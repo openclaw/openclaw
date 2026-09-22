@@ -288,4 +288,42 @@ describe("resolveMattermostReplyToMode", () => {
 
     expect(account.streamingMode).toBe("off");
   });
+
+  it("defaults progress final delivery to in-place and resolves separate when configured", () => {
+    const configured = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: { mode: "progress", progress: { finalDelivery: "separate" } },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(configured.progressFinalDelivery).toBe("separate");
+    expect(resolveMattermostAccount({ cfg: {}, accountId: "default" }).progressFinalDelivery).toBe(
+      "in-place",
+    );
+  });
+
+  it("lets a finalDelivery-only account override inherit the root streaming mode", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: { mode: "progress", progress: { label: "Root progress" } },
+            accounts: {
+              work: { streaming: { progress: { finalDelivery: "separate" } } },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.streamingMode).toBe("progress");
+    expect(account.progressFinalDelivery).toBe("separate");
+    expect(account.config.streaming).toEqual({ progress: { finalDelivery: "separate" } });
+  });
 });
