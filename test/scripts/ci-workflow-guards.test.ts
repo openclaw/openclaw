@@ -1908,10 +1908,25 @@ NODE
   it("serializes both Swift package suites on hosted macOS retries", () => {
     const macosSwift = readCiWorkflow().jobs["macos-swift"];
 
+    expect(macosSwift.strategy.matrix.phase).toEqual(["tests", "packages"]);
+    expect(macosSwift.strategy["max-parallel"]).toBe(2);
     expect(macosSwift.env.OPENCLAWKIT_TEST_EXECUTION).toContain("github.run_attempt > 1");
     const openClawKitTests = macosSwift.steps.find(
       (candidate: WorkflowStep) => candidate.name === "OpenClawKit tests",
     );
+    const packageOptOut = macosSwift.steps.find(
+      (candidate: WorkflowStep) =>
+        candidate.name ===
+        "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
+    );
+    const swiftTest = macosSwift.steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Swift test",
+    );
+    expect(packageOptOut?.if).toBe("matrix.phase == 'packages'");
+    expect(openClawKitTests?.if).toBe(
+      "matrix.phase == 'packages' && needs.preflight.outputs.run_openclawkit_tests == 'true'",
+    );
+    expect(swiftTest?.if).toBe("matrix.phase == 'tests'");
     expect(openClawKitTests?.run).toContain('if [[ "$OPENCLAWKIT_TEST_EXECUTION" == "parallel" ]]');
     expect(openClawKitTests?.run).toContain("--parallel");
     expect(openClawKitTests?.run).toContain("--no-parallel");
@@ -7363,7 +7378,7 @@ exit 1
       (step: WorkflowStep) => step.name === "Save Swift build directory cache",
     );
     expect(restoreMetadata.if).toBe(
-      "steps.validate-swift-build-cache.outputs.cache-valid == 'true' && env.HISTORICAL_TARGET != 'true'",
+      "matrix.phase == 'tests' && steps.validate-swift-build-cache.outputs.cache-valid == 'true' && env.HISTORICAL_TARGET != 'true'",
     );
     expect(restoreMetadata.run).toBe("python3 -I -S scripts/swift-build-cache-metadata.py restore");
     expect(recordMetadata.run).toBe("python3 -I -S scripts/swift-build-cache-metadata.py record");
@@ -8917,7 +8932,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(swiftInstall.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
     expect(swiftLint.run).toContain("swiftlint lint --config config/swiftlint.yml");
     expect(swiftLint.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
-    expect(openClawKitTests.if).toBe("needs.preflight.outputs.run_openclawkit_tests == 'true'");
+    expect(openClawKitTests.if).toBe(
+      "matrix.phase == 'packages' && needs.preflight.outputs.run_openclawkit_tests == 'true'",
+    );
 
     const checkShard = workflow.jobs["check-shard"].steps.find(
       (step: { name?: string }) => step.name === "Run check shard",

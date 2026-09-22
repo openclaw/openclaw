@@ -4111,9 +4111,16 @@ jobs:
   macos-swift:
     permissions:
       contents: read
-    name: "macos-swift"
+    name: ${{ format('macos-swift ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
+    # Keep the independently built package suites out of the app test job's
+    # hosted timeout while preserving the existing two-job concurrency cap.
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        phase: [tests, packages]
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     # Hosted paths include untrusted first-attempt PRs, so their timeout must
     # follow the runner rather than inheriting Blacksmith's tighter budget.
@@ -4185,6 +4192,7 @@ jobs:
 
       - name: Detect Swift toolchain cache key
         id: swift-toolchain
+        if: matrix.phase == 'tests'
         run: |
           set -euo pipefail
           xcode_version="$(xcodebuild -version | tr '\n' ' ' | sed 's/  */ /g; s/ $//')"
@@ -4204,7 +4212,7 @@ jobs:
 
       - name: Restore Swift build directory cache
         id: swift-build-cache
-        if: needs.preflight.outputs.cache_mode != 'off'
+        if: matrix.phase == 'tests' && needs.preflight.outputs.cache_mode != 'off'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build
@@ -4216,6 +4224,7 @@ jobs:
 
       - name: Validate Swift build cache
         id: validate-swift-build-cache
+        if: matrix.phase == 'tests'
         run: |
           set -euo pipefail
           cache_valid=true
@@ -4228,7 +4237,7 @@ jobs:
           echo "cache-valid=$cache_valid" >> "$GITHUB_OUTPUT"
 
       - name: Restore Swift build input timestamps
-        if: steps.validate-swift-build-cache.outputs.cache-valid == 'true' && env.HISTORICAL_TARGET != 'true'
+        if: matrix.phase == 'tests' && steps.validate-swift-build-cache.outputs.cache-valid == 'true' && env.HISTORICAL_TARGET != 'true'
         run: python3 -I -S scripts/swift-build-cache-metadata.py restore
 
       - name: Show toolchain
@@ -4263,6 +4272,7 @@ jobs:
           fi
 
       - name: Swift build (release)
+        if: matrix.phase == 'tests'
         run: |
           set -euo pipefail
           # The macOS lane validates the desktop app build; the CLI product is
@@ -4279,6 +4289,7 @@ jobs:
           swift build --package-path apps/macos --product OpenClaw --configuration release
 
       - name: OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)
+        if: matrix.phase == 'packages'
         run: |
           set -euo pipefail
           # Guard: chat-only consumers build OpenClawKit with the Talk trait
@@ -4295,7 +4306,7 @@ jobs:
 
       # openclawkit-tests-contract-v1: the target owns an independently runnable package suite.
       - name: OpenClawKit tests
-        if: needs.preflight.outputs.run_openclawkit_tests == 'true'
+        if: matrix.phase == 'packages' && needs.preflight.outputs.run_openclawkit_tests == 'true'
         run: |
           set -euo pipefail
           openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
@@ -4313,6 +4324,7 @@ jobs:
 
       - name: Swift test
         id: swift-test
+        if: matrix.phase == 'tests'
         run: |
           set -euo pipefail
           # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
@@ -4372,11 +4384,11 @@ jobs:
       # Builds/tests are serial and leave the source inputs unchanged. Record
       # their actual metadata with the successful products immediately before save.
       - name: Record Swift build input timestamps
-        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true' && env.HISTORICAL_TARGET != 'true'
+        if: matrix.phase == 'tests' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true' && env.HISTORICAL_TARGET != 'true'
         run: python3 -I -S scripts/swift-build-cache-metadata.py record
 
       - name: Save Swift build directory cache
-        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true'
+        if: matrix.phase == 'tests' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build
