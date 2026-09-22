@@ -82,8 +82,13 @@ function requestWebPushMutationAdmission(
     const resolve = (reference: string | null | undefined) =>
       reference ? selectResolvedUserProfileMetadataById(db, reference)?.id : undefined;
     const original = resolve(profiles.original);
-    const current = resolve(profiles.current);
-    const bound = resolve(boundProfile);
+    const current = profiles.current === profiles.original ? original : resolve(profiles.current);
+    const bound =
+      boundProfile === profiles.original
+        ? original
+        : boundProfile === profiles.current
+          ? current
+          : resolve(boundProfile);
     facts = {
       profileId: current ?? null,
       bindingCurrent:

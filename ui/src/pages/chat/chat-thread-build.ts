@@ -27,7 +27,6 @@ import {
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
 import type { CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import { buildPendingInputItems } from "./chat-pending-inputs.ts";
 import {
@@ -76,7 +75,11 @@ import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
-import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
+import {
+  isLiveTerminalForRun,
+  readLiveTerminalRunId,
+  readLiveTerminalAfterBoundaryRunId,
+} from "./terminal-message-identity.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = {
@@ -326,14 +329,15 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   // Transient projections merge into stable history + queued-send rows by timestamp.
   // Stable rows keep their relative order despite client and Gateway clock skew.
-  const projections: ChatProjection[] = buildPendingInputItems(
+  const pendingInputItems = buildPendingInputItems(
     pendingInputs,
     props.searchOpen ? props.searchQuery : undefined,
     props.queue,
     props.workspaceSyncPendingRunIds,
     props.workerSetupPending,
     props.messageRecovery,
-  ).map((item) => ({ item }));
+  );
+  const projections: ChatProjection[] = pendingInputItems.map((item) => ({ item }));
   if (compaction && compactionKey && !hasPersistedCompaction) {
     const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
     projections.push({
@@ -595,11 +599,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   for (const prompt of props.questionPrompts ?? []) {
     // Pending questions live in the composer dock. Their terminal summaries are
     // timestamped transient projections, so keep their historical placement.
-    if (
-      prompt.status === "pending" ||
-      !prompt.sessionKey ||
-      !areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey)
-    ) {
+    if (prompt.status === "pending") {
       continue;
     }
     const questionItem: ChatItem = {
@@ -621,6 +621,39 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     toolItems.map((tool) => tool.projection),
   );
   insertChatItemsByTimestamp(items, projections);
+
+  // Completion time must not move an already visible reply across queued custody.
+  // Only unsequenced live terminals use the same causal ceiling as their stream;
+  // canonical history order is never rewritten.
+  if (pendingInputItems.length) {
+    const pendingKeys = new Set(pendingInputItems.map((item) => item.key));
+    const findTerminalBounds = createRunTurnLookup(items);
+    // Relocation mutates items, so iterate a narrowed snapshot of message candidates.
+    for (const item of items.filter((candidate) => candidate.kind === "message")) {
+      const runId =
+        readLiveTerminalAfterBoundaryRunId(item.message) ?? readLiveTerminalRunId(item.message);
+      const identity = readSessionMessageIdentity(item.message);
+      if (
+        !runId ||
+        identity?.role !== "assistant" ||
+        identity.id !== null ||
+        identity.sequence !== null ||
+        identity.isImported
+      ) {
+        continue;
+      }
+      const bounds = findTerminalBounds(runId);
+      if (!bounds?.beforeKey || !pendingKeys.has(bounds.beforeKey)) {
+        continue;
+      }
+      const index = items.indexOf(item);
+      const { maximum } = insertionIndexesForBounds(items, bounds);
+      if (index > maximum) {
+        items.splice(index, 1);
+        items.splice(maximum, 0, item);
+      }
+    }
+  }
 
   // The active claw is telemetry, not a placeholder: it stays through visible
   // assistant text and tool cards until the run settles. The initial-load
@@ -651,6 +684,18 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       segments,
       tools,
     ));
+  const activeTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
+  const activeTurnBounds = activeTurnRunId ? createRunTurnLookup(items)(activeTurnRunId) : null;
+  const appendActiveRunItem = (item: ChatItem) => {
+    // Queued custody is a ceiling for the whole live response, not just its text.
+    // Moving its working indicator past that ceiling splits and remeasures the run.
+    if (activeTurnBounds) {
+      const { maximum } = insertionIndexesForBounds(items, activeTurnBounds);
+      items.splice(maximum, 0, item);
+    } else {
+      items.push(item);
+    }
+  };
   if (props.stream !== null) {
     const text = sanitizeStreamText(props.stream);
     const prefix = accumulatedStreamText(segments, sanitizeStreamText);
@@ -669,21 +714,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         ...optionalRunIdentity(liveRunId),
         ...optionalBoundaryIdentity(latestBoundaryRunId ?? liveRunId),
       };
-      const liveTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
-      // Pending-custody user rows now participate in the live tail's ceiling.
-      const liveTurnBounds = liveTurnRunId ? createRunTurnLookup(items)(liveTurnRunId) : null;
-      if (liveTurnBounds) {
-        const { maximum } = insertionIndexesForBounds(items, liveTurnBounds);
-        items.splice(maximum, 0, liveStreamItem);
-      } else {
-        items.push(liveStreamItem);
-      }
+      appendActiveRunItem(liveStreamItem);
     }
   }
   if (showWorkingIndicator) {
     const workingProgress = resolveProgress();
     const workingRunId = props.runId ?? workingProgress.runId;
-    items.push({
+    appendActiveRunItem({
       kind: "reading-indicator",
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,

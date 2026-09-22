@@ -3,16 +3,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
 import {
   listUserProfileGitHubLogins,
-  resolveCachedGitHubIdentity,
   resolveUserProfileGitHubAttribution,
 } from "./user-profile-github-identity.js";
-import { listUserProfilesSync } from "./user-profile-list.js";
+import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import { resolveCanonicalCachedGitHubIdentity } from "./user-profile-reads.js";
 import {
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
@@ -25,7 +26,8 @@ import {
 } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   });
@@ -119,7 +121,7 @@ describe("multi-account people", () => {
       githubIdentity: { login: "legacy" },
     });
   });
-  it("keeps both verified accounts on one person across merge and alternating sign-ins", () => {
+  it("keeps both verified accounts on one person across merge and alternating sign-ins", async () => {
     const options = stateOptions();
     const primary = {
       accountId: 71,
@@ -150,8 +152,12 @@ describe("multi-account people", () => {
         hasAvatar: true,
       });
       expect(
-        resolveCachedGitHubIdentity({ accountId: account.accountId, email: account.email }, options)
-          ?.profileId,
+        (
+          await resolveCanonicalCachedGitHubIdentity(
+            { accountId: account.accountId, email: account.email },
+            options,
+          )
+        )?.profileId,
       ).toBe(person.id);
       expect(getUserProfileDisplay(work.id, options)).toMatchObject({
         id: person.id,
@@ -187,7 +193,7 @@ describe("multi-account people", () => {
     ).toMatchObject({ id: person.id, githubIdentity: { login: primary.canonicalLogin } });
     expect(getUserProfileDisplay(signInAlias.id, options).id).toBe(person.id);
     expect(
-      resolveCachedGitHubIdentity({ accountId: 73, email: primary.email }, options),
+      await resolveCanonicalCachedGitHubIdentity({ accountId: 73, email: primary.email }, options),
     ).toBeUndefined();
     expect(
       resolveUserProfileGitHubAttribution([person.id, work.id], options).get(work.id),

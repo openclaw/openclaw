@@ -43,7 +43,7 @@ export function formatPortalResult(
 ): AgentToolResult<PortalSummary | PortalListResult | PortalCloseResult> {
   const text =
     outcome.action === "open"
-      ? `Portal available at ${outcome.result.url}. Pass PUBLIC_URL=${outcome.result.publicUrl} and PORT=${outcome.result.port} when starting the dev server. The operator can see it in the Control UI Portals page.`
+      ? `Portal route allocated at ${outcome.result.url}. Pass PUBLIC_URL=${outcome.result.publicUrl} and PORT=${outcome.result.port} when starting the dev server. Open it in the Control UI Portals page to verify browser access and application rendering; allocation does not prove either. Remote access requires private portal ingress or a reachable direct listener.`
       : outcome.action === "list"
         ? `${outcome.result.portals.length} active portal${outcome.result.portals.length === 1 ? "" : "s"}. The operator can see them in the Control UI Portals page.`
         : `Portal ${outcome.id} closed. The Control UI Portals page has been updated.`;

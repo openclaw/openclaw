@@ -18,8 +18,12 @@ export function withPendingTaskRegistryEvents<T>(refresh: () => void, operation:
   }
 }
 
-export function hasPendingTaskRegistryEvents(): boolean {
-  return taskRegistryProcessState.listener?.events.pending() ?? false;
+export function hasPendingTaskRegistryEvents(taskId?: string): boolean {
+  return taskRegistryProcessState.listener?.events.pending(taskId) ?? false;
+}
+
+export function listPendingTaskRegistryEventTaskIds(): readonly string[] {
+  return taskRegistryProcessState.listener?.events.pendingTaskIds() ?? [];
 }
 
 export function captureTaskRegistryReadFence(

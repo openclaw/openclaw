@@ -57,6 +57,7 @@ import {
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.test-support.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
+import { privateCompletionCases } from "./subagent-announce-private-completion.test-fixtures.js";
 
 const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   enqueueClaimedSessionDelivery: vi.fn(
@@ -553,6 +554,11 @@ async function deliverDiscordDirectMessageCompletion(params: {
   isActive?: boolean;
   requesterSessionKey?: string;
   requesterAgentId?: string;
+  requesterIsSubagent?: boolean;
+  origin?: Parameters<typeof deliverSubagentAnnouncement>[0]["requesterSessionOrigin"];
+  completionDirectOrigin?: Parameters<
+    typeof deliverSubagentAnnouncement
+  >[0]["completionDirectOrigin"];
   runtimeConfig?: Record<string, unknown>;
   queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
   sourceSessionKey?: string;
@@ -561,7 +567,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
   onDeliveryResult?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryResult"];
   isSourceSessionEffectsAllowed?: () => boolean;
 }) {
-  const origin = {
+  const origin = params.origin ?? {
     channel: "discord",
     to: "dm:U123",
     accountId: "acct-1",
@@ -590,9 +596,9 @@ async function deliverDiscordDirectMessageCompletion(params: {
     triggerMessage: "child done",
     steerMessage: "child done",
     requesterSessionOrigin: origin,
-    completionDirectOrigin: origin,
+    completionDirectOrigin: params.completionDirectOrigin ?? origin,
     directOrigin: origin,
-    requesterIsSubagent: false,
+    requesterIsSubagent: params.requesterIsSubagent === true,
     expectsCompletionMessage: true,
     ...(params.completionTarget
       ? {
@@ -1738,21 +1744,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     }
   });
 
-  it.each([
-    { name: "empty", result: { payloads: [] } },
-    { name: "private text", result: { payloads: [{ text: "private parent review" }] } },
-    { name: "media", result: { payloads: [{ mediaUrl: "https://example.com/private.png" }] } },
-    {
-      name: "next child",
-      result: { payloads: [], meta: { yielded: true }, requesterContinuationSettled: true },
-    },
-  ])(
-    "accepts private parent consumption without an external receipt: $name",
-    async ({ result }) => {
+  it.each(privateCompletionCases)(
+    "preserves private parent consumption and final evidence: $name",
+    async (testCase) => {
       const callGateway = createGatewayMock({
         status: "ok",
         inputProcessingCompleted: true,
-        result,
+        result: testCase.result,
       });
       const sendMessage = createSendMessageMock();
       const queue = vi.fn<QueueEmbeddedAgentMessageWithOutcome>();
@@ -1764,9 +1762,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         isActive: true,
         queueEmbeddedAgentMessageWithOutcome: queue,
         runtimeConfig: { tools: { deny: ["message"] } },
+        ...("params" in testCase ? testCase.params : {}),
       });
       expectDeliveryPath(delivery, "direct");
-      expect(delivery).not.toHaveProperty("requesterVisibleFinalDelivered");
+      expect(delivery.requesterVisibleFinalDelivered).toBe(testCase.recordsVisibleFinal);
       expect(delivery).not.toHaveProperty("finalAssistantVisibleText");
       expect(queue).not.toHaveBeenCalled();
       expect(sendMessage).not.toHaveBeenCalled();
@@ -5958,7 +5957,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       { name: "SessionTranscriptWriterClaimReboundError" },
     );
 
-    expect(testing.isWriterClaimReboundAnnounceError(err)).toBe(true);
     expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
   });
 
@@ -5968,7 +5966,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       { name: "SessionTranscriptWriterClaimReboundError" },
     );
 
-    expect(testing.isWriterClaimReboundAnnounceError(err)).toBe(true);
     expect(testing.hasAnnounceSendEvidence(err)).toBe(false);
   });
 

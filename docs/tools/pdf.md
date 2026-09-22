@@ -87,7 +87,7 @@ Limits:
 Used for every other provider.
 
 1. Extract text from the selected pages (up to `agents.defaults.pdfMaxPages`, default `20`) via the bundled `document-extract` plugin, which uses the `clawpdf` package (PDFium WebAssembly) for text and image extraction.
-2. If the extracted text is shorter than `200` characters, render the same pages to PNG images. The render budget is `4,000,000` pixels total, shared across all pages needing images (allocated proportionally per remaining page, not per page), so text pages that already have enough text skip rendering entirely.
+2. For each selected page with fewer than `200` characters of extracted text, render that page to a PNG image. A text-rich page does not suppress image fallback for other selected pages. The render budget is `4,000,000` pixels total, shared across all pages needing images (allocated proportionally per remaining page, not per page), so text pages that already have enough text skip rendering entirely.
 3. Send the extracted text (and any rendered images) plus the prompt to the selected model.
 
 Details:

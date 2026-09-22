@@ -37,7 +37,7 @@ const event = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("stopped"), status, reason: text.optional() }),
 ]);
-export const updateRepairWorkerMessageSchema = z.discriminatedUnion("type", [
+const updateRepairWorkerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ready"), candidateRehearsal: z.literal(true).optional() }),
   z.object({ type: z.literal("validate"), id: turn }),
   z.object({ type: z.literal("cancel-validation"), id: turn }),
@@ -57,7 +57,12 @@ export const updateRepairParentMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("start"),
     runId: text.optional(),
     requester: z
-      .object({ channel: text.optional(), accountId: text.optional(), senderId: text.optional() })
+      .object({
+        channel: text.optional(),
+        accountId: text.optional(),
+        senderId: text.optional(),
+        authorizationSource: text.optional(),
+      })
       .optional(),
     target: z.object({
       stateDir: z.string(),
@@ -84,20 +89,15 @@ export const updateRepairParentMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("cancel"), reason: text }),
 ]);
 export type UpdateRepairWorkerMessage = z.infer<typeof updateRepairWorkerMessageSchema>;
-export type UpdateRepairParentMessage = z.infer<typeof updateRepairParentMessageSchema>;
+type UpdateRepairParentMessage = z.infer<typeof updateRepairParentMessageSchema>;
 export const UPDATE_REPAIR_IPC_MAX_BYTES = 64 * 1024;
 
 export type UpdateRepairTarget = Extract<UpdateRepairParentMessage, { type: "start" }>["target"];
 export type UpdateRepairValidation = z.infer<typeof updateRepairValidationSchema>;
 export type UpdateRepairResult = Extract<UpdateRepairWorkerMessage, { type: "result" }>["result"];
-export type UpdateRepairEvent = Extract<UpdateRepairWorkerMessage, { type: "event" }>["event"];
+type UpdateRepairEvent = Extract<UpdateRepairWorkerMessage, { type: "event" }>["event"];
 export type UpdateRepairParams = {
   target: UpdateRepairTarget;
-  /** Original installation environment for the admitting ledger and requester policy. */
-  admissionEnv?: NodeJS.ProcessEnv;
-  nodeRunner?: string;
-  runId?: string;
-  requester?: { channel?: string; accountId?: string; senderId?: string };
   context: TriageUpdateFailure & {
     phase: "validating" | "verifying";
     beforeVersion?: string;
@@ -109,6 +109,6 @@ export type UpdateRepairParams = {
   budget?: z.input<typeof updateRepairBudgetSchema>;
   onEvent?: (event: UpdateRepairEvent) => void;
   signal?: AbortSignal;
-  /** The admitting update still owns this repair slot. */
+  /** The caller still owns this repair slot. */
   isCurrent?: () => boolean;
 };

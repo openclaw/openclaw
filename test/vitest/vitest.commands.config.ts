@@ -8,7 +8,6 @@ export function createCommandsVitestConfig(env?: Record<string, string | undefin
     dir: "src/commands",
     env,
     exclude: [...commandsLightTestFiles, ...databaseWorkerCoreTestFiles],
-    fileParallelism: false,
     name: "commands",
     pool: "forks",
   });

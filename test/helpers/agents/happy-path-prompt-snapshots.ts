@@ -19,7 +19,7 @@ import { normalizeChatType } from "../../../src/channels/chat-type.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type {
   AnyAgentTool,
-  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { normalizeAgentRuntimeTools } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { createOpenClawCodingTools } from "../../../src/plugin-sdk/agent-harness.js";
@@ -406,7 +406,21 @@ function createAttempt(params: {
   scenario: PromptScenario;
   sessionKey: string;
 }): EmbeddedRunAttemptParams {
+  const unsupportedHostOperation = () => {
+    throw new Error("Prompt snapshots cannot execute host operations");
+  };
   return {
+    hostCapabilities: {
+      kind: "agent-harness-host-capability",
+      version: 1,
+      assertActive: () => {},
+      activeComputerContext: () =>
+        "Current active computer (latest physical input, not message origin): active_node=unknown",
+      bindToolSurface: unsupportedHostOperation,
+      runBeforeToolCall: unsupportedHostOperation,
+      requestApproval: unsupportedHostOperation,
+      waitForApproval: unsupportedHostOperation,
+    } satisfies EmbeddedRunAttemptParams["hostCapabilities"],
     agentId: "main",
     agentDir: AGENT_DIR,
     workspaceDir: WORKSPACE_DIR,
@@ -441,6 +455,7 @@ function createAttempt(params: {
     currentMessageId: params.scenario.ctx.MessageSid,
     sourceReplyDeliveryMode: "message_tool_only",
     forceMessageTool: true,
+    authProfileStore: { version: 1, profiles: {} },
     authStorage: {} as EmbeddedRunAttemptParams["authStorage"],
     modelRegistry: {} as EmbeddedRunAttemptParams["modelRegistry"],
   } as EmbeddedRunAttemptParams;
@@ -474,6 +489,8 @@ function createDynamicTools(params: {
     modelProvider: "openai",
     modelId: MODEL_ID,
     modelApi: "responses",
+    // Codex owns hosted-search selection, matching its dynamic-tool builder.
+    suppressManagedWebSearch: false,
     modelContextWindowTokens: 272_000,
     forceMessageTool: true,
     enableHeartbeatTool: params.trigger === "heartbeat",

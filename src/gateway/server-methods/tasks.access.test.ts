@@ -6,6 +6,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { setCanonicalSqliteSessionMainKey } from "../../config/sessions/session-canonical-key.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -131,6 +132,7 @@ describe("task page access snapshots", () => {
       seedTaskRegistryRowsForTests(tasks);
       await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
       if (!warm) {
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
       }
       const expectedHandles = listOpenClawAgentDatabasesForTest().length;

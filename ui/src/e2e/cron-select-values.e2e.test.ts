@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { pickerValue as readPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -41,7 +42,7 @@ suite.define(() => {
           };
           const gateway = await installMockGateway(page, {
             methodResponses: {
-              "cron.list": {
+              "cron.list": cronListResponseFixture({
                 jobs: [job],
                 snapshotRevision: "focus-clearance",
                 total: 1,
@@ -49,7 +50,7 @@ suite.define(() => {
                 limit: 50,
                 hasMore: false,
                 nextOffset: null,
-              },
+              }),
               "cron.runs": {
                 entries: [],
                 total: 0,

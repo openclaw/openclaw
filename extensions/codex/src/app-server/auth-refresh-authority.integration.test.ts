@@ -245,8 +245,14 @@ describe("Codex app-server auth refresh authority", () => {
           });
           const response = await waitForResponse(harness, "refresh-authority-lost");
           expect(response).toMatchObject({
-            error: { code: -32603, message: expect.stringMatching(/no longer available/i) },
+            error: {
+              code: -32603,
+              message: expect.stringContaining(
+                `auth profile "${PROFILE_ID}" is no longer an OpenAI OAuth credential in its persisted OpenClaw store.`,
+              ),
+            },
           });
+          expect(response.error?.message).not.toMatch(/HTTP 401|sign in again|re-authenticate/i);
           expect(response.result).toBeUndefined();
           expect(refreshOAuth).not.toHaveBeenCalled();
           expect(otherProviderRefresh).not.toHaveBeenCalled();
@@ -287,8 +293,14 @@ describe("Codex app-server auth refresh authority", () => {
       });
       const afterFence = await waitForResponse(harness, "refresh-after-fence");
       expect(afterFence).toMatchObject({
-        error: { code: -32603, message: expect.stringMatching(/sign in again/i) },
+        error: {
+          code: -32603,
+          message: expect.stringContaining(
+            `auth profile "${PROFILE_ID}" could not resolve usable OAuth credentials from its OpenClaw credential store.`,
+          ),
+        },
       });
+      expect(afterFence.error?.message).not.toMatch(/HTTP 401|sign in again|re-authenticate/i);
       expect(afterFence.result).toBeUndefined();
       expect(refreshOAuth).toHaveBeenCalledTimes(1);
 

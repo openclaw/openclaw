@@ -63,6 +63,7 @@ suite.define(() => {
                   listenPort: 43210,
                   tokenQuery: "openclaw_portal=synthetic",
                   publicUrl: "http://127.0.0.1:43210/",
+                  url: "http://127.0.0.1:43210/?openclaw_portal=synthetic",
                   createdAtMs: 1,
                 },
               ],

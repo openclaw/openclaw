@@ -103,7 +103,7 @@ export function inspectUpdateRepairDriverAdmission(
 }
 
 /** Only a fresh, unacknowledged recovery may substitute for a full repair invocation. */
-export function isUnacknowledgedAbandonedUpdateRun(record: UpdateRunRecord): boolean {
+export function isFreshUnacknowledgedAbandonedUpdateRun(record: UpdateRunRecord): boolean {
   return (
     isAbandonedUpdateRun(record) &&
     record.finishedAtMs !== null &&

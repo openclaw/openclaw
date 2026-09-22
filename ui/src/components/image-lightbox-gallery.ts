@@ -1,6 +1,22 @@
 import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
 
-/** The modal owns decoded neighbors and their resource leases until eviction or close. */
+async function decodeImage(item: ImageLightboxItem | null): Promise<ImageLightboxItem | null> {
+  if (!item) {
+    return null;
+  }
+  const image = new Image();
+  image.referrerPolicy = "no-referrer";
+  image.src = item.src;
+  try {
+    await image.decode();
+    return item;
+  } catch {
+    item.release?.();
+    return null;
+  }
+}
+
+/** The modal owns decoded images and their resource leases until eviction or close. */
 export class ImageLightboxGalleryController {
   index = 0;
   current: ImageLightboxItem | undefined;
@@ -22,8 +38,38 @@ export class ImageLightboxGalleryController {
     this.index = gallery?.index ?? 0;
     this.current = initial;
     // The opener retains and releases the initial image independently of the modal.
-    this.images.set(this.index, Promise.resolve({ ...initial, release: undefined }));
+    const preview = { ...initial, release: undefined };
+    if (initial.loadFullResolution) {
+      this.upgrade(this.index, preview, initial.loadFullResolution);
+    } else {
+      this.images.set(this.index, Promise.resolve(preview));
+    }
     this.preloadNeighbors();
+  }
+
+  private upgrade(
+    index: number,
+    preview: ImageLightboxItem,
+    load: () => Promise<ImageLightboxItem | null>,
+  ) {
+    const generation = this.generation;
+    const pending = Promise.resolve()
+      .then(() => (generation === this.generation ? load() : null))
+      .then(decodeImage)
+      .catch(() => null)
+      .then((item) => {
+        if (
+          item &&
+          generation === this.generation &&
+          this.images.get(index) === pending &&
+          this.index === index
+        ) {
+          this.current = item;
+          this.notify();
+        }
+        return item ?? preview;
+      });
+    this.images.set(index, pending);
   }
 
   dispose() {
@@ -79,21 +125,7 @@ export class ImageLightboxGalleryController {
     const generation = this.generation;
     const pending = Promise.resolve()
       .then(() => (generation === this.generation ? load(retryFailed) : null))
-      .then(async (item) => {
-        if (!item) {
-          return null;
-        }
-        const image = new Image();
-        image.referrerPolicy = "no-referrer";
-        image.src = item.src;
-        try {
-          await image.decode();
-          return item;
-        } catch {
-          item.release?.();
-          return null;
-        }
-      })
+      .then(decodeImage)
       .catch(() => null);
     this.images.set(index, pending);
     void pending.then((item) => {

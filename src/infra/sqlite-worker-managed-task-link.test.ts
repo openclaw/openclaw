@@ -18,7 +18,6 @@ import { getTaskById, listTasksForFlowId } from "../tasks/task-registry.js";
 import {
   runTaskRegistryMaintenance,
   configureTaskRegistryMaintenance,
-  resetTaskRegistryMaintenanceRuntimeForTests,
 } from "../tasks/task-registry.maintenance.js";
 import {
   configureTaskRegistryRuntime,
@@ -50,7 +49,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
   await resetRuntimeTaskTestState();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   await state.cleanup();
 });
 

@@ -13,7 +13,7 @@ import type {
   BundledChannelConfigCollector,
   PluginManifestRecord,
 } from "./manifest-registry.types.js";
-import { loadManifestThemeDefinitions } from "./manifest-themes.js";
+import { loadManifestThemeDefinitions } from "./manifest-theme-definitions.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   type OpenClawPackageManifest,
@@ -505,6 +505,7 @@ export function buildPluginManifestRecord(params: {
       officialCatalogManifest?.contracts,
     ),
     transcriptSources: params.manifest.transcriptSources,
+    decisionModels: params.manifest.decisionModels,
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
     imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,

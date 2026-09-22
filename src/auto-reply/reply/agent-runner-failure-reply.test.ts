@@ -47,6 +47,16 @@ describe("buildEmptyInteractiveReplyPayload", () => {
 });
 
 describe("buildExternalRunFailureReply", () => {
+  it("does not expose a foreign error's userMessage property", () => {
+    const error = Object.assign(new Error("private-diagnostic-canary"), {
+      userMessage: "untrusted-public-canary",
+    });
+    expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
+    });
+  });
+
   it("uses preserved format diagnostics without exposing raw details", () => {
     const message = "safe summary";
     const error = new FailoverError(message, {

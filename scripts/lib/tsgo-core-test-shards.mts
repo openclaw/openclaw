@@ -79,6 +79,31 @@ export const TSGO_CORE_TEST_SHARDS = [
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.commands-doctor.json",
   },
+  {
+    name: "cli-update",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.cli-update.json",
+  },
+  {
+    name: "gateway-methods",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.gateway-methods.json",
+  },
+  {
+    name: "ui-chat",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-chat.json",
+  },
+  {
+    name: "agents-sessions",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.agents-sessions.json",
+  },
+  {
+    name: "services-cron",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.services-cron.json",
+  },
 ] as const;
 
 export const TSGO_CORE_GRAPHS = [
@@ -122,16 +147,24 @@ export function selectTsgoCoreTestShards(
 export function selectTsgoCoreTestStripe(
   stripeSpec: string,
 ): readonly { name: string; config: string }[] | undefined {
-  const match = /^([1-9]\d*)\/([1-9]\d*)$/u.exec(stripeSpec);
+  const match = /^([1-9]\d*)(?:-([1-9]\d*))?\/([1-9]\d*)$/u.exec(stripeSpec);
   if (!match) {
     return undefined;
   }
   const stripe = Number(match[1]);
-  const stripeCount = Number(match[2]);
-  if (stripe > stripeCount) {
+  const lastStripe = Number(match[2] ?? match[1]);
+  const stripeCount = Number(match[3]);
+  if (
+    ![stripe, lastStripe, stripeCount].every(Number.isSafeInteger) ||
+    stripe > lastStripe ||
+    lastStripe > stripeCount
+  ) {
     return undefined;
   }
-  return TSGO_CORE_TEST_SHARDS.filter((_, index) => index % stripeCount === stripe - 1);
+  return TSGO_CORE_TEST_SHARDS.filter((_, index) => {
+    const owner = (index % stripeCount) + 1;
+    return owner >= stripe && owner <= lastStripe;
+  });
 }
 
 export function findTsgoCoreTestShardViolations(params: {

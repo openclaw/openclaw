@@ -1,3 +1,9 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  persistSubagentRunsToDiskOrThrow,
+  useSubagentControlFixture,
+} from "./subagent-control.test-support.js";
 /** Cancellation retains selected descendants across committed ancestor retirement. */
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -9,11 +15,11 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
-import { setDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.test-support.js";
 import { getTaskById, findTaskByRunId } from "../../../tasks/task-registry.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
@@ -25,12 +31,10 @@ import {
 } from "../completion/subagent-completion-admission.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import { persistSubagentRunsToDiskAsyncOrThrow } from "./subagent-registry-state.js";
 import {
   activateSubagentRegistry,
   initSubagentRegistry,
@@ -42,11 +46,9 @@ import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
-import {
-  bindSubagentRunRecord,
-  loadSubagentRegistryFromSqlite,
-  upsertSubagentRunRowInDatabase,
-} from "./subagent-registry.store.sqlite.js";
+import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { upsertSubagentRunRowInDatabase } from "./subagent-registry.store.kernel.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { releaseSubagentRun, testing } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
@@ -179,15 +181,16 @@ it.each([
           }
           if (transition.includes("successor")) {
             const taskRuntime = getDetachedTaskLifecycleRuntime();
+            let releaseTaskRuntime = () => {};
             const failTask =
               transition.includes("required-task") || transition.includes("failed rollback");
             if (failTask) {
-              setDetachedTaskLifecycleRuntime({
+              releaseTaskRuntime = fixture.useTaskRuntime({
                 ...taskRuntime,
                 createQueuedTaskRun: () => {
                   expect(subagentRuns.has("successor")).toBe(true);
                   expect(loadSubagentRegistryFromSqlite().has("successor")).toBe(true);
-                  throw new Error("required task rejected");
+                  return null;
                 },
               });
             }
@@ -216,9 +219,15 @@ it.each([
               });
             try {
               if (transition.startsWith("accepted successor")) {
-                register();
+                await register();
               } else {
-                expect(register).toThrow(/rejected/);
+                await expect(register()).rejects.toThrow(
+                  transition === "retained successor after failed rollback"
+                    ? "Queued registration rollback failed"
+                    : transition === "successor required-task rollback"
+                      ? "created no task row"
+                      : "Queued subagent registry persistence failed",
+                );
               }
               if (cancel) {
                 expect(subagentRuns.has("successor")).toBe(false);
@@ -229,7 +238,7 @@ it.each([
                 releaseSubagentRun("successor");
               }
             } finally {
-              setDetachedTaskLifecycleRuntime(taskRuntime);
+              releaseTaskRuntime();
               persist.mockImplementation(persistSubagentRunsToDiskOrThrow);
             }
           } else if (transition === "session replacement") {
@@ -557,12 +566,11 @@ it("does not create a missing child database while binding cancellation", async 
 });
 
 describe("restored historical cancellation ownership", () => {
-  const wake = vi.fn<SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]>();
-  const announce = vi.fn<SubagentRegistryDeps["runSubagentAnnounceFlow"]>();
-  const capture = vi.fn<SubagentRegistryDeps["captureSubagentCompletionReply"]>();
-  const cleanup = vi.fn<SubagentRegistryDeps["cleanupBrowserSessionsForLifecycleEnd"]>();
+  const { wake, announce, capture, cleanup } = fixture;
 
   beforeEach(() => {
+    vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockReset();
+    vi.mocked(resolveContextEngine).mockReset();
     wake.mockReset().mockImplementation(async (params) => {
       params.completeBatch([params.settledEntry], 1, {
         delivered: false,
@@ -574,14 +582,6 @@ describe("restored historical cancellation ownership", () => {
     announce.mockReset().mockResolvedValue("delivered");
     capture.mockReset().mockResolvedValue(undefined);
     cleanup.mockReset().mockResolvedValue(undefined);
-    testing.setDepsForTest({
-      callGateway: fixture.gateway,
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      maybeWakeRequesterAfterAllChildrenSettled: wake,
-      runSubagentAnnounceFlow: announce,
-      captureSubagentCompletionReply: capture,
-      cleanupBrowserSessionsForLifecycleEnd: cleanup,
-    });
   });
 
   function historicalCancellation() {

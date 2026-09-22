@@ -494,7 +494,7 @@ describe("explicit answer visibility across continuations", () => {
           ownership === "independent-run" ? [messages[1]] : [messages[1], ...messages.slice(3)],
         );
         if (ownership === "independent-run") {
-          expect(work[0]?.durationMs).toBe(2);
+          expect(work[0]?.durationMs).toBeNull();
         }
         const activity = items.filter((item) => item.kind === "activity-run");
         expect(
@@ -551,7 +551,7 @@ describe("explicit answer visibility across continuations", () => {
         item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
       ),
     ).toEqual([[messages[1], messages[3], messages[5], messages[6]], [messages[8]]]);
-    expect(work[0]?.durationMs).toBe(6);
+    expect(work[0]?.durationMs).toBeNull();
     expect(
       items
         .filter((item) => item.kind === "group")

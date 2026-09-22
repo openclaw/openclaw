@@ -4,7 +4,12 @@
  * These wrap the shared media task status helpers with image-specific task kind,
  * source id, duplicate-guard timing, and prompt/status wording.
  */
-import { createMediaGenerationTaskStatusOwner } from "./media-generation-task-status-shared.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildActiveMediaGenerationTaskPromptContext,
+  createMediaGenerationTaskStatusOwner,
+  prepareMediaGenerationTaskLookup,
+} from "./media-generation-task-status-shared.js";
 
 export const IMAGE_GENERATION_TASK_KIND = "image_generation";
 
@@ -16,7 +21,6 @@ export const {
   buildTaskStatusListDetails: buildImageGenerationTaskStatusListDetails,
   buildTaskStatusText: buildImageGenerationTaskStatusText,
   buildTaskStatusListText: buildImageGenerationTaskStatusListText,
-  buildActiveTaskPromptContextForSession: buildActiveImageGenerationTaskPromptContextForSession,
 } = createMediaGenerationTaskStatusOwner({
   taskKind: IMAGE_GENERATION_TASK_KIND,
   toolName: "image_generate",
@@ -40,7 +44,6 @@ export const {
   findDuplicateGuardTaskForSession: findDuplicateGuardMusicGenerationTaskForSession,
   buildTaskStatusDetails: buildMusicGenerationTaskStatusDetails,
   buildTaskStatusText: buildMusicGenerationTaskStatusText,
-  buildActiveTaskPromptContextForSession: buildActiveMusicGenerationTaskPromptContextForSession,
 } = createMediaGenerationTaskStatusOwner({
   taskKind: MUSIC_GENERATION_TASK_KIND,
   toolName: "music_generate",
@@ -64,7 +67,6 @@ export const {
   findDuplicateGuardTaskForSession: findDuplicateGuardVideoGenerationTaskForSession,
   buildTaskStatusDetails: buildVideoGenerationTaskStatusDetails,
   buildTaskStatusText: buildVideoGenerationTaskStatusText,
-  buildActiveTaskPromptContextForSession: buildActiveVideoGenerationTaskPromptContextForSession,
 } = createMediaGenerationTaskStatusOwner({
   taskKind: VIDEO_GENERATION_TASK_KIND,
   toolName: "video_generate",
@@ -72,3 +74,40 @@ export const {
   completionLabel: "video",
   promptCompletionLabel: "videos",
 });
+
+/** Shared by embedded and CLI prompts; all sections use this turn's owner snapshot. */
+export async function buildMediaTaskRuntimeContext(params: {
+  capabilityToolNames: ReadonlySet<string>;
+  sessionKey?: string;
+  agentId: string;
+}): Promise<string | undefined> {
+  const sections = [
+    ["image_generate", IMAGE_GENERATION_TASK_KIND],
+    ["music_generate", MUSIC_GENERATION_TASK_KIND],
+    ["video_generate", VIDEO_GENERATION_TASK_KIND],
+  ] as const;
+  const enabled = sections.filter(([tool]) => params.capabilityToolNames.has(tool));
+  if (enabled.length === 0) {
+    return undefined;
+  }
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  const lookup = sessionKey
+    ? await prepareMediaGenerationTaskLookup({
+        sessionKey,
+        agentId: params.agentId,
+        taskIdentities: enabled.map(([sourcePrefix, taskKind]) => ({ sourcePrefix, taskKind })),
+      })
+    : undefined;
+  lookup?.assertCurrent();
+  const facts = enabled.map(
+    ([tool, taskKind]) =>
+      buildActiveMediaGenerationTaskPromptContext({
+        tasks: lookup?.tasks ?? [],
+        config: lookup?.config,
+        agentId: params.agentId,
+        taskKind,
+        sourcePrefix: tool,
+      }) ?? `- tool=${tool}; none`,
+  );
+  return ["## Media Generation Tasks", ...facts].join("\n");
+}

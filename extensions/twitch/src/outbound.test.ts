@@ -125,6 +125,7 @@ describe("outbound", () => {
       abortController.abort();
 
       await expect(invoke(abortController.signal)).rejects.toThrow("Outbound delivery aborted");
+      expect(resolveTwitchAccountContext).not.toHaveBeenCalled();
     });
   });
 
@@ -459,27 +460,16 @@ describe("outbound", () => {
     it("uses configured defaultAccount when accountId is omitted", async () => {
       const { sendMessageTwitchInternal } = await import("./send.js");
 
-      vi.mocked(resolveTwitchAccountContext)
-        .mockImplementationOnce(() => ({
-          accountId: "secondary",
-          account: {
-            ...mockAccount,
-            channel: "secondary-channel",
-          },
-          tokenResolution: { source: "config", token: mockAccount.accessToken },
-          configured: true,
-          availableAccountIds: ["default", "secondary"],
-        }))
-        .mockImplementation((_cfg, accountId) => ({
-          accountId: accountId?.trim() || "secondary",
-          account: {
-            ...mockAccount,
-            channel: "secondary-channel",
-          },
-          tokenResolution: { source: "config", token: mockAccount.accessToken },
-          configured: true,
-          availableAccountIds: ["default", "secondary"],
-        }));
+      vi.mocked(resolveTwitchAccountContext).mockReturnValue({
+        accountId: "secondary",
+        account: {
+          ...mockAccount,
+          channel: "secondary-channel",
+        },
+        tokenResolution: { source: "config", token: mockAccount.accessToken },
+        configured: true,
+        availableAccountIds: ["default", "secondary"],
+      });
       vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
         messageId: "msg-secondary",
         receipt: twitchTestReceipt("msg-secondary"),
@@ -507,6 +497,7 @@ describe("outbound", () => {
         accountId: "secondary",
         clientManager: undefined,
       });
+      expect(resolveTwitchAccountContext).toHaveBeenCalledOnce();
     });
 
     it("should throw on send failure", async () => {

@@ -1,13 +1,25 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { html, render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { renderAssistantAttachments } from "./chat-message-attachments.ts";
-import { releaseChatMediaResourceSubscriber, type AttachmentItem } from "./chat-message-media.ts";
+import { renderAssistantAttachments as renderAttachmentCards } from "./chat-message-attachments.ts";
+import { renderMessageImages } from "./chat-message-images.ts";
+import {
+  projectMessageMedia,
+  releaseChatMediaResourceSubscriber,
+  type AttachmentItem,
+} from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 type AttachmentSidebarContent = Extract<SidebarContent, { kind: "attachment" }>;
+
+function renderAssistantAttachments(
+  ...[content, options, ...rest]: Parameters<typeof renderAttachmentCards>
+) {
+  const { images, attachments } = projectMessageMedia({}, content);
+  return html`${renderMessageImages(images, options)}${renderAttachmentCards(attachments, options, ...rest)}`;
+}
 
 function managedAttachment(url: string, artifactId?: string): AttachmentItem {
   return {

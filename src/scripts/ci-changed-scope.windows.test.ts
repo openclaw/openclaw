@@ -31,6 +31,25 @@ describe("detectChangedScope Windows routing", () => {
     expect(detectChangedScope(["extensions/canvas/src/a2ui-jsonl.ts"]).runWindows).toBe(false);
   });
 
+  it("routes the Windows Testbox admission owner, caller, and native proof", () => {
+    for (const changedPath of [
+      "scripts/windows-testbox-openssh.ps1",
+      ".github/workflows/windows-blacksmith-testbox.yml",
+      "test/scripts/windows-blacksmith-testbox.test.ts",
+    ]) {
+      expect(detectChangedScope([changedPath]), changedPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+    expect(detectChangedScope(["scripts/windows-testbox-openssh-extra.ps1"]).runWindows).toBe(
+      false,
+    );
+    expect(
+      detectChangedScope([".github/workflows/windows-blacksmith-testbox-extra.yml"]).runWindows,
+    ).toBe(false);
+  });
+
   it("routes source CLI invocation owners and their native proof to Windows", () => {
     for (const sourceCliPath of [
       "src/infra/openclaw-cli-invocation.ts",
@@ -252,7 +271,10 @@ describe("detectChangedScope Windows routing", () => {
       name: "routes child environment resolution and native doctor coverage to Windows",
       paths: [
         "src/agents/provider-local-service.ts",
+        "src/agents/provider-local-service-process.ts",
         "src/agents/provider-local-service.env-case.test.ts",
+        "src/agents/provider-local-service.shutdown.test.ts",
+        "src/agents/provider-local-service.settlement.test.ts",
         "src/cli/mcp-cli.ts",
         "src/cli/mcp-cli.test.ts",
         "src/cli/mcp-cli.path-case.windows.test.ts",
@@ -322,6 +344,7 @@ describe("detectChangedScope Windows routing", () => {
 
   it("routes shared test-state and process fixture owners to Windows", () => {
     for (const fixturePath of [
+      "test/vitest/vitest.shared.config.ts",
       "src/test-utils/openclaw-test-state.ts",
       "src/test-utils/openclaw-test-state.test.ts",
       "test/helpers/openclaw-test-instance.ts",

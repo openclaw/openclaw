@@ -5,122 +5,40 @@
  */
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { Insertable, Selectable, Updateable } from "kysely";
+import type { Insertable, Updateable } from "kysely";
 import { withFileLock } from "../../infra/file-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import type { SandboxContainerEngineTarget } from "./container-engine.js";
+import {
+  readSandboxRegistryEntryInDatabase,
+  readSandboxRegistryRowInDatabase,
+  rowToBrowserEntry,
+  rowToContainerEntry,
+} from "./registry.kernel.js";
+import type {
+  SandboxBrowserRegistry,
+  SandboxBrowserRegistryEntry,
+  SandboxRegistry,
+  SandboxRegistryEntry,
+} from "./registry.types.js";
 
-export type SandboxRegistryEntry = {
-  containerName: string;
-  backendId?: string;
-  backendTarget?: SandboxContainerEngineTarget;
-  runtimeLabel?: string;
-  sessionKey: string;
-  createdAtMs: number;
-  lastUsedAtMs: number;
-  image: string;
-  configLabelKind?: string;
-  configHash?: string;
-  /** Original provider workspace, retained so pending cleanup can replay the same request. */
-  workspaceDir?: string;
-  /** Present only for backends that reserve their generation before provisioning. */
-  runtimeState?: "pending" | "ready" | "removing" | "removing-pending";
-};
+export type { SandboxRegistryEntry, SandboxBrowserRegistryEntry } from "./registry.types.js";
 
-type SandboxRegistry = {
-  entries: SandboxRegistryEntry[];
-};
-
-export type SandboxBrowserRegistryEntry = {
-  /** Exact workspace mount retained before browser allocation for local reconciliation. */
-  workspaceDir?: string;
-  containerName: string;
-  sessionKey: string;
-  createdAtMs: number;
-  lastUsedAtMs: number;
-  image: string;
-  configHash?: string;
-  cdpPort: number;
-  noVncPort?: number;
-};
-
-type SandboxBrowserRegistry = {
-  entries: SandboxBrowserRegistryEntry[];
-};
-
-type RegistryEntryPayload = { containerName: string } & Record<string, unknown>;
 type SandboxRegistryKind = "container" | "browser";
 type SandboxRegistryTable = OpenClawStateKyselyDatabase["sandbox_registry_entries"];
 type SandboxRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "sandbox_registry_entries">;
-type SandboxRegistryRow = Selectable<SandboxRegistryTable>;
 type SandboxRegistryInsert = Insertable<SandboxRegistryTable>;
 type SandboxRegistryUpdate = Updateable<SandboxRegistryTable>;
 
 function getSandboxRegistryKysely(db: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<SandboxRegistryDatabase>(db);
-}
-
-function parseRegistryEntryJson(row: SandboxRegistryRow): RegistryEntryPayload | null {
-  try {
-    const parsed = JSON.parse(row.entry_json) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as RegistryEntryPayload)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function optionalPayloadString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function rowToContainerEntry(row: SandboxRegistryRow): SandboxRegistryEntry | null {
-  if (row.registry_kind !== "container") {
-    return null;
-  }
-  const payload = parseRegistryEntryJson(row);
-  if (!payload) {
-    return null;
-  }
-  return normalizeSandboxRegistryEntry({
-    ...payload,
-    containerName: row.container_name,
-    sessionKey: row.session_key ?? optionalPayloadString(payload.sessionKey),
-    createdAtMs: row.created_at_ms ?? Number(payload.createdAtMs ?? 0),
-    lastUsedAtMs: row.last_used_at_ms ?? Number(payload.lastUsedAtMs ?? 0),
-    image: row.image ?? optionalPayloadString(payload.image),
-    ...(row.backend_id != null ? { backendId: row.backend_id } : {}),
-    ...(row.runtime_label != null ? { runtimeLabel: row.runtime_label } : {}),
-    ...(row.config_label_kind != null ? { configLabelKind: row.config_label_kind } : {}),
-    ...(row.config_hash != null ? { configHash: row.config_hash } : {}),
-  } as SandboxRegistryEntry);
-}
-
-function rowToBrowserEntry(row: SandboxRegistryRow): SandboxBrowserRegistryEntry | null {
-  if (row.registry_kind !== "browser") {
-    return null;
-  }
-  const payload = parseRegistryEntryJson(row);
-  if (!payload) {
-    return null;
-  }
-  return {
-    ...payload,
-    containerName: row.container_name,
-    sessionKey: row.session_key ?? optionalPayloadString(payload.sessionKey),
-    createdAtMs: row.created_at_ms ?? Number(payload.createdAtMs ?? 0),
-    lastUsedAtMs: row.last_used_at_ms ?? Number(payload.lastUsedAtMs ?? 0),
-    image: row.image ?? optionalPayloadString(payload.image),
-    cdpPort: row.cdp_port ?? Number(payload.cdpPort ?? 0),
-    ...(row.no_vnc_port != null ? { noVncPort: row.no_vnc_port } : {}),
-    ...(row.config_hash != null ? { configHash: row.config_hash } : {}),
-  } as SandboxBrowserRegistryEntry;
 }
 
 function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegistryEntry | null) {
@@ -188,62 +106,6 @@ function rowToUpdate(row: SandboxRegistryInsert): SandboxRegistryUpdate {
   return update;
 }
 
-function readRegistryRows(
-  kind: SandboxRegistryKind,
-  filter?: { backendId: string; scopeKey: string },
-): SandboxRegistryRow[] {
-  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "sandbox_registry_entries")) {
-        return [];
-      }
-      const stateDb = getSandboxRegistryKysely(db);
-      let query = stateDb
-        .selectFrom("sandbox_registry_entries")
-        .selectAll()
-        .where("registry_kind", "=", kind);
-      if (filter) {
-        query = query
-          .where("session_key", "=", filter.scopeKey)
-          .where("backend_id", "=", filter.backendId);
-      }
-      return executeSqliteQuerySync(
-        db,
-        filter
-          ? query.orderBy("last_used_at_ms", "desc").orderBy("container_name", "asc")
-          : query.orderBy("container_name", "asc"),
-      ).rows;
-    }) ?? []
-  );
-}
-
-function readRegistryRow(
-  kind: SandboxRegistryKind,
-  containerName: string,
-): SandboxRegistryRow | null {
-  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "sandbox_registry_entries")) {
-        return null;
-      }
-      const stateDb = getSandboxRegistryKysely(db);
-      return (
-        executeSqliteQuerySync(
-          db,
-          stateDb
-            .selectFrom("sandbox_registry_entries")
-            .selectAll()
-            .where("registry_kind", "=", kind)
-            .where("container_name", "=", containerName)
-            .limit(1),
-        ).rows[0] ?? null
-      );
-    }) ?? null
-  );
-}
-
 function insertRegistryRowIfMissing(row: SandboxRegistryInsert): void {
   runOpenClawStateWriteTransaction(({ db }) => {
     const stateDb = getSandboxRegistryKysely(db);
@@ -275,25 +137,6 @@ function insertRegistryRow(
   );
 }
 
-function readRegistryRowFromDb(
-  db: import("node:sqlite").DatabaseSync,
-  kind: SandboxRegistryKind,
-  containerName: string,
-): SandboxRegistryRow | null {
-  const stateDb = getSandboxRegistryKysely(db);
-  return (
-    executeSqliteQuerySync(
-      db,
-      stateDb
-        .selectFrom("sandbox_registry_entries")
-        .selectAll()
-        .where("registry_kind", "=", kind)
-        .where("container_name", "=", containerName)
-        .limit(1),
-    ).rows[0] ?? null
-  );
-}
-
 function removeRegistryRow(kind: SandboxRegistryKind, containerName: string): void {
   runOpenClawStateWriteTransaction(({ db }) => {
     const stateDb = getSandboxRegistryKysely(db);
@@ -307,32 +150,33 @@ function removeRegistryRow(kind: SandboxRegistryKind, containerName: string): vo
   });
 }
 
-function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegistryEntry {
-  return {
-    ...entry,
-    backendId: entry.backendId?.trim() || "docker",
-    runtimeLabel: entry.runtimeLabel?.trim() || entry.containerName,
-    configLabelKind: entry.configLabelKind?.trim() || "Image",
-  };
-}
-
 /** Reads all registered sandbox runtime containers from SQLite. */
 export async function readRegistry(): Promise<SandboxRegistry> {
-  const entries = readRegistryRows("container")
-    .map((row) => rowToContainerEntry(row))
-    .filter((entry): entry is SandboxRegistryEntry => entry != null);
-  return {
-    entries: entries.map((entry) => normalizeSandboxRegistryEntry(entry)),
-  };
+  const reply = await executeExistingOpenClawStateRead({}, { type: "sandboxRegistry.list" });
+  if (!reply) {
+    return { entries: [] };
+  }
+  if (!reply.ok || reply.type !== "sandboxRegistry.list") {
+    throw new Error("Unexpected sandbox registry list result");
+  }
+  return { entries: reply.entries };
 }
 
 /** Reads one registered sandbox runtime container by container name. */
 export async function readRegistryEntry(
   containerName: string,
 ): Promise<SandboxRegistryEntry | null> {
-  const row = readRegistryRow("container", containerName);
-  const entry = row ? rowToContainerEntry(row) : null;
-  return entry ? normalizeSandboxRegistryEntry(entry) : null;
+  const reply = await executeExistingOpenClawStateRead(
+    {},
+    { type: "sandboxRegistry.get", containerName },
+  );
+  if (!reply) {
+    return null;
+  }
+  if (!reply.ok || reply.type !== "sandboxRegistry.get") {
+    throw new Error("Unexpected sandbox registry lookup result");
+  }
+  return reply.entry;
 }
 
 /** Reads registered runtime IDs for one backend-owned sandbox scope, newest first. */
@@ -340,10 +184,17 @@ export async function readRegisteredSandboxRuntimeIds(params: {
   backendId: string;
   scopeKey: string;
 }): Promise<string[]> {
-  return readRegistryRows("container", params)
-    .map((row) => rowToContainerEntry(row))
-    .filter((entry): entry is SandboxRegistryEntry => entry != null)
-    .map((entry) => entry.containerName);
+  const reply = await executeExistingOpenClawStateRead(
+    {},
+    { type: "sandboxRegistry.runtimeIds", ...params },
+  );
+  if (!reply) {
+    return [];
+  }
+  if (!reply.ok || reply.type !== "sandboxRegistry.runtimeIds") {
+    throw new Error("Unexpected sandbox runtime ID result");
+  }
+  return reply.runtimeIds;
 }
 
 /** Inserts one sandbox runtime registry entry without replacing an existing entry. */
@@ -354,7 +205,7 @@ export function insertSandboxRegistryEntryIfMissing(entry: SandboxRegistryEntry)
 /** Creates or updates one sandbox runtime registry entry, preserving immutable creation fields. */
 export async function updateRegistry(entry: SandboxRegistryEntry) {
   runOpenClawStateWriteTransaction(({ db }) => {
-    const existingRow = readRegistryRowFromDb(db, "container", entry.containerName);
+    const existingRow = readSandboxRegistryRowInDatabase(db, "container", entry.containerName);
     const existing = existingRow ? rowToContainerEntry(existingRow) : null;
     insertRegistryRow(db, containerEntryToRow(entry, existing));
   });
@@ -390,7 +241,7 @@ export function reserveSandboxRegistryEntry(candidate: SandboxRegistryEntry): Sa
       }
       return existing;
     }
-    if (readRegistryRowFromDb(db, "container", candidate.containerName)) {
+    if (readSandboxRegistryRowInDatabase(db, "container", candidate.containerName)) {
       throw new Error(`Sandbox runtime ID "${candidate.containerName}" is already registered.`);
     }
     const entry = { ...candidate, runtimeState: "pending" as const };
@@ -418,8 +269,10 @@ function assertReservationCurrent(
 
 /** Validate the exact generation; retained handles cannot outlive removal intent. */
 export function assertSandboxRegistryEntryCurrent(entry: SandboxRegistryEntry): void {
-  const row = readRegistryRow("container", entry.containerName);
-  const current = row ? rowToContainerEntry(row) : null;
+  const current =
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
+      readSandboxRegistryEntryInDatabase(db, entry.containerName),
+    ) ?? null;
   assertReservationCurrent(current, entry);
   if (
     current.createdAtMs !== entry.createdAtMs ||
@@ -437,7 +290,7 @@ export function completeSandboxRegistryReservation(
   retired = false,
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
-    const row = readRegistryRowFromDb(db, "container", entry.containerName);
+    const row = readSandboxRegistryRowInDatabase(db, "container", entry.containerName);
     const existing = row ? rowToContainerEntry(row) : null;
     assertReservationCurrent(existing, entry);
     if (retired) {
@@ -492,7 +345,7 @@ export async function removeSandboxRegistryRuntime(
   } = {},
 ): Promise<void> {
   const selected = runOpenClawStateWriteTransaction(({ db }) => {
-    const row = readRegistryRowFromDb(db, "container", entry.containerName);
+    const row = readSandboxRegistryRowInDatabase(db, "container", entry.containerName);
     const current = row ? rowToContainerEntry(row) : null;
     if (
       !current ||
@@ -530,7 +383,8 @@ export async function removeSandboxRegistryRuntime(
       !current ||
       (current.runtimeState !== "removing" && current.runtimeState !== "removing-pending") ||
       current.backendId !== removing.backendId ||
-      current.sessionKey !== removing.sessionKey
+      current.sessionKey !== removing.sessionKey ||
+      (options.shouldRemove && !options.shouldRemove(current))
     ) {
       return;
     }
@@ -541,17 +395,25 @@ export async function removeSandboxRegistryRuntime(
 
 /** Reads all registered browser sandbox containers from SQLite. */
 export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
-  return {
-    entries: readRegistryRows("browser")
-      .map((row) => rowToBrowserEntry(row))
-      .filter((entry): entry is SandboxBrowserRegistryEntry => entry != null),
-  };
+  const reply = await executeExistingOpenClawStateRead({}, { type: "sandboxRegistry.browsers" });
+  if (!reply) {
+    return { entries: [] };
+  }
+  if (!reply.ok || reply.type !== "sandboxRegistry.browsers") {
+    throw new Error("Unexpected sandbox browser registry result");
+  }
+  return { entries: reply.entries };
 }
 
 /** Validate the exact browser workspace owner before local reconciliation effects. */
 export function assertSandboxBrowserRegistryEntryCurrent(entry: SandboxBrowserRegistryEntry): void {
-  const row = readRegistryRow("browser", entry.containerName);
-  const current = row ? rowToBrowserEntry(row) : null;
+  const current = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+    if (!tableExists(db, "sandbox_registry_entries")) {
+      return null;
+    }
+    const row = readSandboxRegistryRowInDatabase(db, "browser", entry.containerName);
+    return row ? rowToBrowserEntry(row) : null;
+  });
   if (
     !current ||
     current.sessionKey !== entry.sessionKey ||
@@ -573,7 +435,7 @@ export function insertSandboxBrowserRegistryEntryIfMissing(
 /** Creates or updates one browser sandbox registry entry, preserving immutable creation fields. */
 export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {
   runOpenClawStateWriteTransaction(({ db }) => {
-    const existingRow = readRegistryRowFromDb(db, "browser", entry.containerName);
+    const existingRow = readSandboxRegistryRowInDatabase(db, "browser", entry.containerName);
     const existing = existingRow ? rowToBrowserEntry(existingRow) : null;
     insertRegistryRow(db, browserEntryToRow(entry, existing));
   });
@@ -597,7 +459,7 @@ export function removeSandboxRegistryGeneration(
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
     assertCurrent();
-    const row = readRegistryRowFromDb(db, kind, entry.containerName);
+    const row = readSandboxRegistryRowInDatabase(db, kind, entry.containerName);
     const current = row && (kind === "browser" ? rowToBrowserEntry(row) : rowToContainerEntry(row));
     if (!current || !sameSandboxRegistryGeneration(current, entry)) {
       throw new Error("Sandbox runtime generation changed during retirement");

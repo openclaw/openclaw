@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createManagerIndexFixture } from "./memory/manager-index.test-support.js";
 import { createMemorySearchTool, testing } from "./tools.js";
@@ -31,6 +34,7 @@ describe("memory_search during a chunking upgrade", () => {
     }
     await manager.close();
     await closeAllMemorySearchManagers();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const db = new DatabaseSync(dbPath);
     try {

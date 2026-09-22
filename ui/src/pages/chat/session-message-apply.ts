@@ -5,6 +5,7 @@ import {
 import type { SessionProjectionScope } from "@openclaw/gateway-client/browser";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
@@ -72,6 +73,7 @@ export function applySessionMessagePayload(
     return;
   }
   const sourceMessage = event.message;
+  const sourceRecord = asNonArrayRecord(sourceMessage);
   const incoming = readSessionMessageIdentity(sourceMessage, event);
   if (!incoming) {
     return;
@@ -95,11 +97,27 @@ export function applySessionMessagePayload(
     (producerRunId || (!incoming.runId && runActive !== true))
       ? finishingChatRunId(state, source, sourceMessage, scope, producerRunId)
       : null;
+  const toolImageOwnerRunId =
+    normalizeRoleForGrouping(incoming.role) === "tool" &&
+    incoming.id &&
+    incoming.sequence !== null &&
+    !incoming.isImported &&
+    producerRunId &&
+    Array.isArray(sourceRecord.content) &&
+    sourceRecord.content.some((part) => {
+      const block = asNonArrayRecord(part);
+      return (
+        block.type === "image" && typeof block.artifactId === "string" && block.artifactId.trim()
+      );
+    })
+      ? finishingChatRunId(state, source, sourceMessage, scope, producerRunId)
+      : null;
   if (
     source.kind === "live" &&
     incoming.role !== "user" &&
     !isPreviousRunAssistant &&
-    !assistantOwnerRunId
+    !assistantOwnerRunId &&
+    !toolImageOwnerRunId
   ) {
     return;
   }
@@ -115,7 +133,6 @@ export function applySessionMessagePayload(
   if (!incoming.id && !incoming.idempotencyKey && incoming.sequence === null) {
     return;
   }
-  const sourceRecord = asNonArrayRecord(sourceMessage);
   if (!sourceRecord) {
     return;
   }

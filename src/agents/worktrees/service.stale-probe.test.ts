@@ -29,6 +29,16 @@ describe("ManagedWorktreeService missing-path observations", () => {
   let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;
   const now = 1_700_000_000_000;
+  const completedGcResult = {
+    removed: [],
+    orphansDeleted: 0,
+    snapshotsPruned: 0,
+    outcome: "completed",
+    issues: [],
+    issueCount: 0,
+    protectedCount: 0,
+    limitsSatisfied: true,
+  };
 
   beforeEach(async () => {
     root = await fs.realpath(tempDirs.make("openclaw-worktree-stale-probe-"));
@@ -90,7 +100,7 @@ describe("ManagedWorktreeService missing-path observations", () => {
       if (operation === "list") {
         expect(result).toEqual([]);
       } else {
-        expect(result).toEqual({ removed: [], orphansDeleted: 0, snapshotsPruned: 0 });
+        expect(result).toEqual(completedGcResult);
       }
     },
   );
@@ -120,7 +130,7 @@ describe("ManagedWorktreeService missing-path observations", () => {
         if (operation === "list") {
           expect(result).toEqual([restored]);
         } else {
-          expect(result).toEqual({ removed: [], orphansDeleted: 0, snapshotsPruned: 0 });
+          expect(result).toEqual(completedGcResult);
         }
       } finally {
         gate.inspect.resolve();
@@ -172,7 +182,7 @@ describe("ManagedWorktreeService missing-path observations", () => {
         if (operation === "list") {
           expect(result).toEqual([rebound]);
         } else {
-          expect(result).toEqual({ removed: [], orphansDeleted: 0, snapshotsPruned: 0 });
+          expect(result).toEqual(completedGcResult);
         }
       } finally {
         gate.inspect.resolve();

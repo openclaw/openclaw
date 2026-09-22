@@ -1,4 +1,11 @@
 /** Pending native preparation must transfer only live invocation authority to the child owner. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  installSpawnAuthorityFixture,
+  installSpawnThreadBindingFixture,
+  installSpawnAttachmentFixture,
+} from "./subagent-spawn.authority.test-support.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -46,11 +53,6 @@ import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { resolveSubagentAttachmentDir } from "../subagent-attachment-paths.js";
 import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
-import {
-  installSpawnAuthorityFixture,
-  installSpawnThreadBindingFixture,
-  installSpawnAttachmentFixture,
-} from "./subagent-spawn.authority.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();

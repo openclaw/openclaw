@@ -118,7 +118,9 @@ export async function resolveComputerBinding(params: {
       }
       service.assertSessionAttachment(attachment);
     };
-    service.touchSessionAttachment(attachment);
+    await service.touchSessionAttachment(attachment);
+    assertCaller();
+    assertCurrent();
     const prepared = await service.prepareAttachedComputer({
       ...attachment,
       runId: run.runId,
@@ -159,13 +161,17 @@ export async function resolveComputerBinding(params: {
             throw new Error("Attached computer invocation lost its admitted caller");
           }
           assertInvocation();
-          service.touchSessionAttachment(attachment);
+          await service.touchSessionAttachment(attachment);
+          assertInvocation();
+          assertCurrent();
           const result = await transport.invoke(
             { ...request, nodeId: node.nodeId },
             assertInvocation,
           );
           assertInvocation();
-          service.touchSessionAttachment(attachment);
+          await service.touchSessionAttachment(attachment);
+          assertInvocation();
+          assertCurrent();
           return result;
         },
       };

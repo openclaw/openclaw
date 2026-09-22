@@ -4,6 +4,7 @@ import { createGatewaySessionEntryReader } from "../../gateway/session-utils-sto
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { storeTargetKey } from "./combined-store-paths.js";
 import type { SessionStoreTarget } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
@@ -16,10 +17,6 @@ export type GatewayStoredSessionTarget = GatewaySessionModelSource & {
 };
 
 export type GatewayStoredSessionTargets = ReadonlyMap<string, GatewayStoredSessionTarget>;
-
-export function storeTargetKey(target: SessionStoreTarget): string {
-  return `${target.agentId}\0${target.storePath}`;
-}
 
 export function createSessionModelSources(
   cfg: OpenClawConfig,

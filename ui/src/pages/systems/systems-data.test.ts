@@ -172,7 +172,7 @@ describe("Systems inventory loading", () => {
     expect(
       request.mock.calls.map(([method, params, options]) => [method, params, options?.signal]),
     ).toEqual([
-      ["environments.list", {}, controller.signal],
+      ["environments.list", { includeDesktopSetup: true }, controller.signal],
       ["node.list", {}, controller.signal],
       ["system.info", {}, controller.signal],
     ]);

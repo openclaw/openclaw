@@ -110,7 +110,11 @@ export type DoctorConfigCapture = {
   configChanges: UpdateDoctorConfigChange[];
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
 };
-export type UpdateDoctorWriteAuthority = { inputHash: string; assertCurrent: () => void };
+export type UpdateDoctorWriteAuthority = {
+  inputHash: string;
+  assertCurrent: () => void;
+  postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
+};
 const doctorConfigWrites = new AsyncLocalStorage<{
   capture: DoctorConfigCapture;
   authority?: UpdateDoctorWriteAuthority;

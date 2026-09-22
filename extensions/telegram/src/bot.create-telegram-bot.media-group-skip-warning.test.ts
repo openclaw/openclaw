@@ -1,8 +1,17 @@
 // Telegram tests cover bot.create telegram bot.media group skip warning plugin behavior.
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { holdTelegramMediaTimeouts } from "./bot-media-timers.test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
+import {
+  clearTelegramRuntimeForTest,
+  resetTelegramMessageCacheForTest,
+} from "./runtime.test-support.js";
 
 const saveRemoteMedia = vi.fn();
 const saveMediaBuffer = vi.fn();
@@ -55,6 +64,7 @@ let createTelegramBot: (
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
 
 const loadConfig = getLoadConfigMock();
+let state: OpenClawTestState;
 
 const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
@@ -102,18 +112,23 @@ function resolveFlushTimer(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
 }
 
 async function flushChannelPostMediaGroup(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
-  const replyDispatched = new Promise<void>((resolve) => {
-    const previousReply = replySpy.getMockImplementation();
-    replySpy.mockImplementationOnce(async (...args) => {
-      const result = await previousReply?.(...args);
-      resolve();
-      return result;
-    });
-  });
   const flushTimer = resolveFlushTimer(setTimeoutSpy);
   expect(flushTimer).toBeTypeOf("function");
-  await flushTimer?.();
-  await replyDispatched;
+  const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+  let completion: Promise<unknown> | undefined;
+  try {
+    // Settle the queued dispatch before fixture cleanup closes its SQLite stores.
+    flushTimer?.();
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    const queued = enqueueSpy.mock.results[0];
+    if (queued?.type === "return") {
+      completion = queued.value;
+    }
+  } finally {
+    enqueueSpy.mockRestore();
+  }
+  expect(completion).toBeDefined();
+  await completion;
 }
 
 function createChannelPostContext(params: {
@@ -190,13 +205,23 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       });
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ label: "telegram-media-group-skip-warning" });
+    resetPluginStateStoreForTests({ closeDatabase: false });
+    setTelegramPluginStateRuntimeForTests();
     saveRemoteMedia.mockReset();
     saveMediaBuffer.mockReset();
     readRemoteMediaBuffer.mockReset();
     rootRead.mockReset();
     sendMessageSpy.mockClear();
     replySpy.mockClear();
+  });
+
+  afterEach(async () => {
+    clearTelegramRuntimeForTest();
+    resetTelegramMessageCacheForTest();
+    resetPluginStateStoreForTests();
+    await state.cleanup();
   });
 
   it("warns the user once when an album drops some images", async () => {
@@ -214,7 +239,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}`);
     });
 
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
     try {
       const handler = getChannelPostHandler();
       const baseMessageId = await queueChannelPostAlbum(handler, {
@@ -255,7 +280,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${urlOf(args)}`);
     });
 
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
     try {
       const handler = getChannelPostHandler();
       await queueChannelPostAlbum(handler, {
@@ -295,7 +320,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}`);
     });
 
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
     try {
       const handler = getChannelPostHandler();
       await queueChannelPostAlbum(handler, {

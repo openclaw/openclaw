@@ -3,7 +3,6 @@ import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-p
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -56,6 +55,31 @@ type ListModelsParams = {
   view?: "all" | "configured" | "provider-config" | "default";
 };
 
+const chatMetadataSnapshot = createPluginMetadataSnapshotFixture({
+  plugins: [
+    {
+      id: "openai",
+      providers: ["openai"],
+      modelCatalog: {
+        discovery: { openai: "runtime" },
+        providers: { openai: { defaultUtilityModel: "gpt-5.6-luna", models: [] } },
+      },
+      setup: { providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }] },
+    },
+    {
+      id: "anthropic",
+      providers: ["anthropic"],
+      cliBackends: ["claude-cli"],
+      syntheticAuthRefs: ["claude-cli"],
+      providerAuthAliases: { "claude-cli": "anthropic" },
+      modelCatalog: { discovery: { anthropic: "refreshable", "claude-cli": "static" } },
+      setup: {
+        providers: [{ id: "anthropic", envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] }],
+      },
+    },
+  ],
+});
+
 export function createModelsListTestContext(params: ListModelsParams) {
   const agentId = params.agentId ?? "main";
   const config = params.cfg ?? ({} as OpenClawConfig);
@@ -76,8 +100,7 @@ export function createModelsListTestContext(params: ListModelsParams) {
           allowKeychainPrompt: false,
         },
       ),
-      metadataSnapshot:
-        params.metadataSnapshot ?? loadManifestMetadataSnapshot({ config, env: process.env }),
+      metadataSnapshot: params.metadataSnapshot ?? chatMetadataSnapshot,
       entries,
       routeVariants: entries,
       ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),

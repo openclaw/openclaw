@@ -49,6 +49,7 @@ export const NodePresenceAlivePayloadSchema = closedObject({
 export const NodePresenceActivityPayloadSchema = Type.Union([
   closedObject({
     idleSeconds: Type.Integer({ minimum: 0, maximum: 2_592_000 }),
+    source: Type.Optional(Type.Union([Type.Literal("app"), Type.Literal("system")])),
     saturated: Type.Optional(Type.Boolean()),
   }),
   closedObject({

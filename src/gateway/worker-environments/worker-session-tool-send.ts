@@ -3,7 +3,7 @@ import type { AgentToolGatewayRequestCaller } from "../../agents/tools/in-proces
 import { runWithScopedSessionAccess } from "../../agents/tools/scoped-session-access.js";
 import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { WorkerSessionToolOutcomeUnknownError } from "./worker-session-tool-result.js";
 import {
   resolveWorkerSessionToolTarget as exactAuthorizedTarget,

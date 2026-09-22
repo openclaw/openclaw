@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AcpxRuntime as BaseAcpxRuntime, type AcpRuntimeOptions } from "acpx/runtime";
+import {
+  AcpxRuntime as BaseAcpxRuntime,
+  createAgentRegistry,
+  createFileSessionStore,
+  type AcpRuntimeOptions,
+} from "acpx/runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -16,9 +21,11 @@ import {
   openAcpxProcessLeaseStateStore,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
-import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "./runtime.js";
+import { AcpxRuntime } from "./runtime.js";
 
-const script = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const script = fileURLToPath(
+  new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
+);
 const sessionKey = "agent:main:acp:argv";
 const samples = ["", "space value", `owner's "choice"`, String.raw`C:\tools\adapter`];
 
@@ -50,6 +57,32 @@ async function prompt(
   expect(await turn.result).toMatchObject({ status: "completed" });
   return JSON.parse(chunks.join(""));
 }
+
+it("passes child-only environment through the ACPX process factory", async () => {
+  await withOpenClawTestState({ label: "acpx-agent-env" }, async (state) => {
+    const peerDirectory = path.join(state.root, "peer");
+    await fs.mkdir(peerDirectory);
+    const runtime = new AcpxRuntime({
+      cwd: state.root,
+      agentProcessEnv: { TOKIO_WORKER_THREADS: "7" },
+      permissionMode: "deny-all",
+      sessionStore: createFileSessionStore({ stateDir: path.join(state.root, "state") }),
+      agentRegistry: createAgentRegistry({
+        overrides: { fixture: [process.execPath, script, peerDirectory, "--capture-worker-env"] },
+      }),
+    });
+    let handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>> | undefined;
+    try {
+      handle = await runtime.ensureSession({ sessionKey, agent: "fixture", mode: "persistent" });
+      expect(await prompt(runtime, handle, "inspect")).toMatchObject({ workerThreads: "7" });
+    } finally {
+      if (handle) {
+        await runtime.close({ handle, reason: "test" });
+      }
+      await runtime.shutdown();
+    }
+  });
+});
 
 it.each([
   { wrapped: false, form: "path" },

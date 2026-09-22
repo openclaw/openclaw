@@ -216,7 +216,6 @@ event('complete');\n`,
                 requestedChannel: null,
                 opts: { json: true, timeout: explicit, acceptCapabilities: true },
                 timeoutMs: larger ? allowance * 3 : allowance,
-                parentOwnsCompletion: true,
               });
         const events: Array<{ kind: string; pid: number; command: string; planning: boolean }> = (
           await fs.readFile(fixture.events, "utf8")

@@ -112,7 +112,7 @@ function createPreparedRunningTask(...args: Parameters<typeof prepareRunningTask
 }
 
 function createFakeTaskReceipt(task: TaskRecord): CreatedDetachedTaskRun {
-  return { task, settleUnstarted: async () => false };
+  return { task, settleUnstarted: async () => false, finalizeActive: async () => undefined };
 }
 
 function findWarningPayload(message: string): Record<string, unknown> | undefined {

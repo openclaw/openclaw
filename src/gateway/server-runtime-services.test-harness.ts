@@ -163,15 +163,10 @@ export function createPostReadyMaintenanceScheduleParams(
 
 export function createMaintenanceHandles() {
   return {
-    tickInterval: setInterval(() => undefined, 60_000),
-    healthInterval: setInterval(() => undefined, 60_000),
-    dedupeCleanup: setInterval(() => undefined, 60_000),
+    stopPeriodicTasks: vi.fn(async () => {}),
     startMediaCleanup: vi.fn(async () => undefined),
     stopMediaCleanup: vi.fn(async () => "drained" as const),
-    stopSessionColdStorageMaintenance: vi.fn(async () => {}),
-    stopTelemetryChecks: vi.fn(async () => {}),
-    worktreeCleanup: setInterval(() => undefined, 60_000),
-    skillUsageCleanup: vi.fn(),
+    skillUsageCleanup: vi.fn(async () => {}),
   };
 }
 

@@ -3,6 +3,7 @@ import type {
   SessionSharingIdentity,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { listProfiles } from "../../state/user-profiles.js";
+import { buildControlUiUserAvatarPath } from "../control-ui-contract.js";
 
 export type SharingActorFacts =
   | { state: "present"; actor: SessionSharingIdentity }
@@ -23,6 +24,8 @@ export function knownSessionIdentities(params: {
     identities.set(identity.id, {
       type: identity.type,
       id: identity.id,
+      ...(identity.identity ? { identity: identity.identity } : {}),
+      ...(identity.avatarUrl ? { avatarUrl: identity.avatarUrl } : {}),
       ...((identity.label ?? current?.label) ? { label: identity.label ?? current?.label } : {}),
     });
   };
@@ -36,7 +39,15 @@ export function knownSessionIdentities(params: {
     remember({
       type: "human",
       id: profile.id,
-      ...(profile.displayName ? { label: profile.displayName } : {}),
+      identity: { type: "profile", id: profile.id },
+      label:
+        profile.displayName?.trim() ||
+        profile.githubIdentity?.login ||
+        profile.emails[0] ||
+        profile.id,
+      ...(profile.hasAvatar
+        ? { avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.updatedAt) }
+        : {}),
     });
   }
   return [...identities.values()];

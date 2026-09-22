@@ -17,10 +17,7 @@ import {
   type ApplicationRouter,
   type RouteId,
 } from "../app-routes.ts";
-import {
-  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
-  sessionRefFromPath,
-} from "../app-session-route-paths.ts";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
@@ -145,17 +142,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   if (startup.changed && !documentMode) {
     saveSettings(settings);
   }
-  let applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
-  const startupSearchParams = new URLSearchParams(applicationLocation.search);
-  const hasSidebarCollapseIntent =
-    startupSearchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name) ===
-    SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value;
-  if (hasSidebarCollapseIntent) {
-    // Sidebar-row hrefs mark new-tab intent once; strip it so copied URLs and reloads stay canonical.
-    startupSearchParams.delete(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name);
-    const search = startupSearchParams.toString();
-    applicationLocation = { ...applicationLocation, search: search ? `?${search}` : "" };
-  }
+  const applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
   if (applicationLocation !== startup.location) {
     history.replace(applicationLocation);
   }
@@ -329,11 +316,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     connectionBootstrap,
   });
   const stopConfigWriteSuspension = bindUpdateConfigWriteInterlock(overlays, runtimeConfig);
-  const navigation = createApplicationNavigationPreferences(
-    settings,
-    hasSidebarCollapseIntent &&
-      sessionRefFromPath(applicationLocation.pathname, basePath)?.namespace === "chat",
-  );
+  const navigation = createApplicationNavigationPreferences(settings);
   const nativeChatDrafts = createNativeChatDrafts();
   const linkReaderRouting = startLinkReaderRouting(() => gateway.snapshot);
   const nativeLinkRouting = startNativeLinkRouting({

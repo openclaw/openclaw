@@ -205,6 +205,7 @@ export function renderChatModelAccountControl(params: {
           class="chat-controls__provider-heading chat-controls__account-heading"
           type="button"
           data-chat-account-group-toggle
+          data-chat-model-group-toggle
           aria-expanded=${currentInventory.open}
           ?disabled=${params.disabled}
           @click=${() => {

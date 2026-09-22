@@ -43,9 +43,16 @@ function pullRequestPreview(pr: ControlUiSessionPullRequest): ControlUiLinkReade
               : "neutral",
     },
     author: pr.author?.login,
+    authorUrl: pr.author?.login
+      ? "https://github.com/" + encodeURIComponent(pr.author.login)
+      : undefined,
     metadata: [
-      ...(pr.additions === undefined ? [] : [{ label: "", value: "+" + pr.additions }]),
-      ...(pr.deletions === undefined ? [] : [{ label: "", value: "−" + pr.deletions }]),
+      ...(pr.additions === undefined
+        ? []
+        : [{ label: "", value: "+" + pr.additions, tone: "positive" as const }]),
+      ...(pr.deletions === undefined
+        ? []
+        : [{ label: "", value: "−" + pr.deletions, tone: "negative" as const }]),
     ],
   };
 }

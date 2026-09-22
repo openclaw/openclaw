@@ -2,12 +2,14 @@ import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  createWorkerInferenceExecutor,
+  executeWorkerInference,
   type WorkerInferenceExecutionParams,
 } from "../gateway/worker-environments/inference-runtime.js";
+import * as workerSessionTargetRuntime from "../gateway/worker-environments/session-target.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as sessionAuthRuntime from "./auth-profiles/session-override.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import {
   acquireSimpleCompletionModelForAgent,
@@ -136,17 +138,19 @@ module.exports = {
               },
             };
             await state.writeConfig(cfg);
-            const executeWorker = createWorkerInferenceExecutor({
-              resolveSessionTarget: () => ({
+            if (mode === "worker") {
+              vi.spyOn(workerSessionTargetRuntime, "resolveWorkerSessionTarget").mockReturnValue({
                 agentId: "main",
                 sessionEntry: { sessionId: "selected-test", updatedAt: 0 },
+                sessionId: "selected-test",
                 sessionKey: "agent:main:main",
                 sessionStore: {},
                 storePath: state.path("unused-session-store.sqlite"),
-              }),
-              resolveSessionAuthSelection: async () => undefined,
-              recordUsage: () => {},
-            });
+              });
+              vi.spyOn(sessionAuthRuntime, "resolveSessionAuthSelection").mockResolvedValue(
+                undefined,
+              );
+            }
 
             for (const [raw, expected] of [
               ["entry", "middle"],
@@ -154,7 +158,7 @@ module.exports = {
               ["plain", "plain"],
             ] as const) {
               if (mode === "worker") {
-                const result = await executeWorker(workerRequest(cfg, provider, raw));
+                const result = await executeWorkerInference(workerRequest(cfg, provider, raw));
                 expect(result).toMatchObject({
                   type: "done",
                   message: {

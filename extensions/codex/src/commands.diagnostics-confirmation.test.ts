@@ -49,6 +49,36 @@ describe("codex command", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
   });
 
+  it("preserves an accepted upload and blocks the next target after owner revocation", async () => {
+    for (const sessionId of ["session-1", "session-2"]) {
+      await writeTestBinding(
+        { kind: "session", agentId: "main", sessionId },
+        { threadId: `thread-${sessionId}`, cwd: "/repo" },
+      );
+    }
+    let ownerCurrent = true;
+    const safeCodexControlRequest = vi.fn(async () => {
+      ownerCurrent = false;
+      return { ok: true as const, value: { threadId: "thread-session-1" } };
+    });
+    const result = await handleCodexCommand(
+      createContext("diagnostics", undefined, {
+        diagnosticsUploadApproved: true,
+        diagnosticsSessions: [{ sessionId: "session-2", channel: "test" }],
+        assertOwnerCurrent: () => {
+          if (!ownerCurrent) {
+            throw new Error("Command owner was revoked");
+          }
+        },
+      }),
+      { deps: createDeps({ safeCodexControlRequest }) },
+    );
+    expect(safeCodexControlRequest).toHaveBeenCalledOnce();
+    expect(result.text).toContain("Codex diagnostics sent to OpenAI servers:");
+    expect(result.text).toContain("Could not send Codex diagnostics:");
+    expect(result.text).toContain("Command owner was revoked");
+  });
+
   it("asks before sending diagnostics feedback for the attached Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestBinding(

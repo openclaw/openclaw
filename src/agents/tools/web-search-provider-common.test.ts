@@ -52,7 +52,11 @@ describe("web provider HTTP errors", () => {
             (cause: unknown) => cause,
           );
           expect(authorization).toBe(`Bearer ${apiKey}`);
-          expect(error).toEqual(new Error(`Search API error (401): ${expected}`));
+          expect(error).toMatchObject({
+            message: `Search API error (401): ${expected}`,
+            status: 401,
+            statusCode: 401,
+          });
         },
       );
     },

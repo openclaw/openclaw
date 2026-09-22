@@ -827,15 +827,8 @@ export function buildGatewayCronService(params: {
       );
       return timeoutMs === 0 ? undefined : timeoutMs;
     },
-    runIsolatedAgentJob: async ({
-      job,
-      message,
-      abortSignal,
-      onExecutionStarted,
-      onExecutionPhase,
-      onLaneWait,
-      executionIdentity,
-    }) => {
+    runIsolatedAgentJob: async (request) => {
+      const { job } = request;
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
       const reviewAgentId = skillCollectionReviewMonitorAgentId(job);
@@ -850,15 +843,9 @@ export function buildGatewayCronService(params: {
       }
       try {
         return await runCronIsolatedAgentTurn({
+          ...request,
           cfg: runtimeConfig,
           deps: params.deps,
-          job,
-          message,
-          abortSignal,
-          onExecutionStarted,
-          onExecutionPhase,
-          onLaneWait,
-          executionIdentity,
           agentId,
           sessionKey,
           lane: "cron",

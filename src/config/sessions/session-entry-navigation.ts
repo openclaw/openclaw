@@ -13,16 +13,32 @@ import {
   type SessionTranscriptTreeNode,
 } from "./transcript-tree.js";
 
-export type SessionNavigationEntry = Pick<
-  SessionEntryBase,
-  "id" | "parentId" | "timestamp" | "appendMode"
-> &
-  (
+export type SessionNavigationEntry = Pick<SessionEntryBase, "id" | "parentId"> & {
+  timestamp?: string;
+  appendMode?: unknown;
+} & (
     | { type: "label"; targetId: string; label?: string }
     | { type: Exclude<SessionEntry["type"], "label"> }
   );
 
 type SessionParentEntry = Pick<SessionEntryBase, "id" | "parentId">;
+
+/** Physical replay traversal stops on unknown rows; budget exhaustion retains the current ID. */
+export function* walkSessionCurrentTurn(
+  initialParentId: string | null,
+  ancestorLimit: number,
+): Generator<string, string | null, (SessionParentEntry & { traversable: boolean }) | undefined> {
+  let parentId = initialParentId;
+  let remainingAncestors = ancestorLimit;
+  while (parentId && remainingAncestors-- > 0) {
+    const parent = yield parentId;
+    if (!parent || parent.id !== parentId || !parent.traversable) {
+      break;
+    }
+    parentId = parent.parentId;
+  }
+  return parentId;
+}
 
 function resolveSessionCanonicalParentId(
   parentId: string | null,
@@ -142,7 +158,7 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
   protected logicalParentsById = new Map<string, string | null>();
   protected invalidLeafControlIds = new Set<string>();
   protected labelsById = new Map<string, string>();
-  protected labelTimestampsById = new Map<string, string>();
+  protected labelTimestampsById = new Map<string, T["timestamp"]>();
   protected leafId: string | null = null;
   protected appendParentId: string | null = null;
   protected appendMode: "side" | undefined;

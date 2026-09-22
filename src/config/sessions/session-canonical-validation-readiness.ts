@@ -79,7 +79,7 @@ export async function certifySessionCanonicalValidationPending(
             claim.assertCurrent();
             const result = await withSqliteMutationWorkerLifetime(
               databaseOptions,
-              async ({ assertCurrent, commitGate }) =>
+              async ({ assertCurrent, commitGate, signal }) =>
                 await withWorker(
                   databaseOptions,
                   claim,
@@ -130,6 +130,7 @@ export async function certifySessionCanonicalValidationPending(
                     assertCurrent();
                     claim.assertCurrent();
                   },
+                  signal,
                 ),
             );
             assertCurrentOwner?.();

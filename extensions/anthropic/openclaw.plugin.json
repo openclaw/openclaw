@@ -279,7 +279,7 @@
             },
             "contextWindow": 200000,
             "maxTokens": 64000,
-            "compat": { "codeMode": "preferred" }
+            "compat": { "codeMode": "capable" }
           }
         ]
       }

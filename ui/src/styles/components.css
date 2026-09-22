@@ -1080,8 +1080,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .plugin-official-badge svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
 }
 
 /* ===========================================
@@ -2554,6 +2555,115 @@ select.input {
   user-select: none;
 }
 
+.code-block-json-modes {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.code-block-json-mode {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+
+.code-block-json-mode[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+
+.code-block-json-mode:focus-visible,
+.code-block-json-node > summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.code-block-json-tree {
+  max-height: 360px;
+  padding: 6px 14px 16px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+
+.code-block-json-children {
+  padding-inline-start: 20px;
+}
+
+.code-block-json-tree .code-block-json-node {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.code-block-json-node > summary {
+  display: block;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  list-style: none;
+}
+
+.code-block-json-node > summary::-webkit-details-marker {
+  display: none;
+}
+
+.code-block-json-node > summary::before {
+  position: static;
+  content: "▸";
+  display: inline-block;
+  inline-size: 14px;
+  block-size: auto;
+  margin-inline-start: -14px;
+  background: none;
+  transform: none;
+}
+
+.code-block-json-node[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.code-block-json-node-summary {
+  font-style: italic;
+}
+
+.code-block-json-node-opening,
+.code-block-json-node[open] > summary > .code-block-json-node-summary {
+  display: none;
+}
+
+.code-block-json-node[open] > summary > .code-block-json-node-opening {
+  display: inline;
+}
+
+.code-block-json-key,
+.code-block-json-value--string {
+  color: var(--hljs-string);
+}
+
+.code-block-json-value--literal {
+  color: var(--hljs-number);
+}
+
+/* Raw keeps the shared seven-line preview, reveal, wrap, and original copy payload. */
+.code-block-wrapper--json:not(.is-json-raw) > :is(.code-block-viewport, .code-block-expand),
+.code-block-wrapper--json:not(.is-json-raw) .code-block-wrap,
+.code-block-wrapper--json.is-json-raw > .code-block-json-tree {
+  display: none;
+}
+
 .code-block-copy {
   appearance: none;
   border: none;
@@ -2660,7 +2770,7 @@ select.input {
     transform var(--duration-fast) var(--ease-out);
 }
 
-.chip:hover {
+.chip:is(button, a, label):hover {
   border-color: var(--border-strong);
   transform: translateY(-1px);
 }
@@ -4838,13 +4948,22 @@ td.data-table-key-col {
   box-shadow: var(--shadow-lg);
 }
 
+.cmd-palette__attachments {
+  --chat-composer-editor-inset-inline: 14px;
+  --chat-composer-editor-inset-block: 6px;
+  --chat-attachment-hit-slop: 12px;
+  --chat-box-inset: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+  margin: 0 12px 6px 4px;
+}
+
 .cmd-palette__entry {
   --cmd-palette-actions-width: 170px;
   position: relative;
   flex: 0 0 auto;
   min-width: 0;
   padding: 14px 5px 14px 18px;
-  border-bottom: 1px solid var(--border);
 }
 
 .cmd-palette__input-scroll {
@@ -4940,6 +5059,34 @@ td.data-table-key-col {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.cmd-palette__search {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-height: 0;
+  opacity: 1;
+  transition:
+    grid-template-rows var(--duration-normal) var(--ease-out),
+    opacity var(--duration-normal) ease;
+}
+
+.cmd-palette__search-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cmd-palette__search-content::before {
+  content: "";
+  flex: 0 0 1px;
+  background: var(--border);
+}
+
+.cmd-palette--prompt .cmd-palette__search {
+  grid-template-rows: 0fr;
+  opacity: 0;
 }
 
 .cmd-palette__filters {
@@ -5948,6 +6095,10 @@ td.data-table-key-col {
   stroke-linejoin: round;
 }
 
+.session-action--touch-menu {
+  display: none;
+}
+
 .session-action:hover:not(:disabled) {
   background: color-mix(in srgb, var(--bg-hover) 92%, transparent);
   color: var(--text);
@@ -5971,8 +6122,7 @@ td.data-table-key-col {
   pointer-events: auto;
 }
 
-/* Sidebar rows are now the direct management surface after removing the
-   duplicate picker; touch users need pin/menu controls without hover. */
+/* Touch devices need tappable actions, including a menu without right-click. */
 @media (hover: none), (pointer: coarse) {
   .sidebar-recent-session.session-row-host {
     --session-row-actions-reserve: 92px;
@@ -5980,6 +6130,14 @@ td.data-table-key-col {
 
   .sidebar-recent-session.session-row-host[data-session-row-action-count="1"] {
     --session-row-actions-reserve: 48px;
+  }
+
+  .sidebar-recent-session:has(.session-action--touch-menu):has([data-sidebar-session-pin]) {
+    --session-row-actions-reserve: 136px;
+  }
+
+  .session-action--touch-menu {
+    display: inline-flex;
   }
 
   .sidebar-recent-session .session-action {
@@ -6204,6 +6362,21 @@ td.data-table-key-col {
   background: currentColor;
   mask: var(--provider-icon-url) center / contain no-repeat;
   -webkit-mask: var(--provider-icon-url) center / contain no-repeat;
+}
+
+.cloud-profile-icon,
+.cloud-profile-icon > svg,
+.cloud-profile-icon > .cloud-provider-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: inherit;
+}
+
+.cloud-provider-icon[data-provider-icon="hetzner"] {
+  mask-size: 88%;
+  -webkit-mask-size: 88%;
 }
 
 .provider-brand-icon--fallback {

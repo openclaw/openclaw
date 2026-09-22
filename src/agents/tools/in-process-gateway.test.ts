@@ -19,13 +19,11 @@ vi.mock("../../gateway/method-scopes.js", () => ({
   resolveLeastPrivilegeOperatorScopesForMethod: () => ["operator.write"],
 }));
 
-vi.mock("../../gateway/server-plugins.js", () => ({
+vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   dispatchGatewayMethodInProcess: mocks.dispatch,
   getInProcessGatewayRequestContext: (resolver?: () => GatewayRequestContext | undefined) =>
     resolver ? resolver() : mocks.hasContext ? mocks.context : undefined,
   runWithOperatorToolGatewayCleanupContext: <T>(run: () => T) => run(),
-  hasInProcessGatewayContext: (resolveGatewayContext?: () => GatewayRequestContext | undefined) =>
-    Boolean(resolveGatewayContext?.() ?? mocks.hasContext),
 }));
 
 vi.mock("./gateway.js", () => ({ callGatewayTool: mocks.callGatewayTool }));
@@ -92,6 +90,7 @@ describe("trusted in-process Gateway session creation", () => {
         forceSyntheticClient: true,
         operatorRoleActor: { kind: "system" },
         sessionCreation: creation,
+        syntheticScopeMode: "minimum",
         syntheticScopes: ["operator.write"],
       },
     );
@@ -243,6 +242,7 @@ describe("trusted in-process Gateway session creation", () => {
         resolveGatewayContext: expect.any(Function),
         sessionCreation: creation,
         signal: controller.signal,
+        syntheticScopeMode: "minimum",
         syntheticScopes: ["operator.write"],
         timeoutMs: 2_000,
       });
@@ -378,6 +378,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
         forceSyntheticClient: true,
         operatorRoleActor: { kind: "system" },
         agentToolCaller,
+        syntheticScopeMode: "minimum",
         syntheticScopes: ["operator.write"],
         expectFinal: true,
         onAccepted,

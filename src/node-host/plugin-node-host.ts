@@ -283,8 +283,8 @@ export async function invokeRegisteredNodeHostCommand(
     : undefined;
   try {
     return await withPluginRuntimeRegistryScope(registry, async () => {
-      if (match.command.duplex === true) {
-        if (!io) {
+      if (match.command.duplex === true || match.command.duplex === "optional") {
+        if (match.command.duplex === true && !io) {
           throw new Error(`node command requires duplex transport: ${command}`);
         }
         return invokeContext
@@ -302,10 +302,10 @@ export async function invokeRegisteredNodeHostCommand(
 
 export function isRegisteredNodeHostCommandDuplex(command: string): boolean {
   const registry = resolveNodeHostPluginRegistry();
-  return (
-    (registry?.nodeHostCommands ?? []).find((entry) => entry.command.command === command)?.command
-      .duplex === true
-  );
+  const duplex = (registry?.nodeHostCommands ?? []).find(
+    (entry) => entry.command.command === command,
+  )?.command.duplex;
+  return duplex === true || duplex === "optional";
 }
 
 function resetNodeHostPluginRegistry(): void {

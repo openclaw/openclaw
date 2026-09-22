@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
+import {
+  replaceSessionEntry,
+  type SessionAccessScope,
+} from "../../config/sessions/session-accessor.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
@@ -29,4 +34,27 @@ export function createChatDirectiveSuiteResources() {
       fs.rmSync(root, { recursive: true, force: true });
     },
   };
+}
+
+export async function seedChatDirectiveFileTranscript(
+  scope: SessionAccessScope,
+  sessionId: string,
+  sessionFile: string,
+) {
+  fs.writeFileSync(
+    sessionFile,
+    `${JSON.stringify({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: sessionId,
+      timestamp: new Date(0).toISOString(),
+      cwd: "/tmp",
+    })}\n`,
+    "utf-8",
+  );
+  // The accessor resolves transcript targets from the persisted store, not the mocked Gateway.
+  await replaceSessionEntry(scope, {
+    sessionId,
+    updatedAt: Date.now(),
+  });
 }

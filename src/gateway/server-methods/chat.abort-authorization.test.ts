@@ -3,6 +3,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { createChatRunState } from "../server-chat-state.js";
+import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import {
   type AbortResponsePayload,
@@ -28,11 +29,11 @@ describe("chat.abort authorization", () => {
   it("rejects non-admin worker-only inference aborts", async () => {
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
     const context = createChatAbortContext({
-      workerEnvironmentService: {
+      workerEnvironmentService: createWorkerInferenceCancellationService(
+        "main-session",
+        ["worker-run"],
         cancelInferenceForSession,
-        hasInferenceForSession: () => true,
-        resolveInferenceSessionForRunId: () => "main-session",
-      },
+      ),
     });
     for (const runId of [undefined, "worker-run"]) {
       const respond = await invokeAbort({
@@ -444,11 +445,11 @@ describe("chat.abort queued-turn contract", () => {
     const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
     const cancelInferenceForSession = vi.fn(() => ["run-1"]);
     const context = createSingleAbortContext();
-    context.workerEnvironmentService = {
+    context.workerEnvironmentService = createWorkerInferenceCancellationService(
+      "main-session",
+      ["run-1"],
       cancelInferenceForSession,
-      hasInferenceForSession: (sessionId: string, runId?: string) =>
-        sessionId === "main-session" && (!runId || runId === "run-1"),
-    } as never;
+    );
 
     const respond = await invokeAbort({
       context,
@@ -469,10 +470,11 @@ describe("chat.abort queued-turn contract", () => {
     const onAuthorizedAfterQueuedAbort = vi.fn(() => false);
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
     const context = createChatAbortContext({
-      workerEnvironmentService: {
+      workerEnvironmentService: createWorkerInferenceCancellationService(
+        "main-session",
+        ["worker-run"],
         cancelInferenceForSession,
-        hasInferenceForSession: () => true,
-      },
+      ),
     });
 
     const respond = await invokeAbort({
@@ -498,11 +500,11 @@ describe("chat.abort queued-turn contract", () => {
     });
     const context = createChatAbortContext({
       chatAbortControllers: new Map([["run-hidden", hidden]]),
-      workerEnvironmentService: {
+      workerEnvironmentService: createWorkerInferenceCancellationService(
+        "main-session",
+        ["run-hidden"],
         cancelInferenceForSession,
-        hasInferenceForSession: (sessionId: string, runId?: string) =>
-          sessionId === "main-session" && (!runId || runId === "run-hidden"),
-      },
+      ),
     });
 
     const lifecycleRespond = await invokeAbort({

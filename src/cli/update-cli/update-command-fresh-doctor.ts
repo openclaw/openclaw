@@ -28,30 +28,44 @@ import {
 } from "../../infra/update-doctor-result.js";
 import {
   createUpdateFailureFact,
+  normalizeUpdateFailureFacts,
+  parseConfigFailureFacts,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
+import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
-import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
+import {
+  redactPublicSupportDiagnosticLine,
+  redactSupportString,
+} from "../../logging/diagnostic-support-redaction.js";
 import { formatCommandOutput } from "../../process/command-error.js";
+import {
+  CommandProcessCleanupError,
+  createSanitizedCommandError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import { isPlainCommandExitFailure, runExec, type RunExecOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import { parseUpdateTimeoutMs, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
+import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
   assertUpdateDoctorChildSucceeded,
-  createUpdateDoctorAuthority,
   inspectUpdateDoctorChildSupport,
   withUpdateDoctorChild,
 } from "./update-command-doctor-child.js";
+import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
 import {
   applyPostPluginConfigValidation,
   POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+  POST_PLUGIN_CONFIG_VALIDATION_EXECUTION_FAILED_REASON,
+  type PostPluginConfigValidation,
 } from "./update-command-post-plugin-validation.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
   stripGatewayServiceMarkerEnv,
@@ -112,7 +126,7 @@ function createPostPluginDoctorExecutionFailure(
       ...(pluginUpdate.warnings ?? []),
       {
         reason,
-        message: "Updated plugin migrations could not be run in a fresh process.",
+        message: `Post-update plugin Doctor did not complete: ${reason}`,
         guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
       },
     ],
@@ -136,7 +150,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   assertCurrent?: () => void;
   /** Propagate a refused child authority to the finalization owner without retrying it. */
   onAuthorityRefused?: () => void;
-}): Promise<void> {
+}): Promise<PluginUpdateWarning | void> {
   const {
     run,
     executorFence,
@@ -145,7 +159,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     assertCurrent,
     assertRequesterCurrent,
     refuseAuthority,
-  } = createUpdateDoctorAuthority(params);
+  } = createUpdateCommandAuthority(params, "Fresh Doctor");
   assertCurrent();
   const entryPath = params.entryPath ?? (await resolveGatewayInstallEntrypoint(params.root));
   if (!entryPath) {
@@ -164,6 +178,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
   const doctorResultPath = createUpdatePostInstallDoctorResultPath();
   let doctorResult: UpdatePostInstallDoctorResult | null = null;
+  let doctorSettled = true;
   let result: { stdout?: unknown; stderr?: unknown } | undefined;
   assertCurrent();
   try {
@@ -229,6 +244,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             repair: true,
             yes: params.yes,
             workspaceSuggestions: params.workspaceSuggestions === true,
+            ...(params.phase === "post-plugin" && process.env[POST_CORE_UPDATE_ENV] === "1"
+              ? { postCoreSchemaRepair: true as const }
+              : {}),
           },
         },
         (runCommand) =>
@@ -248,6 +266,13 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       assertCurrent();
     }
   } catch (error) {
+    if (
+      hasCommandProcessCleanupError(error) ||
+      (isRecord(error) && error.cleanup === "uncertain")
+    ) {
+      doctorSettled = false;
+      throw new CommandProcessCleanupError({ cause: error });
+    }
     if (
       collectNestedErrorCandidates(error).some(
         (cause) =>
@@ -271,7 +296,11 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       // advisory exit code. Convergence below still owns that repair.
       if (
         error.exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE &&
-        isPlainCommandExitFailure({ ...error, failed: error.failed === true }) &&
+        isPlainCommandExitFailure({
+          ...error,
+          failed: error.failed === true,
+          cause: error.cause,
+        }) &&
         doctorResult?.status === "advisory"
       ) {
         return;
@@ -279,20 +308,28 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     }
     const exitCode = isRecord(error) && typeof error.exitCode === "number" ? error.exitCode : null;
     const redaction = { env: process.env, stateDir: resolveStateDir() };
-    const failureFacts = doctorResult?.failureFacts?.length
-      ? doctorResult.failureFacts
-      : [
+    const failureFacts = doctorResult?.configWriteRefusal
+      ? [
           createUpdateFailureFact({
-            check: "doctor",
-            code: "doctor-failed",
-            message:
-              typeof result?.stderr === "string" && result.stderr.trim()
-                ? result.stderr
-                : error instanceof Error
-                  ? error.message
-                  : String(error),
+            check: "config-write",
+            code: doctorResult.configWriteRefusal.reason,
+            message: doctorResult.configWriteRefusal.message,
           }),
-        ];
+        ]
+      : doctorResult?.failureFacts?.length
+        ? doctorResult.failureFacts
+        : [
+            createUpdateFailureFact({
+              check: "doctor",
+              code: "doctor-failed",
+              message:
+                typeof result?.stderr === "string" && result.stderr.trim()
+                  ? result.stderr
+                  : error instanceof Error
+                    ? error.message
+                    : String(error),
+            }),
+          ];
     const details = (["stderr", "stdout"] as const).flatMap((stream) => {
       const output = result?.[stream];
       if (typeof output !== "string" || !output.trim()) {
@@ -311,20 +348,29 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       }
       return excerpt ? [`${stream}: ${excerpt}`] : [];
     });
-    if (details.length > 0) {
-      throw new UpdateDoctorError(
-        `Updated ${params.phase} Doctor failed:\n${details.join("\n")}`,
-        failureFacts,
-        { cause: error, exitCode },
-      );
+    const message = details.length
+      ? `Updated ${params.phase} Doctor failed:\n${details.join("\n")}`
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    // Explicit writer/migration refusals and unsettled writers retain their safety decision.
+    // An execution failure alone does not establish that installed state is unsafe.
+    if (
+      params.phase === "post-plugin" &&
+      !(isRecord(error) && error.isCanceled === true) &&
+      failureFacts.every((fact) => fact.check === "doctor" && fact.code === "doctor-failed")
+    ) {
+      return {
+        reason: "doctor-advisory",
+        message: `Post-update plugin Doctor did not complete${exitCode == null ? "" : ` (exit ${exitCode})`}: ${message}`,
+        guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
+      };
     }
-    throw new UpdateDoctorError(
-      error instanceof Error ? error.message : String(error),
-      failureFacts,
-      { cause: error, exitCode },
-    );
+    throw new UpdateDoctorError(message, failureFacts, { cause: error, exitCode });
   } finally {
-    doctorResult ??= await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+    if (doctorSettled) {
+      doctorResult ??= await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+    }
     if (doctorResult?.warnings?.length) {
       params.onWarnings?.(doctorResult.warnings);
     }
@@ -344,7 +390,7 @@ async function validatePostPluginConfigInFreshProcess(params: {
   timeoutMs: number;
   entryPath: string;
   nodeRunner?: string;
-}): Promise<boolean> {
+}): Promise<PostPluginConfigValidation> {
   try {
     await runExec(
       params.nodeRunner ?? resolveNodeRunner(),
@@ -358,9 +404,59 @@ async function validatePostPluginConfigInFreshProcess(params: {
         env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
       },
     );
-    return true;
-  } catch {
-    return false;
+    return { status: "valid" };
+  } catch (error) {
+    const result = isRecord(error) ? error : {};
+    const cleanupUncertain = result.cleanup === "uncertain" || hasCommandProcessCleanupError(error);
+    // The CLI also emits valid:false for runtime exceptions. Only an ordinary
+    // completed failure with actual issues establishes invalid authored config.
+    const issues =
+      !cleanupUncertain &&
+      isPlainCommandExitFailure({
+        ...result,
+        failed: result.failed === true,
+        cause: result.cause,
+      }) &&
+      typeof result.stdout === "string"
+        ? parseConfigFailureFacts(result.stdout, process.env)
+        : [];
+    if (issues.length) {
+      return { status: "invalid", failureFacts: issues };
+    }
+    const summary = [
+      createSanitizedCommandError(result).message,
+      ...(typeof result.signal === "string" ? [`signal=${result.signal}`] : []),
+      ...(cleanupUncertain ? ["cleanup=uncertain"] : []),
+    ].join("; ");
+    return {
+      status: "execution-failed",
+      failureFacts: normalizeUpdateFailureFacts([
+        {
+          check: "config",
+          code: POST_PLUGIN_CONFIG_VALIDATION_EXECUTION_FAILED_REASON,
+          message: summary,
+        },
+        ...(["stderr", "stdout"] as const).flatMap((stream) => {
+          const output = result[stream];
+          if (typeof output !== "string" || !output.trim()) {
+            return [];
+          }
+          // Node may print a location or source frame before the actual error.
+          // Extract known public causes before single-line fact normalization loses them.
+          const diagnostic = redactPublicSupportDiagnosticLine(output, {
+            env: process.env,
+            stateDir: resolveStateDir(),
+          });
+          return [
+            {
+              check: "config",
+              code: "command-failed",
+              message: `${stream}: ${diagnostic === "[redacted-diagnostic]" ? output : diagnostic}`,
+            },
+          ];
+        }),
+      ]),
+    };
   }
 }
 
@@ -395,7 +491,7 @@ export async function completePostCorePluginUpdate(params: {
   assertCurrent();
   let pluginUpdate = params.pluginUpdate;
   let entryPath: string | undefined;
-  let freshConfigValid: boolean | undefined;
+  let freshConfigValidation: PostPluginConfigValidation | undefined;
   if (pluginUpdate.status !== "error") {
     try {
       entryPath = await resolveGatewayInstallEntrypoint(params.root);
@@ -405,7 +501,7 @@ export async function completePostCorePluginUpdate(params: {
       }
       if (params.freshDoctorRequired || hasDeferredUpdateModelRetirement()) {
         await params.beforeDoctor?.();
-        await runUpdateFinalizationDoctorInFreshProcess({
+        const warning = await runUpdateFinalizationDoctorInFreshProcess({
           ...params,
           assertCurrent,
           onAuthorityRefused: () => {
@@ -414,9 +510,17 @@ export async function completePostCorePluginUpdate(params: {
           entryPath,
           phase: "post-plugin",
         });
+        if (warning) {
+          pluginUpdate = {
+            ...pluginUpdate,
+            status: "warning",
+            reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+            warnings: [...(pluginUpdate.warnings ?? []), warning],
+          };
+        }
       }
     } catch (err) {
-      if (authorityFailed) {
+      if (authorityFailed || hasCommandProcessCleanupError(err)) {
         throw err;
       }
       // Lost updater authority must not become an advisory that starts more children.
@@ -426,15 +530,14 @@ export async function completePostCorePluginUpdate(params: {
         String(err),
         err instanceof UpdateDoctorError ? err.failureFacts : undefined,
       );
-      freshConfigValid = false;
     }
   }
 
   assertCurrent();
-  // Only the target runtime may write state after a version switch: observing
-  // config here could migrate its database back to the parent's newer schema.
+  // The target owns state writes and its version stamp. Read context without
+  // migrating target stores or warning about this parent's expected version skew.
   const configSnapshot = await withNormalConfigValidation(() =>
-    readConfigFileSnapshot({ observe: false }),
+    readConfigFileSnapshot({ observe: false, suppressFutureVersionWarning: true }),
   );
   assertCurrent();
   if (entryPath) {
@@ -458,15 +561,16 @@ export async function completePostCorePluginUpdate(params: {
     assertCurrent();
     // No authored file is a valid unconfigured install, not an invalid config.
     // Existing files still need the target schema; every install needs readiness.
-    freshConfigValid =
-      (!configSnapshot.exists && configSnapshot.valid) ||
-      (await validatePostPluginConfigInFreshProcess({
-        ...params,
-        entryPath,
-        timeoutMs: checkTimeoutMs,
-      }));
+    freshConfigValidation =
+      !configSnapshot.exists && configSnapshot.valid
+        ? { status: "valid" }
+        : await validatePostPluginConfigInFreshProcess({
+            ...params,
+            entryPath,
+            timeoutMs: checkTimeoutMs,
+          });
     assertCurrent();
-    if (freshConfigValid) {
+    if (freshConfigValidation.status === "valid") {
       pluginUpdate = await applyPostPluginUpdateReadiness({
         root: params.root,
         entryPath,
@@ -479,9 +583,8 @@ export async function completePostCorePluginUpdate(params: {
   assertCurrent();
   // Strict validity belongs to the target runtime even when no plugin changed.
   // The parent may retain the previous schema; its snapshot is best-effort context.
-  pluginUpdate = applyPostPluginConfigValidation(
-    pluginUpdate,
-    freshConfigValid ?? configSnapshot.valid,
-  );
+  if (freshConfigValidation) {
+    pluginUpdate = applyPostPluginConfigValidation(pluginUpdate, freshConfigValidation);
+  }
   return { pluginUpdate, configSnapshot };
 }

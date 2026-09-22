@@ -311,6 +311,7 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
     resolveNodeHostLauncherStateDir,
     compareOpenClawReleaseVersions,
     resolveOpenClawStateSqlitePath,
+    watchNodeHostParentStdin,
   } = await import(
     pathToFileURL(path.join(packageRoot, "dist", "node-host-launcher-bootstrap.js")).href
   );
@@ -386,6 +387,9 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
     process.on(signal, listener);
     listeners.set(signal, listener);
   }
+  const stopWatchingParent = process.argv.includes("--parent-stdin")
+    ? watchNodeHostParentStdin(() => listeners.get("SIGTERM")())
+    : () => {};
   try {
     while (!stoppingSignal) {
       let candidate;
@@ -573,6 +577,7 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
       break;
     }
   } finally {
+    stopWatchingParent();
     clearTimeout(shutdownTimer);
     releaseActivation?.();
     for (const [signal, listener] of listeners) {

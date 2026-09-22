@@ -190,6 +190,12 @@ export function createControlUiSessionFixtures(
       );
       set("pinned", next.pinnedAt !== undefined);
     }
+    // Advance the fixture's synthetic timeline without making its later events stale.
+    const latestUpdatedAt = Math.max(
+      0,
+      ...[...records.values()].map(({ row }) => row.updatedAt ?? 0),
+    );
+    set("updatedAt", latestUpdatedAt + 1);
     value.row = next;
     for (const field of changed) {
       value.changed.add(field);

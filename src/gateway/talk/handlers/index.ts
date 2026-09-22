@@ -932,7 +932,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     // Profile accent overrides gateway prefs, then the gateway seam color and theme default.
     const seamColor =
       profileAccent ?? snapshot.config.ui?.prefs?.accent ?? snapshot.config.ui?.seamColor;
-    if (typeof seamColor === "string") {
+    if (typeof seamColor === "string" && seamColor !== "theme") {
       configPayload.ui = { seamColor };
     }
 

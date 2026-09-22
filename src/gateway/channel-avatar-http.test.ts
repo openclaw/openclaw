@@ -1,11 +1,14 @@
 // Channel avatar route tests cover authenticated session lookup, managed-media
 // resolution, image validation, cache reuse, and conditional responses.
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
+import { finishFailedGatewayHttpResponse } from "./http-common.js";
 import { HTTP_IMAGE_MAX_BYTES } from "./http-image-response.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
+import { bindHttpResponseAuthority } from "./http-request-authority.js";
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
@@ -53,17 +56,20 @@ function avatarEntry(reference = AVATAR_REFERENCE) {
 describe("handleChannelAvatarHttpRequest", () => {
   let port = 0;
   let server: ReturnType<typeof createServer>;
+  let authorityCurrent = true;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
       void handleChannelAvatarHttpRequest(req, res, {
         auth: { mode: "token", token: "test-token", allowTailscale: false },
-      }).then((handled) => {
-        if (!handled) {
-          res.statusCode = 418;
-          res.end("unhandled");
-        }
-      });
+      })
+        .then((handled) => {
+          if (!handled) {
+            res.statusCode = 418;
+            res.end("unhandled");
+          }
+        })
+        .catch(() => finishFailedGatewayHttpResponse(res));
     });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -81,10 +87,16 @@ describe("handleChannelAvatarHttpRequest", () => {
   });
 
   beforeEach(() => {
-    mocks.authorize.mockReset().mockResolvedValue({
-      authMethod: "token",
-      operatorScopes: ["operator.admin", "operator.read"],
-    });
+    authorityCurrent = true;
+    mocks.authorize
+      .mockReset()
+      .mockImplementation(({ res }: { res: ServerResponse }) =>
+        bindHttpResponseAuthority(
+          { authMethod: "token", operatorScopes: ["operator.admin", "operator.read"] },
+          res,
+          () => authorityCurrent,
+        ),
+      );
     mocks.loadEntry.mockReset().mockReturnValue({ entry: avatarEntry() });
     mocks.resolveReference.mockReset().mockResolvedValue({
       id: "channel-avatar.png",
@@ -102,6 +114,28 @@ describe("handleChannelAvatarHttpRequest", () => {
 
   const avatarRoute = (sessionKey: string) =>
     `http://127.0.0.1:${port}${buildControlUiChannelAvatarUrl("", sessionKey, "test-revision")}`;
+
+  it("rejects revoked authority while channel avatar bytes are loading", async () => {
+    const reading = createDeferredCore();
+    const release = createDeferredCore();
+    mocks.readMedia.mockImplementationOnce(async () => {
+      reading.resolve();
+      await release.promise;
+      return { buffer: PNG_BYTES };
+    });
+
+    const pending = fetch(avatarRoute("agent:main:revoked"));
+    await reading.promise;
+    authorityCurrent = false;
+    release.resolve();
+
+    const response = await pending;
+    expect(response.status).toBe(401);
+    expect(response.headers.get("etag")).toBeNull();
+    expect(await response.json()).toEqual({
+      error: { message: "Unauthorized", type: "unauthorized" },
+    });
+  });
 
   it.each([
     { label: "PNG", buffer: PNG_BYTES },
