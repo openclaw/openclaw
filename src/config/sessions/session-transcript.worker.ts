@@ -301,7 +301,7 @@ serveWorkerTasks(
               }))),
             };
           }
-          if (request.kind === "transcript-hydration") {
+          if (request.kind === "transcript-hydration" || request.kind === "current-turn-entry") {
             const { readOpenClawDatabaseQuarantineFailure } =
               await import("../../state/openclaw-quarantine-store.js");
             const quarantine = readOpenClawDatabaseQuarantineFailure(
@@ -313,6 +313,22 @@ serveWorkerTasks(
             );
             if (quarantine) {
               throw quarantine;
+            }
+            if (request.kind === "current-turn-entry") {
+              const { readSessionTranscriptCurrentTurnEntry } =
+                await import("./session-accessor.sqlite-current-turn.js");
+              return {
+                ok: true,
+                ...(await withHistoryDatabase(request.database, () =>
+                  readSessionTranscriptCurrentTurnEntry(request.target, {
+                    entryId: request.entryId,
+                    version: request.version,
+                    includeEntry: request.includeEntry,
+                    readOnly: true,
+                    resolvedScope: request.resolvedScope,
+                  }),
+                )),
+              };
             }
             const { readSessionTranscriptBoundedActiveContextCore } =
               await import("./session-accessor.sqlite-active-context.js");

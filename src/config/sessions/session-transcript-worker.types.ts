@@ -20,6 +20,10 @@ import type {
   SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
 import type {
+  SessionTranscriptContextVersion,
+  TranscriptEvent,
+} from "./session-accessor.sqlite-contract.js";
+import type {
   SessionIdentityEvidenceIdentity,
   SessionIdentityEvidenceResult,
 } from "./session-accessor.sqlite-entry-availability.js";
@@ -85,6 +89,19 @@ export type SessionTranscriptHydrationChunk = {
   kind: "transcript-hydration-chunk";
   encoding: string;
   frames: Array<{ data: Uint8Array; endOfEvent: boolean }>;
+};
+
+export type SessionTranscriptCurrentTurnEntryRequest = {
+  entryId: string;
+  version: SessionTranscriptContextVersion;
+  includeEntry: boolean;
+};
+
+export type SessionTranscriptCurrentTurnEntryRead = {
+  kind: "current-turn-entry";
+  version: SessionTranscriptContextVersion;
+  anchor?: TranscriptEntryAnchor;
+  event?: TranscriptEvent;
 };
 
 export type SessionModelContextWorkerInput = {
@@ -165,6 +182,12 @@ type SessionTranscriptHydrationWorkerInput = {
   limits?: { maxBytes: number; maxEvents: number };
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
+
+type SessionTranscriptCurrentTurnEntryWorkerInput = Omit<
+  SessionTranscriptHydrationWorkerInput,
+  "kind" | "limits"
+> &
+  SessionTranscriptCurrentTurnEntryRequest & { kind: "current-turn-entry" };
 
 export type SessionRowPresenceWorkerInput = {
   kind: "session-row-presence";
@@ -276,6 +299,7 @@ export type SessionBranchSummaryWorkerInput = {
 
 export type SessionHistoryWorkerInput =
   | SessionTranscriptHydrationWorkerInput
+  | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptHistoryWorkerInput
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
@@ -307,6 +331,7 @@ export type SessionHistoryWorkerPreparedInput = {
 export type SessionTranscriptWorkerValues = {
   "transcript-search": SessionTranscriptSearchWorkerResult;
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
+  "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
   "sqlite-target": { target: ResolvedSqliteStoreTarget };
   "branch-summaries": SessionBranchSummaryReadResult;
   "history-page": SessionHistoryWorkerResult;
@@ -370,6 +395,10 @@ export type SessionHistoryWorkerDatabase = {
     input: Omit<SessionTranscriptHydrationWorkerInput, "kind" | "database">,
     signal?: AbortSignal,
   ) => Promise<PreparedSessionTranscriptHydration>;
+  readCurrentTurnEntry: (
+    input: Omit<SessionTranscriptCurrentTurnEntryWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<SessionTranscriptCurrentTurnEntryRead>;
   readExactEntries: (
     input: Omit<SessionExactEntriesWorkerInput, "kind" | "database">,
   ) => Promise<SessionExactEntriesWorkerResult>;
