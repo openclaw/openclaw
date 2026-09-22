@@ -128,7 +128,7 @@ async function withInventory(
         statePath: (name) => state.statePath(name),
       });
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 }

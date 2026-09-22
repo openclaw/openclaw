@@ -1,4 +1,5 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { selectAcpSessionRowForRead } from "../acp/runtime/session-meta-keys.js";
 import {
   countMcpOAuthPrincipalsInDatabase,
   listMcpOAuthStoreKeysInDatabase,
@@ -179,6 +180,16 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "acpSessions.metadata") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    rows: command.entries.map(
+                      (entry) => selectAcpSessionRowForRead(db, entry) ?? null,
+                    ),
+                  };
+                }
                 if (command.type === "subagents.runs") {
                   const rows =
                     command.scope.kind === "session"
