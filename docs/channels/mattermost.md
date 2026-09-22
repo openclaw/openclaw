@@ -340,8 +340,9 @@ post:
 applies only when `streaming.mode` is `"progress"`. The temporary post uses Mattermost type
 `custom_openclaw_progress`, so peer OpenClaw bots ignore it while ordinary human messages with the
 same visible prefix remain actionable. OpenClaw pins the configured label, sends the final as a
-normal post, and removes progress only after core confirms final delivery. A failed run or failed
-final send retains a sanitized `Failed.` status instead.
+normal post, and removes progress only after the shared core preview lifecycle confirms final
+delivery. The same lifecycle isolates partial progress receipts and settles failure presentation;
+the Mattermost adapter supplies the typed post and sanitized `Failed.` rendering.
 
 <AccordionGroup>
   <Accordion title="Streaming modes">

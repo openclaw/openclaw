@@ -70,6 +70,9 @@ export async function deliverMattermostReplyWithDraftPreview(
   params: MattermostDraftPreviewDeliverParams,
 ): Promise<MattermostReplyDeliveryResult> {
   if (isReasoningReplyPayload(params.payload)) {
+    if (params.info.kind === "final") {
+      params.previewLifecycle.observeSuppression();
+    }
     return {
       outcome: "reasoning_skipped",
       visibleReplySent: false,
@@ -113,9 +116,6 @@ export async function deliverMattermostReplyWithDraftPreview(
       isError: params.payload.isError,
       adapter: {
         buildFinalEdit: (payload) => {
-          if (params.separateProgressFinalDelivery) {
-            return undefined;
-          }
           const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
           const previewFinalText = previewFinalResolution?.editText;
 

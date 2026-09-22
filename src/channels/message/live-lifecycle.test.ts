@@ -146,6 +146,176 @@ describe("live preview delivery ownership", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("delivers a separate final without promoting the preview", async () => {
+    const { posts, draft, send } = createPreviewHarness();
+    const editFinal = vi.fn(async (id: string, text: string) => {
+      posts.set(id, text);
+    });
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({
+      draft,
+      finalDelivery: "separate",
+    });
+    const result = await lifecycle.deliver({
+      kind: "final",
+      payload: { text: "answer" },
+      adapter: { buildFinalEdit: (payload) => payload.text, editFinal },
+      deliverNormally: send,
+    });
+    expect(result.kind).toBe("normal-delivered");
+    expect(editFinal).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledOnce();
+    expect([...posts.values()]).toEqual(["answer"]);
+  });
+
+  it("continues separate final delivery after a partial progress settlement", async () => {
+    const { posts, draft, send } = createPreviewHarness();
+    const progressError = createChannelPartialDeliveryError(new Error("progress receipt missing"), {
+      visibleReplySent: true,
+      messageIds: [],
+    });
+    draft.discardPending.mockRejectedValueOnce(progressError);
+    const onDiscardPendingPartialFailure = vi.fn();
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({
+      draft,
+      finalDelivery: "separate",
+      onDiscardPendingPartialFailure,
+    });
+    await lifecycle.deliver({
+      kind: "final",
+      payload: { text: "answer" },
+      deliverNormally: send,
+    });
+    expect(send).toHaveBeenCalledOnce();
+    expect(posts.get("final")).toBe("answer");
+    expect(onDiscardPendingPartialFailure).toHaveBeenCalledWith(progressError);
+  });
+
+  it.each(["rejected", "empty", "observed"] as const)(
+    "settles the final failure presenter for a %s failure",
+    async (outcome) => {
+      const { draft, send } = createPreviewHarness();
+      const onFinalFailure = vi.fn(async () => {});
+      const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft, onFinalFailure });
+      if (outcome === "rejected") {
+        send.mockRejectedValueOnce(new Error("send rejected"));
+        await expect(
+          lifecycle.deliver({ kind: "final", payload: { text: "answer" }, deliverNormally: send }),
+        ).rejects.toThrow("send rejected");
+      } else if (outcome === "empty") {
+        send.mockResolvedValueOnce({ visibleReplySent: false });
+        await lifecycle.deliver({
+          kind: "final",
+          payload: { text: "answer" },
+          deliverNormally: send,
+        });
+      } else {
+        lifecycle.observeFailure();
+      }
+      await lifecycle.cleanup();
+      expect(onFinalFailure).toHaveBeenCalledOnce();
+      expect(lifecycle.finalFailed).toBe(true);
+    },
+  );
+
+  it("does not present failure for an intentionally suppressed final", async () => {
+    const { draft, send } = createPreviewHarness();
+    const onFinalFailure = vi.fn(async () => {});
+    send.mockResolvedValueOnce({
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft, onFinalFailure });
+    await lifecycle.deliver({
+      kind: "final",
+      payload: { text: "reasoning only" },
+      deliverNormally: send,
+    });
+    await lifecycle.cleanup();
+    expect(onFinalFailure).not.toHaveBeenCalled();
+    expect(lifecycle.finalFailed).toBe(false);
+  });
+
+  it("surfaces a failed failure presentation when no final became visible", async () => {
+    const { draft, send } = createPreviewHarness();
+    const presentationError = new Error("terminal progress was not retained");
+    const onFinalFailureError = vi.fn();
+    send.mockResolvedValueOnce({ visibleReplySent: false });
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({
+      draft,
+      onFinalFailure: async () => {
+        throw presentationError;
+      },
+      onFinalFailureError,
+    });
+    await expect(
+      lifecycle.deliver({
+        kind: "final",
+        payload: { text: "answer" },
+        deliverNormally: send,
+      }),
+    ).rejects.toBe(presentationError);
+    expect(onFinalFailureError).toHaveBeenCalledExactlyOnceWith(presentationError);
+  });
+
+  it("settles one failure presentation across error delivery and later observers", async () => {
+    const { draft, send } = createPreviewHarness();
+    const onFinalFailure = vi.fn(async () => {});
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({
+      draft,
+      retainOnError: true,
+      onFinalFailure,
+    });
+    await lifecycle.deliver({
+      kind: "final",
+      payload: { text: "error" },
+      isError: true,
+      deliverNormally: send,
+    });
+    lifecycle.observeFailure();
+    await lifecycle.cleanup({ failed: true });
+    expect(onFinalFailure).toHaveBeenCalledOnce();
+  });
+
+  it("retries a failed failure presentation at a later settlement boundary", async () => {
+    const { draft, send } = createPreviewHarness();
+    const onFinalFailure = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("status update rejected"))
+      .mockResolvedValueOnce();
+    send.mockRejectedValueOnce(new Error("final rejected"));
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({
+      draft,
+      onFinalFailure,
+      onFinalFailureError: vi.fn(),
+    });
+    await expect(
+      lifecycle.deliver({ kind: "final", payload: { text: "answer" }, deliverNormally: send }),
+    ).rejects.toThrow("final rejected");
+    await lifecycle.cleanup();
+    expect(onFinalFailure).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not present failure for a stale rejected generation", async () => {
+    const { draft } = createPreviewHarness();
+    const oldSend = createDeferred<LivePreviewDeliveryResult>();
+    const started = createDeferred();
+    const onFinalFailure = vi.fn(async () => {});
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft, onFinalFailure });
+    const delivery = lifecycle.deliver({
+      kind: "final",
+      payload: { text: "old answer" },
+      deliverNormally: async () => {
+        started.resolve();
+        return await oldSend.promise;
+      },
+    });
+    await started.promise;
+    lifecycle.reset();
+    oldSend.reject(new Error("old final rejected"));
+    await expect(delivery).rejects.toThrow("old final rejected");
+    expect(onFinalFailure).not.toHaveBeenCalled();
+  });
+
   it("preserves promoted text and receipt when supplemental delivery is rejected", async () => {
     const { posts, draft, send } = createPreviewHarness();
     const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft });

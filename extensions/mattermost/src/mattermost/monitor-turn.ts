@@ -11,6 +11,7 @@ import {
   createLivePreviewLifecycle,
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
@@ -22,6 +23,7 @@ import {
 import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import {
   formatMattermostFinalDeliveryOutcomeLog,
+  formatMattermostTerminalProgressText,
   pinMattermostProgressLabel,
   resolveMattermostReplyRootId,
   resolveMattermostProgressDeliveryPolicy,
@@ -39,10 +41,6 @@ import { deliverMattermostReplyPayload, joinMattermostVisibleContent } from "./r
 import type { HistoryEntry, ReplyPayload } from "./runtime-api.js";
 import { createChannelMessageReplyPipeline } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
-import {
-  createMattermostSeparateProgressController,
-  discardMattermostSeparateProgressPending,
-} from "./separate-progress.js";
 import { recordMattermostThreadParticipation } from "./thread-participation.js";
 
 type MattermostInboundTurnParams = {
@@ -211,27 +209,32 @@ export async function dispatchMattermostInboundTurn(
           flush: draftStream.flush,
           id: draftStream.postId,
           seal: draftStream.seal,
-          discardPending: () =>
-            discardMattermostSeparateProgressPending({
-              enabled: separateProgressFinalDelivery,
-              discardPending: draftStream.discardPending,
-              logVerboseMessage: monitor.logVerboseMessage,
-            }),
+          discardPending: draftStream.discardPending,
           clear: draftStream.clear,
         }
       : undefined,
     onFinalStarted: () => progressDraft.markFinalReplyStarted(),
     onFinalDelivered: () => progressDraft.markFinalReplyDelivered(),
+    finalDelivery: separateProgressFinalDelivery ? "separate" : "in-place",
     retainOnError: separateProgressFinalDelivery,
+    onFinalFailure: separateProgressFinalDelivery
+      ? async () => {
+          const retained = await draftStream.retainTerminalText(
+            formatMattermostTerminalProgressText(pinnedProgressLabel),
+          );
+          if (!retained) {
+            throw new Error("Mattermost terminal progress was not retained");
+          }
+        }
+      : undefined,
+    onFinalFailureError: (error) =>
+      monitor.logVerboseMessage(`mattermost terminal progress update failed: ${String(error)}`),
+    onDiscardPendingPartialFailure: (error) =>
+      monitor.logVerboseMessage(
+        `mattermost separate progress receipt incomplete before final delivery: ${formatErrorMessage(error)}`,
+      ),
     onCleanupFailure: (err) =>
       monitor.logVerboseMessage(`mattermost draft preview cleanup failed: ${String(err)}`),
-  });
-  const separateProgress = createMattermostSeparateProgressController({
-    enabled: separateProgressFinalDelivery,
-    pinnedLabel: pinnedProgressLabel,
-    draftStream,
-    hasAcceptedFinal: () => previewLifecycle.finalDelivered,
-    logVerboseMessage: monitor.logVerboseMessage,
   });
 
   const resolvePreviewFinalText = (text?: string): MattermostPreviewFinalResolution | undefined => {
@@ -341,7 +344,6 @@ export async function dispatchMattermostInboundTurn(
           // boundary work before deciding whether to edit the preview.
           await draftStream.settleBoundaries();
         }
-        await separateProgress.prepareFinal(payloadEntry.isError === true);
       }
       // A visible same-thread final can be a send or an in-place draft edit; either path records participation.
       let threadParticipationRecorded = false;
@@ -421,15 +423,12 @@ export async function dispatchMattermostInboundTurn(
       if (result.visibleReplySent) {
         await markThreadParticipation();
       }
-      if (info.kind === "final") {
-        await separateProgress.settleFinal(result, payloadEntry.isError === true);
-      }
       return result;
     },
     onError: (err, info) => {
       runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
       if (info.kind === "final") {
-        separateProgress.observeDeliveryError();
+        previewLifecycle.observeFailure();
       }
     },
   };
@@ -585,11 +584,9 @@ export async function dispatchMattermostInboundTurn(
     });
   } catch (error: unknown) {
     previewLifecycle.observeFailure();
-    await separateProgress.settleTurnError();
     throw error;
   } finally {
     try {
-      await separateProgress.settlePendingDeliveryError();
       await draftStream.stop();
       await previewLifecycle.cleanup();
     } catch (err) {

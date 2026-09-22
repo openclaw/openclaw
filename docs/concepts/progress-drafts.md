@@ -439,6 +439,12 @@ full runtime-behavior breakdown per channel.
 
 When the final answer is ready, OpenClaw tries to keep the chat clean:
 
+Core owns whether a preview may be promoted in place or the authoritative final
+must use a separate send. It also owns final acceptance, intentional suppression,
+partial progress-settlement isolation, failure-presentation settlement, and
+cleanup eligibility. Channel adapters still own provider post types, rendering,
+thread routing, and the concrete terminal status update.
+
 - A Discord or Telegram progress card handed off to accepted subagents stays visible across
   parent yield. Core updates that same card while delegated work continues;
   the eventual final answer is separate. See
