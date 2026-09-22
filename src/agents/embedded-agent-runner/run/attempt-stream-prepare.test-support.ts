@@ -3,12 +3,14 @@ import { vi } from "vitest";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
   streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { createResourceLoader } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
@@ -107,8 +109,23 @@ export function createBeforeFinalizeEvent() {
   };
 }
 
+export async function createHeldSettlementSession() {
+  const settled = createDeferredCore();
+  const releaseSettlement = createDeferredCore();
+  const holdSettlement = async () => {
+    settled.resolve();
+    await releaseSettlement.promise;
+  };
+  const { session } = await createTestSession({
+    resourceLoader: createResourceLoader(new Map([["agent_settled", [holdSettlement]]])),
+  });
+  streamMocks.streamSimple.mockImplementation((model) =>
+    createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }])),
+  );
+  return { session, settled, releaseSettlement };
+}
+
 export async function createTurnHandoffSession() {
-  let activeSession: AgentSession;
   const { session } = await createTestSession({
     customTools: [
       {
@@ -123,7 +140,7 @@ export async function createTurnHandoffSession() {
       },
     ],
   });
-  activeSession = session;
+  const activeSession = session;
   streamMocks.streamSimple.mockImplementation((model) =>
     createAssistantResultStream(
       createAssistant(

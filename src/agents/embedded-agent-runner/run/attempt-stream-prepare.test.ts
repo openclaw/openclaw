@@ -43,7 +43,6 @@ import {
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { createResourceLoader } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import { ACTIVE_EMBEDDED_RUNS, ACTIVE_EMBEDDED_RUN_REGISTRATIONS } from "../run-state.js";
@@ -82,6 +81,7 @@ import {
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import {
   createBeforeFinalizeEvent,
+  createHeldSettlementSession,
   createTurnHandoffSession,
   prepareCatalogExecutor,
   trackPreparedStreamSubscriptions,
@@ -680,18 +680,7 @@ describe("prepareEmbeddedAttemptStream", () => {
 
   it("rejects steering after session settlement while its lifecycle owner remains published", async () => {
     const sessionId = "session-output-schema";
-    const settled = createDeferredCore();
-    const releaseSettlement = createDeferredCore();
-    const holdSettlement = async () => {
-      settled.resolve();
-      await releaseSettlement.promise;
-    };
-    const { session } = await createTestSession({
-      resourceLoader: createResourceLoader(new Map([["agent_settled", [holdSettlement]]])),
-    });
-    streamMocks.streamSimple.mockImplementation((model) =>
-      createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }])),
-    );
+    const { session, settled, releaseSettlement } = await createHeldSettlementSession();
     const steer = vi.spyOn(session.agent, "steer");
     const actual = await vi.importActual<typeof import("../../embedded-agent-subscribe.js")>(
       "../../embedded-agent-subscribe.js",
@@ -731,7 +720,9 @@ describe("prepareEmbeddedAttemptStream", () => {
       ).resolves.toMatchObject(expected);
       const nestedEnd = createDeferredCore<Awaited<ReturnType<typeof queueMessage>>>();
       unsubscribeNested = session.subscribe((event) => {
-        if (event.type !== "agent_end") return;
+        if (event.type !== "agent_end") {
+          return undefined;
+        }
         unsubscribeNested?.();
         return queueMessage(sessionId, "Stale owner.", steeringOptions, () => true).then(
           nestedEnd.resolve,
@@ -779,8 +770,12 @@ describe("prepareEmbeddedAttemptStream", () => {
     let queued: Awaited<ReturnType<typeof queueMessage>> | undefined;
     // Register after preparation so an accidental raw agent_end closure is observable.
     const unsubscribe = session.subscribe(async (event) => {
-      if (event.type === "agent_settled") events.push(event.type);
-      if (event.type !== "agent_end") return;
+      if (event.type === "agent_settled") {
+        events.push(event.type);
+      }
+      if (event.type !== "agent_end") {
+        return;
+      }
       events.push(event.type);
       if (events.length === 1) {
         queued = await queueMessage(
@@ -849,8 +844,12 @@ describe("prepareEmbeddedAttemptStream", () => {
       const fail = () => {
         throw failure;
       };
-      if (stage === "subscription") mocks.subscribe.mockImplementationOnce(fail);
-      if (stage === "registration") mocks.setActiveRun.mockImplementationOnce(fail);
+      if (stage === "subscription") {
+        mocks.subscribe.mockImplementationOnce(fail);
+      }
+      if (stage === "registration") {
+        mocks.setActiveRun.mockImplementationOnce(fail);
+      }
       expect(() =>
         prepareCatalogExecutor([], {
           activeSession: session,
@@ -862,7 +861,9 @@ describe("prepareEmbeddedAttemptStream", () => {
       ).toThrow(failure);
       expect(releases).toHaveLength(stage === "subscription" ? 1 : 2);
       expect(listeners.size).toBe(0);
-      for (const release of releases) expect(release).toHaveBeenCalledOnce();
+      for (const release of releases) {
+        expect(release).toHaveBeenCalledOnce();
+      }
       expect(ACTIVE_EMBEDDED_RUNS.has("session-output-schema")).toBe(false);
     },
   );
