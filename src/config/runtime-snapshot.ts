@@ -699,9 +699,8 @@ export async function preflightRuntimeSnapshotWrite(params: {
 export async function finalizeRuntimeSnapshotWrite(params: {
   nextSourceConfig: OpenClawConfig;
   refreshOptions?: RuntimeConfigSnapshotRefreshOptions;
-  hadRuntimeSnapshot: boolean;
   hadBothSnapshots: boolean;
-  loadFreshConfig: () => OpenClawConfig;
+  freshConfig: OpenClawConfig | RuntimeConfigAsyncLoader;
   notifyCommittedWrite: () => void;
   createRefreshError: (detail: string, cause: unknown) => Error;
   formatRefreshError: (error: unknown) => string;
@@ -718,6 +717,7 @@ export async function finalizeRuntimeSnapshotWrite(params: {
     notifyCommittedWrite();
     return;
   }
+  const generation = runtimeConfigSnapshotGeneration;
   const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
   if (refreshHandler) {
     let refreshed: boolean;
@@ -746,24 +746,25 @@ export async function finalizeRuntimeSnapshotWrite(params: {
     }
   }
 
-  if (params.hadBothSnapshots) {
-    const fresh = params.loadFreshConfig();
+  const assertCurrent = () => {
     params.assertCurrent?.();
-    setRuntimeConfigSnapshot(fresh, params.nextSourceConfig);
-    notifyCommittedWrite();
-    return;
+    if (runtimeConfigSnapshotGeneration !== generation) {
+      throw new Error("Runtime config reload was superseded before publication");
+    }
+  };
+  const { config, runtimeEnv } =
+    typeof params.freshConfig === "function"
+      ? await params.freshConfig(assertCurrent)
+      : { config: params.freshConfig };
+  assertCurrent();
+  const publication = runtimeEnv?.publish();
+  try {
+    assertCurrent();
+    setRuntimeConfigSnapshot(config, params.hadBothSnapshots ? params.nextSourceConfig : undefined);
+    publication?.commit();
+  } catch (error) {
+    publication?.();
+    throw error;
   }
-
-  if (params.hadRuntimeSnapshot) {
-    const fresh = params.loadFreshConfig();
-    params.assertCurrent?.();
-    setRuntimeConfigSnapshot(fresh);
-    notifyCommittedWrite();
-    return;
-  }
-
-  const fresh = params.loadFreshConfig();
-  params.assertCurrent?.();
-  setRuntimeConfigSnapshot(fresh);
   notifyCommittedWrite();
 }

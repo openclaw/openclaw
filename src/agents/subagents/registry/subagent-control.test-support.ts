@@ -12,9 +12,11 @@ import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import { revokePluginRecord } from "../../../plugins/registry-lifecycle.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { createPluginRecord } from "../../../plugins/status.test-helpers.js";
+import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import type { DetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime-contract.js";
 import { resetDetachedTaskLifecycleRuntimeForTests } from "../../../tasks/detached-task-runtime.test-support.js";
 import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
+import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -54,6 +56,8 @@ export const { persistSubagentRunsToDiskOrThrow } = await vi.importActual<typeof
 export function useSubagentControlFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
+  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
+  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
   const persist = vi.mocked(registryState.persistSubagentRunsToDiskOrThrow);
   const persistAsync = vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow);
   const gateway = vi.mocked(callGateway);
@@ -78,6 +82,7 @@ export function useSubagentControlFixture() {
     resetSubagentRegistryForTests({ persist: false });
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
+    deliveries = captureTaskDeliveryWork();
     gateway.mockReset().mockImplementation(async (request) => {
       if (request.method !== "agent.wait") {
         throw new Error(`Unexpected registry RPC ${request.method}`);
@@ -107,36 +112,58 @@ export function useSubagentControlFixture() {
     });
   });
   afterEach(async () => {
-    vi.restoreAllMocks();
-    await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    schedulerTesting.reset();
-    resetDetachedTaskLifecycleRuntimeForTests();
-    await cleanupSessionStateForTest({ stateDir });
-    for (const mock of [
-      persist,
-      persistAsync,
-      gateway,
-      announce,
-      capture,
-      wake,
-      cleanup,
-      pluginRuntime,
-      contextEngine,
-    ]) {
-      mock.mockReset();
+    const failures: unknown[] = [];
+    try {
+      await settle();
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      deliveries?.[Symbol.dispose]();
+      deliveries = undefined;
+      vi.restoreAllMocks();
     }
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    await flushLogger();
-    resetLogger();
-    await rm(stateDir, { recursive: true, force: true });
-    env.restore();
+    // Preserve stores and their environment if detached writers have not settled.
+    if (getActiveGatewayRootWorkCount() === 0) {
+      try {
+        resetSubagentRegistryForTests({ persist: false });
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        schedulerTesting.reset();
+        resetDetachedTaskLifecycleRuntimeForTests();
+        await cleanupSessionStateForTest({ stateDir });
+        for (const mock of [
+          persist,
+          persistAsync,
+          gateway,
+          announce,
+          capture,
+          wake,
+          cleanup,
+          pluginRuntime,
+          contextEngine,
+        ]) {
+          mock.mockReset();
+        }
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+        await flushLogger();
+        resetLogger();
+        await rm(stateDir, { recursive: true, force: true });
+        env.restore();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Subagent control fixture cleanup failed");
+    }
   });
 
   return {
+    settle,
     get stateDir() {
       return stateDir;
     },
