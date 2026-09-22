@@ -43,23 +43,23 @@ sessions must be upgraded before those sessions can run.
 
 ## ACP controls
 
-| Command              | What it does                                              | Example                                                       |
-| -------------------- | --------------------------------------------------------- | ------------------------------------------------------------- |
-| `/acp spawn`         | Create ACP session; optional current bind or thread bind. | `/acp spawn codex --bind here --cwd /repo`                    |
-| `/acp cancel`        | Cancel in-flight turn for target session.                 | `/acp cancel agent:codex:acp:<uuid>`                          |
-| `/acp steer`         | Queue an instruction to run after the in-flight turn.     | `/acp steer --session support inbox prioritize failing tests` |
-| `/acp close`         | Close session and unbind thread targets.                  | `/acp close`                                                  |
-| `/acp status`        | Show backend, mode, state, runtime options, capabilities. | `/acp status`                                                 |
-| `/acp set-mode`      | Set runtime mode for target session.                      | `/acp set-mode plan`                                          |
-| `/acp set`           | Generic runtime config option write.                      | `/acp set model openai/gpt-5.4`                               |
-| `/acp cwd`           | Set runtime working directory override.                   | `/acp cwd /Users/user/Projects/repo`                          |
-| `/acp permissions`   | Set approval policy profile.                              | `/acp permissions strict`                                     |
-| `/acp timeout`       | Set runtime timeout (seconds).                            | `/acp timeout 120`                                            |
-| `/acp model`         | Set runtime model override.                               | `/acp model anthropic/claude-opus-4-6`                        |
-| `/acp reset-options` | Remove session runtime option overrides.                  | `/acp reset-options`                                          |
-| `/acp sessions`      | List recent ACP sessions from store.                      | `/acp sessions`                                               |
-| `/acp doctor`        | Backend health, capabilities, actionable fixes.           | `/acp doctor`                                                 |
-| `/acp install`       | Print deterministic install and enable steps.             | `/acp install`                                                |
+| Command              | What it does                                                                                                                  | Example                                                       |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `/acp spawn`         | Create ACP session; optional current bind or thread bind.                                                                     | `/acp spawn codex --bind here --cwd /repo`                    |
+| `/acp cancel`        | Cancel in-flight turn for target session.                                                                                     | `/acp cancel agent:codex:acp:<uuid>`                          |
+| `/acp steer`         | Queue an instruction to run after the in-flight turn.                                                                         | `/acp steer --session support inbox prioritize failing tests` |
+| `/acp close`         | Close session and unbind thread targets. The session stays listed as a closed ACP session; start a new one with `/acp spawn`. | `/acp close`                                                  |
+| `/acp status`        | Show backend, mode, state, runtime options, capabilities.                                                                     | `/acp status`                                                 |
+| `/acp set-mode`      | Set runtime mode for target session.                                                                                          | `/acp set-mode plan`                                          |
+| `/acp set`           | Generic runtime config option write.                                                                                          | `/acp set model openai/gpt-5.4`                               |
+| `/acp cwd`           | Set runtime working directory override.                                                                                       | `/acp cwd /Users/user/Projects/repo`                          |
+| `/acp permissions`   | Set approval policy profile.                                                                                                  | `/acp permissions strict`                                     |
+| `/acp timeout`       | Set runtime timeout (seconds).                                                                                                | `/acp timeout 120`                                            |
+| `/acp model`         | Set runtime model override.                                                                                                   | `/acp model anthropic/claude-opus-4-6`                        |
+| `/acp reset-options` | Remove session runtime option overrides.                                                                                      | `/acp reset-options`                                          |
+| `/acp sessions`      | List recent ACP sessions from store.                                                                                          | `/acp sessions`                                               |
+| `/acp doctor`        | Backend health, capabilities, actionable fixes.                                                                               | `/acp doctor`                                                 |
+| `/acp install`       | Print deterministic install and enable steps.                                                                                 | `/acp install`                                                |
 
 Runtime controls (`spawn`, `cancel`, `steer`, `close`, `status`, `set-mode`,
 `set`, `cwd`, `permissions`, `timeout`, `model`, and `reset-options`) require

@@ -65,6 +65,7 @@ export async function closeAcpRuntimeForSession(params: {
       agentId: params.agentId,
       cfg: params.cfg,
       assertCurrent: params.assertCurrent,
+      includeClosed: true,
     });
     params.assertCurrent?.();
     if (params.shouldCleanup && !params.shouldCleanup()) {
@@ -76,6 +77,23 @@ export async function closeAcpRuntimeForSession(params: {
     }
   }
   if (!acpMeta) {
+    return undefined;
+  }
+  if (acpMeta.state === "closed") {
+    // Reset and delete both retire the key's history; a closed row has no runtime
+    // to cancel, so prune the retained provenance and leave the native path alone.
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      return undefined;
+    }
+    params.assertCurrent?.();
+    await upsertAcpSessionMeta({
+      cfg: params.cfg,
+      sessionKey: acpSessionKey,
+      agentId: params.agentId,
+      assertCommitAllowed: params.assertCurrent,
+      mutate: () => null,
+    });
+    params.assertCurrent?.();
     return undefined;
   }
   const acpManager = getAcpSessionManager();

@@ -183,7 +183,11 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
       sessionKey: "global",
     });
 
-    expect(readAcpSessionMeta).toHaveBeenCalledWith({ sessionKey: "global", agentId: "ops" });
+    expect(readAcpSessionMeta).toHaveBeenCalledWith({
+      sessionKey: "global",
+      agentId: "ops",
+      includeClosed: true,
+    });
   });
 
   it("keeps a prepared row from adopting a replacement session's ACP runtime", () => {
@@ -215,11 +219,9 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
 
     expect(projection.agentRuntime.id).toBe("openclaw");
     expect(readAcpSessionMeta).not.toHaveBeenCalled();
-    expect(readAcpSessionMetaForEntry).toHaveBeenCalledWith({
-      cfg,
-      sessionKey,
-      agentId: "ops",
-      entry,
-    });
+    expect(readAcpSessionMetaForEntry).toHaveBeenCalledWith(
+      { cfg, sessionKey, agentId: "ops", entry },
+      { includeClosed: true },
+    );
   });
 });

@@ -316,6 +316,7 @@ export async function sessionsCommand(
       agentId,
       entry,
     })),
+    includeClosed: true,
   });
   const rows = sessionEntries.map(({ acpSessionKey, agentId, entry, row }) => {
     const acpMeta = acpSessionMetaByEntry.get(entry);

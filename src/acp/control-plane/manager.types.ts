@@ -47,6 +47,8 @@ export type AcpSessionResolution =
       sessionKey: string;
       agentId: string;
       error: AcpRuntimeError;
+      /** Retained terminal metadata when the session was closed rather than lost. */
+      closedMeta?: SessionAcpMeta;
     }
   | {
       kind: "ready";

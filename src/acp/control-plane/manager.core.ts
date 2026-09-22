@@ -128,7 +128,7 @@ export class AcpSessionManager {
     const target = resolveAcpSessionTarget(params);
     return resolveStoredAcpSession(
       target,
-      this.deps.loadSessionEntry({ cfg: params.cfg, ...target, clone: false }),
+      this.deps.loadSessionEntry({ cfg: params.cfg, ...target, clone: false, includeClosed: true }),
     );
   }
 
@@ -147,6 +147,7 @@ export class AcpSessionManager {
       cfg: params.cfg,
       ...target,
       clone: false,
+      includeClosed: true,
       ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     });
     params.assertCurrent?.();

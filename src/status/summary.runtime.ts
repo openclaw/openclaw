@@ -206,12 +206,15 @@ function resolveSessionRuntime(params: {
   });
   // The summary already captured the session generation. Rereading its store
   // could pair runtime metadata with a replacement row and reopen cold history.
-  const acpMeta = readAcpSessionMetaForEntry({
-    cfg: params.cfg,
-    sessionKey: acpSessionKey,
-    agentId: acpAgentId,
-    entry: params.entry,
-  });
+  const acpMeta = readAcpSessionMetaForEntry(
+    {
+      cfg: params.cfg,
+      sessionKey: acpSessionKey,
+      agentId: acpAgentId,
+      entry: params.entry,
+    },
+    { includeClosed: true },
+  );
   const runtime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId ?? acpAgentId,
