@@ -327,37 +327,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
     null,
   );
-  // Transient projections merge into stable history + queued-send rows by timestamp.
-  // Stable rows keep their relative order despite client and Gateway clock skew.
-  const pendingInputItems = buildPendingInputItems(
-    pendingInputs,
-    props.searchOpen ? props.searchQuery : undefined,
-    props.queue,
-    props.workspaceSyncPendingRunIds,
-    props.workerSetupPending,
-    props.messageRecovery,
-  );
-  // Custody is not in the transcript yet, so it floors after every persisted
-  // row; acceptance time only orders custody rows among themselves.
-  const custodyFloor = items.at(-1)?.key;
-  const projections: ChatProjection[] = pendingInputItems.map((item) => ({
-    item,
-    ...(custodyFloor ? { bounds: { afterKey: custodyFloor } } : {}),
-  }));
-  if (compaction && compactionKey && !hasPersistedCompaction) {
-    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
-    projections.push({
-      item: {
-        ...buildCompactionDividerItem(
-          {},
-          timestamp,
-          0,
-          compaction.phase === "complete" ? "complete" : "active",
-        ),
-        key: compactionKey,
-      },
-    });
-  }
   const appendQueuedSend = (queued: ChatQueueItem) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
       return;
@@ -471,6 +440,37 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
   );
+  // Transient projections merge into stable history + queued-send rows by timestamp.
+  // Stable rows keep their relative order despite client and Gateway clock skew.
+  const pendingInputItems = buildPendingInputItems(
+    pendingInputs,
+    props.searchOpen ? props.searchQuery : undefined,
+    props.queue,
+    props.workspaceSyncPendingRunIds,
+    props.workerSetupPending,
+    props.messageRecovery,
+  );
+  // Custody follows visible history. Choose its floor after canvas placement and
+  // hidden-row filtering so the anchor survives projection insertion.
+  const custodyFloor = items.at(-1)?.key;
+  const projections: ChatProjection[] = pendingInputItems.map((item) => ({
+    item,
+    ...(custodyFloor ? { bounds: { afterKey: custodyFloor } } : {}),
+  }));
+  if (compaction && compactionKey && !hasPersistedCompaction) {
+    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
+    projections.push({
+      item: {
+        ...buildCompactionDividerItem(
+          {},
+          timestamp,
+          0,
+          compaction.phase === "complete" ? "complete" : "active",
+        ),
+        key: compactionKey,
+      },
+    });
+  }
   const segments = props.streamSegments;
   const afterBoundaryBySegment = new Map<ChatStreamSegment, string>();
   let latestBoundaryRunId: string | undefined;

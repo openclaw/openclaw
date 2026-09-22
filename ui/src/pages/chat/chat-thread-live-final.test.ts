@@ -86,26 +86,25 @@ describe("live terminal continuity with pending collaborators", () => {
     );
     expect(after.findIndex((item) => item.kind === "agent-run-frame")).toBeLessThan(peer);
   });
-  it("keeps queued custody after persisted history that postdates its acceptance", () => {
-    // A handoff accepted while the session was busy, then overtaken by later
-    // transcript rows, must still render after everything already persisted.
+  it.each([
+    { label: "visible history", messages: history },
+    {
+      label: "a hidden trailing assistant row",
+      messages: [...history, { role: "assistant", content: "", timestamp: 40 }],
+    },
+  ])("keeps older queued inputs at the live edge with $label", ({ messages }) => {
     const stale = {
       ...pending,
       acceptedAt: 5,
       message: { ...pending.message, timestamp: 5 },
     };
     const items = project(
-      props({ pendingInputs: [stale], stream: null, runId: null, runWorking: false }),
+      props({ messages, pendingInputs: [stale], stream: null, runId: null, runWorking: false }),
     );
-    const lastHistory = items.findLastIndex(
-      (item) =>
-        item.kind === "group" && item.messages.some((message) => message.key.includes("active")),
+    const visibleMessages = items.flatMap((item) =>
+      item.kind === "group" ? item.messages.map((source) => source.message) : [],
     );
-    const custody = items.findIndex(
-      (item) =>
-        item.kind === "group" && item.messages.some((message) => message.key.includes("peer")),
-    );
-    expect(custody).toBeGreaterThan(lastHistory);
+    expect(visibleMessages).toEqual([...history, stale.message]);
   });
   it("already attributes a streaming reply to the same participant as its terminal", () => {
     const before = project(props());
