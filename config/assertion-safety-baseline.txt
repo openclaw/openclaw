@@ -2674,7 +2674,7 @@ src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/question.ts	2
 src/gateway/server-methods/restart-request.ts	8
 src/gateway/server-methods/session-catalog-terminal-start.ts	1
-src/gateway/server-methods/session-catalog.ts	5
+src/gateway/server-methods/session-catalog.ts	3
 src/gateway/server-methods/session-create-initial-turn.ts	2
 src/gateway/server-methods/session-recovery-continuation.ts	1
 src/gateway/server-methods/sessions-abort.ts	3
@@ -2805,7 +2805,7 @@ src/infra/delivery-queue-sqlite.types.ts	1
 src/infra/delivery-recovery.shared.ts	4
 src/infra/device-pairing-store.ts	4
 src/infra/diagnostic-event-listener-presence.ts	3
-src/infra/diagnostic-events.ts	13
+src/infra/diagnostic-events.ts	8
 src/infra/diagnostic-model-request.ts	1
 src/infra/diagnostic-semantic-run-progress.ts	1
 src/infra/diagnostic-trace-context.ts	2

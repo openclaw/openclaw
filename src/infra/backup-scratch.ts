@@ -6,7 +6,7 @@ import { getChildLogger } from "../logging/logger.js";
 import { isMissingPathError } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
-import { root as createRoot, type Root } from "./fs-safe.js";
+import { FsSafeError, root as createRoot, type Root } from "./fs-safe.js";
 import { isSqliteLockError, isSqliteNativeOpenFailure } from "./sqlite-error-diagnostics.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import {
@@ -49,7 +49,11 @@ export async function createBackupScratchDirectory(root: string): Promise<Backup
         isSqliteLockError(error) ||
         error instanceof SqliteStagingRetiredError ||
         isMissingPathError(error) ||
-        (isSqliteNativeOpenFailure(error) && (await wasScratchReclaimed(directory)))
+        ((isSqliteNativeOpenFailure(error) ||
+          (error instanceof FsSafeError &&
+            error.code === "path-mismatch" &&
+            isMissingPathError(error.cause))) &&
+          (await wasScratchReclaimed(directory)))
       ) {
         if (attempt < 2) {
           continue;

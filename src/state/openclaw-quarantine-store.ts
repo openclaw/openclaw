@@ -19,6 +19,7 @@ import {
 } from "../infra/sqlite-file-generation.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   OpenClawQuarantineReadCleanupError,
   type OpenClawDatabaseKind,
@@ -117,12 +118,11 @@ export function canReuseOpenClawAgentIntegrityVerification(
   pathname: string,
   record: OpenClawAgentIntegrityVerification | undefined,
   migrationPending: boolean,
-  reuseRuntimeIntegrity = false,
 ): boolean {
   if (
     migrationPending ||
     !record ||
-    (!reuseRuntimeIntegrity && record.clean_close !== 1) ||
+    record.clean_close !== 1 ||
     record.app_version !== VERSION ||
     record.path !== resolveAgentIntegrityPath(pathname)
   ) {
@@ -179,15 +179,23 @@ export function recordOpenClawAgentIntegrityVerification(
 export function clearOpenClawAgentIntegrityVerification(
   pathname: string,
   env: NodeJS.ProcessEnv = process.env,
+  runtimeProof: "revoke" | "retain" = "revoke",
 ): void {
+  if (runtimeProof === "revoke") {
+    invalidateOpenClawAgentDatabaseValidation(pathname);
+  }
   withQuarantineWriter(env, (database) =>
     runSqliteImmediateTransactionSync(database, () =>
-      deleteAgentIntegrityVerification(database, pathname),
+      deleteAgentIntegrityVerification(database, pathname, runtimeProof),
     ),
   );
 }
 
-function deleteAgentIntegrityVerification(database: DatabaseSync, pathname: string): void {
+function deleteAgentIntegrityVerification(
+  database: DatabaseSync,
+  pathname: string,
+  runtimeProof: "revoke" | "retain" = "revoke",
+): void {
   const query = getNodeSqliteKysely<IntegrityDatabase>(database);
   const stored = executeSqliteQueryTakeFirstSync(
     database,
@@ -197,6 +205,13 @@ function deleteAgentIntegrityVerification(database: DatabaseSync, pathname: stri
       .where("path", "=", resolveAgentIntegrityPath(pathname)),
   );
   const current = statSync(pathname, { bigint: true, throwIfNoEntry: false });
+  if (runtimeProof === "revoke") {
+    for (const file of [stored, current]) {
+      if (file) {
+        invalidateOpenClawAgentDatabaseValidation(pathname, `${file.dev}:${file.ino}`);
+      }
+    }
+  }
   executeSqliteQuerySync(
     database,
     query

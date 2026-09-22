@@ -30,6 +30,11 @@ import {
   publishTaskAgentEventDelivery,
   type TaskAgentEventDelivery,
 } from "./task-registry-agent-event-delivery.js";
+import {
+  captureTaskAgentEventSource,
+  sameTaskAgentEventSource,
+  type TaskAgentEventSource,
+} from "./task-registry-agent-event-source.js";
 import type { TaskAgentEventTarget } from "./task-registry-agent-event-target.js";
 import {
   captureTaskAgentEventChange,
@@ -59,16 +64,9 @@ import { getTaskRegistryStore, type TaskRegistryStore } from "./task-registry.st
 import type { TaskRecord } from "./task-registry.types.js";
 import { getTaskRunOwner } from "./task-run-owner.js";
 
-type EventSource = {
-  runId: string;
-  lifecycleGeneration: string;
-  runContext: ReturnType<typeof getAgentRunContext>;
-  subagent: ReturnType<typeof subagentRuns.get>;
-  subagentGeneration: number | undefined;
-};
 type PendingEvent = {
   input: TaskAgentEventInput;
-  source: EventSource;
+  source: TaskAgentEventSource;
   context: OpenClawStateWorkerContext;
   store: TaskRegistryStore;
   flowStore: ReturnType<typeof getTaskFlowRegistryStore>;
@@ -81,6 +79,7 @@ type PendingEvent = {
   receipt?: TaskAgentEventReceipt | null;
   publication?: TaskAgentEventPublication;
   delivery?: TaskAgentEventDelivery;
+  publishObserver?: () => void;
   commitFacts?: unknown;
   committedTarget?: TaskAgentEventInput["expectedTask"];
   lineageResident?: TaskRecord;
@@ -179,7 +178,7 @@ function advanceCommittedLineage(pending: PendingEvent, facts: unknown): void {
       entry !== active &&
       entry.store === pending.store &&
       entry.context.admission.identity.key === pending.context.admission.identity.key &&
-      sameSource(entry.source, pending.source) &&
+      sameTaskAgentEventSource(entry.source, pending.source) &&
       isDeepStrictEqual(entry.input.expectedTask, pending.input.expectedTask) &&
       isDeepStrictEqual(entry.input.backing, pending.input.backing)
     ) {
@@ -212,8 +211,11 @@ function retainCommittedEventAfterResultFailure(pending: PendingEvent): void {
 
 function prepareNativeEventConsumption(): { consume: () => void; release: () => void } | undefined {
   const store = getTaskRegistryStore();
-  const pending = [...pendingEvents].filter(
-    (entry) => entry.store === store && entry.phase.kind !== "consumed",
+  const accepted = [...pendingEvents].filter((entry) => entry.store === store);
+  const pending = accepted.filter((entry) => entry.phase.kind !== "consumed");
+  // Native successors retain their FIFO position behind worker and deferred observers.
+  const deferObservers = accepted.some(
+    (entry) => entry.phase.kind === "granted" || entry.publishObserver !== undefined,
   );
   if (!pending.length) {
     return undefined;
@@ -273,8 +275,17 @@ function prepareNativeEventConsumption(): { consume: () => void; release: () => 
           current && hasAuthoritativeTaskBacking(current)
             ? prepareTaskAgentEventUpdate(current, entry.input)
             : null;
+        let publishObserver: (() => void) | undefined;
         const publication = receipt
-          ? updateTaskWithPublication(receipt.task.taskId, receipt.patch)
+          ? updateTaskWithPublication(
+              receipt.task.taskId,
+              receipt.patch,
+              deferObservers
+                ? (publish) => {
+                    publishObserver = publish;
+                  }
+                : undefined,
+            )
           : null;
         if (receipt && !publication) {
           throw new Error("Failed to persist accepted task event before synchronous mutation");
@@ -300,13 +311,19 @@ function prepareNativeEventConsumption(): { consume: () => void; release: () => 
             const latest = tasks.get(entry.input.taskId);
             if (latest && publication.isCurrent() && isEquivalentTaskRecord(latest, receipt.task)) {
               entry.delivery = { receipt, isCurrent: publication.isCurrent };
+              publishObserver?.();
             }
           };
           const database = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(
             entry.context.admission.databasePath,
           );
-          if (!database || !deferSqlitePostCommitPublication(database.db, publish)) {
-            publish();
+          const afterCommit = deferObservers
+            ? () => {
+                entry.publishObserver = publish;
+              }
+            : publish;
+          if (!database || !deferSqlitePostCommitPublication(database.db, afterCommit)) {
+            afterCommit();
           }
         }
       }
@@ -547,6 +564,11 @@ function startDrain(): void {
           } else {
             await persist(entry);
           }
+          try {
+            entry.publishObserver?.();
+          } finally {
+            delete entry.publishObserver;
+          }
           entry.completion.resolve();
         } catch (error) {
           entry.completion.reject(error);
@@ -582,38 +604,22 @@ function startDrain(): void {
   void operation.finally(() => drains.delete(operation));
 }
 
-function sameSource(left: EventSource, right: EventSource): boolean {
-  return (
-    left.runId === right.runId &&
-    left.lifecycleGeneration === right.lifecycleGeneration &&
-    left.runContext === right.runContext &&
-    left.subagent === right.subagent &&
-    left.subagentGeneration === right.subagentGeneration
-  );
-}
-
 /** At most one active batch and four ordered pending batches per live task identity. */
 export function enqueueTaskAgentEvent(
   initialTask: TaskAgentEventTarget,
   event: AgentEventPayload,
 ): boolean {
   let task = initialTask;
-  const runId = event.runId;
-  const subagent = subagentRuns.get(runId);
-  const source: EventSource = {
-    runId,
-    lifecycleGeneration: event.lifecycleGeneration ?? getAgentRunLifecycleGeneration(),
-    runContext: getAgentRunContext(runId),
-    subagent,
-    subagentGeneration: subagent?.generation,
-  };
+  const source = captureTaskAgentEventSource(event);
   const entries = pendingByTask.get(task.taskId);
   const store = getTaskRegistryStore();
   const flowStore = getTaskFlowRegistryStore();
   const resident = tasks.get(task.taskId);
   const owned = [...(entries ?? [])].filter(
     (entry) =>
-      entry.store === store && entry.flowStore === flowStore && sameSource(source, entry.source),
+      entry.store === store &&
+      entry.flowStore === flowStore &&
+      sameTaskAgentEventSource(source, entry.source),
   );
   for (const entry of owned) {
     if (entry.phase.kind === "granted" && !entry.committedTarget) {
@@ -638,7 +644,7 @@ export function enqueueTaskAgentEvent(
     task = { ...task, createdAt: committed.committedTarget.createdAt };
   }
   const matches = (entry: PendingEvent) =>
-    sameSource(source, entry.source) &&
+    sameTaskAgentEventSource(source, entry.source) &&
     matchesTaskPersistenceReceipt(task, entry.committedTarget ?? entry.input.expectedTask) &&
     isDeepStrictEqual(task.backing, entry.input.backing);
   for (const entry of entries ?? []) {

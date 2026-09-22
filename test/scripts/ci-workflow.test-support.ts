@@ -79,7 +79,10 @@ export function evaluateWorkflowExpression(
     releaseScope?: string;
     repository: string;
     runCheck?: boolean;
-    runnerBackend?: "" | "blacksmith" | "github" | "hybrid";
+    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
+    requestedRunnerBackend?: "default" | "hybrid" | "runson";
+    ciShape?: "default" | "main";
+    includeAndroid?: boolean;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
@@ -168,6 +171,9 @@ export function evaluateWorkflowExpression(
     },
     inputs: {
       dispatch_id: context.dispatchId ?? "",
+      runner_backend: context.requestedRunnerBackend ?? "default",
+      ci_shape: context.ciShape ?? "default",
+      include_android: context.includeAndroid ?? false,
       release_gate: context.releaseGate ?? false,
       release_scope: context.releaseScope ?? "full",
       target_context_ref: context.targetContextRef ?? "",
@@ -177,7 +183,11 @@ export function evaluateWorkflowExpression(
     env: context.env ?? {},
     matrix: context.matrix ?? {},
     runner: { environment: context.runnerEnvironment ?? "" },
-    steps: context.steps ?? {},
+    steps: {
+      runner_profile: { outputs: { node_runner_backend: "" } },
+      qualification_dispatch: { outputs: { eligible: "false" } },
+      ...context.steps,
+    },
     needs: {
       resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
       preflight: {

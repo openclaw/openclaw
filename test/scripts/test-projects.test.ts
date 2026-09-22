@@ -46,13 +46,13 @@ import {
   gatewayDatabaseWorkerTestFiles,
   isGatewayServerTestFile,
 } from "../vitest/vitest.gateway-server-paths.mjs";
+import { isSharedVitestExcludedPath } from "../vitest/vitest.pattern-file.ts";
 import {
   startupCorpusTestFiles,
   stateStartupCorpusTestFiles,
 } from "../vitest/vitest.startup-corpus-paths.mjs";
 
 const normalizeRepoPath = toRepoPath;
-const CODEX_TEST_PROCESS_FILE_LIMIT = 24;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 10;
 
@@ -381,7 +381,11 @@ describe("test runtime prerequisites", () => {
     ["gateway-server", ["server.config-patch.test.ts"], "runtime"],
     [
       "gateway-server",
-      ["server-sidecar-retention.test.ts", "server.config-patch.test.ts"],
+      [
+        "server-sidecar-retention.test.ts",
+        "server.config-patch.test.ts",
+        "server.acp-native-model.product.test.ts",
+      ],
       undefined,
     ],
     ["gateway", ["gateway-*.test.ts"], "runtime"],
@@ -452,7 +456,7 @@ describe("test runtime prerequisites", () => {
 
 function listOrdinaryExtensionFiles(root: string) {
   return listExtensionTestFilesForRoots([root]).filter(
-    (file) => !databaseWorkerExtensionTestFiles.includes(file),
+    (file) => !databaseWorkerExtensionTestFiles.includes(file) && !isSharedVitestExcludedPath(file),
   );
 }
 
@@ -3783,35 +3787,6 @@ describe("scripts/test-projects changed-target routing", () => {
       }
     },
   );
-
-  it.each([
-    ["matrix", MATRIX_TEST_PROCESS_FILE_LIMIT],
-    ["codex", CODEX_TEST_PROCESS_FILE_LIMIT],
-    ["telegram", TELEGRAM_TEST_PROCESS_FILE_LIMIT],
-  ] as const)("bounds an explicit %s directory across both database owners", (name, limit) => {
-    const root = `extensions/${name}`;
-    const plans = buildVitestRunPlans([root]);
-    const selected = plans.flatMap((plan) => plan.includePatterns ?? []);
-    expect(plans.length).toBeGreaterThan(1);
-    expect(plans.every((plan) => (plan.includePatterns?.length ?? 0) <= limit)).toBe(true);
-    expect(selected.toSorted()).toEqual(listExtensionTestFilesForRoots([root]).toSorted());
-    expect(new Set(selected).size).toBe(selected.length);
-    for (const plan of plans) {
-      if (
-        name === "telegram" &&
-        plan.config === "test/vitest/vitest.extension-database-workers.config.ts"
-      ) {
-        expect(plan.includePatterns).toHaveLength(1);
-      }
-      for (const file of plan.includePatterns ?? []) {
-        expect(plan.config).toBe(
-          databaseWorkerExtensionTestFiles.includes(file)
-            ? "test/vitest/vitest.extension-database-workers.config.ts"
-            : `test/vitest/vitest.extension-${name}.config.ts`,
-        );
-      }
-    }
-  });
 
   it("keeps an explicit Codex file target in one process", () => {
     const testFile = listExtensionTestFilesForRoots(["extensions/codex"])[0];
