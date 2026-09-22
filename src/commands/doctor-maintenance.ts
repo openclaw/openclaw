@@ -418,17 +418,18 @@ export async function beginDoctorMaintenance(params: {
     if (authorityRefused || error instanceof DoctorUnreadableStateDatabaseError) {
       throw error;
     }
-    if (error instanceof DoctorMaintenanceRefusalError) {
-      throw error;
-    }
-    const refusal = new DoctorMaintenanceRefusalError(
-      `Doctor could not enter maintenance. ${String(error)}${hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
-      classifyDoctorMaintenanceRefusal(error),
-      {
-        cause: error,
-        ...(error instanceof UpdateDoctorError ? { failureFacts: error.failureFacts } : {}),
-      },
-    );
+    // Released Git drivers consume the original refusal prefix and recovery tail.
+    const refusal =
+      error instanceof DoctorMaintenanceRefusalError
+        ? error
+        : new DoctorMaintenanceRefusalError(
+            `Doctor could not enter maintenance. ${String(error)}${hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
+            classifyDoctorMaintenanceRefusal(error),
+            {
+              cause: error,
+              ...(error instanceof UpdateDoctorError ? { failureFacts: error.failureFacts } : {}),
+            },
+          );
     const recovery = inspectingActivation
       ? await resolveUpdateDoctorGitRecovery({ root: params.root })
       : undefined;
@@ -484,7 +485,7 @@ export async function beginDoctorMaintenance(params: {
           inspection.offline !== true
         ) {
           throw new DoctorMaintenanceRefusalError(
-            await formatUpdateDoctorServiceStopRefusal(inspection.serviceEnv ?? env),
+            `Doctor could not enter maintenance. Error: ${await formatUpdateDoctorServiceStopRefusal(inspection.serviceEnv ?? env)}`,
             { kind: "data-at-risk", reason: "gateway-state-unverified" },
           );
         }
