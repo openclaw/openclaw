@@ -27,10 +27,8 @@ import {
   CUSTOM_PLUGIN_UI_DISABLED_MESSAGE,
   isControlUiPluginAllowed,
 } from "./control-ui-plugin-policy.js";
-import {
-  authorizeControlUiPluginCookieRequest,
-  authorizeControlUiReadRequestOrReply,
-} from "./http-auth-utils.js";
+import { authorizeControlUiPluginCookieRequest } from "./http-auth-plugin-cookie.js";
+import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, sendMethodNotAllowed } from "./http-common.js";
 import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -364,7 +362,11 @@ export async function handleControlUiPluginAssetRequest(
   const cookieAuth = authorizeControlUiPluginCookieRequest(req, {
     requestPath: pathname,
     authGeneration: resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies),
+    res,
   });
+  if (res.writableEnded || res.destroyed) {
+    return true;
+  }
   if (cookieAuth) {
     const grant = cookieAuth.requestAuth.controlUiPluginGrants?.find(
       (candidate) =>

@@ -37,8 +37,7 @@ export type PluginStateMoveEntries = {
   entries: Array<{ sourceKey: string; targetKey: string }>;
 };
 
-/** Async plugin state API exposed to plugin runtimes. */
-export type PluginStateKeyedStore<T> = {
+type PluginStateKeyedStoreBase<T> = {
   /** Prepares a mutation observation through canonical writable admission; may create state. */
   observe?: (key: string) => Promise<PluginStateObservation<T>>;
   /** Compares the observed row before applying prepared data; only explicit conflicts may retry. */
@@ -47,7 +46,11 @@ export type PluginStateKeyedStore<T> = {
     comparison: string,
     intent: PluginStateCompareIntent<T>,
   ) => Promise<PluginStateCompareResult<T>>;
-  register(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
+  register(
+    key: string,
+    value: T,
+    opts?: { ttlMs?: number; assertCurrent?: () => void },
+  ): Promise<void>;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): Promise<boolean>;
   /**
    * The updater runs synchronously in the transaction; undefined leaves the entry unchanged.
@@ -73,7 +76,7 @@ export type PluginStateKeyedStore<T> = {
     keys: readonly string[],
   ) => Promise<Array<Result<T | undefined, PluginStateStoreError>>>;
   consume(key: string): Promise<T | undefined>;
-  delete(key: string): Promise<boolean>;
+  delete(key: string, opts?: { assertCurrent?: () => void }): Promise<boolean>;
   entries(): Promise<PluginStateEntry<T>[]>;
   /** Reads a lexical key range with ordering and limit applied by storage. */
   entriesInKeyRange?: (range: PluginStateKeyRange) => Promise<PluginStateEntry<T>[]>;
@@ -86,6 +89,14 @@ export type PluginStateKeyedStore<T> = {
   count?: () => Promise<number>;
   clear(): Promise<void>;
 };
+
+/** Version 2 is an action-bound, data-only view; legacy stores remain source-compatible. */
+export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extends 2
+  ? Required<Omit<PluginStateKeyedStoreBase<T>, "update" | "deleteIf">>
+  : PluginStateKeyedStoreBase<T> & {
+      /** Bind current action authority through read completion and final write admission. */
+      withCurrent?: (authority: { assertCurrent: () => void }) => PluginStateKeyedStore<T, 2>;
+    };
 
 /**
  * Synchronous plugin-state compatibility contract.

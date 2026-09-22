@@ -52,7 +52,10 @@ function resolveSkillsWatchPath(raw: string): string {
     index += 1;
   }
   try {
-    return path.join(fs.realpathSync.native(cursor), ...parts.slice(index));
+    const resolved = fs.realpathSync.native(cursor);
+    // NTFS can return a delete-pending name if removal races the prefix scan.
+    // Keep discovery on the configured path instead of watching that namespace.
+    return fs.existsSync(resolved) ? path.join(resolved, ...parts.slice(index)) : raw;
   } catch {
     return raw;
   }
@@ -133,10 +136,34 @@ export function createSkillsWatchPathFilter(root: string, usePolling: boolean) {
   const directorySymlinks = new Set<string>();
   const contains = (watchPath: string) =>
     isPathInside(root, watchPath) || isPathInside(watchPath, root);
+  const isSupportingPath = (watchPath: string) =>
+    isPathInside(root, watchPath) && !DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath));
   return {
-    isSupportingPath: (watchPath: string) =>
-      isPathInside(root, watchPath) &&
-      !DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath)),
+    isSupportingPath,
+    isStructuralRaw: (event: string, rawPath: unknown, details: unknown) => {
+      const name = rawPathToString(rawPath);
+      const changedPath = name
+        ? resolveRawSkillsWatchPath(name, details)
+        : getRawWatchedPath(details);
+      if (changedPath && !isSupportingPath(changedPath)) {
+        return false;
+      }
+      if (!name || !changedPath) {
+        return true;
+      }
+      if (!usePolling) {
+        return event !== "change";
+      }
+      // Chokidar watchFile raw events carry Stats pairs, unlike fs.watch names.
+      // Regular supporting-file writes must not keep a directory scan pending.
+      return [
+        isRecord(details) ? details.curr : undefined,
+        isRecord(details) ? details.prev : undefined,
+      ].some(
+        (stats) =>
+          !isRecord(stats) || typeof stats.isDirectory !== "function" || stats.isDirectory(),
+      );
+    },
     ignored: (
       watchPath: string,
       stats?: { isDirectory?: () => boolean; isSymbolicLink?: () => boolean },
@@ -190,7 +217,8 @@ export function makeSkillsWatchTarget(
   depth: number,
   previousWatchRoot?: string,
 ): { path: string; watchRoot: string; depth: number } {
-  const watchPath = toWatchRoot(resolveSkillsWatchPath(raw));
+  // Reconciliation receives an admitted path: only its observation root moves.
+  const watchPath = toWatchRoot(previousWatchRoot ? raw : resolveSkillsWatchPath(raw));
   let watchRoot = watchPath;
   while (!fs.existsSync(watchRoot)) {
     const parent = path.dirname(watchRoot);

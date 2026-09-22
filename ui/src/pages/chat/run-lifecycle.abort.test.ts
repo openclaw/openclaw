@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
@@ -178,6 +179,96 @@ describe("handleAbortChat", () => {
     expect(refreshCurrentChat).toHaveBeenCalledTimes(1);
   });
 
+  it.each(
+    (["online", "replay"] as const).flatMap((mode) =>
+      (["no-active-run", "failure"] as const).flatMap((outcome) =>
+        [
+          {
+            alias: "default main",
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+          {
+            alias: "configured home",
+            defaultAgentId: "work",
+            mainKey: "home",
+            mainSessionKey: "agent:work:home",
+          },
+          {
+            alias: "global home",
+            defaultAgentId: "work",
+            mainKey: "home",
+            mainSessionKey: "global",
+          },
+        ].map(({ alias, defaultAgentId, mainKey, mainSessionKey }) => ({
+          mode,
+          outcome,
+          alias,
+          defaultAgentId,
+          mainKey,
+          mainSessionKey,
+        })),
+      ),
+    ),
+  )(
+    "keeps $mode Stop's $outcome response when Gateway defaults canonicalize $alias",
+    async ({ mode, outcome, defaultAgentId, mainKey, mainSessionKey }) => {
+      const response = createDeferred<unknown>();
+      const request = vi.fn(() => response.promise);
+      const refreshCurrentChat = vi.fn(async () => {});
+      const host = makeAbortHost({
+        client: createTestGatewayClient(request),
+        connected: mode === "online",
+        sessionKey: "main",
+        assistantAgentId: defaultAgentId,
+        hello: {
+          ...sessionMutationGatewayHello(),
+          snapshot: { sessionDefaults: { defaultAgentId, mainKey, mainSessionKey } },
+        },
+        chatRunId: "finished-run",
+        refreshCurrentChat,
+        chatMessage: "Keep this draft",
+      });
+      let operation: Promise<void | boolean> | undefined;
+      try {
+        if (mode === "replay") {
+          await handleAbortChat(host, { preserveDraft: true });
+          expect(request).not.toHaveBeenCalled();
+          host.connected = true;
+          operation = replayPendingChatAbort(host);
+        } else {
+          operation = handleAbortChat(host, { preserveDraft: true });
+        }
+        expect(request).toHaveBeenCalledExactlyOnceWith("chat.abort", {
+          sessionKey: "main",
+          ...(mainSessionKey === "global" ? { agentId: "work" } : {}),
+          runId: "finished-run",
+        });
+        // Only route spelling changes; the captured Gateway defaults stay fixed.
+        host.sessionKey = resolveSessionKey(host.sessionKey, host.hello);
+        expect(host.sessionKey).toBe(mainSessionKey);
+        if (outcome === "failure") {
+          response.reject(new Error("Stop acknowledgement failed"));
+        } else {
+          response.resolve({ ok: true, aborted: false, runIds: [] });
+        }
+        await operation;
+        expect(refreshCurrentChat).toHaveBeenCalledTimes(outcome === "no-active-run" ? 1 : 0);
+        expect(host.chatError ?? null).toBe(
+          outcome === "failure" ? "Stop acknowledgement failed" : null,
+        );
+        expect(host.lastError ?? null).toBe(host.chatError ?? null);
+        expect(host.chatRunId).toBe("finished-run");
+        expect(host.chatMessage).toBe("Keep this draft");
+        expect(request).toHaveBeenCalledOnce();
+      } finally {
+        response.resolve({ aborted: true });
+        await operation;
+      }
+    },
+  );
+
   it("does not refresh a session the Stop was not captured for", async () => {
     const refreshCurrentChat = vi.fn(async () => {});
     const host = makeAbortHost({
@@ -287,9 +378,11 @@ describe("handleAbortChat", () => {
     expect(host.pendingAbort).toEqual({
       sourceClient: client,
       sessionKey: "agent:main",
+      conversation: { sessionKey: "agent:main" },
       runId: "run-main",
     });
     expect(host.chatMessage).toBe("@Alex keep this draft");
+    expect(host.chatRunId).toBe("run-main");
     expect(host.chatMentions).toEqual([{ profileId: "alex-profile", start: 0, end: 5 }]);
     expect(host.chatError ?? null).toBeNull();
     expect(request).not.toHaveBeenCalled();
@@ -307,6 +400,7 @@ describe("replayPendingChatAbort", () => {
         runId: "run-main",
         sessionKey: "global",
         agentId: "work",
+        conversation: { sessionKey: "global", agentId: "work" },
       },
     });
 
@@ -320,32 +414,46 @@ describe("replayPendingChatAbort", () => {
     expect(host.pendingAbort).toBeNull();
   });
 
-  it("denies a queued exact-run stop when the reconnect is read-only", async () => {
-    const request = vi.fn();
-    const client = createTestGatewayClient(request);
-    const host = makeAbortHost({
-      client,
-      hello: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["chat.abort"] },
-      },
-      pendingAbort: {
-        sourceClient: client,
-        runId: "run-main",
-        sessionKey: "global",
-        agentId: "work",
-      },
-    });
+  it.each([true, false])(
+    "denies a queued stop on a read-only reconnect (same scope: %s)",
+    async (sameScope) => {
+      const request = vi.fn();
+      const client = createTestGatewayClient(request);
+      const host = makeAbortHost({
+        client,
+        sessionKey: sameScope ? "global" : "agent:main:replacement-chat",
+        assistantAgentId: "work",
+        agentsList: { defaultId: "main", scope: "global" },
+        chatRunId: "run-main",
+        chatError: "Current scope warning",
+        lastError: "Current scope warning",
+        hello: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: ["operator.read"] },
+          features: { methods: ["chat.abort"] },
+        },
+        pendingAbort: {
+          sourceClient: client,
+          runId: "run-main",
+          sessionKey: "global",
+          agentId: "work",
+          conversation: { sessionKey: "global", agentId: "work" },
+        },
+      });
 
-    await expect(replayPendingChatAbort(host)).resolves.toBe(false);
+      await expect(replayPendingChatAbort(host)).resolves.toBe(false);
 
-    expect(request).not.toHaveBeenCalled();
-    expect(host.pendingAbort).toBeNull();
-    expect(host.chatError).toContain("operator.write");
-    expect(host.lastError).toBe(host.chatError);
-  });
+      expect(request).not.toHaveBeenCalled();
+      expect(host.pendingAbort).toBeNull();
+      if (sameScope) {
+        expect(host.chatError).toContain("operator.write");
+      } else {
+        expect(host.chatError).toBe("Current scope warning");
+      }
+      expect(host.lastError).toBe(host.chatError);
+    },
+  );
 
   it("consumes an ambiguously failed exact-run stop without retrying it", async () => {
     const request = vi.fn(async () => {
@@ -354,10 +462,13 @@ describe("replayPendingChatAbort", () => {
     const client = createTestGatewayClient(request);
     const host = makeAbortHost({
       client,
+      sessionKey: "agent:main:telegram:direct:queued-user",
+      chatRunId: "run-main",
       pendingAbort: {
         sourceClient: client,
         runId: "run-main",
         sessionKey: "agent:main:telegram:direct:queued-user",
+        conversation: { sessionKey: "agent:main:telegram:direct:queued-user", agentId: "main" },
       },
     });
 
@@ -378,6 +489,7 @@ describe("replayPendingChatAbort", () => {
         sourceClient,
         runId: "run-main",
         sessionKey: "agent:main:telegram:direct:queued-user",
+        conversation: { sessionKey: "agent:main:telegram:direct:queued-user", agentId: "main" },
       },
     });
 
@@ -387,4 +499,87 @@ describe("replayPendingChatAbort", () => {
     expect(host.pendingAbort).toBeNull();
     expect(host.chatError ?? null).toBeNull();
   });
+});
+
+describe("abort rejection publication ownership", () => {
+  it.each(
+    (["online", "replay"] as const).flatMap((mode) =>
+      (["current", "disconnected", "session", "agent", "client", "run"] as const).map(
+        (transition) => ({ mode, transition }),
+      ),
+    ),
+  )(
+    "keeps $mode abort failure with its captured scope after $transition",
+    async ({ mode, transition }) => {
+      const response = createDeferred<unknown>();
+      const request = vi.fn(() => response.promise);
+      const client = createTestGatewayClient(request);
+      const refreshCurrentChat = vi.fn(async () => {});
+      const host = makeAbortHost({
+        client,
+        sessionKey: "global",
+        assistantAgentId: "main",
+        agentsList: { defaultId: "main", scope: "global" },
+        chatRunId: "original-run",
+        chatMessage: "Keep this draft",
+        refreshCurrentChat,
+      });
+      let operation: Promise<void | boolean> | undefined;
+      try {
+        if (mode === "replay") {
+          host.connected = false;
+          await handleAbortChat(host, { preserveDraft: true });
+          expect(request).not.toHaveBeenCalled();
+          expect(host.pendingAbort?.runId).toBe("original-run");
+          host.connected = true;
+          operation = replayPendingChatAbort(host);
+          expect(host.pendingAbort).toBeNull();
+        } else {
+          operation = handleAbortChat(host, { preserveDraft: true });
+        }
+        expect(request.mock.calls).toEqual([
+          [
+            "chat.abort",
+            {
+              sessionKey: "global",
+              agentId: "main",
+              runId: "original-run",
+            },
+          ],
+        ]);
+        if (transition === "session") {
+          host.sessionKey = "agent:main:replacement-chat";
+        } else if (transition === "agent") {
+          host.assistantAgentId = "work";
+        } else if (transition === "client") {
+          host.client = createTestGatewayClient(vi.fn());
+        } else if (transition === "run") {
+          host.chatRunId = "replacement-run";
+        } else if (transition === "disconnected") {
+          host.connected = false;
+        }
+        host.chatError = "Current scope warning";
+        host.lastError = "Current scope warning";
+        response.reject(new Error("Synthetic Stop acknowledgement failure"));
+        await expect(operation).resolves.toBe(mode === "replay" ? false : undefined);
+        const stillOwned = transition === "current" || transition === "disconnected";
+        expect(host.chatError).toBe(
+          stillOwned ? "Synthetic Stop acknowledgement failure" : "Current scope warning",
+        );
+        expect(host.lastError).toBe(host.chatError);
+        expect(host.chatMessage).toBe("Keep this draft");
+        expect(host.chatRunId).toBe(transition === "run" ? "replacement-run" : "original-run");
+        expect(refreshCurrentChat).not.toHaveBeenCalled();
+        expect(request).toHaveBeenCalledOnce();
+        if (mode === "replay") {
+          expect(host.pendingAbort).toBeNull();
+          await expect(replayPendingChatAbort(host)).resolves.toBe(false);
+          expect(request).toHaveBeenCalledOnce();
+        }
+      } finally {
+        response.resolve({ aborted: true });
+        await operation;
+      }
+    },
+  );
 });

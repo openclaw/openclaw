@@ -21,6 +21,7 @@ import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   repairOpenClawStateDatabaseSchemaIfNeeded,
@@ -310,6 +311,7 @@ it.each(["registry", "main-key"] as const)(
     const initial = openOpenClawAgentDatabase(options);
     setCanonicalSqliteSessionMainKey(initial, repair === "main-key" ? "previous" : "main");
     closeOpenClawAgentDatabasesForTest();
+    clearOpenClawAgentIntegrityVerification(initial.path, env);
     if (repair === "registry") {
       unregisterOpenClawAgentDatabase({ ...options, path: initial.path });
     }

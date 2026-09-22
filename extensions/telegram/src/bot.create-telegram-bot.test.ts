@@ -3,7 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  escapeRegExp,
+  formatEnvelopeTimestamp,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildPluginBindingApprovalCustomId,
@@ -18,6 +22,7 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -50,6 +55,7 @@ import {
 } from "./callback-query-answer-state.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import type { TelegramPollRegistryEntry } from "./poll-registry.js";
+import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
@@ -251,16 +257,7 @@ async function dispatchSpooledPrivateText(
 
 function installTelegramTopicStateForTest(): void {
   resetTelegramTopicNameCacheForTest();
-  const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>(
-    options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0],
-  ) => pluginStateTestRuntime.createPluginStateKeyedStoreForTests<T>("telegram", options);
-  const openSyncKeyedStore: TelegramRuntime["state"]["openSyncKeyedStore"] = <T>(
-    options: Parameters<TelegramRuntime["state"]["openSyncKeyedStore"]>[0],
-  ) => pluginStateTestRuntime.createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
-  setTelegramRuntime({
-    state: { openKeyedStore, openSyncKeyedStore },
-    channel: {},
-  } as TelegramRuntime);
+  setTelegramPluginStateRuntimeForTests();
 }
 
 async function dispatchSpooledNativeStop(
@@ -614,7 +611,7 @@ describe("createTelegramBot", () => {
     });
     setTelegramRuntime({
       state: { openKeyedStore, openSyncKeyedStore },
-      channel: {},
+      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
     } as TelegramRuntime);
     let sequentialKey: string | string[] | undefined;
     sequentializeSpy.mockImplementationOnce(
@@ -669,7 +666,7 @@ describe("createTelegramBot", () => {
     });
     setTelegramRuntime({
       state: { openKeyedStore, openSyncKeyedStore },
-      channel: {},
+      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
     } as TelegramRuntime);
     createTelegramBot({ token: "tok" });
     const update = {
@@ -726,7 +723,10 @@ describe("createTelegramBot", () => {
     });
     const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>() =>
       ({ lookup }) as unknown as PluginStateKeyedStore<T>;
-    setTelegramRuntime({ state: { openKeyedStore }, channel: {} } as TelegramRuntime);
+    setTelegramRuntime({
+      state: { openKeyedStore },
+      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
+    } as TelegramRuntime);
     createTelegramBot({ token: "tok" });
     const update = { update_id: 42, poll_answer: pollAnswer };
     const reachedHandlers = vi.fn();
@@ -3880,38 +3880,33 @@ describe("createTelegramBot", () => {
       ctx: Record<string, unknown>,
     ) => Promise<void>;
 
-    await callbackHandler({
-      update: { update_id: 222 },
-      callbackQuery: {
-        id: "cb-1",
-        data: "ping",
+    const callbackCtx = (id: string, data: string) =>
+      makeCallbackRetryContext({
+        updateId: 222,
+        id,
+        data,
+        messageId: 9001,
         from: { id: 789, username: "testuser" },
-        message: {
-          chat: { id: 123, type: "private" },
-          date: 1736380800,
-          message_id: 9001,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({}),
-    });
-    await callbackHandler({
-      update: { update_id: 222 },
-      callbackQuery: {
-        id: "cb-question-duplicate",
-        data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
-        from: { id: 789, username: "testuser" },
-        message: {
-          chat: { id: 123, type: "private" },
-          date: 1736380800,
-          message_id: 9001,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({}),
-    });
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cb-question-duplicate");
+        message: { chat: { id: 123, type: "private" } },
+      });
+    const resolveQuestion = vi
+      .spyOn(questionGatewayRuntime, "resolveOption")
+      .mockRejectedValue(new Error("Unexpected duplicate question resolution"));
+    try {
+      // Admission owns dedupe state; the duplicate handler must still acknowledge its button.
+      await runTelegramMiddlewareChain({
+        ctx: callbackCtx("cb-1", "ping"),
+        finalHandler: callbackHandler,
+      });
+      await callbackHandler(
+        callbackCtx("cb-question-duplicate", "tgq1:ask_0123456789abcdef0123456789abcdef:1"),
+      );
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cb-question-duplicate");
+      expect(resolveQuestion).not.toHaveBeenCalled();
+    } finally {
+      resolveQuestion.mockRestore();
+    }
 
     replySpy.mockClear();
 
@@ -4933,7 +4928,7 @@ describe("createTelegramBot", () => {
     resetHarnessSpies();
     loadConfig.mockReturnValue(testCase.config);
     await dispatchMessage({
-      message: testCase.message,
+      message: { message_id: 1, ...testCase.message },
       me: testCase.me,
       botRequireMention: testCase.botRequireMention,
     });
@@ -5505,18 +5500,14 @@ describe("createTelegramBot", () => {
       },
     });
 
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
+    await dispatchMessage({
       message: {
+        message_id: 1,
         chat: { id: -100123456789, type: "group", title: "Test Group" },
         from: { id: 123456789, username: "testuser" },
         text: "/status",
         date: 1736380800,
       },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
@@ -5828,18 +5819,14 @@ describe("createTelegramBot", () => {
     };
     loadConfig.mockReturnValue(config);
 
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
+    await dispatchMessage({
       message: {
+        message_id: 1,
         chat: { id: 123, type: "group", title: "Routing" },
         from: { id: 999, username: "ops" },
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
@@ -6471,15 +6458,21 @@ describe("createTelegramBot", () => {
 
   it("retries model selection callbacks after a bubbled session-store failure", async () => {
     createTelegramBot({ token: "tok" });
-    const callbackHandler = getOnHandler("callback_query");
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
-      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, getOnHandler("callback_query"));
 
-    const applySessionModelSelectionSpy = vi.spyOn(
-      modelSessionRuntime,
-      "applySessionModelSelection",
-    );
-    applySessionModelSelectionSpy.mockRejectedValueOnce(new Error("session store boom"));
+    const applySessionModelSelectionSpy = vi
+      .spyOn(modelSessionRuntime, "applySessionModelSelection")
+      .mockRejectedValueOnce(new Error("session store boom"))
+      .mockResolvedValueOnce({
+        status: "applied",
+        provider: "openai",
+        model: "gpt-5.4",
+        effectiveModelRef: "openai/gpt-5.4",
+        agentRuntime: "openclaw",
+        changed: true,
+        contextTokens: 128_000,
+      });
 
     const ctx = makeCallbackRetryContext({
       updateId: 890,
@@ -6491,20 +6484,14 @@ describe("createTelegramBot", () => {
     try {
       await expect(runMiddlewareChain(ctx)).rejects.toThrow("session store boom");
       await runMiddlewareChain(ctx);
+      expect(applySessionModelSelectionSpy).toHaveBeenCalledTimes(2);
     } finally {
       applySessionModelSelectionSpy.mockRestore();
     }
 
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    const finalEditMessageText = editMessageTextSpy.mock.calls.at(-1)?.[2];
-    expect(typeof finalEditMessageText === "string" ? finalEditMessageText : "").toContain(
-      "Session-only model selection. Runtime set to <b>codex</b> from configured policy.",
-    );
-    expect(
-      editMessageTextSpy.mock.calls.some((call) =>
-        (typeof call[2] === "string" ? call[2] : "").includes("Failed to change model"),
-      ),
-    ).toBe(false);
+    expect(editMessageTextSpy.mock.calls.map((call) => call[2])).toEqual([
+      "✅ Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime set to <b>openclaw</b>. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.",
+    ]);
   });
 
   it("shows a permanent rejection when model selection is locked", async () => {

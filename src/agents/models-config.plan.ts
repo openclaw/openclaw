@@ -30,7 +30,6 @@ import {
   resolvePluginModelCatalogOwnerPluginId,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
-import type { ProviderCatalogInventoryCapture } from "./provider-model-membership.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
@@ -52,7 +51,6 @@ export type PreparedModelsConfigContext = Readonly<{
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
-  providerCatalogInventory?: ProviderCatalogInventoryCapture;
 }>;
 
 /**
@@ -142,7 +140,6 @@ async function resolveProvidersForModelsJson(params: {
     ...(context.workspaceDir ? { workspaceDir: context.workspaceDir } : {}),
     explicitProviders,
     sourceModelFields,
-    providerCatalogInventory: context.providerCatalogInventory,
     ...(context.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: context.pluginMetadataSnapshot }
       : {}),

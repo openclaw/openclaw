@@ -73,6 +73,42 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
     vi.useRealTimers();
   });
 
+  it("holds expanded pending rows until an explicit fresh page is requested", async () => {
+    const pendingPage = catalogPage([]);
+    pendingPage.catalogs[0]!.hosts[0]!.pending = true;
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(page(1))
+      .mockResolvedValueOnce(page(2))
+      .mockResolvedValueOnce(page(3))
+      .mockResolvedValueOnce(pendingPage)
+      .mockResolvedValue(page(4, "Fresh", ""));
+    const { sidebar } = await mountExpanded(request);
+    await sidebar.sessionData.refreshSessionCatalogs();
+    await settle(sidebar);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]).toMatchObject({
+      pending: true,
+      nextCursor: "page-4",
+      sessions: [
+        expect.objectContaining({ threadId: "thread-1" }),
+        expect.objectContaining({ threadId: "thread-2" }),
+        expect.objectContaining({ threadId: "thread-3" }),
+      ],
+    });
+    await loadMore(sidebar);
+    expect(request).toHaveBeenCalledTimes(5);
+    expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
+      agentId: "main",
+      catalogId: "codex",
+      hostIds: ["gateway:local"],
+      cursors: { "gateway:local": "page-4" },
+    });
+    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.pending).toBeUndefined();
+    expect(sidebar.textContent).toContain("Original 3");
+    expect(sidebar.textContent).toContain("Fresh 4");
+  });
+
   it.each(["base", "expanded"] as const)(
     "stops new automatic pages after hiding during the %s response and catches up once",
     async (heldStage) => {
@@ -96,7 +132,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       });
       const { sidebar, gateway } = await mountExpanded(request);
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       const issuedBeforeHide = heldStage === "base" ? 4 : 5;
       expect(request).toHaveBeenCalledTimes(issuedBeforeHide);
 
@@ -117,7 +153,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       const callsBeforeShow = request.mock.calls.length;
       setVisibility("visible");
       globalThis.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       await settle(sidebar);
       expect(request.mock.calls.filter(([, params]) => !params.cursors)).toHaveLength(
         baseCallsBeforeShow + 1,
@@ -140,7 +176,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       .mockResolvedValueOnce(page(3, "Refreshed"));
     const { sidebar, gateway } = await mountExpanded(request);
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     await settle(sidebar);
     expect(request).toHaveBeenCalledTimes(6);
     expect(sidebar.textContent).toContain("Refreshed 3");
@@ -189,7 +225,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       .mockReturnValueOnce(pending.promise);
     const { sidebar, provider, gateway } = await mountExpanded(request);
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(4);
     provider.remove();
     pending.resolve(page(1, "Retired"));
@@ -269,7 +305,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       .mockReturnValueOnce(pending.promise);
     const { sidebar, gateway } = await mountExpanded(request);
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     setVisibility("hidden");
     pending.resolve(page(1, "Only remaining", ""));
     await settle(sidebar);

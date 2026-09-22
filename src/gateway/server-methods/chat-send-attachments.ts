@@ -2,6 +2,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { StageSandboxMediaResult } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -94,6 +95,9 @@ async function prestageMediaPathOffloads(params: {
     }
 
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    if (getAgentWorkspaceAccess(workspaceDir, "prepareTurnAttachments")?.prepareTurnAttachments) {
+      return refsByManagedPath(mediaPathRefs);
+    }
     const sandbox = await ensureSandboxWorkspaceForSession({
       config: params.cfg,
       agentId: params.agentId,

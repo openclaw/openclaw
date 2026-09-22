@@ -283,6 +283,12 @@ it.each(["failed", "timeout"] as const)(
       });
       reconcileChatRunFromSessionRow(state, row, { publishRunStatus: false });
       expect(state.chatRunId).toBeNull();
+      // Session publication can settle the run before its chat error event arrives.
+      // The composer must explain the failure without requiring a history reload.
+      expect(state.chatRunError).toMatchObject({
+        runId: "current-run",
+        summary: row.lastRunError,
+      });
 
       await loadChatHistory(state);
 
@@ -291,6 +297,67 @@ it.each(["failed", "timeout"] as const)(
         status: status === "timeout" ? "timeout" : "error",
         errorMessage: row.lastRunError,
       });
+    } finally {
+      reconcileChatRunLifecycle(state, { clearRunStatus: true });
+    }
+  },
+);
+
+it.each(
+  (["live", "history"] as const).flatMap((source) =>
+    [false, undefined].map((publishRunStatus) => ({ source, publishRunStatus })),
+  ),
+)(
+  "upgrades a session failure summary from $source (publishRunStatus=$publishRunStatus)",
+  async ({ source, publishRunStatus }) => {
+    const summary = "Failed to prepare the workspace";
+    const diagnostic = `${summary}: missing required file /workspace/project/setup.ts`;
+    const row: GatewaySessionRow = {
+      key: "main",
+      kind: "direct",
+      updatedAt: 2,
+      status: "failed",
+      hasActiveRun: false,
+      lastRunId: "current-run",
+      lastRunError: summary,
+    };
+    const state = makeChatHost({
+      sessionKey: "main",
+      requestHandlers: {
+        "chat.history": {
+          messages: [
+            {
+              role: "custom",
+              customType: "run-failed-before-reply",
+              content: diagnostic,
+              __openclaw: { id: "failure", seq: 1, runId: "current-run" },
+            },
+          ],
+          sessionInfo: row,
+        },
+      },
+    });
+    try {
+      handleChatGatewayEvent(state, {
+        sessionKey: "main",
+        runId: "current-run",
+        state: "delta",
+        deltaText: "Working",
+      });
+      reconcileChatRunFromSessionRow(state, row, { publishRunStatus });
+      expect(state.chatRunError?.summary).toBe(summary);
+      if (source === "history") {
+        await loadChatHistory(state);
+      } else {
+        handleChatGatewayEvent(state, {
+          sessionKey: "main",
+          runId: "current-run",
+          state: "error",
+          errorMessage: diagnostic,
+        });
+      }
+      expect(state.chatRunError?.summary).toContain(diagnostic);
+      expect(getChatSessionProjection(state).runs["current-run"]?.errorMessage).toBe(diagnostic);
     } finally {
       reconcileChatRunLifecycle(state, { clearRunStatus: true });
     }

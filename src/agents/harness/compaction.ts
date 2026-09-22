@@ -34,13 +34,10 @@ import {
   resolvePreparedRuntimeModelAuth,
 } from "../runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
+import { resolveAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy } from "./policy.js";
 import { resolveCodexAgentHarnessNativeCompaction } from "./registry.js";
-import {
-  resolveAgentHarnessNativeToolPolicyRestricted,
-  selectAgentHarness,
-  selectAgentHarnessForPreparedModelProviders,
-} from "./selection.js";
+import { selectAgentHarness, selectAgentHarnessForPreparedModelProviders } from "./selection.js";
 import { projectPreparedModelProvider } from "./support.js";
 import type { AgentHarness, AgentHarnessNativeCompactionRequest } from "./types.js";
 

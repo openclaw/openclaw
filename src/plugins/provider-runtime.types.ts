@@ -150,6 +150,8 @@ export type ProviderPreparedRuntimeAuth = {
  * token blob, read a legacy credential file, or pick between aliases).
  */
 export type ProviderResolveUsageAuthContext = {
+  /** Cancel provider-owned work when the usage collection deadline expires. */
+  signal?: AbortSignal;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -203,6 +205,8 @@ export type ProviderResolvedUsageAuth = ProviderUsageAuthToken | { handled: true
  * owns the provider-specific HTTP request + response normalization.
  */
 export type ProviderFetchUsageSnapshotContext = {
+  /** Custom transports must preserve this signal; fetchFn already includes it. */
+  signal?: AbortSignal;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;

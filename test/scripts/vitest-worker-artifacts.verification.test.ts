@@ -121,3 +121,28 @@ it.each(["inputs", "outputs"] as const)(
     expect(fs.existsSync(directory)).toBe(false);
   },
 );
+
+it("rejects a byte-identical input at the compiler-time ctime cutoff", async () => {
+  const directory = tempDirs.make("vitest-worker-source-change-");
+  const filename = path.join(directory, "input.ts");
+  const original = "export const value = 1;\n";
+  fs.writeFileSync(filename, original);
+  const manifest: VitestWorkerManifest = {
+    identity: "source-change-fixture",
+    inputs: { [filename]: hashVitestWorkerArtifact(original) },
+    outputs: {},
+    durationMs: 0,
+  };
+  fs.writeFileSync(filename, "export const value = 2;\n");
+  fs.writeFileSync(filename, original);
+  // Filesystem timestamps need not advance in lockstep with the wall clock.
+  const inputsChangedAfter = fs.statSync(filename).ctimeMs;
+  await expect(
+    verifyVitestWorkerArtifacts(directory, manifest, {
+      inputsChangedAfter: inputsChangedAfter + 1,
+    }),
+  ).resolves.toBeUndefined();
+  await expect(
+    verifyVitestWorkerArtifacts(directory, manifest, { inputsChangedAfter }),
+  ).rejects.toThrow("Source changed during compiled subprocess invocation");
+});

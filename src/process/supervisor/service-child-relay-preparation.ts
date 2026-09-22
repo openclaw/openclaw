@@ -4,7 +4,8 @@ import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launc
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../spawn-secret-input.js";
 import { getInheritedProcessLineageFds } from "./inherited-process-lineage.js";
 import { supportsNodeWorkerProcessOwner } from "./service-child-protocol.js";
-import type { ProcessAdapterConstruction, SpawnSecretInput } from "./types.js";
+import { reserveStdioEntry } from "./service-child-stdio.js";
+import type { ProcessAdapterConstruction, SpawnProcessAdapter, SpawnSecretInput } from "./types.js";
 
 export type ServiceChildRelayParams = ProcessAdapterConstruction & {
   command: string;
@@ -24,17 +25,12 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
     | { ownedWorker?: never; env?: NodeJS.ProcessEnv; cleanupBinding?: never }
   );
 
-function reserveStdioEntry(stdio: SpawnStdioEntry[], value: SpawnStdioEntry): number {
-  let fd = 3;
-  while (stdio[fd] !== undefined && stdio[fd] !== "ignore") {
-    fd += 1;
-  }
-  while (stdio.length <= fd) {
-    stdio.push("ignore");
-  }
-  stdio[fd] = value;
-  return fd;
-}
+export type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
+  waitForExtinction: () => Promise<void>;
+  confirmExtinction: () => boolean;
+  openStartGate?: () => Promise<void>;
+  closeStartGate?: () => void;
+} & Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
 
 /** Prepare transport facts; the host revalidates authority immediately before spawning. */
 export function prepareServiceChildRelay(params: ServiceChildRelayParams) {

@@ -1,11 +1,15 @@
 // Slack tests cover auth.test token handling during provider boot.
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { WebClient } from "@slack/web-api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { slackPlugin } from "../channel.js";
 import { assertSlackDetachedTargetAllowed } from "../detached-target-admission.js";
 import { getSlackInstallationKind } from "../installation-identity-state.js";
 import {
@@ -22,6 +26,7 @@ import {
   useSlackStartupAuthClientOnce,
 } from "../monitor.test-helpers.js";
 import { getSlackRuntime } from "../runtime.js";
+import { startStalledSlackApiServer } from "./provider.stalled-api.test-helpers.js";
 
 const { monitorSlackProvider } = await import("./provider.js");
 
@@ -83,41 +88,11 @@ function useShortSlackStartupAuthClientOnce(): void {
   );
 }
 
-async function startStalledSlackApiServer(events: string[]) {
-  let requestCount = 0;
-  let requestUrl: string | undefined;
-  const server = createServer((request) => {
-    requestCount += 1;
-    requestUrl = request.url;
-    events.push("request");
-    request.resume();
-    request.socket.once("close", () => {
-      events.push("socket-closed");
-    });
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
-  return {
-    apiUrl: `http://127.0.0.1:${address.port}/api/`,
-    get requestCount() {
-      return requestCount;
-    },
-    get requestUrl() {
-      return requestUrl;
-    },
-    close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
-  };
-}
-
 beforeEach(async () => {
   await resetSlackTestState();
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackPlugin }]),
+  );
 });
 
 afterEach(async () => {
@@ -126,9 +101,13 @@ afterEach(async () => {
     monitor.controller.abort();
   }
   await Promise.allSettled(monitors.map((monitor) => monitor.run));
-  getSlackClient().auth.test.mockReset();
-  await resetSlackTestState();
-  vi.unstubAllEnvs();
+  try {
+    getSlackClient().auth.test.mockReset();
+    await resetSlackTestState();
+  } finally {
+    resetPluginRuntimeStateForTest();
+    vi.unstubAllEnvs();
+  }
 });
 
 afterAll(() => {

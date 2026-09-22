@@ -38,6 +38,11 @@ import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
 import { prepareTalkAgentConsultTranscript } from "../agent-consult-transcript.js";
 import { buildTalkRealtimeConfig } from "../session-config.js";
 import { forgetLegacyVoiceBinding } from "./client-legacy-voice-bindings.js";
+import { talkConfigAccentCases } from "./config-accent.test-support.js";
+import {
+  defineRealtimeConfigProjectionTests,
+  type TalkConfigProjectionResponse,
+} from "./config-realtime.test-support.js";
 import { talkHandlers } from "./index.js";
 import {
   expectRecordFields,
@@ -1252,24 +1257,7 @@ describe("talk.config handler", () => {
     },
   );
 
-  it.each([
-    {
-      name: "prefers the authenticated profile accent over gateway appearance defaults",
-      profileId: "profile-1",
-      profileAccent: "#A1B2C3",
-      expectedAccent: "#a1b2c3",
-    },
-    {
-      name: "ignores malformed authenticated profile accents",
-      profileId: "profile-1",
-      profileAccent: "not-a-color",
-      expectedAccent: "#52c99a",
-    },
-    {
-      name: "keeps profile-less callers on their existing gateway accent path",
-      expectedAccent: "#52c99a",
-    },
-  ])("$name", async ({ profileId, profileAccent, expectedAccent }) => {
+  it.each(talkConfigAccentCases)("$name", async ({ profileId, profileAccent, expectedAccent }) => {
     markTalkOwnerCold("tts");
     const runtimeConfig = createTalkConfig("healthy-talk-key");
     mocks.getSpeechProvider.mockReturnValue({ id: "acme" });
@@ -1292,7 +1280,9 @@ describe("talk.config handler", () => {
     });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(respond.mock.calls[0]?.[1]?.config?.ui).toEqual({ seamColor: expectedAccent });
+    expect(respond.mock.calls[0]?.[1]?.config?.ui).toEqual(
+      expectedAccent ? { seamColor: expectedAccent } : undefined,
+    );
     if (profileId) {
       expect(mocks.getCanonicalUserPreferences).toHaveBeenCalledWith(profileId, ["ui.accent"]);
     } else {
@@ -1368,118 +1358,27 @@ describe("talk.config handler", () => {
     });
   });
 
-  it.each([
-    { includeSecrets: false, providerSelection: "explicit" },
-    { includeSecrets: true, providerSelection: "explicit" },
-    { includeSecrets: false, providerSelection: "implicit" },
-  ] as const)(
-    "projects opaque OpenAI models through the cold bundled policy surface includeSecrets=$includeSecrets provider=$providerSelection",
-    async ({ includeSecrets, providerSelection }) => {
-      const runtimeConfig = {
-        talk: {
-          realtime: {
-            ...(providerSelection === "explicit" ? { provider: "openai" } : {}),
-            model: "gpt-live-test-canary",
-            providers: {
-              openai: { model: "gpt-live-test-canary", voice: "marin" },
-            },
-          },
+  defineRealtimeConfigProjectionTests(async (runtimeConfig, includeSecrets) => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      hash: "test-hash",
+      valid: true,
+      config: runtimeConfig,
+    });
+    mocks.listRealtimeVoiceProviders.mockReturnValue([]);
+    const respond = vi.fn();
+    await callTalkHandler("talk.config", {
+      params: includeSecrets ? { includeSecrets: true } : {},
+      client: {
+        connect: {
+          scopes: includeSecrets ? ["operator.read", "operator.talk.secrets"] : ["operator.read"],
         },
-      } as OpenClawConfig;
-      mocks.readConfigFileSnapshot.mockResolvedValue({
-        path: "/tmp/openclaw.json",
-        hash: "test-hash",
-        valid: true,
-        config: runtimeConfig,
-      });
-      mocks.listRealtimeVoiceProviders.mockReturnValue([]);
-      const respond = vi.fn();
-
-      await callTalkHandler("talk.config", {
-        params: includeSecrets ? { includeSecrets: true } : {},
-        client: {
-          connect: {
-            scopes: includeSecrets ? ["operator.read", "operator.talk.secrets"] : ["operator.read"],
-          },
-        },
-        respond,
-        context: { getRuntimeConfig: () => runtimeConfig },
-      });
-
-      const response = expectRespondOk(respond) as {
-        config?: {
-          talk?: Record<string, unknown>;
-          clientHints?: Record<string, unknown>;
-        };
-      };
-      const realtime = expectRecordFields(response.config?.talk?.realtime, {
-        provider: "openai",
-      });
-      expect(JSON.stringify(response)).not.toContain("gpt-live-test-canary");
-      expect(realtime).not.toHaveProperty("model");
-      const providerConfig = (realtime.providers as Record<string, unknown>).openai;
-      expectRecordFields(providerConfig, { voice: "marin" });
-      expect(providerConfig).not.toHaveProperty("model");
-      expect(response.config?.clientHints).toEqual({
-        realtime: {
-          modelSource: "gateway",
-          gatewayRelaySupported: false,
-        },
-      });
-    },
-  );
-
-  it.each([false, true])(
-    "preserves the released OpenAI realtime route through the cold bundled policy surface includeSecrets=%s",
-    async (includeSecrets) => {
-      const runtimeConfig = {
-        talk: {
-          realtime: {
-            provider: "openai",
-            model: "gpt-live-1-codex",
-            providers: {
-              openai: { model: "gpt-live-1-codex", voice: "spruce" },
-            },
-          },
-        },
-      } as OpenClawConfig;
-      mocks.readConfigFileSnapshot.mockResolvedValue({
-        path: "/tmp/openclaw.json",
-        hash: "test-hash",
-        valid: true,
-        config: runtimeConfig,
-      });
-      mocks.listRealtimeVoiceProviders.mockReturnValue([]);
-      const respond = vi.fn();
-
-      await callTalkHandler("talk.config", {
-        params: includeSecrets ? { includeSecrets: true } : {},
-        client: {
-          connect: {
-            scopes: includeSecrets ? ["operator.read", "operator.talk.secrets"] : ["operator.read"],
-          },
-        },
-        respond,
-        context: { getRuntimeConfig: () => runtimeConfig },
-      });
-
-      const response = expectRespondOk(respond) as {
-        config?: {
-          talk?: Record<string, unknown>;
-          clientHints?: Record<string, unknown>;
-        };
-      };
-      const realtime = expectRecordFields(response.config?.talk?.realtime, {
-        provider: "openai",
-        model: "gpt-live-1-codex",
-      });
-      expectRecordFields((realtime.providers as Record<string, unknown>).openai, {
-        model: "gpt-live-1-codex",
-        voice: "spruce",
-      });
-      expect(response.config).not.toHaveProperty("clientHints");
-    },
-  );
+      },
+      respond,
+      context: { getRuntimeConfig: () => runtimeConfig },
+    });
+    return expectRespondOk(respond) as TalkConfigProjectionResponse;
+  });
 
   it("projects effective legacy realtime provider config for native routing", async () => {
     const resolveConfig = vi.fn(

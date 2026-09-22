@@ -49,7 +49,7 @@ export async function prepareCliHistoryBoundary(
   }
   const target = { ...source, storePath: resolveSessionTranscriptDatabasePath(source) };
   const assertCurrent = createCliRunCurrentAssertion(params);
-  await waitForSessionTranscriptProjection(target);
+  await waitForSessionTranscriptProjection(target, params.abortSignal);
   assertCurrent();
   const snapshot: InternalSessionEntry | undefined = loadSessionEntryReadOnly(target);
   if (!snapshot || snapshot.sessionId !== target.sessionId) {
@@ -108,13 +108,17 @@ export async function prepareCliHistoryBoundary(
     !params.cliSessionBinding
   ) {
     let truncated = false;
-    const branch = SessionManager.openBounded(target, {
-      maxBytes: 1024 * 1024,
-      maxEvents: 100,
-      onTruncated: () => {
-        truncated = true;
-      },
-    }).getBranch();
+    const branch = (
+      await SessionManager.openBoundedAsync(target, {
+        signal: params.abortSignal,
+        maxBytes: 1024 * 1024,
+        maxEvents: 100,
+        onTruncated: () => {
+          truncated = true;
+        },
+      })
+    ).getBranch();
+    assertCurrent();
     // Bookkeeping is not a conversation. Retained reset rows, summaries, custom
     // context, missing anchors and bounded cuts must never look like a fresh start.
     allowed = !truncated && buildSessionContext(branch).messages.length === 0;

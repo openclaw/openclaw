@@ -1,52 +1,35 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import * as tar from "tar";
 import { describe, expect, it } from "vitest";
+import { sqliteWorkerPreloadEnv } from "../../infra/sqlite-worker-preload.test-support.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { runCliProcessChild } from "../cli-process-child.test-helpers.js";
 
 function runBackupCli(params: {
   env: NodeJS.ProcessEnv;
   outputPath: string;
-  preloadPath?: string;
   includeWorkspace?: boolean;
 }): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        ...(params.preloadPath ? ["--import", params.preloadPath] : []),
-        "--import",
-        "tsx",
-        path.resolve("src/entry.ts"),
-        "backup",
-        "create",
-        "--output",
-        params.outputPath,
-        ...(params.includeWorkspace ? [] : ["--no-include-workspace"]),
-        "--verify",
-        "--json",
-      ],
-      {
-        env: { ...params.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code, stdout, stderr }));
+  return runCliProcessChild({
+    nodeArgs: [
+      "--import",
+      "tsx",
+      path.resolve("src/entry.ts"),
+      "backup",
+      "create",
+      "--output",
+      params.outputPath,
+      ...(params.includeWorkspace ? [] : ["--no-include-workspace"]),
+      "--verify",
+      "--json",
+    ],
+    env: { ...params.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
   });
 }
 
@@ -186,19 +169,19 @@ describe("backup create CLI", () => {
         );
         const markerPath = state.path("sqlite-backup-entered");
         const preloadPath = await state.writeText(
-          "shift-clock-at-sqlite-backup.mjs",
+          "shift-clock-at-sqlite-backup.cjs",
           `
-            import fs from "node:fs";
-            import { syncBuiltinESMExports } from "node:module";
+            const fs = require("node:fs");
+            const { syncBuiltinESMExports } = require("node:module");
             const sqlite = process.getBuiltinModule("node:sqlite");
             const originalBackup = sqlite.backup.bind(sqlite);
-            let shifted = false;
+            const markerPath = process.env.PROOF_SNAPSHOT_MARKER;
+            const realNow = Date.now.bind(Date);
+            // Acquisition runs in a worker; every isolate must observe the same elapsed time.
+            Date.now = () => realNow() + (fs.existsSync(markerPath) ? 61_000 : 0);
             sqlite.backup = async (...args) => {
-              if (!shifted) {
-                shifted = true;
-                fs.writeFileSync(process.env.PROOF_SNAPSHOT_MARKER, "entered\\n", { mode: 0o600 });
-                const realNow = Date.now.bind(Date);
-                Date.now = () => realNow() + 61_000;
+              if (!fs.existsSync(markerPath)) {
+                fs.writeFileSync(markerPath, "entered\\n", { mode: 0o600 });
               }
               return await originalBackup(...args);
             };
@@ -211,11 +194,11 @@ describe("backup create CLI", () => {
           env: {
             ...process.env,
             ...state.env,
+            ...sqliteWorkerPreloadEnv(preloadPath),
             OPENCLAW_TEST_CONSOLE: "1",
             PROOF_SNAPSHOT_MARKER: markerPath,
           },
           outputPath,
-          preloadPath,
         });
 
         expect(result.code, result.stderr).toBe(0);

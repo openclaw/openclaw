@@ -15,8 +15,8 @@ import {
 } from "./code-mode.test-support.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
 
-afterEach(() => {
-  resetCodeModeTestState();
+afterEach(async () => {
+  await resetCodeModeTestState();
   resetProcessRegistryForTests();
 });
 
@@ -63,7 +63,7 @@ it.each([createProcessTool, createLazyProcessTool])(
   },
 );
 
-it("composes lazy process actions through generated declarations and a typechecked cell", async () => {
+it("composes lazy process actions through generated declarations and JavaScript", async () => {
   const session = createProcessSessionFixture({ id: "typed-process", backgrounded: true });
   addSession(session);
   appendOutput(session, "stdout", "first\nsecond");
@@ -147,8 +147,6 @@ async function checkContracts(action: "list" | "poll", input: Parameters<typeof 
   const result = await waitUntilCompleted({
     details: resultDetails(
       await h.tools[0]!.execute("typed-process", {
-        language: "typescript",
-        typecheck: true,
         code: `${composition}\nreturn await consume();`,
       }),
     ),

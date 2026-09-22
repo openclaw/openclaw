@@ -28,6 +28,7 @@ import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import { registerExecutorRootOwnershipTests } from "./update-command-executor-roots.test-support.js";
 import {
   captureUpdateCommandExecutorAuthority,
   releaseUpdateCommandPreflightForHandoff,
@@ -35,7 +36,7 @@ import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
@@ -137,6 +138,8 @@ describe("live update executor", () => {
     expect(warning).toHaveBeenCalledWith(expect.stringContaining(String(candidatePid)));
     expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
   });
+
+  registerExecutorRootOwnershipTests(() => ({ root, replaceOwner }));
 
   it("recovery acquires a fresh owner without reactivating the original fence", async () => {
     const store = createManagedHandoffLeaseStore();
@@ -273,22 +276,24 @@ describe("live update executor", () => {
     expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
   });
 
-  it("borrows only a live helper's exact assigned executor and leaves release to that helper", async () => {
-    const { runtimeEntry, options } = prepareStagedLeaseFixture();
-    const runId = randomUUID();
-    const owner = randomUUID();
-    const metadata = path.join(root, "handoff.json");
-    fs.writeFileSync(
-      metadata,
-      JSON.stringify({ version: 1, meta: { runId, handoffId: owner, root } }),
-    );
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
-    vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, metadata);
-    const child = spawn(
-      process.execPath,
-      [
-        "-e",
-        `
+  it.each([false, true])(
+    "borrows the exact helper package owner with a separate service root: %s",
+    async (splitRoot) => {
+      const { runtimeEntry, options } = prepareStagedLeaseFixture();
+      const runId = randomUUID();
+      const owner = randomUUID();
+      const metadata = path.join(root, "handoff.json");
+      fs.writeFileSync(
+        metadata,
+        JSON.stringify({ version: 1, meta: { runId, handoffId: owner, root } }),
+      );
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
+      vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, metadata);
+      const child = spawn(
+        process.execPath,
+        [
+          "-e",
+          `
       const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
       const store=createManagedHandoffLeaseStore(${JSON.stringify(options)});
       const acquired=store.acquire(${JSON.stringify(root)},${JSON.stringify(owner)},{kind:"update"});
@@ -302,44 +307,84 @@ describe("live update executor", () => {
       });
       process.send("assigned");
     `,
-      ],
-      { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-    );
-    const exited = once(child, "exit");
-    let stderr = "";
-    child.stderr?.on("data", (data) => {
-      stderr += String(data);
-    });
-    try {
-      const ready = await Promise.race([
-        once(child, "message").then(([message]) => message),
-        exited.then(() => {
-          throw new Error(`helper exited before assignment: ${stderr}`);
-        }),
-      ]);
-      expect(ready).toBe("assigned");
-      const store = createManagedHandoffLeaseStore();
-      await withUpdateCommandExecutor(runId, async (executor) => {
-        const fence = await executor.enter(root, { preflight: true });
-        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
-        await Promise.resolve();
-        fence.assertCurrent();
+        ],
+        { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+      );
+      const exited = once(child, "exit");
+      let stderr = "";
+      child.stderr?.on("data", (data) => {
+        stderr += String(data);
       });
-      const current = store.read(root);
-      expect(current.kind === "current" && current.lease.owner).toBe(owner);
-      await expect(
-        withUpdateCommandExecutor(randomUUID(), async (executor) => executor.enter(root)),
-      ).rejects.toThrow("changed during admission");
-      expect(store.read(root)).toEqual(current);
-    } finally {
-      if (child.connected) {
-        child.send("release");
+      try {
+        const ready = await Promise.race([
+          once(child, "message").then(([message]) => message),
+          exited.then(() => {
+            throw new Error(`helper exited before assignment: ${stderr}`);
+          }),
+        ]);
+        expect(ready).toBe("assigned");
+        const store = createManagedHandoffLeaseStore();
+        const serviceRoot = splitRoot ? path.join(root, "service-A") : undefined;
+        if (serviceRoot) {
+          fs.mkdirSync(serviceRoot);
+        }
+        await withUpdateCommandExecutor(runId, async (executor) => {
+          const fence = await executor.enter(root, { serviceRoot, preflight: true });
+          expect(captureUpdateCommandExecutorAuthority(fence).installKey).toBe(root);
+          if (serviceRoot) {
+            expect(store.read(serviceRoot).kind).toBe("current");
+          }
+          expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+          const result = await withUpdateCommandExecutorChild(
+            fence,
+            root,
+            (grant, beforeInput) =>
+              runUtf8CommandWithTimeout(
+                [
+                  process.execPath,
+                  "--input-type=module",
+                  "-e",
+                  `import {json} from "node:stream/consumers";
+               import {withDelegatedUpdateCommandExecutor,captureUpdateCommandExecutorAuthority} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)};
+               const grant=await json(process.stdin);
+               await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async(fence)=>{
+                 fence.assertCurrent(); process.stdout.write(JSON.stringify(captureUpdateCommandExecutorAuthority(fence)));
+               });`,
+                ],
+                {
+                  input: JSON.stringify(grant),
+                  beforeInput,
+                  timeoutMs: 15_000,
+                  killProcessTree: true,
+                  requireProcessTreeExtinction: true,
+                },
+              ),
+            { auxiliaryPreflight: true },
+          );
+          expect(result.code, result.stderr).toBe(0);
+          expect(JSON.parse(result.stdout)).toEqual(captureUpdateCommandExecutorAuthority(fence));
+          expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+          fence.assertCurrent();
+        });
+        if (serviceRoot) {
+          expect(store.read(serviceRoot)).toEqual({ kind: "absent" });
+        }
+        const current = store.read(root);
+        expect(current.kind === "current" && current.lease.owner).toBe(owner);
+        await expect(
+          withUpdateCommandExecutor(randomUUID(), async (executor) => executor.enter(root)),
+        ).rejects.toThrow("changed during admission");
+        expect(store.read(root)).toEqual(current);
+      } finally {
+        if (child.connected) {
+          child.send("release");
+        }
+        const [code] = await exited;
+        expect(code, stderr).toBe(0);
       }
-      const [code] = await exited;
-      expect(code, stderr).toBe(0);
-    }
-    expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
-  });
+      expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
+    },
+  );
 
   it("preserves an unreadable existing coordination database without repairing it", async () => {
     const database = path.join(temporary, "managed-update-handoffs.sqlite");
@@ -566,20 +611,22 @@ describe("candidate executor delegation", () => {
     },
   );
 
-  it("refuses a revoked requester before delegated Doctor changes operator config", async () => {
-    const configPath = path.join(root, "openclaw.json");
-    const original = JSON.stringify({
-      commands: { ownerAllowFrom: ["replacement"] },
-      plugins: { enabled: false },
-    });
-    fs.writeFileSync(configPath, original);
-    const workerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.migratedFinalize);
-    const resultUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.doctorResult);
-    // Prepare the worker before its deadline; watch mode still loads live source.
-    const sourceImportArgs = workerUrl.pathname.endsWith(".ts")
-      ? ["--import", path.resolve("scripts/tsx.mjs")]
-      : [];
-    const childProgram = `
+  it.each([false, true])(
+    "refuses a revoked requester before delegated Doctor changes operator config (retained service: %s)",
+    async (retainedService) => {
+      const configPath = path.join(root, "openclaw.json");
+      const original = JSON.stringify({
+        commands: { ownerAllowFrom: ["replacement"] },
+        plugins: { enabled: false },
+      });
+      fs.writeFileSync(configPath, original);
+      const workerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.migratedFinalize);
+      const resultUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.doctorResult);
+      const serviceRoot = retainedService ? path.join(root, "service-A") : undefined;
+      if (serviceRoot) {
+        fs.mkdirSync(serviceRoot);
+      }
+      const childProgram = `
       import fs from "node:fs";
       import {createUpdatePostInstallDoctorResultPath, UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV} from ${JSON.stringify(resultUrl.href)};
       const resultPath = createUpdatePostInstallDoctorResultPath();
@@ -593,50 +640,63 @@ describe("candidate executor delegation", () => {
       });
       await import(${JSON.stringify(workerUrl.href)});
     `;
-    const runId = randomUUID();
-    await withUpdateCommandExecutor(runId, async (executor) => {
-      const fence = await executor.enter(root);
-      const result = await withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
-        runUtf8CommandWithTimeout(
-          [process.execPath, ...sourceImportArgs, "--input-type=module", "-e", childProgram],
-          {
-            input: JSON.stringify({
-              executor: grant,
-              runId,
-              root,
-              configInputHash: createHash("sha256").update(original).digest("hex"),
-              requester: { channel: "synthetic", senderId: "owner" },
-              repair: true,
-            }),
-            beforeInput,
-            env: { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath },
-            timeoutMs: 15_000,
-            killProcessTree: true,
-            requireProcessTreeExtinction: true,
-          },
-        ),
-      );
-      expect(result.code, result.stderr).toBe(1);
-      expect(result.stdout, result.stderr).toContain('"reason":"requester-revoked"');
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        status: "error",
-        configWriteRefusal: { reason: "requester-revoked", keys: [] },
+      const runId = randomUUID();
+      await withUpdateCommandExecutor(runId, async (executor) => {
+        const fence = await executor.enter(root, { serviceRoot });
+        const result = await withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
+          runUtf8CommandWithTimeout(
+            [
+              process.execPath,
+              "--import",
+              path.resolve("scripts/tsx.mjs"),
+              "--input-type=module",
+              "-e",
+              childProgram,
+            ],
+            {
+              input: JSON.stringify({
+                executor: grant,
+                runId,
+                root,
+                configInputHash: createHash("sha256").update(original).digest("hex"),
+                requester: { channel: "synthetic", senderId: "owner" },
+                repair: true,
+              }),
+              beforeInput,
+              env: { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath },
+              timeoutMs: 15_000,
+              killProcessTree: true,
+              requireProcessTreeExtinction: true,
+            },
+          ),
+        );
+        expect(result.code).toBe(1);
+        expect(result.stdout, result.stderr).toContain('"reason":"requester-revoked"');
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          status: "error",
+          configWriteRefusal: { reason: "requester-revoked", keys: [] },
+        });
+        expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+        fence.assertCurrent();
       });
-      expect(fs.readFileSync(configPath, "utf8")).toBe(original);
-      fence.assertCurrent();
-    });
-  });
+    },
+  );
 
   const program = `
     import fs from "node:fs";
     import {spawn} from "node:child_process";
     import {once} from "node:events";
     import {setTimeout} from "node:timers/promises";
+    import {json} from "node:stream/consumers";
     import {withDelegatedUpdateCommandExecutor} from ${JSON.stringify(moduleUrl)};
-    const input=JSON.parse(fs.readFileSync(0,"utf8"));
+    const input=await json(process.stdin);
     await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.root,async (fence)=>{
       process.stdout.write("admitted\\n");
-      while(!fs.existsSync(input.proceed)) await setTimeout(10);
+      while(!input.staleSpawnerAfterAdmission && !fs.existsSync(input.proceed)) await setTimeout(10);
+      if(input.staleSpawnerAfterAdmission){
+        await Promise.resolve();
+        input.grant.spawner.updatedAt+=1;
+      }
       fence.assertCurrent();
       fs.writeFileSync(input.output,"owned");
       const helper=spawn(process.execPath,['-e',"process.send('ready');setTimeout(()=>{},2000)"],{
@@ -648,47 +708,50 @@ describe("candidate executor delegation", () => {
     });
   `;
   it.each([
-    { changedRoot: false, revoked: false },
-    { changedRoot: false, revoked: "candidate" },
-    { changedRoot: true, revoked: false },
-    { changedRoot: true, revoked: "candidate" },
-    { changedRoot: true, revoked: "original" },
+    { changedRoot: false, revoked: false, splitService: false },
+    { changedRoot: false, revoked: "candidate", splitService: false },
+    { changedRoot: true, revoked: false, splitService: false },
+    { changedRoot: true, revoked: "candidate", splitService: false },
+    { changedRoot: true, revoked: "original", splitService: false },
+    { changedRoot: false, revoked: false, splitService: true },
+    { changedRoot: false, revoked: "candidate", splitService: true },
+    { changedRoot: false, revoked: "service", splitService: true },
+    { changedRoot: true, revoked: false, splitService: true },
+    { changedRoot: true, revoked: "original", splitService: true },
+    { changedRoot: true, revoked: "service", splitService: true },
+    { changedRoot: true, revoked: "candidate", splitService: true },
   ])(
-    "retains both installation owners through a real child ($changedRoot, $revoked)",
-    async ({ changedRoot, revoked }) => {
+    "retains installation owners through a real child ($changedRoot, $revoked, $splitService)",
+    async ({ changedRoot, revoked, splitService }) => {
       const candidateRoot = changedRoot ? path.join(root, "activated") : root;
       if (changedRoot) {
         fs.mkdirSync(candidateRoot);
       }
+      const serviceRoot = splitService ? path.join(root, "service-A") : undefined;
+      if (serviceRoot) {
+        fs.mkdirSync(serviceRoot);
+      }
+      const revokedRoot =
+        revoked === "service" ? serviceRoot! : revoked === "original" ? root : candidateRoot;
       const ready = createDeferred();
       const proceed = path.join(root, "proceed");
       const output = path.join(root, "effect");
       const work = withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root);
+        const fence = await executor.enter(root, { serviceRoot });
         const pending = withUpdateCommandExecutorChild(fence, candidateRoot, (grant, beforeInput) =>
-          runUtf8CommandWithTimeout(
-            [
-              process.execPath,
-              "--import",
-              path.resolve("scripts/tsx.mjs"),
-              "--input-type=module",
-              "-e",
-              program,
-            ],
-            {
-              input: JSON.stringify({ grant, root: candidateRoot, proceed, output }),
-              beforeInput,
-              timeoutMs: 15_000,
-              killProcessTree: true,
-              // Match production candidate transport: join source-loader helpers too.
-              requireProcessTreeExtinction: true,
-              onOutputChunk: (chunk) => {
-                if (chunk.toString().includes("admitted")) {
-                  ready.resolve();
-                }
-              },
+          runUtf8CommandWithTimeout([process.execPath, "--input-type=module", "-e", program], {
+            input: JSON.stringify({ grant, root: candidateRoot, proceed, output }),
+            beforeInput,
+            timeoutMs: 15_000,
+            killProcessTree: true,
+            // Match production candidate transport: join source-loader helpers too.
+            requireProcessTreeExtinction: true,
+            onOutputChunk: (chunk) => {
+              if (chunk.toString().includes("admitted")) {
+                ready.resolve();
+              }
             },
-          ),
+          }),
         );
         try {
           await Promise.race([
@@ -709,8 +772,13 @@ describe("candidate executor delegation", () => {
           expect(store.acquire(candidateRoot, "other-candidate", { kind: "update" }).kind).toBe(
             "busy",
           );
+          if (serviceRoot) {
+            const serviceOwner = store.read(serviceRoot);
+            assert(serviceOwner.kind === "current");
+            expect(store.release(serviceOwner.lease)).toBe(false);
+          }
           if (revoked) {
-            replaceOwner(revoked === "original" ? root : candidateRoot);
+            replaceOwner(revokedRoot);
           }
         } finally {
           fs.writeFileSync(proceed, "continue");
@@ -724,9 +792,7 @@ describe("candidate executor delegation", () => {
         // The current receiver also retains the original recovery owner after
         // activation: changing either owner must refuse the child effect.
         expect(fs.existsSync(output)).toBe(false);
-        expect(
-          createManagedHandoffLeaseStore().read(revoked === "original" ? root : candidateRoot),
-        ).toMatchObject({
+        expect(createManagedHandoffLeaseStore().read(revokedRoot)).toMatchObject({
           kind: "current",
           lease: { owner: "replacement" },
         });
@@ -744,6 +810,9 @@ describe("candidate executor delegation", () => {
         expect(fs.readFileSync(output, "utf8")).toBe("owned");
         expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
         expect(createManagedHandoffLeaseStore().read(candidateRoot)).toEqual({ kind: "absent" });
+        if (serviceRoot) {
+          expect(createManagedHandoffLeaseStore().read(serviceRoot)).toEqual({ kind: "absent" });
+        }
       }
     },
   );
@@ -780,26 +849,16 @@ describe("candidate executor delegation", () => {
       withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(root);
         await withUpdateCommandExecutorChild(fence, candidateRoot, (grant, beforeInput) =>
-          runUtf8CommandWithTimeout(
-            [
-              process.execPath,
-              "--import",
-              path.resolve("scripts/tsx.mjs"),
-              "--input-type=module",
-              "-e",
-              program,
-            ],
-            {
-              input: JSON.stringify({ grant, root: candidateRoot, output }),
-              beforeInput: (pid) => {
-                replaceOwner();
-                beforeInput(pid);
-              },
-              timeoutMs: 15_000,
-              killProcessTree: true,
-              requireProcessTreeExtinction: true,
+          runUtf8CommandWithTimeout([process.execPath, "--input-type=module", "-e", program], {
+            input: JSON.stringify({ grant, root: candidateRoot, output }),
+            beforeInput: (pid) => {
+              replaceOwner();
+              beforeInput(pid);
             },
-          ),
+            timeoutMs: 15_000,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+          }),
         );
       }),
     ).rejects.toThrow(/ownership|release/);
@@ -811,9 +870,11 @@ describe("candidate executor delegation", () => {
     expect(createManagedHandoffLeaseStore().read(candidateRoot)).toEqual({ kind: "absent" });
   });
 
-  it.each([false, true])(
-    "rejects a changed parent grant and settles its child (changed root=%s)",
-    async (changedRoot) => {
+  it.each([false, true, "after"] as const)(
+    "rejects a changed grant snapshot and settles its child (scenario=%s)",
+    async (scenario) => {
+      const changedRoot = scenario === true;
+      const afterAdmission = scenario === "after";
       const candidateRoot = changedRoot ? path.join(root, "activated") : root;
       if (changedRoot) {
         fs.mkdirSync(candidateRoot);
@@ -825,32 +886,31 @@ describe("candidate executor delegation", () => {
           fence,
           candidateRoot,
           (grant, beforeInput) =>
-            runUtf8CommandWithTimeout(
-              [
-                process.execPath,
-                "--import",
-                path.resolve("scripts/tsx.mjs"),
-                "--input-type=module",
-                "-e",
-                program,
-              ],
-              {
-                input: JSON.stringify({
-                  grant: {
-                    ...grant,
-                    parent: { ...grant.parent, updatedAt: grant.parent.updatedAt + 1 },
-                  },
-                  output,
-                  root: candidateRoot,
-                }),
-                beforeInput,
-                timeoutMs: 15_000,
-                killProcessTree: true,
-              },
-            ),
+            runUtf8CommandWithTimeout([process.execPath, "--input-type=module", "-e", program], {
+              input: JSON.stringify({
+                grant: afterAdmission
+                  ? grant
+                  : {
+                      ...grant,
+                      parent: { ...grant.parent, updatedAt: grant.parent.updatedAt + 1 },
+                    },
+                staleSpawnerAfterAdmission: afterAdmission,
+                output,
+                root: candidateRoot,
+              }),
+              beforeInput,
+              timeoutMs: 15_000,
+              killProcessTree: true,
+              requireProcessTreeExtinction: true,
+            }),
         );
         expect(result.code).not.toBe(0);
-        expect(result.stderr).toContain("does not match its parent");
+        expect(result.stderr).toContain(
+          afterAdmission ? "no longer has permission" : "does not match its parent",
+        );
+        if (afterAdmission) {
+          expect(result.stdout).toContain("admitted");
+        }
         expect(fs.existsSync(output)).toBe(false);
         fence.assertCurrent();
       });

@@ -14,12 +14,12 @@ import {
   assignSessionOwner,
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
-  recordSessionParticipant,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { scanDoctorSessionEntriesStrict } from "./session-accessor.sqlite-canonical-inventory.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";

@@ -129,10 +129,13 @@ export type ChangedLaneResult = {
 /** Eligible leaf inputs; compiler inventories still decide all consuming graphs. */
 export function getChangedCoreTestPaths(result: ChangedLaneResult): string[] | undefined {
   const { lanes } = result;
-  if (lanes.all || lanes.core || lanes.ui || lanes.tooling || lanes.liveDockerTooling) {
+  if (lanes.all || lanes.core || lanes.tooling || lanes.liveDockerTooling) {
     return undefined;
   }
-  const paths = result.paths.filter((file) => getChangedPathFacts(file).surface !== "docs");
+  // Styles keep their UI and lint gates but do not change compiler input types.
+  const paths = result.paths.filter(
+    (file) => getChangedPathFacts(file).surface !== "docs" && !/^ui\/.+\.css$/u.test(file),
+  );
   return paths.length > 0 &&
     paths.every((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file))
     ? paths

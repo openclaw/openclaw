@@ -1,6 +1,7 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
+import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import type { SessionGoal } from "../../api/types.ts";
 import { renderComposerMenu } from "../../components/composer-menu.ts";
 import { createComposerProps } from "./chat-composer.test-support.ts";
@@ -51,6 +52,82 @@ describe("composer overflow presentation", () => {
     styles.remove();
     resetChatComposerState();
   });
+
+  it.each([390, 2048])(
+    "keeps skill labels and dependency notes inside scrollable menu rows at %ipx",
+    async (width) => {
+      await page.viewport(width, 1000);
+      container.className = "";
+      container.style.cssText = `position: fixed; bottom: 24px; left: 16px; width: ${Math.min(width - 32, 760)}px`;
+      const props = createComposerProps({
+        onRequestUpdate: () => render(renderChatComposer(props), container),
+        capabilityMenu: {
+          basePath: "",
+          skills: [
+            "apple-notes",
+            "apple-reminders",
+            "bear-notes",
+            "A skill with a long descriptive name that wraps across multiple lines",
+            ...Array.from({ length: 12 }, (_, index) => `fixture-skill-${index}`),
+          ].map((name) => ({
+            key: name,
+            name,
+            enabled: false,
+            baseEnabled: false,
+            missingDeps: true,
+          })),
+          skillsLoading: false,
+          skillsError: false,
+          mcpServers: [],
+          toolsEffectiveResult: null,
+          toolsEffectiveLoading: false,
+          toolsEffectiveError: false,
+          toolAccessMutationBlockedReason: null,
+          webSearchBaseEnabled: true,
+          mutationBlockedReason: null,
+          canAdmin: true,
+          adminBlockedReason: null,
+          onLoadSkills: vi.fn(),
+          onPatchToolOverrides: vi.fn(),
+          onNavigate: vi.fn(),
+        },
+      });
+      render(renderChatComposer(props), container);
+      await page
+        .elementLocator(
+          container.querySelector<HTMLElement>('.agent-chat__attach-menu > [slot="trigger"]')!,
+        )
+        .click();
+      await page
+        .elementLocator(container.querySelector<HTMLElement>('[value="open-skills"]')!)
+        .click();
+      await afterLayout();
+      const dropdown = container.querySelector<HTMLElement>(".agent-chat__capability-menu")!;
+      const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+      expect(menu.scrollHeight).toBeGreaterThan(menu.clientHeight);
+      const rows = [...dropdown.querySelectorAll<HTMLElement>('[value^="skill:"]')];
+      expect(rows).toHaveLength(16);
+
+      for (const row of rows) {
+        const box = row.getBoundingClientRect();
+        const label = row
+          .querySelector<HTMLElement>(".agent-chat__capability-menu-label")!
+          .getBoundingClientRect();
+        expect(label.top).toBeGreaterThanOrEqual(box.top);
+        expect(label.bottom).toBeLessThanOrEqual(box.bottom);
+        expect(label.left).toBeGreaterThanOrEqual(box.left);
+        expect(label.right).toBeLessThanOrEqual(box.right);
+      }
+      const name = rows[1]!.querySelector<HTMLElement>(
+        ".agent-chat__capability-menu-label > span",
+      )!;
+      expect(name.getBoundingClientRect().height).toBeLessThan(
+        2 * Number.parseFloat(getComputedStyle(name).lineHeight),
+      );
+      expect(menu.scrollWidth).toBeLessThanOrEqual(menu.clientWidth);
+      expect(menu.getBoundingClientRect().right).toBeLessThanOrEqual(width);
+    },
+  );
 
   function drawAttachments(count: number) {
     return render(renderAttachmentPreview({ attachments: attachments.slice(0, count) }), container);
@@ -254,18 +331,14 @@ describe("composer overflow presentation", () => {
 
   it("restores full mention names after narrowing and reconnecting the composer", async () => {
     container.className = "";
-    const part = render(
-      renderChatComposer(
-        createComposerProps({
-          draft: "@Jordan Rivera @Morgan Williams",
-          mentions: [
-            { profileId: "jordan", start: 0, end: 14 },
-            { profileId: "morgan", start: 15, end: 31 },
-          ],
-        }),
-      ),
-      container,
-    );
+    const props = createComposerProps({
+      draft: "@Jordan Rivera @Morgan Williams",
+      mentions: [
+        { profileId: "jordan", start: 0, end: 14 },
+        { profileId: "morgan", start: 15, end: 31 },
+      ],
+    });
+    const part = render(renderChatComposer(props), container);
     const strip = container.querySelector<HTMLElement>('[role="status"]')!;
     const visibleNames = () =>
       [...strip.querySelectorAll<HTMLElement>(".composer-context-strip__person")]
@@ -275,6 +348,25 @@ describe("composer overflow presentation", () => {
     for (const avatar of strip.querySelectorAll<HTMLElement>('[role="img"]')) {
       expect(avatar.getBoundingClientRect().width).toBe(16);
       expect(avatar.getBoundingClientRect().height).toBe(16);
+    }
+    await document.fonts.ready;
+    await afterLayout();
+    const mutations = vi.fn();
+    const observer = new MutationObserver(mutations);
+    observer.observe(strip.querySelector(".composer-context-strip__people")!, {
+      subtree: true,
+      attributes: true,
+      // Avatar fallback classes can refresh independently of recipient sizing.
+      attributeFilter: ["hidden", "style"],
+      childList: true,
+      characterData: true,
+    });
+    try {
+      render(renderChatComposer({ ...props, draft: props.draft + " please review" }), container);
+      await afterLayout();
+      expect(mutations).not.toHaveBeenCalled();
+    } finally {
+      observer.disconnect();
     }
     container.style.width = "300px";
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera"]);
@@ -288,6 +380,19 @@ describe("composer overflow presentation", () => {
     part.setConnected(true);
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
     expect(more.hidden).toBe(true);
+    const longName = "Morgan Alexandra Penelope Williams ".repeat(3).trim();
+    const draft = "@Jordan Rivera @" + longName;
+    render(
+      renderChatComposer({
+        ...props,
+        draft,
+        mentions: [props.mentions![0]!, { profileId: "morgan", start: 15, end: draft.length }],
+      }),
+      container,
+    );
+    await expect.poll(visibleNames).toEqual(["@Jordan Rivera"]);
+    expect(more.hidden).toBe(false);
+    expect(more.title).toBe("@" + longName);
   });
 
   async function expectEdges(
@@ -309,6 +414,74 @@ describe("composer overflow presentation", () => {
       });
     expect(getComputedStyle(element).maskImage === "none").toBe(!scrollable);
   }
+
+  it.each([
+    { viewport: 1200, width: 760 },
+    { viewport: 390, width: 342 },
+  ])(
+    "ellipsizes empty focused and blurred composers at $viewport px without clipping drafts",
+    async ({ viewport, width }) => {
+      await page.viewport(viewport, 800);
+      container.style.width = `${width}px`;
+      const props = createComposerProps({
+        assistantName: "A deliberately long assistant name ".repeat(8),
+        onDraftChange: (draft) => {
+          props.draft = draft;
+          draw();
+        },
+      });
+      const draw = () => render(renderChatComposer(props), container);
+      draw();
+      const textarea = container.querySelector<HTMLTextAreaElement>(
+        ".agent-chat__composer-combobox > textarea",
+      )!;
+      const placeholder = container.querySelector<HTMLElement>(
+        ".agent-chat__composer-placeholder",
+      )!;
+      const control = page.elementLocator(textarea);
+      await afterLayout();
+
+      expect(placeholder).not.toBeNull();
+      expect(placeholder.textContent).toBe(textarea.placeholder);
+      expect(placeholder.getAttribute("aria-hidden")).toBe("true");
+      expect(textarea.getAttribute("aria-label")).toBeTruthy();
+      for (const focused of [false, true]) {
+        if (focused) {
+          await control.click();
+        } else {
+          textarea.blur();
+        }
+        await afterLayout();
+        expect(document.activeElement === textarea).toBe(focused);
+        expect(placeholder.checkVisibility()).toBe(true);
+        expect(placeholder.scrollWidth).toBeGreaterThan(placeholder.clientWidth);
+        expect(getComputedStyle(placeholder).textOverflow).toBe("ellipsis");
+        expect(getComputedStyle(placeholder).overflowX).toBe("hidden");
+        expect(getComputedStyle(textarea, "::placeholder").color).toBe("rgba(0, 0, 0, 0)");
+        expect(placeholder.getBoundingClientRect().right).toBeLessThanOrEqual(
+          textarea.getBoundingClientRect().right + 1,
+        );
+      }
+
+      const emptyHeight = textarea.clientHeight;
+      const draft =
+        "A typed line that wraps within the available composer width. ".repeat(8) +
+        "\nA second editable line.";
+      await control.fill(draft);
+      await afterLayout();
+      expect(textarea.value).toBe(draft);
+      expect(props.draft).toBe(draft);
+      expect(placeholder.checkVisibility()).toBe(false);
+      expect(getComputedStyle(textarea).whiteSpace).toBe("pre-wrap");
+      expect(textarea.clientHeight).toBeGreaterThan(emptyHeight);
+
+      await control.fill("");
+      await afterLayout();
+      expect(document.activeElement).toBe(textarea);
+      expect(placeholder.checkVisibility()).toBe(true);
+      expect(textarea.clientHeight).toBe(emptyHeight);
+    },
+  );
 
   it("updates retained attachment edges when files are appended, scrolled, and removed", async () => {
     drawAttachments(1);

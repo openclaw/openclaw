@@ -235,6 +235,54 @@ describe("gateway chat metadata runtime", () => {
     }
   });
 
+  test.each([false, true])(
+    "notifies settled catalog status without rebuilding metadata (beforeRefresh: %s)",
+    async (prepareBeforeRefresh) => {
+      const onChanged = vi.fn();
+      const harness = createChatMetadataHarness(undefined, {
+        onChanged,
+        ...(prepareBeforeRefresh ? { beforeRefresh: async () => {} } : {}),
+      });
+      const owner = harness.getPreparedOwner()!;
+      const catalog = owner.modelCatalog;
+      try {
+        await harness.runtime.refresh();
+        const original = await harness.runtime.read({ agentId: "main" });
+        onChanged.mockClear();
+        catalog.pendingProviders = ["test"];
+        await harness.runtime.refresh();
+        expect(onChanged).not.toHaveBeenCalled();
+
+        catalog.pendingProviders = undefined;
+        // The settlement signal must survive joining an unrelated, already-pending refresh.
+        await Promise.all([
+          harness.runtime.refresh(),
+          harness.runtime.refresh({ notifyIfUnchanged: true }),
+        ]);
+        expect(onChanged).toHaveBeenCalledOnce();
+        expect(await harness.runtime.read({ agentId: "main" })).toEqual(original);
+        expect(harness.getPreparedOwner()).toBe(owner);
+        expect(owner.modelCatalog).toBe(catalog);
+        expect(harness.buildCommands).toHaveBeenCalledOnce();
+        expect(harness.buildProjection).toHaveBeenCalledOnce();
+        await harness.runtime.refresh();
+        expect(onChanged).toHaveBeenCalledOnce();
+
+        catalog.refreshFailed = true;
+        await Promise.all([
+          harness.runtime.refresh(),
+          harness.runtime.refresh({ notifyIfUnchanged: true }),
+        ]);
+        expect(onChanged).toHaveBeenCalledTimes(2);
+        await harness.runtime.read({ agentId: "main" });
+        expect(harness.buildCommands).toHaveBeenCalledTimes(2);
+        expect(harness.buildProjection).toHaveBeenCalledTimes(2);
+      } finally {
+        await harness.runtime.stop();
+      }
+    },
+  );
+
   test.each([
     { settlement: "resolve", explicitInvalidation: true },
     { settlement: "reject", explicitInvalidation: true },

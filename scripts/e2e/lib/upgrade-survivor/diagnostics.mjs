@@ -40,8 +40,14 @@ const logNames = [
   "workshop-recovered-upgrade.json",
   "workshop-candidate-doctor.json",
   "legacy-operator-cron-history-proof.json",
+  "legacy-operator-baseline-turn.out",
+  "legacy-operator-baseline-turn.err",
+  "legacy-operator-candidate-turn.out",
+  "legacy-operator-candidate-turn.err",
   "gateway.log",
   "gateway.log.doctor",
+  "missing-load-path/baseline-gateway.log",
+  "missing-load-path/baseline-gateway-convergence-refusal.log",
   "baseline-service-install.err",
   "systemctl-shim.log",
   "systemctl-shim-gateway.log",
@@ -235,6 +241,53 @@ function postCoreResult(value, sanitize = (text) => text) {
       ),
     ),
   };
+}
+
+// Keep the assertion receipt independent of large Doctor output in update.json.
+export function recordSuccessfulUpdateCheck(artifactRoot, result) {
+  if (!artifactRoot) {
+    return;
+  }
+  try {
+    writeReport(
+      artifactRoot,
+      path.join(artifactRoot, "diagnostics"),
+      "successful-update-check.json",
+      { artifactRoot: fs.realpathSync(artifactRoot), ...successfulUpdateCheck(result) },
+      inputLimit,
+    );
+  } catch {
+    // Diagnostic failure must preserve the original assertion and exit status.
+  }
+}
+
+function successfulUpdateCheck(value, sanitize = (text) => text) {
+  const unavailable = { availability: "unavailable" };
+  if (!value || value.availability === "unavailable") {
+    return unavailable;
+  }
+  try {
+    if (!["passed", "failed"].includes(value.outcome)) {
+      throw new Error();
+    }
+    const result = {
+      availability: "captured",
+      outcome: value.outcome,
+      ...textFields(value, ["message"], sanitize),
+      plugins: null,
+    };
+    if (value.plugins !== null) {
+      try {
+        result.plugins = postCoreResult(value.plugins, sanitize);
+      } catch {
+        omissions["successful update plugins"] = reasons[3];
+      }
+    }
+    return result;
+  } catch {
+    omissions["successful update check"] = reasons[3];
+    return unavailable;
+  }
 }
 
 export function readPostCoreSnapshot(artifactRoot) {
@@ -1270,6 +1323,25 @@ async function capture(artifactRoot, phase, exitStatus, signal = "", observation
   } catch {
     omissions["post-core"] = reasons[3];
   }
+  report.successfulUpdateCheck = { availability: "unavailable" };
+  if (observationRoot) {
+    try {
+      const raw = readOwned(
+        observationRoot,
+        "diagnostics/successful-update-check.json",
+        "successful update check",
+      );
+      if (raw !== null) {
+        const receipt = JSON.parse(raw);
+        if (receipt.artifactRoot !== fs.realpathSync(observationRoot)) {
+          throw new Error();
+        }
+        report.successfulUpdateCheck = successfulUpdateCheck(receipt);
+      }
+    } catch {
+      omissions["successful update check"] = reasons[3];
+    }
+  }
   report.doctorResults = [];
   try {
     report.doctorResults = readDoctorResults(observationRoot || artifactRoot);
@@ -1677,6 +1749,8 @@ export function publishDiagnostics(
     "service environment",
     "child exit",
     "post-core",
+    "successful update check",
+    "successful update plugins",
     "plugin identity",
     ...["doctor", "sessions", "archives", "sibling"].map((section) => `migration-${section}`),
     "session migration",
@@ -1740,6 +1814,7 @@ export function publishDiagnostics(
     report.config.sha256 = snapshot.config.sha256;
   }
   report.postCore = publishedPostCore(snapshot.postCore, sanitize);
+  report.successfulUpdateCheck = successfulUpdateCheck(snapshot.successfulUpdateCheck, sanitize);
   report.sessionMigration = publishedSessionMigration(snapshot.sessionMigration, sanitize);
   report.doctorResults = { availability: "unknown", observations: [] };
   try {

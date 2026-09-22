@@ -118,6 +118,7 @@ export async function resolveSlackMessageContent(params: {
   mediaReadIdleTimeoutMs?: number;
   mediaTotalTimeoutMs?: number;
   abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
@@ -138,6 +139,7 @@ export async function resolveSlackMessageContent(params: {
             readIdleTimeoutMs: params.mediaReadIdleTimeoutMs,
             totalTimeoutMs: params.mediaTotalTimeoutMs,
             abortSignal: params.abortSignal,
+            assertCurrent: params.assertCurrent,
             preloadedMedia: params.preloadedMedia,
           }),
         )

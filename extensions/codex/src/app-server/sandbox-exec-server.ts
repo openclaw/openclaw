@@ -12,6 +12,8 @@ import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import type { RawData, WebSocket } from "ws";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
+import { getCodexNativeProcessClient } from "./native-process-authority.js";
+import type { CodexNativeProcessClient } from "./native-process-authority.js";
 import {
   createCodexNodeExecServerDisconnectError,
   startCodexNodeExecServerRelay,
@@ -50,6 +52,7 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
   onExecutionDisconnect?: (error: Error) => void;
+  requireProcessAuthority?: boolean;
 }): Promise<CodexSandboxExecEnvironment | undefined> {
   if (!params.sandbox?.enabled) {
     return undefined;
@@ -74,9 +77,28 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
   });
   // Codex retains a thread's environment instance when its id and cwd stay equal.
   // A single-use paired-node channel therefore needs a fresh selected identity.
-  const environmentId = nodeLease ? `openclaw-node-${nodeLease.id}` : execServer.environmentId;
+  const processAuthority =
+    params.requireProcessAuthority && !("node" in execServer)
+      ? getCodexNativeProcessClient(params.client)
+      : undefined;
+  if (processAuthority && !("node" in execServer)) {
+    const authorities = (execServer.processAuthorities ??= new Map());
+    if (!authorities.has(processAuthority.authPath)) {
+      authorities.set(processAuthority.authPath, processAuthority);
+      params.client.addCloseHandler(() => authorities.delete(processAuthority.authPath));
+    }
+  }
+  const environmentId = nodeLease
+    ? `openclaw-node-${nodeLease.id}`
+    : processAuthority
+      ? `${execServer.environmentId}-${processAuthority.id}`
+      : execServer.environmentId;
   try {
-    const execServerUrl = nodeLease ? `${execServer.url}?lease=${nodeLease.id}` : execServer.url;
+    const execServerUrl = nodeLease
+      ? `${execServer.url}?lease=${nodeLease.id}`
+      : processAuthority
+        ? new URL(processAuthority.authPath, execServer.url).href
+        : execServer.url;
     await params.client.request(
       "environment/add",
       {
@@ -304,7 +326,8 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
       handleNodeConnection(execServer, socket, request);
       return;
     }
-    handleConnection(execServer, socket);
+    const requestPath = new URL(request.url ?? "", "ws://127.0.0.1").pathname;
+    handleConnection(execServer, socket, execServer.processAuthorities?.get(requestPath));
   });
   embeddedAgentLog.info("codex sandbox exec-server started", {
     environmentId,
@@ -344,7 +367,10 @@ function isAuthorizedExecServerRequest(
   request: IncomingMessage,
 ): boolean {
   const url = new URL(request.url ?? "", "ws://127.0.0.1");
-  return url.pathname === execServer.authPath;
+  return (
+    url.pathname === execServer.authPath ||
+    (!("node" in execServer) && execServer.processAuthorities?.has(url.pathname) === true)
+  );
 }
 
 function readCodexPlacementNodeId(sandbox: SandboxContext): string | undefined {
@@ -454,11 +480,19 @@ function handleClosedCodexNodeExecServerLease(
   }
 }
 
-function handleConnection(execServer: OpenClawExecServer, socket: WebSocket): void {
-  const session = new CodexSandboxExecSession(execServer, {
-    isOpen: () => socket.readyState === socket.OPEN,
-    send: (message) => socket.send(JSON.stringify(message)),
-  });
+function handleConnection(
+  execServer: OpenClawExecServer,
+  socket: WebSocket,
+  processAuthority?: CodexNativeProcessClient,
+): void {
+  const session = new CodexSandboxExecSession(
+    execServer,
+    {
+      isOpen: () => socket.readyState === socket.OPEN,
+      send: (message) => socket.send(JSON.stringify(message)),
+    },
+    processAuthority,
+  );
   socket.on("message", (data) => {
     void handleMessage(session, data).catch((error: unknown) => {
       embeddedAgentLog.warn("codex sandbox exec-server message failed", { error });

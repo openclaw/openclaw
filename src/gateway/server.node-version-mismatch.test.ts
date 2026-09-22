@@ -1,6 +1,6 @@
 // Real signed node connects protect same-install classification and version admission.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import {

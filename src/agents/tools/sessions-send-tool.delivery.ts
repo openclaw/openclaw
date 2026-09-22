@@ -161,7 +161,7 @@ export async function startSessionsSendAgentRun(params: {
         );
       }
     }
-    const response = await params.callGateway<{ runId: string }>({
+    const response = await params.callGateway<{ runId: string; admissionPending?: boolean }>({
       method: "agent",
       params: fallbackSessionKey
         ? {
@@ -172,9 +172,23 @@ export async function startSessionsSendAgentRun(params: {
         : params.sendParams,
       timeoutMs: 10_000,
     });
+    const responseRunId =
+      typeof response?.runId === "string" && response.runId ? response.runId : params.runId;
+    if (response?.admissionPending === true) {
+      return {
+        ok: false,
+        result: jsonResult({
+          runId: responseRunId,
+          status: "error",
+          error: "Gateway admission is still pending; inspect this run before retrying.",
+          sentBeforeError: true,
+          sessionKey: fallbackSessionKey ?? params.sessionKey,
+        }),
+      };
+    }
     return {
       ok: true,
-      runId: typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+      runId: responseRunId,
       targetDisposition: "queued",
       ...(fallbackSessionKey ? { a2aSessionKey: fallbackSessionKey } : {}),
     };

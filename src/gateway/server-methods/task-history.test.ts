@@ -137,7 +137,7 @@ describe("tasks.history", () => {
             let held = false;
             vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
               const result = await read(...args);
-              if (!held && args[1]?.runId === task.runId) {
+              if (!held && args[1] && "taskId" in args[1] && args[1].runId === task.runId) {
                 held = true;
                 committed.resolve();
                 await release.promise;

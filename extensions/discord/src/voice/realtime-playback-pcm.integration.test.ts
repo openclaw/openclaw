@@ -75,7 +75,7 @@ it("plays continuous audio arriving during the player's starvation retirement", 
       resources.add(state.resource);
     }
   });
-  const stop = fixture.voiceSdk.AudioPlayer.prototype.stop.bind(fixture.player);
+  const stop = fixture.stopPlayer;
   let resumed = false;
   fixture.stop.mockImplementation((force) => {
     const stopped = stop(force);

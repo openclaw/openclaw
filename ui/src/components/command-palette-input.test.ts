@@ -63,8 +63,14 @@ describe("command palette input", () => {
     const input = host.querySelector("textarea")!;
     const prompt = "🦞".repeat(4_097) + "\nFinish the task";
     input.value = prompt;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(inputProps.onValueChange).toHaveBeenCalledWith(prompt);
+    const event = new InputEvent("input", {
+      bubbles: true,
+      inputType: "insertText",
+      data: prompt,
+    });
+    input.dispatchEvent(event);
+    expect(inputProps.onValueChange).toHaveBeenCalledExactlyOnceWith(prompt, event);
+    expect(vi.mocked(inputProps.onValueChange).mock.calls[0]?.[1]).toBe(event);
     expect(input.value).toBe(prompt);
   });
 

@@ -787,6 +787,8 @@ describe("RealtimeTalkSession lifecycle", () => {
     vi.useFakeTimers();
     let failCreate = true;
     try {
+      const requestsStarted = createDeferred();
+      let pendingCreates = 0;
       const request = vi.fn(
         async (method: string, _params?: unknown, options?: { timeoutMs?: number }) => {
           if (method !== "talk.client.create") {
@@ -802,6 +804,9 @@ describe("RealtimeTalkSession lifecycle", () => {
           }
           await new Promise<void>((_resolve, reject) => {
             setTimeout(() => reject(new Error("request timeout")), options?.timeoutMs);
+            if (++pendingCreates === 2) {
+              requestsStarted.resolve();
+            }
           });
           return { ok: true };
         },
@@ -817,8 +822,7 @@ describe("RealtimeTalkSession lifecycle", () => {
       const third = new RealtimeTalkSession(client, "agent:main:main", {}, { transport: "webrtc" });
 
       const startsSettled = Promise.allSettled([first.start(), second.start()]);
-      await Promise.resolve();
-      await Promise.resolve();
+      await requestsStarted.promise;
       await expect(third.start()).rejects.toThrow(
         "Too many active or closing realtime Talk voice sessions",
       );

@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { backupFleetCell, restoreFleetCell } from "./backup.runtime.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
@@ -16,7 +16,7 @@ let root: string;
 let record: FleetCellRecord;
 
 const tempRoot = createSuiteTempRootTracker({ prefix: "openclaw-fleet-backup-test-" });
-const nativeConfig = getFsSafeNativeConfig();
+let nativeModeEnv: ReturnType<typeof captureEnv>;
 
 function inspection(running = false): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
@@ -67,10 +67,17 @@ function containerMock(current: FleetContainerInspectResult = inspection()) {
     removeNetwork: vi.fn(async () => undefined),
     logs: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
-    stop: vi.fn(async () => undefined),
+    stop: vi.fn<FleetContainerRuntime["stop"]>(async () => undefined),
     restart: vi.fn(async () => undefined),
     remove: vi.fn(async () => undefined),
   } satisfies FleetContainerRuntime;
+}
+
+function stopInspection(current: ReturnType<typeof inspection>) {
+  return async () => {
+    current.running = false;
+    current.state = "exited";
+  };
 }
 
 async function createArchive(
@@ -100,6 +107,7 @@ async function createArchive(
 }
 
 beforeEach(async () => {
+  nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
   root = await tempRoot.setup();
   record = {
     tenantId: "acme",
@@ -118,7 +126,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
-  configureFsSafeNative(nativeConfig);
+  nativeModeEnv.restore();
   vi.restoreAllMocks();
   await tempRoot.cleanup();
 });
@@ -167,7 +175,7 @@ describe("fleet backup runtime", () => {
 
   function forceJavaScriptCopyFallback() {
     // These fixtures exercise publication without native or filesystem hard-link support.
-    configureFsSafeNative({ mode: "off" });
+    setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
     vi.spyOn(fs, "link").mockRejectedValue(
       Object.assign(new Error("unsupported"), { code: "ENOTSUP" }),
     );
@@ -684,10 +692,7 @@ describe("fleet restore runtime", () => {
         );
         return running;
       });
-      containers.stop.mockImplementation(async () => {
-        running.running = false;
-        running.state = "exited";
-      });
+      containers.stop.mockImplementation(stopInspection(running));
 
       await restoreFleetCell({ ...restoreParams(containers, archive), force: true });
 
@@ -704,10 +709,7 @@ describe("fleet restore runtime", () => {
     const archive = await createArchive();
     const running = inspection(true);
     const containers = containerMock(running);
-    containers.stop.mockImplementation(async () => {
-      running.running = false;
-      running.state = "exited";
-    });
+    containers.stop.mockImplementation(stopInspection(running));
     containers.remove.mockRejectedValue(new Error("transient removal failure"));
     await expect(
       restoreFleetCell({ ...restoreParams(containers, archive), force: true }),
@@ -722,10 +724,7 @@ describe("fleet restore runtime", () => {
     const archive = await createArchive();
     const running = inspection(true);
     const containers = containerMock(running);
-    containers.stop.mockImplementation(async () => {
-      running.running = false;
-      running.state = "exited";
-    });
+    containers.stop.mockImplementation(stopInspection(running));
     containers.run.mockImplementation(async () => {
       running.running = true;
       running.state = "running";

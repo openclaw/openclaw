@@ -27,7 +27,6 @@ import {
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
 import { gitCommitPrefixesMatch } from "./git-commit.js";
-import { executeGitCommand } from "./git-exec.js";
 import type { VerifiedGitUpdateReceipt } from "./restart-sentinel.js";
 import { checkTelemetryUpdate } from "./telemetry.js";
 import { gatewayUpdateCampaign, type UpdateCampaignController } from "./update-campaign.js";
@@ -50,6 +49,7 @@ import {
   type UpdateCheckResult,
 } from "./update-check.js";
 import { devUpdateTargetFromGitTarget } from "./update-dev-target.js";
+import { resolveDevGitCommits } from "./update-git-metadata.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 import { resolveStartupInstallStatus } from "./update-install-status.js";
 import { runCampaignUpdate, type AutoUpdateRunner } from "./update-startup-auto-run.js";
@@ -94,9 +94,6 @@ const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const AUTO_STABLE_DELAY_HOURS = 6;
 const AUTO_STABLE_JITTER_HOURS = 12;
-const DEV_COMMIT_LIMIT = 5;
-const DEV_COMMIT_SUBJECT_MAX_LENGTH = 120;
-const DEV_COMMIT_LOG_MAX_OUTPUT_BYTES = 8 * 1024;
 
 function shouldSkipCheck(allowInTests: boolean): boolean {
   return !allowInTests && Boolean(process.env.VITEST || process.env.NODE_ENV === "test");
@@ -379,51 +376,6 @@ export function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
     });
   lifecycle.refreshes.set(cfg, refresh);
   return refresh;
-}
-
-async function resolveDevGitCommits(params: {
-  root: string;
-  currentSha: string;
-  upstreamSha: string;
-  signal: AbortSignal;
-}): Promise<Array<{ sha: string; subject: string }>> {
-  const result = await executeGitCommand(
-    params.root,
-    [
-      "log",
-      "--format=%h%x09%s",
-      `--max-count=${DEV_COMMIT_LIMIT}`,
-      `${params.currentSha}..${params.upstreamSha}`,
-    ],
-    {
-      timeoutMs: 2500,
-      signal: params.signal,
-      killProcessTree: true,
-      maxOutputBytes: { stdout: DEV_COMMIT_LOG_MAX_OUTPUT_BYTES, stderr: 1024 },
-    },
-  ).catch(() => null);
-  if (!result || result.code !== 0 || result.termination !== "exit") {
-    return [];
-  }
-  return result.stdout
-    .split("\n")
-    .flatMap((line) => {
-      const separator = line.indexOf("\t");
-      const sha = separator < 0 ? "" : line.slice(0, separator).trim();
-      if (!sha) {
-        return [];
-      }
-      return [
-        {
-          sha,
-          subject: line
-            .slice(separator + 1)
-            .trim()
-            .slice(0, DEV_COMMIT_SUBJECT_MAX_LENGTH),
-        },
-      ];
-    })
-    .slice(0, DEV_COMMIT_LIMIT);
 }
 
 function recordAutoUpdateAttempt(version: string): void {
@@ -742,6 +694,7 @@ async function runGatewayUpdateCheckOwned(
       currentSha,
       upstreamRef,
       upstreamSha,
+      ...(git.repositoryUrl ? { repositoryUrl: git.repositoryUrl } : {}),
       commitsBehind,
       commits,
     };

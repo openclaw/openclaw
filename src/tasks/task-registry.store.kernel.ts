@@ -604,35 +604,45 @@ export function readTaskRegistrySnapshot({
 /** The caller holds shared writer custody across this snapshot and its mutation. */
 export function readTaskRegistryMutationSnapshotInDatabase(
   db: DatabaseSync,
-  scope: TaskRegistryMutationScope,
+  scope: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[],
 ): TaskRegistryStoreSnapshot {
+  const scopes = "taskId" in scope ? [scope] : scope;
+  const taskIds = [...new Set(scopes.map((entry) => entry.taskId))];
+  const runIds = [...new Set(scopes.flatMap((entry) => entry.runId?.trim() || []))];
+  const childSessionKeys = [
+    ...new Set(scopes.flatMap((entry) => entry.childSessionKey?.trim() || [])),
+  ];
   return runSqliteDeferredTransactionSync(db, () => {
     const kysely = getTaskRegistryKysely(db);
-    const selected = kysely
-      .selectFrom("task_runs")
-      .where((eb) =>
-        eb.or([
-          eb("task_id", "=", scope.taskId),
-          eb(eb.fn<string>("trim", [eb.ref("run_id")]), "=", scope.runId?.trim() || null),
-          eb(
-            eb.fn<string>("trim", [eb.ref("child_session_key")]),
-            "=",
-            scope.childSessionKey?.trim() || null,
-          ),
-        ]),
-      );
+    const selected = kysely.selectFrom("task_runs").where((eb) => {
+      // Bound sets keep the parameter count fixed even for large refreshes.
+      const matches = [eb("task_runs.task_id", "in", sqliteStringSet(taskIds))];
+      if (runIds.length) {
+        matches.push(eb("run_id", "in", sqliteStringSet(runIds)));
+      }
+      if (childSessionKeys.length) {
+        matches.push(eb("child_session_key", "in", sqliteStringSet(childSessionKeys)));
+      }
+      return eb.or(matches);
+    });
     const taskRows = executeSqliteQuerySync(
       db,
-      selected.selectAll().orderBy("created_at", "asc").orderBy("task_id", "asc"),
+      selected
+        .leftJoin("task_delivery_state", "task_delivery_state.task_id", "task_runs.task_id")
+        .selectAll("task_runs")
+        .select([
+          "task_delivery_state.task_id as delivery_task_id",
+          "requester_origin_json",
+          "last_notified_event_at",
+        ])
+        .orderBy("created_at", "asc")
+        .orderBy("task_runs.task_id", "asc"),
     ).rows;
-    const deliveryRows = executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("task_delivery_state")
-        .select(TASK_DELIVERY_STATE_SELECT_COLUMNS)
-        .where("task_id", "in", sqliteStringSet(taskRows.map((row) => row.task_id)))
-        .orderBy("task_id", "asc"),
-    ).rows;
+    const deliveryRows = taskRows
+      .filter((row) => row.delivery_task_id !== null)
+      .toSorted((left, right) =>
+        Buffer.compare(Buffer.from(left.task_id), Buffer.from(right.task_id)),
+      );
     return {
       tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
       deliveryStates: new Map(

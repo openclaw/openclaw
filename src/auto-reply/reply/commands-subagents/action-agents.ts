@@ -1,14 +1,12 @@
 // Lists available agents and conversation bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
-import { buildSubagentRunView } from "../../../agents/subagents/registry/subagent-run-view.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "../channel-context.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
-import { RECENT_WINDOW_MINUTES, type SubagentsCommandContext } from "./shared.js";
+import type { SubagentsCommandContext } from "./shared.js";
 
 function formatConversationBindingText(params: { conversationId: string }): string {
   return `binding:${params.conversationId}`;
@@ -25,8 +23,7 @@ function supportsConversationBindings(channel: string): boolean {
 }
 
 export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): CommandHandlerResult {
-  const { params, requesterKey, runs } = ctx;
-  const readIndex = buildSubagentRunReadIndex();
+  const { params, requesterKey, readContext } = ctx;
   const channel = resolveCommandSurfaceChannel(params);
   const accountId = resolveChannelAccountId(params);
   const currentConversationBindingsSupported = supportsConversationBindings(channel);
@@ -50,11 +47,7 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
     return resolved;
   };
 
-  const { latest, active, recent } = buildSubagentRunView({
-    runs,
-    recentMinutes: RECENT_WINDOW_MINUTES,
-    countPendingDescendantRuns: (sessionKey) => readIndex.countPendingDescendantRuns(sessionKey),
-  });
+  const { latest, active, recent } = readContext.list.view;
   const indexByChildSessionKey = new Map(
     [...active, ...recent].map((entry, idx) => [entry.childSessionKey, idx + 1] as const),
   );

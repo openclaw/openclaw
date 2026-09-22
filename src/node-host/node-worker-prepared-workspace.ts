@@ -2,7 +2,6 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
-import { parseWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type {
@@ -15,7 +14,7 @@ import {
   NodeWorkerPreparedWorkspaceStore,
 } from "./node-worker-prepared-workspace-store.js";
 import { serializeNodeWorkerWorkspace } from "./node-worker-transfer-client.js";
-import { captureManifest } from "./node-worker-workspace-commands.js";
+import { captureManifest, readWorkspaceManifest } from "./node-worker-workspace-commands.js";
 import {
   assertNodePreparedWorkspacePaths,
   nodeWorkerWorkspaceLaunchGenerationKey,
@@ -77,17 +76,16 @@ export class NodeWorkerPreparedWorkspaceRuntime {
         },
         hashMemo: WorkspaceHashMemo,
       ) => {
-        const readManifest = async (ref: string) =>
-          await parseWorkspaceManifest(
-            await fsp.readFile(
-              path.join(workspace.homeDir, ".openclaw-worker", "manifests", `${ref.slice(7)}.json`),
-              "utf8",
-            ),
-            ref,
-            signal,
-          );
-        const source = await readManifest(workspace.sourceManifestRef);
-        const prepared = await readManifest(workspace.preparedManifestRef);
+        const { manifest: source } = await readWorkspaceManifest(
+          workspace.homeDir,
+          workspace.sourceManifestRef,
+          signal,
+        );
+        const { manifest: prepared } = await readWorkspaceManifest(
+          workspace.homeDir,
+          workspace.preparedManifestRef,
+          signal,
+        );
         if (
           !source.baseCommit ||
           source.baseCommit !== prepared.baseCommit ||
@@ -168,6 +166,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
     gatewayNamespace: string,
     isProtected: (generationKey: string) => boolean,
     signal?: AbortSignal,
+    prepareProtection?: () => Promise<void>,
   ) {
     const generationKeys: string[] = [];
     let deleted = 0;
@@ -188,11 +187,14 @@ export class NodeWorkerPreparedWorkspaceRuntime {
         sessionId: row.session_id,
         ownerEpoch: row.owner_epoch,
       });
+      await prepareProtection?.();
       if (isProtected(generationKey)) {
         continue;
       }
       const ownerRoot = path.join(this.root, row.gateway_namespace, row.cache_key);
       await serializeNodeWorkerWorkspace(ownerRoot, async () => {
+        signal?.throwIfAborted();
+        await prepareProtection?.();
         signal?.throwIfAborted();
         if (isProtected(generationKey)) {
           return;

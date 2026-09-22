@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -11,10 +10,10 @@ import {
   cleanupUsagePageTest,
   contextWithClient,
   createPage,
+  createPendingUsageRouteData,
   focusDocument,
   preloadUsage,
   refreshButton,
-  type TestUsagePage,
 } from "./usage-page.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
@@ -382,23 +381,9 @@ describe("UsagePage provider usage outcome", () => {
         }
         return cacheSnapshot("fresh").result;
       });
-      const page = document.createElement("openclaw-usage-page") as TestUsagePage;
-      page.context = contextWithClient({ request } as unknown as GatewayBrowserClient);
-      page.render = () => nothing;
-      document.body.append(page);
-      await page.updateComplete;
+      const page = await createPage({ request } as unknown as GatewayBrowserClient);
       page.routeData = {
-        gateway: page.context.gateway,
-        gatewaySnapshot: page.context.gateway.snapshot,
-        query: {
-          startDate: "2026-08-07",
-          endDate: "2026-08-07",
-          scope: "family",
-          timeZone: "local",
-          agentId: null,
-        },
-        result: null,
-        costSummary: null,
+        ...createPendingUsageRouteData(page.context.gateway, "2026-08-07"),
         providerUsage:
           loadSource === "preload"
             ? {
@@ -407,7 +392,6 @@ describe("UsagePage provider usage outcome", () => {
               }
             : { state: "pending" },
         loadedAtMs: loadSource === "preload" ? Date.now() : null,
-        error: null,
       };
       await page.updateComplete;
       if (loadSource === "direct") {
@@ -446,27 +430,8 @@ describe("UsagePage provider usage outcome", () => {
       }
       return cacheSnapshot("fresh").result;
     });
-    const page = document.createElement("openclaw-usage-page") as TestUsagePage;
-    page.context = contextWithClient({ request } as unknown as GatewayBrowserClient);
-    page.render = () => nothing;
-    document.body.append(page);
-    await page.updateComplete;
-    page.routeData = {
-      gateway: page.context.gateway,
-      gatewaySnapshot: page.context.gateway.snapshot,
-      query: {
-        startDate: "2026-08-07",
-        endDate: "2026-08-07",
-        scope: "family",
-        timeZone: "local",
-        agentId: null,
-      },
-      result: null,
-      costSummary: null,
-      providerUsage: { state: "pending" },
-      loadedAtMs: null,
-      error: null,
-    };
+    const page = await createPage({ request } as unknown as GatewayBrowserClient);
+    page.routeData = createPendingUsageRouteData(page.context.gateway, "2026-08-07");
     await page.updateComplete;
 
     const refresh = () => {
@@ -501,27 +466,8 @@ describe("UsagePage provider usage outcome", () => {
       }
       return cacheSnapshot("fresh").result;
     });
-    const page = document.createElement("openclaw-usage-page") as TestUsagePage;
-    page.context = contextWithClient({ request } as unknown as GatewayBrowserClient);
-    page.render = () => nothing;
-    document.body.append(page);
-    await page.updateComplete;
-    page.routeData = {
-      gateway: page.context.gateway,
-      gatewaySnapshot: page.context.gateway.snapshot,
-      query: {
-        startDate: "2026-08-07",
-        endDate: "2026-08-07",
-        scope: "family",
-        timeZone: "local",
-        agentId: null,
-      },
-      result: null,
-      costSummary: null,
-      providerUsage: { state: "pending" },
-      loadedAtMs: null,
-      error: null,
-    };
+    const page = await createPage({ request } as unknown as GatewayBrowserClient);
+    page.routeData = createPendingUsageRouteData(page.context.gateway, "2026-08-07");
     await page.updateComplete;
 
     // First load: only usage.status fails; the notice flag records the failure.

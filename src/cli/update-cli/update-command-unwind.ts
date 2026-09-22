@@ -1,20 +1,26 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
+  createUpdateCommandFailureResult,
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
   mergeWindowsTaskRecoveryFailure,
 } from "./update-command-result.js";
-import { completeUpdateCommandRun, failUpdateCommandRun } from "./update-command-run.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service-maintenance.js";
-import { hasDeferredUpdateCommandTerminalResult } from "./update-command-terminal.js";
+import {
+  deferUpdateCommandTerminalResult,
+  hasDeferredUpdateCommandTerminalResult,
+  prepareUnexpectedUpdateCommandFailure,
+} from "./update-command-terminal.js";
 
 /** Unwind only legacy updates; pending publication cannot authorize compensation or diagnostics. */
 export async function withUpdateCommandRecoveryUnwind(
@@ -27,12 +33,16 @@ export async function withUpdateCommandRecoveryUnwind(
     error instanceof UpdateCommandFailure
       ? error.result
       : (recoveryState.triageTarget.failureResult ?? {
-          status: "error" as const,
-          mode: "unknown" as const,
-          reason: "update-failed",
+          ...createUpdateCommandFailureResult({
+            mode: "unknown",
+            root: recoveryState.triageTarget.root,
+            durationMs: 0,
+            failure: {
+              cause: error,
+              detail: createUpdateErrorFact("update", error, run.env).message,
+            },
+          }),
           runId: run.runId,
-          steps: [],
-          durationMs: 0,
         });
   let failure: { error: unknown } | undefined;
   try {
@@ -94,7 +104,7 @@ export async function withUpdateCommandRecoveryUnwind(
       });
     }
     throw new UpdateCommandPendingRecoveryFailure(
-      primaryResult(failure?.error),
+      primaryResult(failure?.error ?? cause),
       formatErrorMessage(cause),
       { cause },
     );
@@ -102,7 +112,7 @@ export async function withUpdateCommandRecoveryUnwind(
   if (!recoveryState.ledgerHandoffOwned) {
     // The admitted newer runtime owns canonical history after handoff. The old
     // process must not reopen a database that it may no longer understand.
-    try {
+    const admitRecovery = async () => {
       // A lost live context or a successful callback is not fresh-install proof.
       // Reconcile all affected state roots read-only before native compensation.
       const paths = new Set<string>();
@@ -114,12 +124,50 @@ export async function withUpdateCommandRecoveryUnwind(
         paths.add(file);
         await assertUpdateRecoveryAdmission({ env });
       }
+    };
+    try {
+      await admitRecovery();
     } catch (error) {
-      throw new UpdateCommandPendingRecoveryFailure(
-        primaryResult(failure?.error),
+      const pending = new UpdateCommandPendingRecoveryFailure(
+        primaryResult(failure?.error ?? error),
         formatErrorMessage(error),
         { cause: error },
       );
+      if (
+        failure &&
+        !(failure.error instanceof UpdateCommandFailure) &&
+        !run.executorFence &&
+        !recoveryState.windowsTaskAutoStartRecovery &&
+        !hasDeferredUpdateCommandTerminalResult(run)
+      ) {
+        const original = failure.error;
+        // Pre-staging has no native compensation. Let the terminal owner make
+        // one fresh admission after settlement before recording the initial failure.
+        deferUpdateCommandTerminalResult(run, async (settlementFailure, onTerminalRecord) => {
+          if (settlementFailure !== pending) {
+            throw settlementFailure;
+          }
+          try {
+            await admitRecovery();
+          } catch (cause) {
+            throw new UpdateCommandPendingRecoveryFailure(
+              primaryResult(original),
+              formatErrorMessage(cause),
+              { cause },
+            );
+          }
+          const recorded = await prepareUnexpectedUpdateCommandFailure(
+            original,
+            opts,
+            onTerminalRecord,
+          );
+          if (recorded instanceof UpdateCommandPendingRecoveryFailure) {
+            throw recorded;
+          }
+          return recorded.result;
+        });
+      }
+      throw pending;
     }
   }
   try {
@@ -143,7 +191,7 @@ export async function withUpdateCommandRecoveryUnwind(
       if (failure.error instanceof UpdateCommandFailure) {
         completeUpdateCommandRun(failure.error.result, run);
       } else {
-        failUpdateCommandRun(failure.error, run);
+        failure.error = await prepareUnexpectedUpdateCommandFailure(failure.error, opts);
       }
     }
     throw failure.error;

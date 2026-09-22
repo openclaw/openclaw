@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
@@ -11,10 +10,8 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engi
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
-  isFileMissingError,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
-  retryTransientMemoryRead,
   runWithConcurrency,
   type MemoryChunk,
   type MemorySearchDeadlineControl,
@@ -53,6 +50,7 @@ import {
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
 import { resolveChunkProvenance } from "./manager-index-preparation.js";
+import { readMemoryIndexSource } from "./manager-index-source.js";
 import {
   resolveMemoryIndexProviderIdentities,
   type MemoryIndexProviderIdentity,
@@ -738,7 +736,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         let valid = entryValidity.get(candidate.entry);
         if (valid === undefined) {
           if (candidate.source === "memory") {
-            const current = await buildFileEntry(
+            const current = await (this.memoryFiles?.inspectFile ?? buildFileEntry)(
               candidate.entry.absPath,
               this.workspaceDir,
               this.settings.multimodal,
@@ -938,6 +936,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     await withMemoryWorkspaceLock(this.workspaceDir, async () => {
       const database = this.database;
       const assertCurrent = () => {
+        this.memoryFiles?.assertCurrent();
         if (
           this.closed ||
           database.closed ||
@@ -984,7 +983,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       });
       const prepare = async (): Promise<boolean> => {
         if (source === "memory") {
-          const current = await buildFileEntry(
+          const current = await (this.memoryFiles?.inspectFile ?? buildFileEntry)(
             entry.absPath,
             this.workspaceDir,
             this.settings.multimodal,
@@ -1032,18 +1031,23 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const kind = entry.kind;
     const suppliedContent = options.content ?? entry.content;
     const prepare = async (): Promise<PreparedMemoryIndexEntry | null> => {
-      const pathClassification = await resolveMemoryPathClassification({
-        absolutePath: entry.absPath,
-        source,
-        workspaceDir: this.workspaceDir,
-      });
       if (kind === "multimodal") {
-        const multimodalChunk = await buildMultimodalChunkForIndexing(entry);
+        const multimodalChunk: Awaited<
+          ReturnType<NonNullable<typeof this.memoryFiles>["buildMultimodalChunk"]>
+        > = await (this.memoryFiles?.buildMultimodalChunk ?? buildMultimodalChunkForIndexing)(
+          entry,
+        );
         if (!multimodalChunk) {
           this.dirty = true;
           await this.deleteIndexedFile(entry.path, source);
           return null;
         }
+        const pathClassification = await resolveMemoryPathClassification({
+          absolutePath: entry.absPath,
+          source,
+          workspaceDir: this.workspaceDir,
+          readSource: this.memoryFiles ? multimodalChunk : undefined,
+        });
         const chunk: IndexedMemoryChunk = {
           ...multimodalChunk.chunk,
           importance: null,
@@ -1064,18 +1068,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         };
       }
 
-      const content =
-        suppliedContent ??
-        (await retryTransientMemoryRead(
-          () => fs.readFile(entry.absPath, "utf-8"),
-          `read memory markdown for indexing ${entry.absPath}`,
-        ).catch((err: unknown) => {
-          if (source !== "memory" || !isFileMissingError(err)) {
-            throw err;
-          }
-          return null;
-        }));
-      if (content === null) {
+      const read = await readMemoryIndexSource({
+        absolutePath: entry.absPath,
+        workspaceDir: this.workspaceDir,
+        source,
+        suppliedContent,
+        memoryFiles: this.memoryFiles,
+      });
+      if (!read) {
         this.dirty = true;
         return null;
       }
@@ -1088,8 +1088,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           lineProvenance: entry.lineProvenance,
         },
         source,
-        content,
-        pathClassification,
+        content: read.content,
+        pathClassification: read.pathClassification,
         chunking: this.settings.chunking,
         cutoffLine: cutoff.state === "valid" ? cutoff.cutoffLine : undefined,
         provider:

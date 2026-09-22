@@ -13,6 +13,21 @@ function inheritedRecord(
 }
 
 describe("worker process protocol", () => {
+  it.each([
+    { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 },
+    { status: "failed", reason: "turn-failed", transcriptLeafId: "leaf", transcriptNextSeq: 2 },
+    { status: "fenced", reason: "credential-replaced" },
+    { status: "not-started", reason: "admission-deadline", errorText: "admission timed out" },
+  ])("only retains workers after started $status results", (result) => {
+    expect(parseWorkerRuntimeResult(result)).toStrictEqual(result);
+    const frame = { type: "result", turnId: "turn-1", result, retainWorker: false };
+    expect(parseWorkerProcessResult(frame)).toStrictEqual(frame);
+    const retained = { ...frame, retainWorker: true };
+    expect(parseWorkerProcessResult(retained)).toStrictEqual(
+      result.status === "completed" || result.status === "failed" ? retained : null,
+    );
+  });
+
   it("rejects request discriminators inherited alongside the wrong own keys", () => {
     const request = inheritedRecord({ type: "cancel" }, { turnId: "turn-1", unexpected: true });
 

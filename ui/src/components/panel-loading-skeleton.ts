@@ -8,6 +8,8 @@ export type PanelLoadingSkeletonVariant =
   | "chat"
   | "desktop"
   | "discussion"
+  | "document"
+  | "file-list"
   | "files"
   | "review"
   | "tasks"
@@ -387,6 +389,16 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
             <div class="conversation">
               ${this.line("medium")} ${this.line()} ${this.line("long")} ${this.line("short")}
             </div>
+          </div>
+        `;
+      case "file-list":
+        return html`<div class="rows">${this.rows(5)}</div>`;
+      case "document":
+        return html`
+          <div class="skeleton file-heading medium"></div>
+          <div class="code">
+            ${this.line()} ${this.line()} ${this.line("medium")} ${this.line()}
+            ${this.line("short")}
           </div>
         `;
       case "review":

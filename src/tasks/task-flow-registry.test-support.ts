@@ -1,11 +1,11 @@
 import { clearTaskRegistrySqliteForTests } from "../test-utils/task-registry-sqlite.js";
+import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "./task-flow-registry.js";
 import type {
   JsonValue,
   TaskFlowRecord,
   TaskFlowStatus,
   TaskFlowSyncMode,
 } from "./task-flow-registry.types.js";
-import "./task-flow-registry.js";
 import type { TaskNotifyPolicy } from "./task-registry.types.js";
 
 type CreateFlowRecordParams = {
@@ -52,4 +52,14 @@ export function resetTaskFlowRegistryForTests(opts?: { persist?: boolean }): voi
   if (opts?.persist !== false) {
     clearTaskRegistrySqliteForTests("flow");
   }
+}
+
+export function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
 }

@@ -6,6 +6,9 @@ import type {
 
 export type MarkdownHumanMentionToken = { marker: string; profileId: string; label: string };
 
+// Larger message-mode inputs use the literal-text fallback instead of Markdown parsing.
+export const MARKDOWN_PARSE_LIMIT = 40_000;
+
 type MarkdownCodeBlockChrome = "copy" | "none";
 type MarkdownCodeBlockInteraction = "interactive" | "static";
 type MarkdownTableInteractions = "enabled" | "none";

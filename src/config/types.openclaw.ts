@@ -170,7 +170,7 @@ export type OpenClawConfig = {
         | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
-      /** User-selected Control UI accent color (#RRGGBB). */
+      /** Control UI accent: #RRGGBB, or "theme" to bypass inherited accent colors. */
       accent?: string;
       /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
       locale?: string;
@@ -310,6 +310,8 @@ export type ConfigFileSnapshot = {
   raw: string | null;
   /** Parsed JSON/JSONC/YAML value before schema normalization. */
   parsed: unknown;
+  /** Internal include-expanded authored values paired with sourceConfigBeforeMigrations. */
+  authoredConfig?: OpenClawConfig;
   /** Include/env-resolved source before raw compatibility migrations. */
   sourceConfigBeforeMigrations?: ResolvedSourceConfig;
   /**

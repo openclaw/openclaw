@@ -80,7 +80,8 @@ describe("queue health collector", () => {
       prefix: "openclaw-health-dq-",
     });
     try {
-      const { upsertDeliveryQueueEntry } = await import("../../infra/delivery-queue-sqlite.js");
+      const { seedDeliveryQueueEntry } =
+        await import("../../infra/delivery-queue-sqlite.test-support.js");
       const { prepareDeliveryQueueTerminalEntry, terminalizePendingDeliveryQueueEntryInDatabase } =
         await import("../../infra/delivery-queue-sqlite.kernel.js");
       const { openOpenClawStateDatabase } = await import("../../state/openclaw-state-db.js");
@@ -93,7 +94,7 @@ describe("queue health collector", () => {
         retryCount: 5,
         retainOnFailure: true as const,
       };
-      upsertDeliveryQueueEntry({ queueName: "outbound", entry });
+      seedDeliveryQueueEntry({ queueName: "outbound", entry });
       const database = openOpenClawStateDatabase();
       expect(
         terminalizePendingDeliveryQueueEntryInDatabase(

@@ -39,7 +39,7 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
   const runId = "skill-usage-run";
   const skillName = "daily-brief";
   let skillFile: string;
-  let unregisterUsage: () => void;
+  let unregisterUsage: ReturnType<typeof registerSkillUsageTracking>;
   let publicEvents: DiagnosticEventPayload[];
   let sharedEvents: DiagnosticEventPayload[];
   let trustedEvents: DiagnosticEventPayload[];
@@ -65,14 +65,14 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
 
   afterEach(async () => {
     await waitForDiagnosticEventsDrained();
-    unregisterUsage();
+    await unregisterUsage();
     consumeRunSkillUsage(runId);
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
     setActivePluginRegistry(createEmptyPluginRegistry());
     vi.restoreAllMocks();
-    closeOpenClawStateDatabaseForTest();
     await testState.cleanup();
+    closeOpenClawStateDatabaseForTest();
   });
 
   function createBridge(options: { execute?: AnyAgentTool["execute"]; command?: boolean } = {}) {
@@ -179,9 +179,12 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
         contentItems: [{ type: "inputText", text: "# Daily brief\n" }],
       });
       await waitForDiagnosticEventsDrained();
+      await unregisterUsage();
       expect(usageRows()).toEqual([expectedUsageRow(1)]);
+      unregisterUsage = registerSkillUsageTracking({ env: testState.env });
       expect(await call("read-2")).toMatchObject({ success: true });
       await waitForDiagnosticEventsDrained();
+      await unregisterUsage();
       expect(execute).toHaveBeenCalledTimes(2);
       expect(usageRows()).toEqual([expectedUsageRow(2)]);
       expect(consumeRunSkillUsage(runId)).toEqual([
@@ -208,6 +211,7 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
       });
       expect(await call("failed-read")).toMatchObject({ success: false });
       await waitForDiagnosticEventsDrained();
+      await unregisterUsage();
       expect(execute).toHaveBeenCalledOnce();
       expect(consumeRunSkillUsage(runId)).toEqual([]);
       expect(usageRows()).toEqual([]);
@@ -223,6 +227,7 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
     });
     expect(await call("thrown-read")).toMatchObject({ success: false });
     await waitForDiagnosticEventsDrained();
+    await unregisterUsage();
     expect(usageRows()).toEqual([]);
     expect(consumeRunSkillUsage(runId)).toEqual([]);
     expect(trustedEvents).toEqual([]);
@@ -240,6 +245,7 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
     const { call, execute } = createBridge();
     expect(await call("blocked-read")).toMatchObject({ success: false, executionStarted: false });
     await waitForDiagnosticEventsDrained();
+    await unregisterUsage();
     expect(execute).not.toHaveBeenCalled();
     expect(usageRows()).toEqual([]);
     expect(consumeRunSkillUsage(runId)).toEqual([]);
@@ -253,6 +259,7 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
       const { call } = createBridge();
       expect(await call("other-read", otherFile)).toMatchObject({ success: true });
       await waitForDiagnosticEventsDrained();
+      await unregisterUsage();
       expect(usageRows()).toEqual([]);
       expect(consumeRunSkillUsage(runId)).toEqual([]);
       expect(trustedEvents).toEqual([]);
@@ -263,6 +270,7 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
     const { call } = createBridge({ command: true });
     expect(await call("skill-command")).toMatchObject({ success: true });
     await waitForDiagnosticEventsDrained();
+    await unregisterUsage();
     expect(usageRows()).toEqual([expectedUsageRow(1)]);
     expect(consumeRunSkillUsage(runId)).toEqual([
       { name: skillName, source: "workspace", activation: "command", skillFile },

@@ -172,7 +172,7 @@ export function connectControlUiFavicon(
   });
   palette.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ["style", "data-theme", "data-theme-mode"],
+    attributeFilter: ["style", "data-theme", "data-theme-mode", "data-theme-mascot"],
   });
   document.addEventListener("visibilitychange", synchronize);
   shell.addEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, synchronize);

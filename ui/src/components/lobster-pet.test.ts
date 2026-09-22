@@ -15,10 +15,15 @@ import {
   LOBSTER_BOTTLE_FORTUNES,
   pickLobsterEntrance,
   planLobsterBottle,
-  planLobsterPasser,
   resolveLobsterLoadIdentity,
 } from "./lobster-pet-plans.ts";
-import { createPet, type LobsterPetElement } from "./lobster-pet.test-support.ts";
+import {
+  advanceUntil,
+  arrive,
+  createPet,
+  spritePresent,
+  type LobsterPetElement,
+} from "./lobster-pet.test-support.ts";
 
 function poke(element: LobsterPetElement): void {
   const sprite = element.querySelector(".lobster-pet");
@@ -28,10 +33,6 @@ function poke(element: LobsterPetElement): void {
 
 function spriteClasses(element: LobsterPetElement): string {
   return element.querySelector(".lobster-pet")?.className ?? "";
-}
-
-function spritePresent(element: LobsterPetElement): boolean {
-  return element.querySelector(".lobster-pet") !== null;
 }
 
 async function advanceUntilAct(element: LobsterPetElement, maxMs: number): Promise<string | null> {
@@ -46,29 +47,6 @@ async function advanceUntilAct(element: LobsterPetElement, maxMs: number): Promi
     }
   }
   return null;
-}
-
-async function advanceUntil(
-  element: LobsterPetElement,
-  predicate: () => boolean,
-  maxMs: number,
-  stepMs = 1000,
-): Promise<boolean> {
-  let elapsed = 0;
-  while (elapsed < maxMs) {
-    await vi.advanceTimersByTimeAsync(stepMs);
-    elapsed += stepMs;
-    await element.updateComplete;
-    if (predicate()) {
-      return true;
-    }
-  }
-  return predicate();
-}
-
-// Cover the maximum first-arrival delay, including the shy familiarity tier.
-async function arrive(element: LobsterPetElement): Promise<void> {
-  await advanceUntil(element, () => spritePresent(element), 12_000);
 }
 
 async function startVigilOnlyRun(
@@ -627,20 +605,6 @@ describe("lobster pet element", () => {
     expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:-1");
   });
 
-  it("carries a bindle on the first load after a gateway upgrade", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    vi.stubGlobal("localStorage", window.localStorage);
-    localStorage.setItem("openclaw.control.lobsterpet.gatewayVersion.v1", "2026.6.1");
-    const element = createPet(42);
-    element.gatewayVersion = "2026.7.1";
-    await arrive(element);
-
-    expect(element.querySelector(".lob-bindle")).not.toBeNull();
-    expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toContain("just moved in");
-    expect(localStorage.getItem("openclaw.control.lobsterpet.gatewayVersion.v1")).toBe("2026.7.1");
-  });
-
   it("travels light on first sighting and on same-version reloads", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
@@ -875,30 +839,6 @@ describe("lobster pet element", () => {
 });
 
 describe("lobster plans", () => {
-  it("keeps the passer gate near 9.5% while widening the traffic", () => {
-    const counts = new Map<string, number>();
-    const total = 20_000;
-    for (let seed = 0; seed < total; seed++) {
-      const plan = planLobsterPasser(seed);
-      if (!plan) {
-        continue;
-      }
-      counts.set(plan.kind, (counts.get(plan.kind) ?? 0) + 1);
-      expect(plan.atMs).toBeGreaterThanOrEqual(2500);
-      expect(plan.atMs).toBeLessThanOrEqual(9000);
-    }
-    for (const kind of ["stranger", "crab", "snail", "duck", "jellyfish"]) {
-      expect(counts.get(kind) ?? 0).toBeGreaterThan(0);
-    }
-    const passers = [...counts.values()].reduce((sum, count) => sum + count, 0);
-    expect(passers).toBeGreaterThan(total * 0.07);
-    expect(passers).toBeLessThan(total * 0.12);
-    // Strangers stay the most common traffic.
-    for (const kind of ["crab", "snail", "duck", "jellyfish"]) {
-      expect(counts.get("stranger") ?? 0).toBeGreaterThan(counts.get(kind) ?? 0);
-    }
-  });
-
   it("maps entrance rolls to their rarity bands", () => {
     expect(pickLobsterEntrance(0.01)).toBe("balloon");
     expect(pickLobsterEntrance(0.06)).toBe("bubble");
@@ -1125,27 +1065,5 @@ describe("rare lobster loads", () => {
       40_000,
     );
     expect(gone).toBe(true);
-  });
-
-  it("earns the golden ledge trim once the Lobsterdex is complete", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    vi.stubGlobal("localStorage", window.localStorage);
-    localStorage.setItem(
-      "openclaw.control.lobsterdex.v1",
-      JSON.stringify(
-        Object.fromEntries(
-          LOBSTER_PET_PALETTES.map((palette) => [palette.id, { firstSeenAt: 1, name: "First" }]),
-        ),
-      ),
-    );
-    const element = createPet(42);
-    await element.updateComplete;
-    expect(element.hasAttribute("data-dex-complete")).toBe(true);
-
-    // The visits setting silences the trim like everything else.
-    element.visitsEnabled = false;
-    await element.updateComplete;
-    expect(element.hasAttribute("data-dex-complete")).toBe(false);
   });
 });

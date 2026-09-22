@@ -21,7 +21,7 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     find: "Find files by glob",
     ls: "List directories",
     exec: params.codeModeActive
-      ? "Run JavaScript/TypeScript Code Mode; call exact catalog tools from code, never shell/Python/imports"
+      ? "Run JavaScript Code Mode; call exact catalog tools from code, never shell/Python/imports"
       : promptSurface === "cli_backend"
         ? "Run shell on connected node; sync; host=node"
         : "Run shell; pty for TTY CLIs",

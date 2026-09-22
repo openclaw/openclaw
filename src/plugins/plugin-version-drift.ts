@@ -343,6 +343,34 @@ export function hasOfficialPluginVersionCandidates(params: {
   );
 }
 
+/** Exact cohort targets shared by automatic updates and Doctor's drift repair. */
+export function resolveOfficialPluginCohortNpmSpecs(params: {
+  gatewayVersion: string;
+  installRecords: Record<string, PluginInstallRecord>;
+  config?: OpenClawConfig;
+}): Record<string, string> {
+  const version = resolveOpenClawReleaseCohortVersion(params.gatewayVersion);
+  const specs: Record<string, string> = {};
+  for (const [pluginId, record] of Object.entries(params.installRecords)) {
+    if (
+      record.source !== "npm" ||
+      !isPluginEnabled(params.config, pluginId) ||
+      !shouldCompareOfficialInstallToGateway({ pluginId, record })
+    ) {
+      continue;
+    }
+    const official = resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record });
+    const packageName = official ? parseRegistryNpmSpec(official)?.name : undefined;
+    if (
+      packageName &&
+      parseRegistryNpmSpec(`${packageName}@${version}`)?.selectorKind === "exact-version"
+    ) {
+      specs[pluginId] = `${packageName}@${version}`;
+    }
+  }
+  return specs;
+}
+
 /**
  * Compare active official external plugin installs against an OpenClaw host
  * version and return any mismatches.
