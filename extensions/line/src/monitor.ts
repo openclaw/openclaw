@@ -1,4 +1,3 @@
-// Line plugin module implements monitor behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";

@@ -37,7 +37,27 @@ With config hot reload enabled, changes to `logging.level`, `logging.file`, and
 long-lived channel loggers. Queued records finish writing to their original file.
 Explicit logger-level overrides, such as Baileys verbosity, remain in effect.
 
+Subsystem file logs omit call-site metadata (`_meta.path`) for `trace`, `debug`,
+`info`, and `warn` records, including `raw()` lines, to avoid capturing and parsing
+a stack on every routine message. `error` and `fatal` records retain it. All levels
+retain call-site metadata while diagnostics are enabled and an internal log-record
+consumer is subscribed, preserving [OTLP code locations](/gateway/opentelemetry/privacy-and-trace-context).
+This follows diagnostic enablement and subscriptions on the next record, including
+for existing subsystem loggers. Log messages, structured fields, and error stacks
+supplied by callers are unchanged.
+
 Talk, realtime voice, and managed-room code paths use the shared file logger for bounded lifecycle records intended for operational debugging and OTLP log export. Transcript text, audio payloads, turn ids, call ids, and provider item ids are never copied into the log record.
+
+Discord realtime voice keeps session lifecycle transitions at `info`; audio chunks
+and transcript deltas use `debug`. Model-fetch starts and successful responses
+under one second also use `debug`. Non-2xx responses and responses taking at least
+one second remain at `info`; transport failures remain warnings. The existing
+[model transport diagnostic flags](/logging#targeted-model-transport-diagnostics)
+promote transport details to `info` when enabled.
+
+Secret egress request audit records remain at `info`, including successful
+forwarding. Their structured fields record the proxy outcome without request
+payloads or credentials; see [secret egress proxy](/gateway/secrets/secret-store-and-egress#secret-egress-proxy).
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
 
@@ -45,7 +65,7 @@ The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI d
 openclaw logs --follow
 ```
 
-If a tail read observes that the active file has disappeared, the Control UI clears its previous records and follows the recreated file. Missing files still return an empty tail; filesystem read errors remain visible.
+If a tail read observes that the active file has disappeared, the Control UI clears its previous records and follows the recreated file. Missing files still return an empty tail. Filesystem read errors, including a log path that points to a directory, remain visible while the Control UI keeps the last successfully read records as stale data.
 
 ### Verbose vs. log levels
 
@@ -240,6 +260,29 @@ The latter two distinguish selected rows refreshed during this request from
 selected rows already resident when it began. Dirty counts describe pending
 owner work at the start of the request.
 
+The `materialize` phase measures the wait for session-row projection readiness. In-flight
+catalog renewals no longer block lists or descriptions once a catalog is loaded:
+reads use the current catalog while its replacement loads in the background, then
+rows refresh with the new catalog. Startup still waits for the first catalog.
+Renewals that retain identical catalog content do not dirty resident rows.
+
+Profile and run-registry publications refresh their derived display facts without
+rereading session entries. Worker environment and placement publications refresh
+only the selected rows' worker facts on their next presentation. Stored session
+writes publish exact keys; broad list notifications do not schedule an all-row
+drain. Config, store topology, and adopted model catalogs still refresh affected
+live rows before lists respond. Archived rows stay cold until selected.
+
+Transcript-only row refreshes use a one-second window per resident session: the
+first notification refreshes promptly, and further notifications collapse into a
+trailing refresh. These pending notifications are not dirty rows until that
+refresh is due. Transcript freshness can therefore lag by up to one window;
+optional previews still wait for idle background backfill. Metadata, lifecycle,
+catalog, and topology publications continue to invalidate immediately.
+Transcript notifications do not invalidate parents or children: relationships,
+inherited model settings, and subagent activity have their own metadata or
+registry publications.
+
 Records report phase totals, synchronous selection/row time, and
 `yieldWaitMs`/`yieldCount` for awaiting shared projection readiness. These waits
 can include coalesced work shared with other callers. Phase totals include their
@@ -266,6 +309,14 @@ If a CPU counter read fails, all CPU fields are omitted for that request;
 its result and elapsed diagnostics are preserved. Existing activation and the
 one-second warning threshold are unchanged, so missing slow records do not account
 for CPU consumed by faster requests.
+
+Catalog lists additionally expose fixed request-stage observations through the
+existing diagnostic event stream and [Prometheus exporter](/gateway/prometheus#catalog-list-stages).
+These include initial/final projection readiness, provider or coalesced waits,
+and synchronous planning/final-delivery thread CPU. Unlike slow logs, these
+observations include requests below one second when an interested trusted
+consumer is active. They do not change warning thresholds, startup-phase history,
+request behavior or diagnostic collection settings.
 
 ### WS log style
 

@@ -8,6 +8,7 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -18,6 +19,8 @@ import {
   repositorySessionNeedsWorker,
   resolveChatPaneWorkerPresentation,
 } from "./chat-pane-placement.ts";
+
+registerNewSessionSetupEnglish();
 
 async function selectChatPanePlacementTarget(params: {
   client: GatewayBrowserClient;

@@ -7,12 +7,15 @@ import {
 } from "../../daemon/service-types.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { resolveInstallationTarget } from "../../infra/installation-target-context.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart-budget.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
-import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import {
   CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
+  CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
+  readControlPlaneUpdateSentinelMeta,
+  UPDATE_RUN_ID_ENV,
   writeControlPlaneUpdateRestartSentinel,
 } from "../../infra/update-control-plane-sentinel.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
@@ -20,12 +23,13 @@ import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import {
   cancelManagedServiceUpdateHandoff,
+  isCurrentForegroundUpdateHandoffProcess,
+  parkForegroundUpdateHandoff,
   startManagedServiceUpdateHandoff,
   transferManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { defaultRuntime } from "../../runtime.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { formatInstallationTargetCommand } from "../installation-target-format.js";
 import { printResult } from "./progress.js";
@@ -40,6 +44,9 @@ function parsePositivePid(value: unknown): number | null {
   const trimmed = typeof value === "string" ? value.trim() : "";
   return /^\d+$/u.test(trimmed) ? (parseStrictPositiveInteger(trimmed) ?? null) : null;
 }
+
+/** EX_TEMPFAIL: ownership transferred successfully, but the update is not terminal yet. */
+const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
 
 const GATEWAY_ANCESTRY_SHELL_GUIDANCE =
   "Run this command from a shell outside the gateway service.";
@@ -183,7 +190,7 @@ export async function handoffUpdateFromGateway(params: {
   if (started.status === "joined") {
     throw new UpdatePreMutationError(
       "managed-service-handoff-already-running",
-      "Another managed update is already running. Inspect `openclaw status --all` before retrying.",
+      "Another managed update is already running. Check progress with `openclaw update status`.",
     );
   }
   const identity = {
@@ -192,7 +199,7 @@ export async function handoffUpdateFromGateway(params: {
     installRoot: started.installRoot,
   };
   const target = resolveInstallationTarget(env);
-  const statusCommand = formatInstallationTargetCommand(["openclaw", "status", "--all"], target, {
+  const statusCommand = formatInstallationTargetCommand(["openclaw", "update", "status"], target, {
     env,
   });
   const healthCommand = formatInstallationTargetCommand(
@@ -200,7 +207,7 @@ export async function handoffUpdateFromGateway(params: {
     target,
     { env },
   );
-  const guidance = `Update continues outside the Gateway process. Log: ${started.logPath}\nFollow up: ${statusCommand}; ${healthCommand}.`;
+  const guidance = `Update is not finished. It will continue in the background so it can restart the Gateway.\nLog: ${started.logPath}\nCheck progress: ${statusCommand}`;
   const result: UpdateRunResult = {
     runId: params.opts.run?.runId,
     status: "skipped",
@@ -247,9 +254,55 @@ export async function handoffUpdateFromGateway(params: {
       { env: params.opts.run.env },
     );
   }
-  printResult(result, params.opts);
-  if (!params.opts.json) {
-    defaultRuntime.log(guidance);
+  await printResult(result, params.opts, { nextAction: guidance });
+  process.exitCode = UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE;
+  return true;
+}
+
+export async function parkForegroundUpdateForActivation(
+  params: { root: string; opts: UpdateCommandOptions },
+  assertCurrent: () => void,
+): Promise<void> {
+  assertCurrent();
+  const run = params.opts.run;
+  if (run?.completionOwner === "gateway-restart" && !run.gatewayRestartRequired) {
+    await parkForegroundUpdateHandoff({ root: params.root, run });
+    assertCurrent();
+  }
+}
+
+/** Invalid handoff metadata may not fall back to another native owner. */
+export async function resolveForegroundUpdateAdmission(params: {
+  root: string | undefined;
+  env?: NodeJS.ProcessEnv;
+  meta?: Awaited<ReturnType<typeof readControlPlaneUpdateSentinelMeta>>;
+  expectedForeground?: true;
+}): Promise<boolean> {
+  const env = params.env ?? process.env;
+  const meta =
+    params.meta === undefined ? await readControlPlaneUpdateSentinelMeta(env) : params.meta;
+  const claimed = meta?.completionOwner === "gateway-restart";
+  if (
+    !claimed &&
+    !params.expectedForeground &&
+    !meta?.foregroundOrigin &&
+    !(env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]?.trim() && meta === null)
+  ) {
+    return false;
+  }
+  if (
+    !claimed ||
+    !params.root ||
+    !(await isCurrentForegroundUpdateHandoffProcess({
+      root: params.root,
+      runId: env[UPDATE_RUN_ID_ENV],
+      env,
+    }))
+  ) {
+    throw new UpdatePreMutationError(
+      "managed-service-preflight",
+      "The update handoff metadata or this Gateway's current ownership could not be verified. Retry the update from its current owner.",
+    );
   }
   return true;
 }

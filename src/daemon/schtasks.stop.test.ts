@@ -14,11 +14,13 @@ import {
   probeProcessState,
   pushSuccessfulSchtasksResponses,
   readGatewayOwnerLease,
+  readWindowsProcessStartTimeSync,
   resolveScheduledTaskOwnedGatewayPids,
   resolveTaskScriptPath,
   restartScheduledTask,
   setTaskStateProbeResult,
   spawnSync,
+  spawnSyncResult,
   startScheduledTask,
   stopScheduledTask,
   taskkillPids,
@@ -280,7 +282,6 @@ describe("Scheduled Task stop/restart cleanup", () => {
   it.each([
     { mode: "foreground", state: "live" },
     { mode: "supervised", state: "dead" },
-    { mode: "supervised", state: "unknown" },
   ] as const)(
     "does not adopt a $state $mode recorded owner through matching task argv",
     async ({ mode, state }) => {
@@ -312,7 +313,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     },
   );
 
-  it.each(["before graceful stop", "before forced stop"])(
+  it.each(["before ownership discovery", "before graceful stop", "before forced stop"])(
     "refuses a recorded owner that changes %s",
     async (phase) => {
       await withPreparedGatewayTask(async ({ env }) => {
@@ -329,7 +330,8 @@ describe("Scheduled Task stop/restart cleanup", () => {
           });
         }
         spawnSync.mockImplementation((command, args) => {
-          if (command.toLowerCase().endsWith("taskkill.exe")) {
+          const executable = command.toLowerCase();
+          if (executable.endsWith("taskkill.exe")) {
             changed = true;
             killed = args?.includes("/F") ?? false;
             return {
@@ -341,8 +343,245 @@ describe("Scheduled Task stop/restart cleanup", () => {
               signal: null,
             };
           }
+          if (executable.endsWith("tasklist.exe")) {
+            const output = killed ? "No tasks" : '"node.exe","4242","Console","1","1 K"';
+            return {
+              pid: 0,
+              output: [null, output, ""],
+              stdout: output,
+              stderr: "",
+              status: 0,
+              signal: null,
+            };
+          }
           const output = JSON.stringify([
             ...(!killed ? [{ ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }] : []),
+            { ProcessId: 9999, CommandLine: "powershell.exe" },
+          ]);
+          return {
+            pid: 0,
+            output: [null, output, ""],
+            stdout: output,
+            stderr: "",
+            status: 0,
+            signal: null,
+          };
+        });
+
+        await expect(terminateScheduledTaskGatewayListeners(env)).rejects.toThrow(
+          "Gateway owner changed before terminating process 4242",
+        );
+
+        const taskkillCalls = spawnSync.mock.calls
+          .filter(([command]) => command.toLowerCase().endsWith("taskkill.exe"))
+          .map(([, args]) => args);
+        expect(taskkillCalls).toEqual(
+          phase === "before graceful stop" ? [] : [["/T", "/PID", "4242"]],
+        );
+      });
+    },
+  );
+
+  it.each(["before ownership discovery", "before graceful stop", "before forced stop"])(
+    "keeps terminating the same Scheduled Task owner after it becomes unknown %s",
+    async (phase) => {
+      await withPreparedGatewayTask(async ({ env }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        let unknown = false;
+        let forced = false;
+        readGatewayOwnerLease.mockImplementation(() =>
+          unknown ? { ...GATEWAY_OWNER, state: "unknown" } : GATEWAY_OWNER,
+        );
+        if (phase === "before ownership discovery") {
+          unknown = true;
+        } else if (phase === "before graceful stop") {
+          readGatewayOwnerLease.mockImplementationOnce(() => {
+            unknown = true;
+            return GATEWAY_OWNER;
+          });
+        }
+        spawnSync.mockImplementation((command, args) => {
+          const executable = command.toLowerCase();
+          if (executable.endsWith("taskkill.exe")) {
+            unknown = true;
+            forced = args?.includes("/F") ?? false;
+            return {
+              pid: 0,
+              output: [null, "", ""],
+              stdout: "",
+              stderr: "",
+              status: 0,
+              signal: null,
+            };
+          }
+          if (executable.endsWith("tasklist.exe")) {
+            const alive = phase === "before forced stop" && !forced;
+            const output = alive ? '"node.exe","4242","Console","1","1 K"' : "No tasks";
+            return {
+              pid: 0,
+              output: [null, output, ""],
+              stdout: output,
+              stderr: "",
+              status: 0,
+              signal: null,
+            };
+          }
+          const keepGateway = phase === "before forced stop" && !forced;
+          const output = JSON.stringify([
+            ...(keepGateway
+              ? [{ ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }]
+              : []),
+            { ProcessId: 9999, CommandLine: "powershell.exe" },
+          ]);
+          return {
+            pid: 0,
+            output: [null, output, ""],
+            stdout: output,
+            stderr: "",
+            status: 0,
+            signal: null,
+          };
+        });
+
+        await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
+
+        expect(readWindowsProcessStartTimeSync).toHaveBeenCalledWith(4242, 5_000, env);
+
+        const taskkillCalls = spawnSync.mock.calls
+          .filter(([command]) => command.toLowerCase().endsWith("taskkill.exe"))
+          .map(([, args]) => args);
+        expect(taskkillCalls).toEqual(
+          phase !== "before forced stop"
+            ? [["/T", "/PID", "4242"]]
+            : [
+                ["/T", "/PID", "4242"],
+                ["/F", "/T", "/PID", "4242"],
+              ],
+        );
+        expect(taskkillCalls.flat()).not.toContain("9999");
+        expect(killProcessTreeMock).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("keeps terminating the validated owner after graceful shutdown removes its lease", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      let leaseRemoved = false;
+      let forced = false;
+      readGatewayOwnerLease.mockImplementation(() => (leaseRemoved ? undefined : GATEWAY_OWNER));
+      readWindowsProcessStartTimeSync.mockReturnValue(GATEWAY_OWNER.startedAt);
+      spawnSync.mockImplementation((command, args) => {
+        const executable = command.toLowerCase();
+        if (executable.endsWith("taskkill.exe")) {
+          leaseRemoved = true;
+          forced = args?.includes("/F") ?? false;
+          return {
+            pid: 0,
+            output: [null, "", ""],
+            stdout: "",
+            stderr: "",
+            status: 0,
+            signal: null,
+          };
+        }
+        if (executable.endsWith("tasklist.exe")) {
+          const output = forced ? "No tasks" : '"node.exe","4242","Console","1","1 K"';
+          return {
+            pid: 0,
+            output: [null, output, ""],
+            stdout: output,
+            stderr: "",
+            status: 0,
+            signal: null,
+          };
+        }
+        const output = JSON.stringify([
+          ...(!forced ? [{ ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }] : []),
+          { ProcessId: 9999, CommandLine: "powershell.exe" },
+        ]);
+        return {
+          pid: 0,
+          output: [null, output, ""],
+          stdout: output,
+          stderr: "",
+          status: 0,
+          signal: null,
+        };
+      });
+
+      await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
+
+      expect(readWindowsProcessStartTimeSync).toHaveBeenCalledWith(4242, 5_000, env);
+      expect(taskkillPids()).toEqual([4242, 4242]);
+    });
+  });
+
+  it.each([
+    { label: "belongs to another host", owner: { host: "another-host" }, currentStart: 100 },
+    { label: "has no recorded process identity", owner: { startedAt: null }, currentStart: 100 },
+    { label: "cannot read its current process identity", owner: {}, currentStart: null },
+    { label: "has reused its pid", owner: {}, currentStart: 101 },
+  ] as const)(
+    "does not terminate an unknown owner that $label",
+    async ({ owner, currentStart }) => {
+      await withPreparedGatewayTask(async ({ env }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        readGatewayOwnerLease.mockReturnValue({ ...GATEWAY_OWNER, ...owner, state: "unknown" });
+        readWindowsProcessStartTimeSync.mockReturnValue(currentStart);
+        mockWindowsTaskkillSuccess();
+
+        await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([]);
+
+        expect(taskkillPids()).toEqual([]);
+        expect(killProcessTreeMock).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it.each(["before graceful stop", "before forced stop"])(
+    "refuses a dead or reused recorded owner %s",
+    async (phase) => {
+      await withPreparedGatewayTask(async ({ env }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        let dead = false;
+        let forced = false;
+        readGatewayOwnerLease.mockImplementation(() =>
+          dead ? { ...GATEWAY_OWNER, state: "dead" } : GATEWAY_OWNER,
+        );
+        if (phase === "before graceful stop") {
+          readGatewayOwnerLease.mockImplementationOnce(() => {
+            dead = true;
+            return GATEWAY_OWNER;
+          });
+        }
+        spawnSync.mockImplementation((command, args) => {
+          const executable = command.toLowerCase();
+          if (executable.endsWith("taskkill.exe")) {
+            dead = true;
+            forced = args?.includes("/F") ?? false;
+            return {
+              pid: 0,
+              output: [null, "", ""],
+              stdout: "",
+              stderr: "",
+              status: 0,
+              signal: null,
+            };
+          }
+          if (executable.endsWith("tasklist.exe")) {
+            const output = forced ? "No tasks" : '"node.exe","4242","Console","1","1 K"';
+            return {
+              pid: 0,
+              output: [null, output, ""],
+              stdout: output,
+              stderr: "",
+              status: 0,
+              signal: null,
+            };
+          }
+          const output = JSON.stringify([
+            ...(!forced ? [{ ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }] : []),
             { ProcessId: 9999, CommandLine: "powershell.exe" },
           ]);
           return {
@@ -391,6 +630,99 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
+  it("does not force a gracefully removed owner when the CIM snapshot is stale", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      inspectPortUsageMock.mockResolvedValue(freePortUsage());
+      let removed = false;
+      spawnSync.mockImplementation((command) => {
+        const executable = command.toLowerCase();
+        if (executable.endsWith("taskkill.exe")) {
+          removed = true;
+          return {
+            pid: 0,
+            output: [null, "", ""],
+            stdout: "",
+            stderr: "",
+            status: 0,
+            signal: null,
+          };
+        }
+        if (executable.endsWith("tasklist.exe")) {
+          const output = removed ? "No tasks" : '"node.exe","4242","Console","1","1 K"';
+          return {
+            pid: 0,
+            output: [null, output, ""],
+            stdout: output,
+            stderr: "",
+            status: 0,
+            signal: null,
+          };
+        }
+        // Model the lagging CIM result from the packaged Windows failure.
+        const output = JSON.stringify([
+          { ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE },
+          { ProcessId: 9999, CommandLine: "powershell.exe" },
+        ]);
+        return {
+          pid: 0,
+          output: [null, output, ""],
+          stdout: output,
+          stderr: "",
+          status: 0,
+          signal: null,
+        };
+      });
+
+      await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
+
+      const taskkillCalls = spawnSync.mock.calls
+        .filter(([command]) => command.toLowerCase().endsWith("taskkill.exe"))
+        .map(([, args]) => args);
+      expect(taskkillCalls).toEqual([["/T", "/PID", "4242"]]);
+      expect(spawnSync.mock.calls).toContainEqual([
+        expect.stringMatching(/tasklist\.exe$/i),
+        ["/FI", "PID eq 4242", "/FO", "CSV", "/NH"],
+        expect.objectContaining({ timeout: 1_500 }),
+      ]);
+    });
+  });
+
+  it("allows forced taskkill process teardown to settle beyond five seconds", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      let forced = false;
+      let tasklistCallsAfterForce = 0;
+      readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
+      spawnSync.mockImplementation((command, args) => {
+        const executable = command.toLowerCase();
+        if (executable.endsWith("taskkill.exe")) {
+          forced = args?.includes("/F") ?? false;
+          return spawnSyncResult("");
+        }
+        if (executable.endsWith("tasklist.exe")) {
+          if (forced) {
+            tasklistCallsAfterForce += 1;
+          }
+          const output =
+            forced && tasklistCallsAfterForce > 75
+              ? "No tasks"
+              : '"node.exe","4242","Console","1","1 K"';
+          return spawnSyncResult(output);
+        }
+        const output = JSON.stringify([
+          { ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE },
+        ]);
+        return spawnSyncResult(output);
+      });
+
+      await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
+
+      expect(taskkillPids()).toEqual([4242, 4242]);
+      expect(tasklistCallsAfterForce).toBe(76);
+    });
+  });
+
   it.each(["gateway", "task-supervisor", "gateway-with-supervisor"])(
     "stops the exact installed Windows %s even before its port is bound",
     async (owner) => {
@@ -423,6 +755,17 @@ describe("Scheduled Task stop/restart cleanup", () => {
               stdout: "",
               stderr: "",
               status: 1,
+              signal: null,
+            };
+          }
+          if (executable.endsWith("tasklist.exe")) {
+            const output = forced ? "No tasks" : '"node.exe","4242","Console","1","1 K"';
+            return {
+              pid: 0,
+              output: [null, output, ""],
+              stdout: output,
+              stderr: "",
+              status: 0,
               signal: null,
             };
           }
@@ -471,6 +814,11 @@ describe("Scheduled Task stop/restart cleanup", () => {
         expect(taskkillCalls).toEqual([
           ["/T", "/PID", "4242"],
           ["/F", "/T", "/PID", "4242"],
+        ]);
+        expect(spawnSync.mock.calls).toContainEqual([
+          expect.stringMatching(/tasklist\.exe$/i),
+          ["/FI", "PID eq 4242", "/FO", "CSV", "/NH"],
+          expect.objectContaining({ timeout: 1_500 }),
         ]);
         expect(taskkillCalls.flat()).not.toContain("3131");
         expect(taskkillCalls.flat()).not.toContain("4141");

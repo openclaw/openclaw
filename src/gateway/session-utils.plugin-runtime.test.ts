@@ -226,6 +226,7 @@ describe("gateway session list plugin runtime normalization", () => {
       const { createSessionRowProjection } = await import("./session-row-projection.js");
       const projection = await createSessionRowProjection({ cfg });
       try {
+        await projection.ensureMaterialized();
         normalizeProviderModelIdWithPluginMock.mockClear();
         loadPluginManifestRegistryCoreMock.mockClear();
         const lifecycle = projection.snapshot({ key: sessionKey, agentId: "main" });

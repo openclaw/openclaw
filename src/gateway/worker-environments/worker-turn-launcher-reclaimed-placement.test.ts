@@ -20,6 +20,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getCommandLaneSnapshot, setCommandLaneConcurrency } from "../../process/command-queue.js";
+import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -146,7 +147,7 @@ describe("worker turn launcher reclaimed placement", () => {
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
@@ -504,41 +505,44 @@ describe("worker turn launcher reclaimed placement", () => {
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });
 
-  it("projects a failed placement cause with current-build recovery guidance", async () => {
-    placements.startDispatch({
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-    });
-    placements.fail({
-      sessionId: SESSION_ID,
-      recoveryError: "stale terminal worker failure",
-    });
-    placements.fail({
-      sessionId: SESSION_ID,
-      recoveryError: "cloud worker disappeared: environment state destroyed",
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments: unusedEnvironments(),
-      placements,
-    });
-    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+  it.each(["cloud worker disappeared: environment state destroyed", STALE_WORKER_BUILD_REASON])(
+    "preserves the failed placement cause: %s",
+    async (recoveryError) => {
+      placements.startDispatch({
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+      });
+      placements.fail({
+        sessionId: SESSION_ID,
+        recoveryError: "stale terminal worker failure",
+      });
+      placements.fail({
+        sessionId: SESSION_ID,
+        recoveryError,
+      });
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments: unusedEnvironments(),
+        placements,
+      });
+      const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
 
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-failed",
-        },
-        turn("run-failed"),
-        runLocal,
-      ),
-    ).rejects.toThrow(
-      "Worker turn rejected in placement failed: cloud worker disappeared: environment state destroyed; redispatch the session so its worker can bootstrap the current build before retrying.",
-    );
-    expect(runLocal).not.toHaveBeenCalled();
-    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-  });
+      await expect(
+        provider.executeTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "run-failed",
+          },
+          turn("run-failed"),
+          runLocal,
+        ),
+      ).rejects.toMatchObject({
+        message: `Worker turn rejected in placement failed: ${recoveryError}`,
+      });
+      expect(runLocal).not.toHaveBeenCalled();
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    },
+  );
 });

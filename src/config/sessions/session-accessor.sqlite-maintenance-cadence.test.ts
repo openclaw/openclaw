@@ -14,14 +14,17 @@ import {
   assignSessionOwner,
   listSessionParticipantsReadOnly,
   loadSessionEntry,
-  recordSessionParticipant,
 } from "./session-accessor.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import * as candidates from "./session-accessor.sqlite-maintenance-candidates.js";
 import { applySessionEntryMaintenance } from "./session-accessor.sqlite-maintenance.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import * as maintenanceRuntime from "./store-maintenance-runtime.js";
-import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
+import {
+  resolveMaintenanceConfigFromInput,
+  type ResolvedSessionMaintenanceConfig,
+} from "./store-maintenance.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -80,14 +83,31 @@ it.each(["participant", "owner"] as const)(
   async (kind) => {
     const { database, storePath } = createStore(24);
     writeMetadata(storePath, kind, 0);
-    const queries = trackSqliteStatementExecutions(database.db, ["ageFact"], (sql) =>
-      sql.includes('as "session_started_at"') && sql.includes('from "session_nodes"')
-        ? "ageFact"
-        : null,
+    const factReads = vi.spyOn(ageFacts, "recordSessionEntryMaintenanceAgeFact");
+    // One fact uses separate indexed probes; metadata writes must not repeat any of them.
+    const queries = trackSqliteStatementExecutions(
+      database.db,
+      ["after", "dashboards", "pending", "unexpected"],
+      (sql) => {
+        if (!sql.includes('as "session_started_at"') || !sql.includes('from "session_nodes"')) {
+          return null;
+        }
+        if (sql.includes('"age_namespaces"')) {
+          return "dashboards";
+        }
+        if (sql.includes('"session_canonical_validation_pending"')) {
+          return "pending";
+        }
+        return sql.includes('"updated_at" > ?') ? "after" : "unexpected";
+      },
     );
+    const expectedProbes = { after: 1, dashboards: 1, pending: 1, unexpected: 0 };
+    const expectedRows = { after: 1, dashboards: 0, pending: 0, unexpected: 0 };
     try {
       await renameEntry(storePath, 0, "warm age facts");
-      expect(queries.counts.ageFact).toBe(1);
+      expect(factReads).toHaveBeenCalledTimes(1);
+      expect(queries.counts).toEqual(expectedProbes);
+      expect(queries.rowCounts).toEqual(expectedRows);
       for (let sequence = 1; sequence <= 3; sequence += 1) {
         writeMetadata(storePath, kind, sequence);
         await renameEntry(storePath, 0, `renamed-${sequence}`);
@@ -113,7 +133,9 @@ it.each(["participant", "owner"] as const)(
           assignedAt: 3,
         });
       }
-      expect(queries.counts.ageFact).toBe(1);
+      expect(factReads).toHaveBeenCalledTimes(1);
+      expect(queries.counts).toEqual(expectedProbes);
+      expect(queries.rowCounts).toEqual(expectedRows);
     } finally {
       queries.restore();
     }
@@ -366,4 +388,107 @@ it("reconsiders a session unarchived without changing its timestamp", async () =
     archivedAt: expect.any(Number),
     archiveReason: "age-retention",
   });
+});
+
+it.each([
+  "shared dashboards",
+  "pending dashboard alias",
+  "pending namespace prefixes",
+  "recent activity",
+  "expired recent activity",
+  "disabled ages",
+] as const)("keeps exact next maintenance deadlines for %s", (scenario) => {
+  const { options } = createStore(0);
+  const now = Date.now();
+  const maintenance: ResolvedSessionMaintenanceConfig = {
+    ...resolveMaintenanceConfigFromInput(),
+    pruneAfterMs: 30 * DAY_MS,
+    archiveDashboardAfterMs: null,
+    preserveRecentMs: null,
+  };
+  const result = runOpenClawAgentWriteTransaction((database) => {
+    writeSessionEntry(database, "agent:main:main", {
+      sessionId: "protected-primary",
+      updatedAt: now - 100 * DAY_MS,
+    });
+    if (scenario === "shared dashboards") {
+      maintenance.archiveDashboardAfterMs = 7 * DAY_MS;
+      writeSessionEntry(database, "agent:main:dashboard:first", {
+        sessionId: "first-dashboard",
+        updatedAt: now - 8 * DAY_MS,
+        lastActivityAt: now,
+      });
+      writeSessionEntry(database, "agent:zeta:dashboard:second", {
+        sessionId: "second-dashboard",
+        updatedAt: now - 8 * DAY_MS,
+        lastInteractionAt: now - DAY_MS,
+      });
+    } else if (scenario === "pending dashboard alias") {
+      maintenance.archiveDashboardAfterMs = 7 * DAY_MS;
+      writeSessionEntry(
+        database,
+        "AGENT:MAIN:DASHBOARD:ALIAS",
+        { sessionId: "pending-dashboard", updatedAt: now - 8 * DAY_MS, lastActivityAt: now },
+        { allowStoredAliases: true, canonicalPreviousEntry: null },
+      );
+    } else if (scenario === "pending namespace prefixes") {
+      maintenance.archiveDashboardAfterMs = 7 * DAY_MS;
+      writeSessionEntry(database, "agent:main:dashboard:certified", {
+        sessionId: "certified-dashboard",
+        updatedAt: now - 8 * DAY_MS,
+        lastActivityAt: now,
+      });
+      for (const [index, storedKey] of ["agent:", "agent:foo"].entries()) {
+        writeSessionEntry(
+          database,
+          storedKey,
+          {
+            sessionId: `pending-prefix-${index}`,
+            updatedAt: now,
+          },
+          { allowStoredAliases: true, canonicalPreviousEntry: null },
+        );
+      }
+    } else if (scenario === "recent activity") {
+      maintenance.pruneAfterMs = 60 * DAY_MS;
+      maintenance.preserveRecentMs = 7 * DAY_MS;
+      const fields = [
+        "updatedAt",
+        "lastActivityAt",
+        "lastInteractionAt",
+        "sessionStartedAt",
+      ] as const;
+      for (const [index, field] of fields.entries()) {
+        writeSessionEntry(database, key(index), {
+          sessionId: `activity-${index}`,
+          updatedAt: now - 31 * DAY_MS,
+          [field]: now - index * DAY_MS,
+        });
+      }
+    } else {
+      maintenance.preserveRecentMs = scenario === "expired recent activity" ? 7 * DAY_MS : null;
+      maintenance.pruneAfterMs = scenario === "disabled ages" ? 0 : 30 * DAY_MS;
+      writeSessionEntry(database, key(0), {
+        sessionId: "ordinary",
+        updatedAt: now - 8 * DAY_MS,
+      });
+    }
+    ageFacts.recordSessionEntryMaintenanceAgeFact(database, maintenance, now);
+    return {
+      nextAgeAt: ageFacts.readSessionEntryMaintenanceAgeFact(database.db, maintenance)?.next.at,
+      nextMaintenanceAt: ageFacts.readSessionEntryMaintenanceNextAgeAt(database, maintenance),
+    };
+  }, options);
+  const expected = {
+    "shared dashboards": now + 6 * DAY_MS + 1,
+    "pending dashboard alias": now + 7 * DAY_MS + 1,
+    "pending namespace prefixes": now + 7 * DAY_MS + 1,
+    "recent activity": now + 4 * DAY_MS + 1,
+    "expired recent activity": now + 22 * DAY_MS + 1,
+    "disabled ages": Infinity,
+  };
+  expect(result.nextAgeAt).toBe(expected[scenario]);
+  expect(result.nextMaintenanceAt).toBe(
+    Math.min(expected[scenario], now + ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS),
+  );
 });

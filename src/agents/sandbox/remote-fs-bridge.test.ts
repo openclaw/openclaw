@@ -2,8 +2,9 @@
 // the pinned mutation helper and remote stat/path guards.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE } from "../../infra/guest-filesystem.js";
 import { createSandboxedReadTool, createSandboxedWriteTool } from "../agent-tools.read.js";
 import { createCoreCodingTools } from "../core-coding-tools.js";
@@ -18,6 +19,8 @@ import {
   type LocalRemoteShellSpawn,
   type LocalRemoteShellSpawnResult,
 } from "./remote-fs-bridge.test-helpers.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function shellResult(stdout: string) {
   return { stdout: Buffer.from(stdout), stderr: Buffer.alloc(0), code: 0 };
@@ -80,6 +83,87 @@ function createWorkspaceReadBridge(workspaceDir: string) {
     runtime,
   });
 }
+
+describe("remote pinned read sources", () => {
+  it.runIf(process.platform !== "win32")(
+    "does not classify a parent alias into a protected mount as workspace memory",
+    async () => {
+      const workspaceDir = await fs.realpath(tempDirs.make("remote-protected-read-"));
+      const protectedDir = path.join(workspaceDir, "protected");
+      await fs.mkdir(protectedDir);
+      await fs.writeFile(path.join(protectedDir, "USER.md"), "protected file");
+      await fs.symlink(protectedDir, path.join(workspaceDir, "alias"), "dir");
+      const { runtime } = createLocalRemoteRuntime({
+        remoteWorkspaceDir: workspaceDir,
+        remoteAgentWorkspaceDir: workspaceDir,
+      });
+      const bridge = createRemoteShellSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          readOnlyResourceMounts: [{ hostPath: protectedDir, containerPath: protectedDir }],
+        }),
+        runtime,
+      });
+      await expect(bridge.readFileWithSource!({ filePath: "alias/USER.md" })).resolves.toEqual({
+        data: Buffer.from("protected file"),
+        canonicalPath: path.join(protectedDir, "USER.md"),
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each(["alias", "canonical-parent"] as const)(
+    "keeps read provenance bound to the bytes when the %s is swapped",
+    async (swap) => {
+      const workspaceDir = await fs.realpath(tempDirs.make("openclaw-remote-read-source-"));
+      const original = path.join(workspaceDir, "original");
+      const replacement = path.join(workspaceDir, "replacement");
+      const alias = path.join(workspaceDir, "alias");
+      await fs.mkdir(original);
+      await fs.mkdir(replacement);
+      await fs.writeFile(path.join(original, "MEMORY.md"), "original bytes");
+      await fs.writeFile(path.join(replacement, "MEMORY.md"), "replacement bytes");
+      await fs.symlink(original, alias, "dir");
+      const runRemoteShellScript = createLocalRemoteShellScriptRunner();
+      let swapped = false;
+      const bridge = createRemoteShellSandboxFsBridge({
+        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+        runtime: {
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+          async runRemoteShellScript(command) {
+            // Canonicalization has finished; the unmodified guest reader runs next.
+            if (command.args?.[0] === "read" && !swapped) {
+              swapped = true;
+              if (swap === "alias") {
+                await fs.unlink(alias);
+                await fs.symlink(replacement, alias, "dir");
+              } else {
+                await fs.rename(original, path.join(workspaceDir, "moved-original"));
+                await fs.symlink(replacement, original, "dir");
+              }
+            }
+            return runRemoteShellScript(command);
+          },
+        },
+      });
+      if (!bridge.readFileWithSource) {
+        throw new Error("The remote bridge must preserve read provenance.");
+      }
+      const read = bridge.readFileWithSource({ filePath: "alias/MEMORY.md", maxBytes: 100 });
+      if (swap === "alias") {
+        await expect(read).resolves.toEqual({
+          data: Buffer.from("original bytes"),
+          canonicalPath: path.join(original, "MEMORY.md"),
+          workspaceRelativePath: "original/MEMORY.md",
+        });
+      } else {
+        await expect(read).rejects.toThrow(/not a directory|symbolic links|too many levels|ELOOP/i);
+      }
+      expect(swapped).toBe(true);
+    },
+  );
+});
 
 describe("remote sandbox fs bridge", () => {
   it.each([false, true])(

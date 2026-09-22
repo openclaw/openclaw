@@ -9,7 +9,7 @@ import {
   COMPACTION_SUMMARY_SUFFIX,
   bashExecutionToText,
 } from "../runtime/index.js";
-import { estimateToolResultTextChars } from "./tool-result-text-budget.js";
+import { prepareToolResultTextChars } from "./tool-result-text-budget.js";
 
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
@@ -82,9 +82,7 @@ function estimateToolResultContentChars(content: unknown[]): number {
   let chars = 0;
   for (const block of content) {
     if (isTextBlock(block)) {
-      chars += estimateToolResultTextChars(block.text, {
-        minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
-      });
+      chars += prepareToolResultTextChars(block, block.text, TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE);
     } else if (isImageBlock(block)) {
       chars += TOOL_IMAGE_CHARS;
     } else {

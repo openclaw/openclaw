@@ -17,6 +17,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseSchema,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
@@ -55,8 +56,6 @@ import {
 
 const resumeSubagentRun = vi.hoisted(() => vi.fn());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const discardTerminalDelivery = (entry: SubagentRunRecord, completedAt: number) =>
-  SubagentLifecycleController.discardTerminalDelivery(entry, completedAt);
 
 vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun }));
 
@@ -797,7 +796,7 @@ describe("atomic subagent completion admission store", () => {
     });
   });
 
-  it("reloads a blocked text completion from SQLite before canonical owner redrive", async () => {
+  it("repairs a blocked legacy text completion with Doctor before canonical owner redrive", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
       closeOpenClawStateDatabaseForTest();
       database = openOpenClawStateDatabase();
@@ -863,6 +862,7 @@ describe("atomic subagent completion admission store", () => {
       resetTaskRegistryForTests({ persist: false });
       subagentRuns.clear();
       closeOpenClawStateDatabaseForTest();
+      expect(repairOpenClawStateDatabaseSchema().warnings).toEqual([]);
       database = openOpenClawStateDatabase();
       queueContext = captureOpenClawStateWorkerContext({
         path: database.path,
@@ -977,7 +977,7 @@ describe("atomic subagent completion admission store", () => {
       expect(resumeSubagentRun).not.toHaveBeenCalled();
       const discardInsideTransaction = vi.fn((entry: SubagentRunRecord, completedAt: number) => {
         expect(database.db.isTransaction).toBe(true);
-        discardTerminalDelivery(entry, completedAt);
+        SubagentLifecycleController.discardTerminalDelivery(entry, completedAt);
       });
       database.db.exec(`
         CREATE TRIGGER fail_dismissed_task_persist

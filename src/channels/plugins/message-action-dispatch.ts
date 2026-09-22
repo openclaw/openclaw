@@ -5,6 +5,7 @@
  */
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
+import { assertOutboundHandoffCurrent } from "../../infra/outbound/deliver-handoff.js";
 import {
   prepareMessageActionWriteAuthority,
   withMessageActionWriteAuthority,
@@ -207,10 +208,11 @@ function resolveScheduledMessageActionAccess(params: {
   if (!authority) {
     return undefined;
   }
-  authority.assertCurrent();
+  const assertCurrent = authority.assertSourceCurrent ?? authority.assertCurrent;
+  assertCurrent();
   const policy = authority.policy;
   if (policy.mode === "trusted") {
-    return { kind: "trusted-operator", assertCurrent: authority.assertCurrent };
+    return { kind: "trusted-operator", assertCurrent };
   }
   if (!params.accountId || normalizeAccountId(params.accountId) !== policy.ownerAccountId) {
     throw new Error(
@@ -230,7 +232,7 @@ function resolveScheduledMessageActionAccess(params: {
         "Scheduled Discord channel-edit requires its authenticated requester account and channel.",
       );
     }
-    return { kind: "account", channelRequester: requester, assertCurrent: authority.assertCurrent };
+    return { kind: "account", channelRequester: requester, assertCurrent };
   }
   const origin = policy.ownerOrigin;
   if (
@@ -242,7 +244,7 @@ function resolveScheduledMessageActionAccess(params: {
       `Scheduled ${params.channel}:${params.action} requires matching recorded creator origin.`,
     );
   }
-  return { kind: "account", assertCurrent: authority.assertCurrent };
+  return { kind: "account", assertCurrent };
 }
 
 function resolveMessageActionReadEnforcement(params: {
@@ -540,15 +542,6 @@ function prepareScheduledMessageWriteContext(
   if (!policy || !ctx.messageActionAuthorization?.scheduled) {
     return undefined;
   }
-  if (
-    policy === "provider" &&
-    prepared.enforcement.kind === "provider-owned" &&
-    prepared.enforcement.pluginTrust === "bundled" &&
-    !prepared.plugin.actions?.writeAuthorityActions?.includes(action)
-  ) {
-    // Retain existing bundled provider admission until its adapter opts into this fence.
-    return undefined;
-  }
   const accountId =
     ctx.accountId ?? resolveChannelDefaultAccountId({ plugin: prepared.plugin, cfg: ctx.cfg });
   const access = resolveScheduledMessageActionAccess({
@@ -730,7 +723,7 @@ export async function dispatchChannelMessageAction(
       ) {
         return null;
       }
-      authorizedActionContext.assertDirectAdapterHandoff?.();
+      assertOutboundHandoffCurrent(authorizedActionContext.assertDirectAdapterHandoff);
       prepared.assertReadAuthorityCurrent?.();
       if (typeof match === "function") {
         prepared.assertAliasAuthorityCurrent();

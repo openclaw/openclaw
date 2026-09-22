@@ -5,11 +5,11 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerLaunchPlan } from "../worker/launch-descriptor.js";
+import { nodeWorkerPlanHash } from "../worker/node-supervisor-protocol.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
-import {
-  nodeWorkerPlanHash,
-  type NodeWorkerLaunchInput,
-  type NodeWorkerSupervisorIdentity,
+import type {
+  NodeWorkerLaunchInput,
+  NodeWorkerSupervisorIdentity,
 } from "./node-worker-supervisor-contract.js";
 
 const TEST_BUNDLE_HASH = "a".repeat(64);
@@ -35,6 +35,7 @@ let retained = false;
 let currentTurn;
 let disposed = false;
 let started = false;
+let lineageFds = [];
 let resolveStart;
 const start = new Promise((resolve) => { resolveStart = resolve; });
 const hardTerminate = () => {
@@ -46,7 +47,7 @@ const hardTerminate = () => {
     });
     return;
   }
-  process.kill(-process.pid, "SIGKILL");
+  process.kill(process.pid, "SIGKILL");
 };
 const onMessage = (message) => {
   if (
@@ -54,13 +55,18 @@ const onMessage = (message) => {
     typeof message !== "object" ||
     message === null ||
     Array.isArray(message) ||
-    Object.keys(message).length !== 1 ||
-    message.type !== "openclaw-worker-start-v1"
+    Object.keys(message).some((key) => key !== "type" && key !== "lineageFds") ||
+    message.type !== "openclaw-worker-start-v1" ||
+    (Object.hasOwn(message, "lineageFds") && (
+      !Array.isArray(message.lineageFds) || message.lineageFds.length === 0 ||
+      message.lineageFds.some((fd) => !Number.isSafeInteger(fd) || fd < 3)
+    ))
   ) {
     hardTerminate();
     return;
   }
   started = true;
+  lineageFds = message.lineageFds ?? [];
   resolveStart();
 };
 const onDisconnect = () => {
@@ -124,6 +130,11 @@ if (mode === "admission-rearm") {
   return;
 } else if (mode === "tree" || mode === "tree-cancel-reject") {
   grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "grandchild.pid"), String(grandchild.pid));
+} else if (mode === "escaped-tree") {
+  grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true, stdio: ["ignore", "ignore", "ignore", ...lineageFds],
+  });
   fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "grandchild.pid"), String(grandchild.pid));
 } else if (mode === "background-start" || mode.startsWith("background-start:")) {
   const port = mode === "background-start" ? 0 : Number(mode.slice("background-start:".length));

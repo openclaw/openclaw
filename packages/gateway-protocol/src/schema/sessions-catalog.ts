@@ -90,6 +90,8 @@ export const SessionCatalogHostSchema = closedObject({
   label: NonEmptyString,
   kind: Type.Union([Type.Literal("gateway"), Type.Literal("node")]),
   connected: Type.Boolean(),
+  /** First snapshot is still loading; retain prior rows until the host publication arrives. */
+  pending: Type.Optional(Type.Boolean()),
   nodeId: Type.Optional(NonEmptyString),
   canStartTerminal: Type.Optional(Type.Boolean()),
   sessions: Type.Array(SessionCatalogSessionSchema),
@@ -109,6 +111,8 @@ export const SessionCatalogSchema = closedObject({
 const SessionsCatalogListCommonProperties = {
   agentId: Type.Optional(NonEmptyString),
   progressId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Opt into pending hosts completed by incremental publications for this progressId. */
+  allowPartialResults: Type.Optional(Type.Boolean()),
   search: Type.Optional(Type.String()),
   limitPerHost: Type.Optional(Type.Integer({ minimum: 1 })),
   hostIds: Type.Optional(Type.Array(NonEmptyString)),
@@ -116,6 +120,8 @@ const SessionsCatalogListCommonProperties = {
 
 export const SessionsCatalogListParamsSchema = closedObject({
   catalogId: Type.Optional(NonEmptyString),
+  /** Return catalog labels and capabilities with empty hosts, without listing sessions. */
+  metadataOnly: Type.Optional(Type.Boolean()),
   cursors: Type.Optional(Type.Record(NonEmptyString, Type.String())),
   ...SessionsCatalogListCommonProperties,
 });

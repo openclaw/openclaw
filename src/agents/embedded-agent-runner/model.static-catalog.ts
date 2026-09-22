@@ -451,9 +451,9 @@ async function loadBundledProviderStaticCatalogModels(params: {
   );
   const preparedResults = preparedEntries
     ? new Map(
-        preparedEntries.map(({ provider, result }) => [
+        preparedEntries.map(({ provider, providerConfigs }) => [
           `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
-          result,
+          providerConfigs,
         ]),
       )
     : undefined;
@@ -481,13 +481,12 @@ async function loadBundledProviderStaticCatalogModels(params: {
       continue;
     }
     const preparedResultKey = `${catalogProvider.pluginId ?? ""}\0${normalizeProviderId(catalogProvider.id)}`;
-    const result = preparedResults?.has(preparedResultKey)
-      ? preparedResults.get(preparedResultKey)
-      : await runProviderStaticCatalog({ provider: catalogProvider });
-    const normalized = normalizePluginDiscoveryResult({
-      provider: catalogProvider,
-      result,
-    });
+    const normalized =
+      preparedResults?.get(preparedResultKey) ??
+      normalizePluginDiscoveryResult({
+        provider: catalogProvider,
+        result: await runProviderStaticCatalog({ provider: catalogProvider }),
+      });
     for (const [providerIdRaw, providerConfig] of Object.entries(normalized)) {
       const provider = normalizeProviderId(providerIdRaw);
       // Empty catalogs never resolve request secrets or transport settings.

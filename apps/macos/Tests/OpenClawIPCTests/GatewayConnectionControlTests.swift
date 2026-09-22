@@ -549,12 +549,6 @@ private func assertConfigLookupCannotRecreateRoute(
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
         let storeKey = "autoqa-185-tls-recovery"
         GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
-        let route = try #require(GatewayTLSRoute.resolve(
-            url: url,
-            connectionMode: .remote,
-            configuredFingerprint: nil,
-            storedFingerprint: "old",
-            storeKey: storeKey))
         let failure = GatewayTLSValidationFailure(
             kind: .pinMismatch,
             host: "gateway.example.ts.net",
@@ -577,7 +571,12 @@ private func assertConfigLookupCannotRecreateRoute(
         })
         let connection = GatewayConnection(
             testEndpointProvider: {
-                GatewayConnection.EndpointSnapshot(
+                let route = try #require(GatewayTLSRoute.resolve(
+                    url: url,
+                    connectionMode: .remote,
+                    configuredFingerprint: nil,
+                    storeKey: storeKey))
+                return GatewayConnection.EndpointSnapshot(
                     config: (url: url, token: nil, password: nil),
                     tls: route,
                     routeAuthority: nil)

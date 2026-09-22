@@ -187,6 +187,7 @@ export function matchesFilter(
     return true;
   }
   return [
+    card.id,
     card.title,
     card.notes,
     card.agentId,

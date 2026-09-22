@@ -147,6 +147,7 @@ test("retains ACP batch bounds while clean lists and inline dirty metadata reuse
         ...runtimeEntries,
       });
       projection = await createSessionRowProjection({ cfg });
+      await projection.ensureMaterialized();
       acpSelects = 0;
       const rows = vi.spyOn(rowProjection, "readSessionRowInputs");
       const metadataReads = vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntry");

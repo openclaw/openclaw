@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import type {
   AcpSessionRuntimeOptions,
   EnsureManagerRuntimeHandle,
@@ -26,9 +27,11 @@ export type RuntimeOptionCommandServices = {
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 };
 
 type RuntimeOptionCommandContext = RuntimeOptionCommandServices & {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -38,6 +41,10 @@ type RuntimeOptionCommandContext = RuntimeOptionCommandServices & {
 export async function runSetManagerSessionRuntimeMode(
   params: RuntimeOptionCommandContext & { runtimeMode: string },
 ): Promise<AcpSessionRuntimeOptions> {
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
+  params.assertActive?.();
   const resolution = params.resolveSession({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -45,12 +52,18 @@ export async function runSetManagerSessionRuntimeMode(
   });
   const resolvedMeta = requireReadySessionMeta(resolution);
   const { runtime, handle, meta } = await params.ensureRuntimeHandle({
+    assertActive: params.assertActive,
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     meta: resolvedMeta,
+    isCurrentActor: params.isCurrentActor,
   });
+  params.assertActive?.();
   const capabilities = await resolveManagerRuntimeCapabilities({ runtime, handle });
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
   if (!capabilities.controls.includes("session/set_mode") || !runtime.setMode) {
     throw createUnsupportedControlError({
       backend: handle.backend || meta.backend,
@@ -59,14 +72,22 @@ export async function runSetManagerSessionRuntimeMode(
   }
 
   await withAcpRuntimeErrorBoundary({
-    run: async () =>
+    run: async () => {
+      if (!params.isCurrentActor()) {
+        throw createSupersededActorError(params.sessionKey);
+      }
+      params.assertActive?.();
       await runtime.setMode!({
         handle,
         mode: params.runtimeMode,
-      }),
+      });
+    },
     fallbackCode: "ACP_TURN_FAILED",
     fallbackMessage: "Could not update ACP runtime mode.",
   });
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
 
   const nextOptions = mergeRuntimeOptions({
     current: resolveRuntimeOptionsFromMeta(meta),
@@ -83,6 +104,10 @@ export async function runSetManagerSessionRuntimeMode(
 export async function runSetManagerSessionConfigOption(
   params: RuntimeOptionCommandContext & { key: string; value: string },
 ): Promise<AcpSessionRuntimeOptions> {
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
+  params.assertActive?.();
   const resolution = params.resolveSession({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -90,17 +115,23 @@ export async function runSetManagerSessionConfigOption(
   });
   const resolvedMeta = requireReadySessionMeta(resolution);
   const { runtime, handle, meta } = await params.ensureRuntimeHandle({
+    assertActive: params.assertActive,
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     meta: resolvedMeta,
+    isCurrentActor: params.isCurrentActor,
   });
+  params.assertActive?.();
   const inferredPatch = inferRuntimeOptionPatchFromConfigOption(params.key, params.value);
   const capabilities = await resolveManagerRuntimeCapabilities({
     runtime,
     handle,
     includeStatusConfigOptionKeys: true,
   });
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
   if (!capabilities.controls.includes("session/set_config_option") || !runtime.setConfigOption) {
     throw createUnsupportedControlError({
       backend: handle.backend || meta.backend,
@@ -121,6 +152,7 @@ export async function runSetManagerSessionConfigOption(
     );
   }
 
+  params.assertActive?.();
   const result = await withAcpRuntimeErrorBoundary({
     run: async () =>
       await runtime.setConfigOption!({
@@ -131,6 +163,9 @@ export async function runSetManagerSessionConfigOption(
     fallbackCode: "ACP_TURN_FAILED",
     fallbackMessage: "Could not update ACP runtime config option.",
   });
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
 
   const nextOptions = reconcileAcceptedRuntimeOptions(
     mergeRuntimeOptions({ current: resolveRuntimeOptionsFromMeta(meta), patch: inferredPatch }),
@@ -147,6 +182,10 @@ export async function runSetManagerSessionConfigOption(
 export async function runUpdateManagerSessionRuntimeOptions(
   params: RuntimeOptionCommandContext & { patch: Partial<AcpSessionRuntimeOptions> },
 ): Promise<AcpSessionRuntimeOptions> {
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
+  params.assertActive?.();
   const resolution = params.resolveSession({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -159,6 +198,7 @@ export async function runUpdateManagerSessionRuntimeOptions(
   });
   await persistManagerRuntimeOptions({
     ...params,
+    assertCommitAllowed: params.assertActive,
     options: nextOptions,
   });
   return nextOptions;
@@ -168,6 +208,10 @@ export async function runUpdateManagerSessionRuntimeOptions(
 export async function runResetManagerSessionRuntimeOptions(
   params: RuntimeOptionCommandContext,
 ): Promise<AcpSessionRuntimeOptions> {
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
+  params.assertActive?.();
   const resolution = params.resolveSession({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -185,10 +229,15 @@ export async function runResetManagerSessionRuntimeOptions(
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "Could not reset ACP runtime options.",
     });
-    params.runtimeHandles.clear(params);
+    if (!params.isCurrentActor()) {
+      throw createSupersededActorError(params.sessionKey);
+    }
+    params.runtimeHandles.clearIfHandleMatches({ ...params, handle: cached.handle });
   }
   await persistManagerRuntimeOptions({
     ...params,
+    // Closing an admitted handle owns its settlement; a metadata-only reset still needs authority.
+    assertCommitAllowed: cached ? undefined : params.assertActive,
     options: {},
   });
   return {};
@@ -197,17 +246,23 @@ export async function runResetManagerSessionRuntimeOptions(
 async function persistManagerRuntimeOptions(
   params: Pick<
     RuntimeOptionCommandContext,
-    "cfg" | "sessionKey" | "agentId" | "runtimeHandles" | "writeSessionMeta"
+    "cfg" | "sessionKey" | "agentId" | "runtimeHandles" | "writeSessionMeta" | "isCurrentActor"
   > & {
+    assertCommitAllowed?: () => void;
     options: AcpSessionRuntimeOptions;
   },
 ): Promise<void> {
   const normalized = normalizeRuntimeOptions(params.options);
   const hasOptions = Object.keys(normalized).length > 0;
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
   await params.writeSessionMeta({
+    assertCommitAllowed: params.assertCommitAllowed,
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    isCurrentActor: params.isCurrentActor,
     mutate: (current, entry) => {
       if (!entry || !current) {
         return null;
@@ -227,6 +282,9 @@ async function persistManagerRuntimeOptions(
     },
     failOnError: true,
   });
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
 
   const cached = params.runtimeHandles.get(params);
   if (!cached) {

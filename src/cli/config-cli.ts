@@ -228,13 +228,13 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
   let outputPath = CONFIG_PATH ?? "openclaw.json";
   try {
     const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
-    const { formatInvalidConfigRepairHint, strictlyValidateConfigSnapshotForCli } =
+    const { formatInvalidConfigRepairHint, finishConfigValidationForCli } =
       await import("./config-cli-validation.js");
-    const read = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
-    const snapshot = await strictlyValidateConfigSnapshotForCli(
-      read.snapshot,
-      read.pluginMetadataSnapshot,
-    );
+    const read = await readConfigFileSnapshotWithPluginMetadata({
+      observe: false,
+      prepareValidation: "strict",
+    });
+    const snapshot = await finishConfigValidationForCli(read);
     outputPath = snapshot.path;
     const shortPath = shortenHomePath(outputPath);
     if (!snapshot.exists) {

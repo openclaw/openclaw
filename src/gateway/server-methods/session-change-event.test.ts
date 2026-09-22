@@ -7,19 +7,30 @@ import {
 import { resolveChatPaneDesktopTarget } from "../../../ui/src/pages/chat/chat-pane-placement.js";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildProjectedAgentRunIndex,
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import { createPluginRuntimeCapabilityLease } from "../../plugins/capability-lease.js";
+import { createPluginServiceGatewayEvents } from "../../plugins/gateway-events.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import { createGatewayBroadcaster } from "../server-broadcast.js";
+import { createGatewayConnectionState } from "../server-connection-state.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import {
   bindSessionRowProjection,
   getSessionRowProjection,
 } from "../session-row-projection-access.js";
-import type { SessionRowProjection } from "../session-row-projection.js";
+import {
+  createSessionRowProjection,
+  type SessionRowProjection,
+} from "../session-row-projection.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { loadCachedSessionSharingSnapshot } from "../session-sharing-snapshot-cache.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
@@ -50,6 +61,16 @@ async function emitAndSettleLeading(...args: Parameters<typeof emitSessionsChang
   await vi.advanceTimersByTimeAsync(0);
 }
 
+function holdExactPreparation(projection: SessionRowProjection, ...ready: Promise<void>[]) {
+  const prepare = projection.withPreparedExactRows.bind(projection);
+  return vi
+    .spyOn(projection, "withPreparedExactRows")
+    .mockImplementation(async (queries, consume) => {
+      await ready.shift();
+      return prepare(queries, consume);
+    });
+}
+
 function createContext(
   receivers = new Set(["conn-1"]),
   config: OpenClawConfig = {},
@@ -61,6 +82,10 @@ function createContext(
     },
     capture: () => undefined,
     ensureMaterialized: async () => {},
+    withPreparedExactRows: async (_queries: unknown, consume: () => unknown) => ({
+      kind: "complete",
+      value: consume(),
+    }),
     snapshot: ({ key }: { key: string }) => ({ row: mocks.loadRow(key) }),
   };
   return {
@@ -154,6 +179,34 @@ afterEach(async () => {
 });
 
 describe("sessions.changed coalescing", () => {
+  it("publishes catalog-only changes without invalidating session projections or access", async () => {
+    const context = createContext();
+    const changed = vi.fn();
+    const unsubscribe = sessionChanges.subscribe(changed);
+    onTestFinished(unsubscribe);
+    const initialAccessRevision = readGatewayAccessRevision();
+
+    await emitAndSettleLeading(context, { reason: "groups" }, { catalogOnly: true });
+
+    expect(changed).not.toHaveBeenCalled();
+    expect(mocks.invalidate).not.toHaveBeenCalled();
+    expect(context.mentionInbox?.invalidate).not.toHaveBeenCalled();
+    expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ reason: "groups" }),
+      expect.any(Set),
+      expect.any(Object),
+    );
+
+    // Rename/delete use the same public reason but can change member rows.
+    await emitAndSettleLeading(context, { reason: "groups" });
+    expect(changed).toHaveBeenCalledWith({ all: true, scope: "sessions" });
+    expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+    expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 1);
+  });
+
   it("publishes the latest placement through coalesced unrelated mutations and clears it explicitly", async () => {
     const context = createContext();
     const sessionKey = "agent:main:cloud";
@@ -256,7 +309,7 @@ describe("sessions.changed coalescing", () => {
         event: "sessions.changed",
         payload: { sessionKey, reason: "patch" },
       });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       await vi.advanceTimersByTimeAsync(6_000);
       slow.resolve(initial);
       await vi.advanceTimersByTimeAsync(0);
@@ -303,12 +356,47 @@ describe("sessions.changed coalescing", () => {
     }
   });
 
+  it.each(["blocked", "failed"] as const)(
+    "publishes an exact row while unrelated bulk preparation is %s",
+    async (state) => {
+      const context = createContext();
+      const projection = getSessionRowProjection(context)!;
+      const unrelated = createDeferred();
+      const bulk = vi.spyOn(projection, "ensureMaterialized");
+      if (state === "blocked") {
+        bulk.mockReturnValue(unrelated.promise);
+      } else {
+        bulk.mockRejectedValue(new Error("unrelated bulk row failed"));
+      }
+      const bulkWork = projection.ensureMaterialized().catch(() => undefined);
+      const sessionKey = "agent:main:ready";
+      try {
+        await emitAndSettleLeading(context, { reason: "patch", sessionKey });
+        expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+          "sessions.changed",
+          expect.objectContaining({
+            session: expect.objectContaining({
+              key: sessionKey,
+              sessionId: `${sessionKey}-id`,
+              label: "first",
+            }),
+          }),
+          new Set(["conn-1"]),
+          expect.objectContaining({ sessionKeys: [sessionKey] }),
+        );
+        expect(bulk).toHaveBeenCalledOnce();
+      } finally {
+        unrelated.resolve();
+        await bulkWork;
+        await flushPendingSessionsChangedEvents(context);
+      }
+    },
+  );
+
   it("joins the latest deferred row during shutdown while preparation is blocked", async () => {
     const context = createContext();
     const prepared = createDeferred();
-    vi.spyOn(getSessionRowProjection(context)!, "ensureMaterialized").mockReturnValue(
-      prepared.promise,
-    );
+    holdExactPreparation(getSessionRowProjection(context)!, prepared.promise);
     emitSessionsChanged(context, { reason: "first", sessionKey: "agent:main:chat" });
     await Promise.resolve();
     emitSessionsChanged(context, { reason: "latest", sessionKey: "agent:main:chat" });
@@ -330,6 +418,289 @@ describe("sessions.changed coalescing", () => {
       { reason: "latest", session: { label: "committed-latest" } },
     ]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps an alias tombstone behind an admitted row publication", async () => {
+    const context = createContext(new Set(["conn-1"]), {
+      agents: { entries: { main: {} } },
+    });
+    const prepared = createDeferred();
+    holdExactPreparation(getSessionRowProjection(context)!, prepared.promise);
+    emitSessionsChanged(context, {
+      reason: "patch",
+      sessionKey: "main",
+      agentId: "main",
+      sessionId: "removed",
+    });
+    await Promise.resolve();
+    emitSessionsChanged(context, {
+      reason: "delete",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      sessionId: "removed",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const earlyPublications = vi.mocked(context.broadcastToConnIds).mock.calls.length;
+    prepared.resolve();
+    await flushPendingSessionsChangedEvents(context);
+    expect(earlyPublications).toBe(0);
+    expect(
+      vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
+    ).toMatchObject([
+      { reason: "patch", sessionId: "removed" },
+      { reason: "delete", sessionId: "removed" },
+    ]);
+  });
+
+  it("preserves a trailing tombstone before a replacement generation", async () => {
+    const context = createContext();
+    const sessionKey = "agent:main:chat";
+    await emitAndSettleLeading(context, { reason: "patch", sessionKey, sessionId: "removed" });
+    emitSessionsChanged(context, { reason: "delete", sessionKey, sessionId: "removed" });
+    emitSessionsChanged(context, { reason: "create", sessionKey, sessionId: "replacement" });
+    mocks.loadRow.mockReturnValue({ key: sessionKey, sessionId: "replacement" });
+    await flushPendingSessionsChangedEvents(context);
+    const payloads = vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload);
+    expect(payloads).toMatchObject([
+      { reason: "patch", sessionId: "removed" },
+      { reason: "delete", sessionId: "removed" },
+      { reason: "create", sessionId: "replacement", session: { sessionId: "replacement" } },
+    ]);
+    expect(payloads[1]).not.toHaveProperty("session");
+  });
+
+  it("joins a different session admitted while shutdown is draining", async () => {
+    const context = createContext();
+    const first = createDeferred();
+    const second = createDeferred();
+    holdExactPreparation(getSessionRowProjection(context)!, first.promise, second.promise);
+    emitSessionsChanged(context, { reason: "patch", sessionKey: "agent:main:first" });
+    await Promise.resolve();
+    let drained = false;
+    const drain = flushPendingSessionsChangedEvents(context).then(() => {
+      drained = true;
+    });
+    emitSessionsChanged(context, { reason: "patch", sessionKey: "agent:main:second" });
+    await Promise.resolve();
+    first.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    const drainedBeforeSecond = drained;
+    second.resolve();
+    await drain;
+    expect(drainedBeforeSecond).toBe(false);
+    expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([true, false])(
+    "bounds held generation churn for roster and plugins (tombstones: %s)",
+    async (tombstones) => {
+      const context = createContext();
+      const sessionKey = "agent:main:churn";
+      const first = {
+        key: sessionKey,
+        sessionId: "generation-0",
+        kind: "direct" as const,
+        updatedAt: 1,
+      };
+      const latest = { ...first, sessionId: "generation-128", label: "latest", updatedAt: 2 };
+      let response = sessionsResult([first], 1);
+      const request = vi.fn(async () => response);
+      const client = createTestGatewayClient(request);
+      const { sessions, emitEvent } = createSessionCapabilityHarness(client.request.bind(client));
+      const broadcaster = createGatewayBroadcaster({ clients: new GatewayClientRegistry() });
+      const lease = createPluginRuntimeCapabilityLease("bounded-events");
+      const pluginEvents = createPluginServiceGatewayEvents({
+        pluginId: "bounded-events",
+        broadcast: vi.fn(),
+        lease,
+      });
+      const notices = vi.fn();
+      pluginEvents!.onSessionsChanged(notices);
+      vi.mocked(context.broadcastToConnIds).mockImplementation(
+        (event, payload, connIds, options) => {
+          broadcaster.broadcastToConnIds(event, payload, connIds, options);
+          emitEvent({ type: "event", event, payload });
+        },
+      );
+      const prepared = createDeferred();
+      const exactPreparation = holdExactPreparation(
+        getSessionRowProjection(context)!,
+        prepared.promise,
+      );
+      try {
+        await sessions.refresh({ agentId: "main", force: true });
+        const initialReads = request.mock.calls.length;
+        emitSessionsChanged(context, { reason: "patch", sessionKey, sessionId: first.sessionId });
+        await Promise.resolve();
+        for (let generation = 0; generation < 128; generation += 1) {
+          if (tombstones) {
+            emitSessionsChanged(context, {
+              reason: "delete",
+              sessionKey,
+              sessionId: `generation-${generation}`,
+            });
+          }
+          emitSessionsChanged(context, {
+            reason: "create",
+            sessionKey,
+            sessionId: `generation-${generation + 1}`,
+          });
+        }
+        expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+        response = sessionsResult([latest], 2);
+        mocks.loadRow.mockReturnValue(latest);
+        prepared.resolve();
+        await flushPendingSessionsChangedEvents(context);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(
+          vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
+        ).toMatchObject([
+          { reason: "patch", sessionId: "generation-0" },
+          ...(tombstones ? [{ reason: "delete", sessionId: "generation-0" }] : []),
+          { reason: "create", sessionId: "generation-128" },
+          { reason: "update" },
+        ]);
+        expect(vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1]).not.toHaveProperty(
+          "sessionKey",
+        );
+        expect(exactPreparation).toHaveBeenCalledTimes(2);
+        expect(notices).toHaveBeenCalledTimes(tombstones ? 3 : 2);
+        expect(notices).toHaveBeenLastCalledWith(
+          expect.objectContaining({ sessionKey, reason: "create", label: "latest" }),
+        );
+        expect(request).toHaveBeenCalledTimes(initialReads + 1);
+        expect(sessions.state.result?.sessions).toEqual([latest]);
+      } finally {
+        prepared.resolve();
+        await flushPendingSessionsChangedEvents(context);
+        sessions.dispose();
+        lease.revoke();
+      }
+    },
+  );
+
+  it("keeps persisted replacement identity through recipient projection", async () => {
+    vi.useRealTimers();
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = { agents: { entries: { main: {} } } };
+      const sessionKey = "agent:main:replacement";
+      const target = { agentId: "main", sessionKey };
+      replaceSessionEntrySync(target, {
+        sessionId: "original",
+        updatedAt: 1,
+        visibility: "shared",
+      });
+      const projection = await createSessionRowProjection({ cfg: config });
+      const context = createContext(new Set(["conn-1"]), config);
+      bindSessionRowProjection(context, () => projection);
+      const connection = createGatewayConnectionState({ bootId: "event-generation", cfg: config });
+      const send = vi.fn<(frame: string) => void>();
+      connection.clients.add({
+        connId: "conn-1",
+        usesSharedGatewayAuth: false,
+        connect: {
+          minProtocol: 4,
+          maxProtocol: 4,
+          client: { id: "test", mode: "test", version: "1", platform: "test" },
+          role: "operator",
+          scopes: ["operator.admin"],
+        },
+        socket: {
+          readyState: 1,
+          bufferedAmount: 0,
+          send,
+          close: vi.fn(),
+          terminate: vi.fn(),
+          on: vi.fn(),
+          off: vi.fn(),
+          once: vi.fn(),
+        },
+      });
+      const detach = connection.attachSessionRowProjection(projection);
+      context.broadcastToConnIds = vi.fn(connection.broadcastToConnIds);
+      const prepared = createDeferred();
+      try {
+        await projection.ensureMaterialized();
+        // A cold resident row may have no capture; the committed producer ID still fences it.
+        vi.spyOn(projection, "capture").mockReturnValueOnce(undefined);
+        const preparation = holdExactPreparation(projection, prepared.promise);
+        emitSessionsChanged(context, { reason: "patch", sessionKey, sessionId: "original" });
+        await Promise.resolve();
+        replaceSessionEntrySync(target, {
+          sessionId: "replacement",
+          updatedAt: 2,
+          visibility: "shared",
+        });
+        emitSessionsChanged(context, { reason: "delete", sessionKey, sessionId: "original" });
+        emitSessionsChanged(context, { reason: "create", sessionKey, sessionId: "replacement" });
+        prepared.resolve();
+        await flushPendingSessionsChangedEvents(context);
+        const payloads = vi
+          .mocked(context.broadcastToConnIds)
+          .mock.calls.map(([, payload]) => payload);
+        expect(payloads).toMatchObject([
+          { reason: "patch", sessionKey },
+          { reason: "delete", sessionId: "original" },
+          { reason: "create", session: { sessionId: "replacement" } },
+        ]);
+        expect(payloads[0]).not.toHaveProperty("session");
+        expect(payloads[1]).not.toHaveProperty("session");
+        expect(send.mock.calls.map(([frame]) => JSON.parse(frame).payload)).toMatchObject([
+          { reason: "delete", sessionId: "original" },
+          { reason: "create", sessionId: "replacement", session: { sessionId: "replacement" } },
+        ]);
+        preparation.mockRestore();
+
+        for (const failedCapture of [false, true]) {
+          send.mockClear();
+          const held = createDeferred();
+          const heldPreparation = holdExactPreparation(projection, held.promise);
+          const sessionId = failedCapture ? "recaptured-after-failure" : "recaptured-replacement";
+          try {
+            emitSessionsChanged(context, { reason: "patch", sessionKey });
+            await Promise.resolve();
+            if (failedCapture) {
+              vi.spyOn(projection, "capture").mockImplementationOnce(() => {
+                throw new Error("synthetic pending capture failure");
+              });
+            }
+            emitSessionsChanged(context, { reason: "send", sessionKey });
+            replaceSessionEntrySync(target, {
+              sessionId,
+              updatedAt: Date.now(),
+              visibility: "shared",
+            });
+            // Settled notices omit sessionId and coalesce with the queued generation.
+            emitSessionsChanged(context, { reason: "agent.input.settled", sessionKey });
+            held.resolve();
+            await flushPendingSessionsChangedEvents(context);
+            expect(
+              send.mock.calls
+                .map(([frame]) => JSON.parse(frame).payload)
+                .filter((payload) => payload.sessionKey === sessionKey),
+            ).toMatchObject([
+              {
+                reason: "agent.input.settled",
+                sessionKey,
+                sessionId,
+                session: { sessionId },
+              },
+            ]);
+          } finally {
+            held.resolve();
+            await flushPendingSessionsChangedEvents(context);
+            heldPreparation.mockRestore();
+          }
+        }
+      } finally {
+        prepared.resolve();
+        await flushPendingSessionsChangedEvents(context);
+        detach();
+        connection.mentionInbox.dispose();
+        projection.dispose();
+      }
+    });
   });
 
   it.each([
@@ -358,7 +729,11 @@ describe("sessions.changed coalescing", () => {
 
     await emitAndSettleLeading(context, { reason: "create", sessionKey: "agent:main:chat" });
     mocks.rowLabel = "latest";
-    await emitAndSettleLeading(context, { reason: "update", sessionKey: "agent:main:chat" });
+    await emitAndSettleLeading(context, {
+      reason: "patch",
+      sessionKey: "agent:main:chat",
+      catalogChanged: true,
+    });
     await emitAndSettleLeading(context, { reason: "send", sessionKey: "agent:main:chat" });
 
     expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
@@ -370,9 +745,14 @@ describe("sessions.changed coalescing", () => {
     expect(vi.mocked(context.broadcastToConnIds).mock.calls[1]?.[1]).toMatchObject({
       label: "latest",
       reason: "send",
+      catalogChanged: true,
     });
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 3);
     expect(mocks.invalidate).toHaveBeenCalledTimes(3);
+    await emitAndSettleLeading(context, { reason: "patch", sessionKey: "agent:main:chat" });
+    expect(vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1]).not.toHaveProperty(
+      "catalogChanged",
+    );
   });
 
   it.each([true, false])(

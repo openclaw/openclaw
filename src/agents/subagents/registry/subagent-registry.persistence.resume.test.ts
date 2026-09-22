@@ -1,25 +1,24 @@
 import { setImmediate as nextTask } from "node:timers/promises";
 // Subagent registry persistence-resume tests cover restoring SQLite-backed child runs.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { isPathInside } from "../../../infra/path-guards.js";
+import "./subagent-registry.persistence.mocks.test-support.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import {
-  bindGatewayContextResolver,
-  getGatewayContextResolver,
-} from "../../../plugins/runtime/gateway-request-scope.js";
+  announceSpy,
+  createSubagentPersistenceRuntime,
+  listFixtureAgentDatabases,
+} from "./subagent-registry.persistence-fixture.test-support.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { listOpenClawAgentDatabasesForTest as listSeedAgentDatabases } from "../../../state/openclaw-agent-db.test-support.js";
 import { closeOpenClawStateDatabaseForTest as closeSeedStateDatabase } from "../../../state/openclaw-state-db.js";
 import "./subagent-registry.mocks.shared.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../../tools/gateway-caller-context.js";
-import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
+import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { registerSubagentDismissedRetentionCases } from "./subagent-registry.persistence.retention.test-support.js";
 import {
-  createSubagentRegistryTestDeps,
   gateSubagentRequesterSettlement,
   settleSubagentRegistryPersistenceWork,
   withSubagentRegistryPersistenceState,
@@ -33,47 +32,27 @@ import {
 } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-type WakeRequester = SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"];
+type WakeRequester = typeof maybeWakeRequesterAfterAllChildrenSettled;
 type WakeParams = Parameters<WakeRequester>[0];
 
-const { announceSpy } = vi.hoisted(() => ({
-  announceSpy: vi.fn(async () => "delivered" as const),
-}));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-vi.mock("../announce/subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: announceSpy,
-}));
 let mod: typeof import("./subagent-registry.test-helpers.js");
 let callGatewayModule: typeof import("../../../gateway/call.js");
 let agentEventsModule: typeof import("../../../infra/agent-events.js");
-let registryDepsModule: typeof import("./subagent-registry-deps.js");
+let requesterSettleModule: typeof import("../announce/subagent-announce.requester-settle-wake.js");
+let registryConfigModule: typeof import("../../../config/config.js");
 let registrySessionCleanupModule: typeof import("../../../test-utils/session-state-cleanup.js");
 let registryAgentDbTestModule: typeof import("../../../state/openclaw-agent-db.test-support.js");
 let registryStateDbModule: typeof import("../../../state/openclaw-state-db.js");
-
-function listFixtureAgentDatabases(listDatabases: typeof listSeedAgentDatabases, stateDir: string) {
-  return listDatabases().filter((database) => isPathInside(stateDir, database.path));
-}
-
-function setRegistryDeps(extra: Partial<SubagentRegistryDeps> = {}) {
-  mod.testing.setDepsForTest(
-    createSubagentRegistryTestDeps({
-      callGateway: vi.mocked(callGatewayModule.callGateway),
-      ...extra,
-    }),
-  );
-}
+let bindGatewayContextResolver: typeof import("../../../plugins/runtime/gateway-request-scope.js").bindGatewayContextResolver;
+let getGatewayContextResolver: typeof import("../../../plugins/runtime/gateway-request-scope.js").getGatewayContextResolver;
+let getGatewayToolCallerIdentity: typeof import("../../tools/gateway-caller-context.js").getGatewayToolCallerIdentity;
+let withGatewayToolCallerIdentity: typeof import("../../tools/gateway-caller-context.js").withGatewayToolCallerIdentity;
 
 const readPersistedRun = (runId: string) => loadSubagentRegistryFromSqlite().get(runId);
 
 function activateRegistry() {
-  const recoveryRuntime = {
-    dispatchAgent: (params: Record<string, unknown>, timeoutMs?: number) =>
-      callGatewayModule.callGateway({ method: "agent", params, timeoutMs }),
-    waitForAgent: (params: Record<string, unknown>, timeoutMs?: number) =>
-      callGatewayModule.callGateway({ method: "agent.wait", params, timeoutMs }),
-    sendRecoveryNotice: vi.fn(),
-  };
+  const recoveryRuntime = createSubagentPersistenceRuntime(callGatewayModule.callGateway);
   mod.activateSubagentRegistry(
     () => ({ resolveGatewayContext: () => ({ recoveryRuntime }) }) as never,
   );
@@ -82,27 +61,39 @@ function activateRegistry() {
 describe("subagent registry persistence resume", () => {
   beforeAll(async () => {
     vi.resetModules();
+    ({ bindGatewayContextResolver, getGatewayContextResolver } =
+      await import("../../../plugins/runtime/gateway-request-scope.js"));
+    ({ getGatewayToolCallerIdentity, withGatewayToolCallerIdentity } =
+      await import("../../tools/gateway-caller-context.js"));
     mod = await import("./subagent-registry.test-helpers.js");
     callGatewayModule = await import("../../../gateway/call.js");
     agentEventsModule = await import("../../../infra/agent-events.js");
     registryStateDbModule = await import("../../../state/openclaw-state-db.js");
-    registryDepsModule = await import("./subagent-registry-deps.js");
+    requesterSettleModule = await import("../announce/subagent-announce.requester-settle-wake.js");
+    registryConfigModule = await import("../../../config/config.js");
     registryAgentDbTestModule = await import("../../../state/openclaw-agent-db.test-support.js");
     registrySessionCleanupModule = await import("../../../test-utils/session-state-cleanup.js");
   });
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+    registryConfigModule.setRuntimeConfigSnapshot({});
     announceSpy.mockClear();
     vi.mocked(callGatewayModule.callGateway).mockReset().mockResolvedValue({
       status: "ok",
       startedAt: 111,
       endedAt: 222,
     });
-    setRegistryDeps();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.mocked(agentEventsModule.onAgentEvent)
       .mockReset()
       .mockReturnValue(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearRuntimeConfigSnapshot();
+    registryConfigModule.clearRuntimeConfigSnapshot();
   });
 
   const withRegistryState = <T>(run: (stateDir: string) => Promise<T>) => {
@@ -111,7 +102,6 @@ describe("subagent registry persistence resume", () => {
       {
         stateDir,
         resetRegistry: () => mod.resetSubagentRegistryForTests({ persist: false }),
-        resetDeps: () => mod.testing.setDepsForTest(),
         closeDatabases: async () => {
           // The resumed registry owns a separate agent-DB cache after resetModules.
           // Agent cleanup releases leases through state DB writes, so close state DBs last.
@@ -279,12 +269,12 @@ describe("subagent registry persistence resume", () => {
       const run = createOrphanedRequiredDelivery("pending");
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
       const settlement = gateSubagentRequesterSettlement(
-        registryDepsModule.subagentRegistryDeps.maybeWakeRequesterAfterAllChildrenSettled,
+        requesterSettleModule.maybeWakeRequesterAfterAllChildrenSettled,
       );
-      mod.testing.setDepsForTest({
-        ...registryDepsModule.subagentRegistryDeps,
-        maybeWakeRequesterAfterAllChildrenSettled: settlement.run,
-      });
+      vi.spyOn(
+        requesterSettleModule,
+        "maybeWakeRequesterAfterAllChildrenSettled",
+      ).mockImplementation(settlement.run);
       try {
         mod.initSubagentRegistry();
         activateRegistry();
@@ -375,7 +365,10 @@ describe("subagent registry persistence resume", () => {
           });
           return true;
         });
-        setRegistryDeps({ maybeWakeRequesterAfterAllChildrenSettled: wakeRequester });
+        vi.spyOn(
+          requesterSettleModule,
+          "maybeWakeRequesterAfterAllChildrenSettled",
+        ).mockImplementation(wakeRequester);
         saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
         mod.initSubagentRegistry();
@@ -518,7 +511,10 @@ describe("subagent registry persistence resume", () => {
               params.completeBatch([params.settledEntry], 1, { delivered: true, path: "direct" });
               return true;
             });
-            setRegistryDeps({ maybeWakeRequesterAfterAllChildrenSettled: wakeRequester });
+            vi.spyOn(
+              requesterSettleModule,
+              "maybeWakeRequesterAfterAllChildrenSettled",
+            ).mockImplementation(wakeRequester);
             saveSubagentRegistryToSqlite(new Map(runs.map((run) => [run.runId, run])));
             mod.initSubagentRegistry();
             mod.activateSubagentRegistry(() => firstGateway as never);
@@ -625,7 +621,10 @@ describe("subagent registry persistence resume", () => {
               oldParams ??= params;
               return oldDone.promise;
             });
-            setRegistryDeps({ maybeWakeRequesterAfterAllChildrenSettled: wakeRequester });
+            vi.spyOn(
+              requesterSettleModule,
+              "maybeWakeRequesterAfterAllChildrenSettled",
+            ).mockImplementation(wakeRequester);
             saveSubagentRegistryToSqlite(new Map(batch.map((entry) => [entry.runId, entry])));
             mod.initSubagentRegistry();
             const anchor = mod.getSubagentRunByRunId("run-batch-anchor")!;
@@ -709,7 +708,9 @@ describe("subagent registry persistence resume", () => {
 
   it("keeps restored recovery dormant until the Gateway lifecycle activates it", async () => {
     const wakeRequester = vi.fn(async () => false);
-    setRegistryDeps({ maybeWakeRequesterAfterAllChildrenSettled: wakeRequester });
+    vi.spyOn(requesterSettleModule, "maybeWakeRequesterAfterAllChildrenSettled").mockImplementation(
+      wakeRequester,
+    );
 
     await withRegistryState(async (stateDir) => {
       const endedAt = Date.now();
@@ -779,9 +780,9 @@ describe("subagent registry persistence resume", () => {
       );
 
       const recoveryRuntime = {
+        ...createSubagentPersistenceRuntime(callGatewayModule.callGateway),
         dispatchAgent: vi.fn(),
         waitForAgent: vi.fn(async () => ({ status: "pending" })),
-        sendRecoveryNotice: vi.fn(),
       };
       let firstLifecycleOpen = true;
       const gatewayContext = {
@@ -810,25 +811,14 @@ describe("subagent registry persistence resume", () => {
         expect.objectContaining({ method: "agent.wait" }),
       );
 
-      firstLifecycleOpen = false;
-      expect(resolveGatewayContext()).toBe(gatewayContext);
-      expect(gatewayContext.resolveGatewayContext()).toBeUndefined();
-      expect(restoredGatewayContextResolver?.()).toBeUndefined();
-      const replacementRuntime = {
-        dispatchAgent: vi.fn(),
-        waitForAgent: vi.fn(async () => ({ status: "pending" })),
-        sendRecoveryNotice: vi.fn(),
-      };
-      const resolveReplacementContext = () =>
-        ({ resolveGatewayContext: () => ({ recoveryRuntime: replacementRuntime }) }) as never;
-      mod.activateSubagentRegistry(resolveReplacementContext);
-      mod.activateSubagentRegistry(resolveReplacementContext);
-      expect(getGatewayContextResolver(restoredRun!)).toBe(restoredGatewayContextResolver);
-      expect(wakeRequester).toHaveBeenCalledOnce();
-      expect(recoveryRuntime.waitForAgent).toHaveBeenCalledOnce();
-      expect(replacementRuntime.waitForAgent).not.toHaveBeenCalled();
-
+      const sweptWake = createDeferredCore<boolean>();
+      wakeRequester.mockImplementationOnce(() => {
+        sweptWake.resolve(false);
+        return sweptWake.promise;
+      });
       await mod.testing.runSweeperTickForTests();
+      await sweptWake.promise;
+      wakeRequester.mockClear();
       expect(callGatewayModule.callGateway).toHaveBeenCalledTimes(1);
       expect(callGatewayModule.callGateway).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -839,6 +829,27 @@ describe("subagent registry persistence resume", () => {
           }),
         }),
       );
+
+      firstLifecycleOpen = false;
+      expect(resolveGatewayContext()).toBe(gatewayContext);
+      expect(gatewayContext.resolveGatewayContext()).toBeUndefined();
+      expect(restoredGatewayContextResolver?.()).toBeUndefined();
+      const replacementRuntime = {
+        ...createSubagentPersistenceRuntime(callGatewayModule.callGateway),
+        dispatchAgent: vi.fn(),
+        waitForAgent: vi.fn(async () => ({ status: "pending" })),
+      };
+      const resolveReplacementContext = () =>
+        ({ resolveGatewayContext: () => ({ recoveryRuntime: replacementRuntime }) }) as never;
+      mod.activateSubagentRegistry(resolveReplacementContext);
+      mod.activateSubagentRegistry(resolveReplacementContext);
+      expect(getGatewayContextResolver(restoredRun!)).toBe(restoredGatewayContextResolver);
+      expect(wakeRequester).not.toHaveBeenCalled();
+      expect(recoveryRuntime.waitForAgent).toHaveBeenCalledOnce();
+      expect(replacementRuntime.waitForAgent).not.toHaveBeenCalled();
+
+      await mod.testing.runSweeperTickForTests();
+      expect(callGatewayModule.callGateway).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -866,7 +877,10 @@ describe("subagent registry persistence resume", () => {
             });
           }),
       );
-      setRegistryDeps({ maybeWakeRequesterAfterAllChildrenSettled: wakeRequester });
+      vi.spyOn(
+        requesterSettleModule,
+        "maybeWakeRequesterAfterAllChildrenSettled",
+      ).mockImplementation(wakeRequester);
 
       await withRegistryState(async (stateDir) => {
         const endedAt = Date.now();
@@ -874,7 +888,7 @@ describe("subagent registry persistence resume", () => {
           const runId = `run-restored-wake-${index}`;
           return createDeliveredWake(
             runId,
-            activationSettlement ? undefined : { status: "pending", attemptCount: 0 },
+            requesterYielded ? undefined : { status: "pending", attemptCount: 0 },
             {
               childSessionKey: `agent:main:subagent:restored-wake-${index}`,
               requesterSessionKey: `agent:main:requester-${index}`,
@@ -961,7 +975,10 @@ describe("subagent registry persistence resume", () => {
     "settles a restored steered requester turn (yielded: %s)",
     async (requesterYielded) => {
       const wakeRequester = vi.fn(async () => false);
-      setRegistryDeps({ maybeWakeRequesterAfterAllChildrenSettled: wakeRequester });
+      vi.spyOn(
+        requesterSettleModule,
+        "maybeWakeRequesterAfterAllChildrenSettled",
+      ).mockImplementation(wakeRequester);
 
       await withRegistryState(async (stateDir) => {
         const endedAt = Date.now();
@@ -1023,10 +1040,15 @@ describe("subagent registry persistence resume", () => {
         } else {
           expect(restored?.requesterSettleWake).toBeUndefined();
         }
-        await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
-          timeout: 1_000,
-          interval: 10,
-        });
+        if (requesterYielded) {
+          await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
+            timeout: 1_000,
+            interval: 10,
+          });
+        } else {
+          await nextTask();
+          expect(wakeRequester).not.toHaveBeenCalled();
+        }
       });
     },
   );

@@ -3,9 +3,9 @@ import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createGatewayDatabaseWorkersVitestConfig(env?: Record<string, string | undefined>) {
   return createScopedVitestConfig(gatewayDatabaseWorkerTestFiles, {
-    dir: "src/gateway",
+    dir: ".",
     env,
-    fileParallelism: false,
+    fileParallelism: true,
     intersectIncludeFile: true,
     isolate: false,
     name: "gateway-database-workers",

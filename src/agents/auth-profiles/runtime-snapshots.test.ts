@@ -23,6 +23,8 @@ import {
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreMetadataRevision,
+  getRuntimeAuthProfileStoreSnapshotRevision,
   listOwnedRuntimeAuthProfileStoreSnapshots,
   noteRuntimeAuthProfileStorePersistedMutation,
   registerRuntimeAuthProfileStoreMutationListener,
@@ -193,7 +195,7 @@ describe("runtime auth profile snapshots", () => {
     },
   );
 
-  it("notifies listeners only when credential ownership changes", () => {
+  it("does not publish usage bookkeeping as an auth change", () => {
     const agentDir = "/tmp/openclaw-auth-runtime-listener";
     const listener = vi.fn();
     const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
@@ -359,6 +361,97 @@ describe("runtime auth profile snapshots", () => {
 
     clearRuntimeAuthProfileStoreSnapshots();
     expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(initialRevision + 2);
+  });
+
+  it.each(["set", "replace"] as const)(
+    "keeps metadata stable while %s publishes bookkeeping for rollback readers",
+    (publication) => {
+      const agentDir = "/tmp/openclaw-auth-metadata-revision";
+      const store = createStore("metadata");
+      setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+      const metadataRevision = getRuntimeAuthProfileStoreMetadataRevision(agentDir);
+      const missingRevision = getRuntimeAuthProfileStoreMetadataRevision("/tmp/absent-auth-owner");
+      const snapshotRevision = getRuntimeAuthProfileStoreSnapshotRevision(agentDir);
+      const listener = vi.fn();
+      const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+      const next = {
+        ...store,
+        runtimeInheritsMainState: true,
+        lastGood: { openai: "openai:default" },
+        usageStats: {
+          "openai:default": {
+            lastUsed: 2,
+            errorCount: 2,
+            failureCounts: { timeout: 2 },
+            lastFailureAt: 2,
+            lastProbeAt: 2,
+          },
+        },
+      };
+      try {
+        if (publication === "set") {
+          setRuntimeAuthProfileStoreSnapshot(next, agentDir);
+        } else {
+          replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: next }]);
+        }
+        expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toEqual(next);
+        expect(getRuntimeAuthProfileStoreSnapshotRevision(agentDir)).toBeGreaterThan(
+          snapshotRevision,
+        );
+        expect(getRuntimeAuthProfileStoreMetadataRevision(agentDir)).toBe(metadataRevision);
+        expect(getRuntimeAuthProfileStoreMetadataRevision("/tmp/absent-auth-owner")).toBe(
+          missingRevision,
+        );
+        expect(listener).not.toHaveBeenCalled();
+      } finally {
+        unregister();
+        clearRuntimeAuthProfileStoreSnapshots();
+      }
+    },
+  );
+
+  it.each([
+    { cooldownUntil: 30_000 },
+    { cooldownReason: "auth" as const },
+    { cooldownModel: "second" },
+    { blockedUntil: 30_000 },
+    { blockedScope: "model" as const },
+    { blockedModel: "second" },
+    { disabledUntil: 30_000 },
+    { disabledReason: "auth_permanent" as const },
+  ])("publishes availability changes %j with stable credential ownership", (change) => {
+    const agentDir = "/tmp/openclaw-auth-availability-revision";
+    const store = createStore("availability");
+    setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+    const metadataRevision = getRuntimeAuthProfileStoreMetadataRevision(agentDir);
+    const credentialRevision = getRuntimeAuthProfileStoreCredentialsRevision();
+    const listener = vi.fn();
+    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+    try {
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: {
+            ...store,
+            usageStats: { "openai:default": change },
+          },
+        },
+      ]);
+      expect(getRuntimeAuthProfileStoreMetadataRevision(agentDir)).toBeGreaterThan(
+        metadataRevision,
+      );
+      expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(credentialRevision);
+      expect(listener).toHaveBeenCalledExactlyOnceWith({
+        affectsInheritedStores: true,
+        profileSetChanged: false,
+      });
+      const blockedRevision = getRuntimeAuthProfileStoreMetadataRevision(agentDir);
+      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
+      expect(getRuntimeAuthProfileStoreMetadataRevision(agentDir)).toBeGreaterThan(blockedRevision);
+    } finally {
+      unregister();
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
   });
 
   it("isolates set/get/replace snapshot mutations without structuredClone", () => {

@@ -118,6 +118,7 @@ function launchApp(
   app: "browser" | "terminal" = "browser",
   ownerEpoch = 1,
   ssh = SSH,
+  args?: string[],
 ) {
   return manager.launchApp({
     environmentId: "worker:one",
@@ -128,6 +129,7 @@ function launchApp(
         ? {
             id: "browser",
             executablePath: "/usr/local/bin/openclaw-worker-browser",
+            ...(args ? { args } : {}),
             cdpPort: 9222,
           }
         : { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
@@ -653,6 +655,16 @@ describe("worker desktop tunnels", () => {
     await manager.stopAll();
   });
 
+  it("requires node transport for managed desktop accounts before spawning SSH", async () => {
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    await expect(acquire(manager, 1, { ...DESKTOP, username: "desktop-user" })).rejects.toThrow(
+      "requires the worker node transport",
+    );
+    expect(fake.starts).toEqual([]);
+    expect(fake.runs).toEqual([]);
+  });
+
   it("rejects Windows gateway hosts before spawning SSH", async () => {
     const fake = fakeRunner();
     const manager = createWorkerDesktopTunnels({ runner: fake.runner, platform: "win32" });
@@ -663,26 +675,32 @@ describe("worker desktop tunnels", () => {
     expect(fake.starts).toEqual([]);
   });
 
-  it("deduplicates one exact no-argument launcher command per app and epoch", async () => {
-    const result = deferred<SpawnResult>();
-    const fake = fakeRunner(async () => await result.promise);
-    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+  it.each([{ args: undefined }, { args: ["arg with spaces", "literal;$(text)"] }])(
+    "deduplicates one exact launcher with args $args per app and epoch",
+    async ({ args }) => {
+      const result = deferred<SpawnResult>();
+      const fake = fakeRunner(async () => await result.promise);
+      const manager = createWorkerDesktopTunnels({ runner: fake.runner });
 
-    const first = launchApp(manager);
-    const second = launchApp(manager);
-    await vi.waitFor(() => expect(fake.runs).toHaveLength(1), { interval: 1 });
-    const run = fake.runs[0]!;
-    expect(run.argv.at(-1)).toBe("'/usr/local/bin/openclaw-worker-browser'");
-    expect(run.argv.at(-1)).not.toContain("9222");
-    expect(run.argv.at(-1)).not.toContain(".cache/openclaw");
-    expect(run.options.timeoutMs).toBeGreaterThan(0);
-    expect(run.options.timeoutMs).toBeLessThanOrEqual(30_000);
-    expect(run.options.signal).toBeInstanceOf(AbortSignal);
-    result.resolve(success());
+      const first = launchApp(manager, "browser", 1, SSH, args);
+      const second = launchApp(manager, "browser", 1, SSH, args);
+      await vi.waitFor(() => expect(fake.runs).toHaveLength(1), { interval: 1 });
+      const run = fake.runs[0]!;
+      expect(run.argv.at(-1)).toBe(
+        "'/usr/local/bin/openclaw-worker-browser'" +
+          (args ? " 'arg with spaces' 'literal;$(text)'" : ""),
+      );
+      expect(run.argv.at(-1)).not.toContain("9222");
+      expect(run.argv.at(-1)).not.toContain(".cache/openclaw");
+      expect(run.options.timeoutMs).toBeGreaterThan(0);
+      expect(run.options.timeoutMs).toBeLessThanOrEqual(30_000);
+      expect(run.options.signal).toBeInstanceOf(AbortSignal);
+      result.resolve(success());
 
-    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
-    await manager.stopAll();
-  });
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+      await manager.stopAll();
+    },
+  );
 
   it.each(["browser", "terminal"] as const)(
     "does not replay a %s launch after ambiguous SSH exit 255",

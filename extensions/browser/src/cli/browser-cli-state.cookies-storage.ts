@@ -2,7 +2,10 @@
  * Browser CLI cookie and Web Storage commands.
  */
 import type { Command } from "commander";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   runBrowserCliRequest,
@@ -102,7 +105,7 @@ export function registerBrowserCookiesAndStorageCommands(
           parent,
           method: "GET",
           path: `/storage/${kind}`,
-          query: { key: normalizeOptionalString(key), targetId },
+          query: { key: readNonBlankString(key), targetId },
           errorPolicy: "inline",
           print: (result) => defaultRuntime.writeJson(result.values ?? {}),
         });

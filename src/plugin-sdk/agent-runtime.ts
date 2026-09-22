@@ -48,10 +48,18 @@ type LoadModelCatalogCompatibilityParams = LoadPreparedModelCatalogParams & {
   cacheOnly?: boolean;
   /** @deprecated Plugin metadata belongs to the published lifecycle generation. */
   metadataSnapshot?: Omit<PluginMetadataSnapshot, "owners" | "declaredProviderOwners"> & {
-    // Shipped snapshots may predate prepared provider ownership and normalization policies.
+    // Shipped snapshots may predate prepared provider ownership, auth contributions, and normalization policies.
     declaredProviderOwners?: PluginMetadataSnapshot["declaredProviderOwners"];
-    owners: Omit<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies"> &
-      Partial<Pick<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies">>;
+    owners: Omit<
+      PluginMetadataSnapshot["owners"],
+      "modelIdNormalizationPolicies" | "providerAuthContributions"
+    > &
+      Partial<
+        Pick<
+          PluginMetadataSnapshot["owners"],
+          "modelIdNormalizationPolicies" | "providerAuthContributions"
+        >
+      >;
   };
 };
 

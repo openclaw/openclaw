@@ -119,6 +119,9 @@ function normalizeSessionConversationResolution(
     return null;
   }
 
+  const parentConversationCandidates = normalizeUniqueSingleOrTrimmedStringList(
+    resolved.parentConversationCandidates ?? [],
+  );
   return {
     id: resolved.id.trim(),
     threadId: normalizeOptionalString(resolved.threadId),
@@ -126,13 +129,9 @@ function normalizeSessionConversationResolution(
     // candidate so nested topic/thread routes still collapse to their parent.
     baseConversationId:
       normalizeOptionalString(resolved.baseConversationId) ??
-      normalizeUniqueSingleOrTrimmedStringList(resolved.parentConversationCandidates ?? []).at(
-        -1,
-      ) ??
+      parentConversationCandidates.at(-1) ??
       resolved.id.trim(),
-    parentConversationCandidates: normalizeUniqueSingleOrTrimmedStringList(
-      resolved.parentConversationCandidates ?? [],
-    ),
+    parentConversationCandidates,
     hasExplicitParentConversationCandidates: Object.hasOwn(
       resolved,
       "parentConversationCandidates",
@@ -228,22 +227,19 @@ function resolveSessionConversationResolution(params: {
     return null;
   }
 
-  const parentConversationCandidates = normalizeUniqueSingleOrTrimmedStringList(
-    pluginResolved?.hasExplicitParentConversationCandidates
-      ? resolved.parentConversationCandidates
-      : (messaging?.resolveParentConversationCandidates?.({
-          kind: params.kind,
-          rawId,
-        }) ?? resolved.parentConversationCandidates),
-  );
-  const baseConversationId =
-    parentConversationCandidates.at(-1) ?? resolved.baseConversationId ?? resolved.id;
-
-  return {
-    ...resolved,
-    baseConversationId,
-    parentConversationCandidates,
-  };
+  if (!pluginResolved?.hasExplicitParentConversationCandidates) {
+    const legacyParents = messaging?.resolveParentConversationCandidates?.({
+      kind: params.kind,
+      rawId,
+    });
+    if (legacyParents != null) {
+      resolved.parentConversationCandidates =
+        normalizeUniqueSingleOrTrimmedStringList(legacyParents);
+    }
+  }
+  resolved.baseConversationId =
+    resolved.parentConversationCandidates.at(-1) ?? resolved.baseConversationId ?? resolved.id;
+  return resolved;
 }
 
 /**

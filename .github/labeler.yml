@@ -25,6 +25,11 @@
           - "docs/nodes/camera.md"
           - "docs/nodes/location-command.md"
           - "docs/platforms/linux.md"
+"plugin: code-mode-quickjs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/code-mode-quickjs/**"
+          - "docs/plugins/reference/code-mode-quickjs.md"
 "plugin: cua-computer":
   - changed-files:
       - any-glob-to-any-file:
@@ -34,6 +39,18 @@
       - any-glob-to-any-file:
           - "extensions/pixverse/**"
           - "docs/providers/pixverse.md"
+"plugin: typesafe":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/typesafe/**"
+          - "docs/plugins/typesafe.md"
+          - "docs/plugins/reference/typesafe.md"
+"plugin: onnx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/onnx/**"
+          - "docs/plugins/onnx.md"
+          - "docs/plugins/reference/onnx.md"
 "channel: a2a":
   - changed-files:
       - any-glob-to-any-file:
@@ -77,6 +94,13 @@
       - any-glob-to-any-file:
           - "extensions/imap/**"
           - "docs/automation/imap.md"
+"plugin: facetime":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/facetime/**"
+          - "docs/plugins/facetime.md"
+          - "docs/plugins/facetime-recovery.md"
+          - "docs/plugins/reference/facetime.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:
@@ -825,6 +849,11 @@
           - "extensions/fireworks/**"
           - "docs/providers/fireworks.md"
           - "docs/plugins/reference/fireworks.md"
+"extensions: github":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/github/**"
+          - "docs/plugins/github.md"
 "extensions: github-copilot":
   - changed-files:
       - any-glob-to-any-file:

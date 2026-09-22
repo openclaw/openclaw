@@ -2,13 +2,19 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
-import { observeCatalogWorkerTasks } from "./models-auth-catalog.test-support.js";
+import {
+  observeCatalogWorkerTasks,
+  waitForCatalogPublication,
+} from "./models-auth-catalog.test-support.js";
 
 describe("models.authRefresh learned catalog", () => {
-  it("models.authRefresh retains same-account rows while renewing and discovers a replacement account", async () => {
+  it("retains same-account rows while renewing and discovers a replacement account", async ({
+    signal,
+  }) => {
     const state = await createOpenClawTestState({
       label: "models-auth-refresh-catalog",
       env: {
@@ -22,6 +28,7 @@ describe("models.authRefresh learned catalog", () => {
     });
     const provider = "renewal-fixture";
     const catalogWork = observeCatalogWorkerTasks();
+    const initialRefreshReturned = createDeferred();
     const requests: string[] = [];
     let holdDiscovery = false;
     const heldResponses: Array<() => void> = [];
@@ -43,6 +50,11 @@ describe("models.authRefresh learned catalog", () => {
         response.end(JSON.stringify([{ id: `${account}-learned`, name: `${account} learned` }]));
       if (holdDiscovery) {
         heldResponses.push(reply);
+      } else if (requests.length === 1) {
+        // Keep publication pending after the foreground refresh has returned.
+        void initialRefreshReturned.promise.then(() => {
+          setTimeout(reply, 1_500);
+        });
       } else {
         reply();
       }
@@ -140,16 +152,28 @@ describe("models.authRefresh learned catalog", () => {
           });
           return result.models.filter((model) => model.provider === provider);
         };
-        // A refresh can return the static catalog while account discovery continues.
-        await list(true);
-        await expect
-          .poll(async () => (await list()).map((model) => model.id))
-          .toEqual(["account-one-learned"]);
+        const original = await waitForCatalogPublication({
+          signal,
+          start: async () => {
+            const result = await list(true);
+            initialRefreshReturned.resolve();
+            return result;
+          },
+          read: list,
+          ready: (models) => models.some((model) => model.id === "account-one-learned"),
+        });
+        expect(original.map((model) => model.id)).toEqual(["account-one-learned"]);
         expect(requests.length).toBeGreaterThan(0);
         expect(
           requests.every((authorization) => authorization === "Bearer account-one-original"),
         ).toBe(true);
-        await expect.poll(() => catalogWork.read().pendingTasks).toBe(0);
+        expect(
+          await waitForCatalogPublication({
+            signal,
+            read: async () => catalogWork.read().pendingTasks,
+            ready: (pending) => pending === 0,
+          }),
+        ).toBe(0);
         const initialRequests = requests.length;
         const initialTasks = catalogWork.read().completedTasks;
         const renewalRequest = once(discovery, "request");
@@ -166,7 +190,13 @@ describe("models.authRefresh learned catalog", () => {
         await renewalRequest;
         console.log("RENEWAL_REQUEST_MS", Date.now() - renewalStarted);
         expect(requests.slice(initialRequests)).toEqual(["Bearer account-one-renewed"]);
-        await expect.poll(() => catalogWork.read().pendingTasks).toBe(0);
+        expect(
+          await waitForCatalogPublication({
+            signal,
+            read: async () => catalogWork.read().pendingTasks,
+            ready: (pending) => pending === 0,
+          }),
+        ).toBe(0);
         expect(catalogWork.read()).toMatchObject({
           workersCreated: 1,
           completedTasks: initialTasks + 1,
@@ -178,9 +208,12 @@ describe("models.authRefresh learned catalog", () => {
         await client.request("models.authRefresh", { agentId: "main", operation: "login" });
         expect((await list()).map((model) => model.id)).not.toContain("account-one-learned");
         await replacementRequest;
-        await expect
-          .poll(async () => (await list()).map((model) => model.id))
-          .toEqual(["account-two-learned"]);
+        const replacement = await waitForCatalogPublication({
+          signal,
+          read: list,
+          ready: (models) => models.some((model) => model.id === "account-two-learned"),
+        });
+        expect(replacement.map((model) => model.id)).toEqual(["account-two-learned"]);
         expect(requests.slice(renewedRequests)).toEqual(["Bearer account-two-original"]);
         expect(catalogWork.read()).toMatchObject({
           maxWorkers: 1,
@@ -208,10 +241,12 @@ describe("models.authRefresh learned catalog", () => {
         expect((await list()).filter((model) => model.available)).toEqual([]);
         expect((await list()).map((model) => model.id)).not.toContain("account-two-learned");
       } finally {
+        initialRefreshReturned.resolve();
         await disconnectGatewayClient(client);
         await server.close();
       }
     } finally {
+      initialRefreshReturned.resolve();
       catalogWork.close();
       try {
         await new Promise<void>((resolve, reject) => {

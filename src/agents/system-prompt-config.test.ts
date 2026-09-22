@@ -79,6 +79,9 @@ function preparedOwner(
     modelCatalog: { entries, routeVariants: entries },
     configuredRuntimeModels,
     configuredModelAliases,
+    findConfiguredRuntimeModel: () => {
+      throw new Error("Prompt rendering must not select runtime models");
+    },
     inlineProviderModels: [],
     createStores: vi.fn<PreparedModelRuntimeSnapshot["createStores"]>(() => {
       throw new Error("Prompt rendering must not create runtime stores");

@@ -15,20 +15,13 @@ const describeCornerShape = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
 
-// The `@supports` condition base.css gates the whole refinement on. Rewriting
-// its value to one no engine implements is how this file reproduces Firefox
-// and Safari from the shipped stylesheet instead of a hand-copied fallback.
+// Rewrite the property in both feature queries and declarations: unsupported
+// engines also ignore corner-shape outside an @supports block.
 const SUPPORTS_CONDITION = "@supports (corner-shape: superellipse(1.5))";
-const UNSUPPORTED_CONDITION = "@supports (corner-shape: openclaw-unsupported-shape)";
 
 type CornerCase = {
   /** Corner radius an engine without `corner-shape` keeps drawing. */
   readonly circular: string;
-  /** Which physical corner to probe; most fixtures round all four equally,
-   * so "topLeft" (the default) stands in for the rest. Only a directional
-   * shorthand like .agent-chat__search-bar's `0 0 var(...) var(...)` needs
-   * "bottomLeft" — its top corners are permanently 0 either way. */
-  readonly corner?: "bottomLeft" | "topLeft";
   readonly markup: string;
   readonly selector: string;
   /** Radius once the 1.25 corner scale applies. */
@@ -145,10 +138,7 @@ const CORNER_CASES: readonly CornerCase[] = [
     superelliptical: "8.5px",
   },
   {
-    // The search bar rounds only its bottom corners. Probe bottom-left to
-    // verify its radius and shape stay aligned with the adjacent card.
     circular: "14px",
-    corner: "bottomLeft",
     markup: '<div class="agent-chat__search-bar"><input type="text" /></div>',
     selector: ".agent-chat__search-bar",
     superelliptical: "17.5px",
@@ -253,24 +243,20 @@ async function probeCorners(browser: Browser, fixtureFile: string): Promise<Corn
   try {
     await page.goto(`file://${fixtureFile}`);
     return await page.evaluate(
-      (probes: readonly { selector: string; corner: "bottomLeft" | "topLeft" }[]) => {
+      (probes: readonly string[]) => {
         return Object.fromEntries(
-          probes.map(({ selector, corner }) => {
+          probes.map((selector) => {
             const element = document.querySelector(selector);
             if (!element) {
               throw new Error(`Missing corner fixture element for ${selector}`);
             }
             const style = getComputedStyle(element);
-            const radius =
-              corner === "bottomLeft" ? style.borderBottomLeftRadius : style.borderTopLeftRadius;
+            const radius = style.borderTopLeftRadius;
             return [selector, { radius, shape: style.getPropertyValue("corner-shape") }];
           }),
         );
       },
-      ALL_CASES.map((corner) => ({
-        selector: corner.selector,
-        corner: corner.corner ?? "topLeft",
-      })),
+      ALL_CASES.map((corner) => corner.selector),
     );
   } finally {
     await page.close().catch(() => {});
@@ -312,7 +298,7 @@ beforeAll(async () => {
   fs.writeFileSync(superellipticalFixture, fixtureDocument(css), "utf8");
   fs.writeFileSync(
     circularFixture,
-    fixtureDocument(css.replaceAll(SUPPORTS_CONDITION, UNSUPPORTED_CONDITION)),
+    fixtureDocument(css.replaceAll("corner-shape:", "openclaw-unsupported-corner-shape:")),
     "utf8",
   );
   browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });

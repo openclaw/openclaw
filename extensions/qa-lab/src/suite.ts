@@ -1,4 +1,3 @@
-// QA Lab plugin module implements suite behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -461,7 +460,7 @@ export async function captureGatewayHeapSnapshotCheckpoint(params: {
     }
   };
   const deadlineMs = Date.now() + 20_000;
-  await params.gateway.signalProcess("SIGUSR2");
+  await params.gateway.signalProcess("SIGQUIT");
   let snapshotPath: string | undefined;
   while (Date.now() < deadlineMs) {
     const next = (await listGatewayHeapSnapshotFiles(params.gateway.tempRoot)).filter(

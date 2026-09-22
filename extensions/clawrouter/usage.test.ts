@@ -121,6 +121,7 @@ function mockFetchGuard(response: Response): MockedFunction<ClawRouterUsageFetch
 
 describe("ClawRouter usage", () => {
   it("maps the managed monthly budget and usage totals", async () => {
+    const signal = new AbortController().signal;
     const fetchGuard = mockFetchGuard(
       Response.json({
         budget: {
@@ -145,6 +146,7 @@ describe("ClawRouter usage", () => {
       token: "proxy-key",
       baseUrl: "https://clawrouter.example/v1",
       timeoutMs: 5000,
+      signal,
       fetchGuard,
     });
 
@@ -181,6 +183,7 @@ describe("ClawRouter usage", () => {
           },
         }),
         auditContext: "clawrouter.usage",
+        signal,
         mode: "trusted_env_proxy",
       }),
     );

@@ -117,7 +117,7 @@ export function buildDeveloperInstructions(
     // models (codex-rs spec_plan add_collaboration_tools). Without this hint
     // models cannot see spawn_agent and grab the always-direct sessions_spawn.
     nativeDelegationAvailable
-      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork." : ""}`
+      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork." : ""}`
       : undefined,
     hasSessionsYield && nativeDelegationAvailable
       ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."

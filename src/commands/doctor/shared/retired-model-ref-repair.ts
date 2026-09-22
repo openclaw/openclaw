@@ -33,6 +33,8 @@ import {
 } from "../../../config/model-provider-config.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { normalizePluginsConfig } from "../../../plugins/config-state.js";
+import { createInstalledPluginEnabledPredicate } from "../../../plugins/installed-plugin-index.js";
 import {
   loadManifestMetadataSnapshot,
   isManifestPluginAvailableForControlPlane,
@@ -63,6 +65,13 @@ export type ModelRefRepairResolver = (params: {
   authProfileOnly?: boolean;
 }) => ModelRefRepair;
 
+export type SessionModelRetirement = {
+  agentId: string;
+  resolve: ModelRefRepairResolver;
+  defaultModelRef?: string;
+  warnings: string[];
+};
+
 export function repairModelRefAuthProfile(
   modelRef: string,
   profileIdMap: ReadonlyMap<string, string> | undefined,
@@ -88,6 +97,7 @@ export function createRetiredModelRefRepairResolver(params: {
 }): ModelRefRepairResolver {
   const env = params.env ?? process.env;
   const agents = params.agentIds ?? listAgentIds(params.cfg);
+  const normalizedPluginsConfig = normalizePluginsConfig(params.cfg.plugins);
   const warn = (message: string) => {
     if (params.warnings && !params.warnings.includes(message)) {
       params.warnings.push(message);
@@ -100,12 +110,9 @@ export function createRetiredModelRefRepairResolver(params: {
       const metadataSnapshot =
         params.metadataSnapshot ??
         loadManifestMetadataSnapshot({ config: params.cfg, workspaceDir, env });
-      const eligiblePlugins = metadataSnapshot.plugins.filter((plugin) =>
-        isManifestPluginAvailableForControlPlane({
-          snapshot: metadataSnapshot,
-          plugin,
-          config: params.cfg,
-        }),
+      const isInstalledPluginEnabled = createInstalledPluginEnabledPredicate(
+        metadataSnapshot.index.plugins,
+        params.cfg,
       );
       const authViews = new Map<
         string | undefined,
@@ -143,7 +150,17 @@ export function createRetiredModelRefRepairResolver(params: {
               providerId: provider,
               pluginMetadataSnapshot: metadataSnapshot,
             });
-            const plugin = eligiblePlugins.find((candidate) => candidate.id === pluginId);
+            const plugin = metadataSnapshot.plugins.find(
+              (candidate) =>
+                candidate.id === pluginId &&
+                isManifestPluginAvailableForControlPlane({
+                  snapshot: metadataSnapshot,
+                  plugin: candidate,
+                  config: params.cfg,
+                  normalizedConfig: normalizedPluginsConfig,
+                  isInstalledPluginEnabled,
+                }),
+            );
             const catalog = Object.entries(plugin?.modelCatalog?.providers ?? {}).find(
               ([providerId]) => normalizeProviderId(providerId) === provider,
             )?.[1];

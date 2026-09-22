@@ -7,7 +7,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as sqliteTransaction from "../../infra/sqlite-transaction.js";
-import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
+import {
+  revokeSqliteReclamationCommit,
+  waitForSqliteReclamationParentRelease,
+  withSqliteReclamationAuthorization,
+} from "./session-accessor.sqlite-reclamation-commit.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -26,6 +30,7 @@ function waitForApproval(progress: Int32Array): void {
 function createCommitFixture(
   options: {
     holdAfterApproval?: boolean;
+    checkpointAfterCommit?: boolean;
     outcome?: "rollback" | "exit-before-commit" | "exit-after-commit";
   } = {},
 ) {
@@ -74,6 +79,106 @@ function createCommitFixture(
     },
   };
 }
+
+test("does not wait for a parent acknowledgment without a consumed commit approval", () => {
+  const gate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  waitForSqliteReclamationParentRelease(gate);
+  expect(Atomics.load(new Int32Array(gate), 0)).toBe(0);
+  revokeSqliteReclamationCommit(gate);
+  expect(() => waitForSqliteReclamationParentRelease(gate)).toThrow("commit was not authorized");
+});
+
+test.each([false, true])(
+  "joins parent probe release before checkpoint (release fails: %s)",
+  async (releaseFails) => {
+    const fixture = createCommitFixture({ checkpointAfterCommit: true });
+    const transact = sqliteTransaction.runSqliteImmediateTransactionSync;
+    let heldWriter = false;
+    let releaseProbe: (() => void) | undefined;
+    let probeStillHeld: (() => boolean) | undefined;
+    try {
+      await fixture.requested;
+      const checkpoint = once(fixture.worker, "message");
+      if (releaseFails) {
+        const open = nodeSqlite.openNodeSqliteDatabase;
+        vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce((...args) => {
+          const probe = open(...args);
+          const exec = probe.exec.bind(probe);
+          const close = probe.close.bind(probe);
+          probeStillHeld = () => probe.isOpen && probe.isTransaction;
+          releaseProbe = () => {
+            if (probe.isOpen) {
+              if (probe.isTransaction) {
+                exec("ROLLBACK");
+              }
+              close();
+            }
+          };
+          vi.spyOn(probe, "exec").mockImplementation((sql) => {
+            if (sql === "COMMIT" || sql === "ROLLBACK") {
+              throw new Error(`injected probe ${sql} failure`);
+            }
+            return exec(sql);
+          });
+          vi.spyOn(probe, "close").mockImplementation(() => {
+            throw new Error("injected probe close failure");
+          });
+          return probe;
+        });
+      }
+      vi.spyOn(sqliteTransaction, "runSqliteImmediateTransactionSync").mockImplementation(
+        (db, operation, options) =>
+          transact(
+            db,
+            () => {
+              const value = operation();
+              heldWriter = db.isTransaction;
+              const gate = new Int32Array(fixture.gate);
+              const committing = Atomics.load(gate, 0);
+              fixture.release();
+              Atomics.wait(gate, 0, committing, 5_000);
+              expect(Atomics.load(gate, 0)).not.toBe(committing);
+              return value;
+            },
+            options,
+          ),
+      );
+      await fixture.withAuthorization(
+        () => {},
+        async (authorize) => {
+          const errors = authorize();
+          if (releaseFails) {
+            expect(errors.map(String)).toEqual(
+              expect.arrayContaining([
+                "Error: injected probe COMMIT failure",
+                "Error: injected probe close failure",
+                "Error: SQLite commit-settlement probe remains in a transaction after close",
+              ]),
+            );
+            expect(probeStillHeld?.()).toBe(true);
+          } else {
+            expect(errors).toEqual([]);
+          }
+        },
+      );
+      const [observed] = await checkpoint;
+      expect(heldWriter).toBe(true);
+      expect(observed).toMatchObject(
+        releaseFails
+          ? {
+              error: "Error: SQLite parent commit-settlement probe did not release its writer lock",
+            }
+          : { checkpointCompleted: true, health: { state: "complete", walBytes: 0 } },
+      );
+      expect(await fixture.exited).toEqual([0]);
+      expect(Atomics.load(new Int32Array(fixture.gate), 0)).toBe(observed.parentRelease);
+      expect(fixture.value()).toBe(2);
+    } finally {
+      releaseProbe?.();
+      await fixture.close();
+    }
+  },
+);
 
 test.each(["transient", "permanent", "closed"] as const)(
   "joins a consumed commit despite a %s barrier failure",

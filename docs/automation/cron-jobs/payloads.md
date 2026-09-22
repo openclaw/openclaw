@@ -90,9 +90,17 @@ an invocation already admitted retains its configuration. Disabling or removing 
 withdrawing its `message` capability, or revoking its caller or plugin authority stops
 further affected reads from that occurrence, including pending reads before another
 provider request or result delivery. Re-enabling the job does not restore an
-occurrence's revoked access. Older agent-created jobs
-without recorded creator origin need to be recreated or explicitly reauthorized
-from a fresh authenticated creator turn.
+occurrence's revoked access.
+
+A new account-bound job created by a verified local administrator retains that
+authenticated local source, allowing provider-permitted reads through its saved
+creator account. Editing its `toolsAllow` cap from the same local source explicitly
+reauthorizes an existing job. Description, display-label, and exact no-op edits
+preserve the recorded source. Changes to model-facing names, prompts, tools, schedules,
+or other executable behavior need fresh source authorization and clear the old source
+when none is present. Remote management alone cannot supply local-source authorization,
+and older jobs without a provable origin remain blocked until reauthorized or recreated
+from a fresh authorized source.
 
 Scheduled turns can also `edit`, `delete`, `pin`, and `unpin` Discord messages.
 Agent-created jobs use their recorded creator account and Discord's delegated

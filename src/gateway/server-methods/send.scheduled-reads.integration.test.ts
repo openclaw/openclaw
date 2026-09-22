@@ -78,6 +78,10 @@ function accountPolicy(
   };
 }
 
+function localAccountPolicy(): Extract<ScheduledToolPolicyContext, { mode: "account" }> {
+  return { ...accountPolicy(), ownerOrigin: { kind: "local" } };
+}
+
 async function createFixture(state: OpenClawTestState) {
   let cfg: OpenClawConfig = {
     agents: { defaults: { workspace: state.workspaceDir } },
@@ -304,18 +308,20 @@ function expectDenied(response: Parameters<RespondFn>, reason: string) {
 describe("Gateway scheduled reads through an installed Discord plugin", () => {
   it("fetches fresh same-key results and rejects a repeat after permission revocation", async () => {
     await withFixture(async (fixture) => {
-      expectRead(await fixture.read(), "fresh-1");
-      expectRead(await fixture.read(), "fresh-2");
+      const client = fixture.createClient(localAccountPolicy());
+      expectRead(await fixture.read({ client }), "fresh-1");
+      expectRead(await fixture.read({ client }), "fresh-2");
       expect(fixture.providerRead).toHaveBeenCalledTimes(2);
       const requestsBeforeRevocation = fixture.httpRequests.length;
       fixture.revoke();
-      expectDenied(await fixture.read(), "authority is no longer active");
+      expectDenied(await fixture.read({ client }), "authority is no longer active");
       expect(fixture.httpRequests).toHaveLength(requestsBeforeRevocation);
     });
   });
 
   it("rejects a concurrent same-key read without joining a response accepted before revocation", async () => {
     await withFixture(async (fixture) => {
+      const client = fixture.createClient(localAccountPolicy());
       const accepted = createDeferred();
       const releaseResponse = createDeferred();
       fixture.providerRead.mockImplementationOnce(async () => {
@@ -331,7 +337,7 @@ describe("Gateway scheduled reads through an installed Discord plugin", () => {
         });
         return new Response(body, { headers: { "content-type": "application/json" } });
       });
-      const first = fixture.read();
+      const first = fixture.read({ client });
       let repeated: ReturnType<typeof fixture.read> | undefined;
       try {
         await withTestTimeout(
@@ -342,7 +348,7 @@ describe("Gateway scheduled reads through an installed Discord plugin", () => {
         expect(fixture.providerRead).toHaveBeenCalledOnce();
         const requestsBeforeRevocation = fixture.httpRequests.length;
         fixture.revoke();
-        repeated = fixture.read();
+        repeated = fixture.read({ client });
         expectDenied(
           await withTestTimeout(
             repeated,

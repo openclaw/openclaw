@@ -351,7 +351,7 @@ export type CronJobState = Omit<
   startupCatchupAtMs?: number;
   /** Exact paced completion slot protected from future-slot repair until consumed. */
   pacedNextRunAtMs?: number;
-  /** Exact recurring slot retained across an out-of-band manual force run. */
+  /** Exact occurrence retained across a manual run; authored one-shots survive pause. */
   forcePreservedNextRunAtMs?: number;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
@@ -431,12 +431,20 @@ export type CronToolsAllowProvenance =
       callerOrigin?: CronScheduledToolCallerOrigin;
       channelRequester?: CronAuthenticatedChannelRequester;
     }
-  | {
+  | ({
       version: 1;
       source: "authenticated-requester";
-      callerOrigin?: never;
-      channelRequester: CronAuthenticatedChannelRequester;
-    };
+    } & (
+      | {
+          /** Authenticated creator origin captured independently of the tool surface. */
+          callerOrigin: CronScheduledToolCallerOrigin;
+          channelRequester?: CronAuthenticatedChannelRequester;
+        }
+      | {
+          callerOrigin?: never;
+          channelRequester: CronAuthenticatedChannelRequester;
+        }
+    ));
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {

@@ -38,46 +38,14 @@ import {
 } from "./server-reload-contracts.js";
 import type { createGatewayReloadHandlers } from "./server-reload-hot.js";
 import {
-  captureSharedGatewaySessionGenerationOwnership,
-  claimSharedGatewaySessionGenerationIfOwned,
   disconnectStaleSharedGatewayAuthClients,
-  finalizeOwnedSharedGatewaySessionGeneration,
-  isSharedGatewaySessionGenerationOwnershipCurrent,
-  restoreOwnedCurrentSharedGatewaySessionGeneration,
   type SharedGatewaySessionGenerationOwnership,
 } from "./server-shared-auth-generation.js";
-import { publishRuntimeSecretsStateTransition } from "./server-startup-config.js";
 
 export function isRuntimeSecretsPreparationCurrent(
   preparation: CurrentRuntimeSecretsPreparation,
 ): boolean {
   return getActiveSecretsRuntimeSnapshotRevisionState() === preparation.expectedRevision;
-}
-
-async function activateSecretsRuntimeSnapshotIfCurrent(
-  snapshot: PreparedSecretsRuntimeSnapshot,
-  expectedRevision: number,
-  options?: {
-    canActivate?: () => boolean;
-    checkpoint?: () => Promise<void>;
-    onActivated?: () => void;
-    runtimeSourceConfig?: OpenClawConfig;
-  },
-): Promise<boolean> {
-  const runtime = await import("../secrets/runtime.js");
-  await options?.checkpoint?.();
-  if (options?.canActivate && !options.canActivate()) {
-    return false;
-  }
-  if (
-    !runtime.activateSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision, {
-      runtimeSourceConfig: options?.runtimeSourceConfig,
-    })
-  ) {
-    return false;
-  }
-  options?.onActivated?.();
-  return true;
 }
 
 async function restoreSecretsRuntimeSnapshotIfCurrent(
@@ -216,14 +184,10 @@ export function createManagedReloadSecretHandlers(options: {
         return {
           rollback: rollbackPublishedSource,
           commit: () =>
-            publishRuntimeSecretsStateTransition(
-              params.activateRuntimeSecrets,
-              sourceOnlySnapshot,
-              {
-                sourceOnly: true,
-                expectedRevision: committedSecretsRevision,
-              },
-            ),
+            params.activateRuntimeSecrets.publishStateTransition(sourceOnlySnapshot, {
+              sourceOnly: true,
+              expectedRevision: committedSecretsRevision,
+            }),
         };
       }
       const preparation = await tryPrepareRuntimeSecrets(
@@ -261,28 +225,19 @@ export function createManagedReloadSecretHandlers(options: {
       if (!previousRuntimeSourceConfig || !previousSecretsSnapshot) {
         throw new GatewayConfigReloadSupersededError();
       }
-      const activateIfCurrent = params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
-      const activated = activateIfCurrent
-        ? await activateIfCurrent(
-            preparedSecrets,
-            previousSecretsRevision,
-            {
-              reason: "reload",
-              activate: true,
-              deferStatePublication: true,
-              runtimeSourceConfig: sourceConfig,
-            },
-            undefined,
-            transactionOwnership.isCurrent,
-            transactionOwnership.checkpoint,
-          )
-        : (await activateSecretsRuntimeSnapshotIfCurrent(preparedSecrets, previousSecretsRevision, {
-              canActivate: transactionOwnership.isCurrent,
-              checkpoint: transactionOwnership.checkpoint,
-              runtimeSourceConfig: sourceConfig,
-            }))
-          ? preparedSecrets
-          : null;
+      const activated = await params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
+        preparedSecrets,
+        previousSecretsRevision,
+        {
+          reason: "reload",
+          activate: true,
+          deferStatePublication: true,
+          runtimeSourceConfig: sourceConfig,
+        },
+        undefined,
+        transactionOwnership.isCurrent,
+        transactionOwnership.checkpoint,
+      );
       if (!activated) {
         continue;
       }
@@ -305,8 +260,7 @@ export function createManagedReloadSecretHandlers(options: {
       }
       return {
         rollback: rollbackPublishedSource,
-        commit: () =>
-          publishRuntimeSecretsStateTransition(params.activateRuntimeSecrets, activated),
+        commit: () => params.activateRuntimeSecrets.publishStateTransition(activated),
       };
     }
   };
@@ -330,9 +284,7 @@ export function createManagedReloadSecretHandlers(options: {
       // Prepared secrets carry effective defaults; commit and rollback must retain authored provenance.
       const previousRuntimeSourceConfig = getRuntimeConfigSourceSnapshot() ?? undefined;
       const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-      const previousGenerationOwnership = captureSharedGatewaySessionGenerationOwnership(
-        params.sharedGatewaySessionGenerationState,
-      );
+      const previousGenerationOwnership = params.sharedGatewaySessionGenerationState.capture();
       const previousSharedGatewaySessionGeneration = previousGenerationOwnership.generation;
       const preparation = await tryPrepareRuntimeSecrets(
         prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
@@ -393,6 +345,49 @@ export function createManagedReloadSecretHandlers(options: {
         null;
       let runtimePolicyReconciled = false;
       let applicationStatus: Awaited<ReturnType<typeof applyHotReload>>;
+      const rollbackPublication = async () => {
+        const generationOwnership = publishedSharedGatewaySessionGeneration;
+        if (
+          !runtimeSecretsPublished ||
+          publishedSnapshotRevision === null ||
+          !generationOwnership
+        ) {
+          return;
+        }
+        let generationRestored = false;
+        const restoreGeneration = () => {
+          generationRestored = params.sharedGatewaySessionGenerationState.restoreCurrent(
+            generationOwnership,
+            previousSharedGatewaySessionGeneration,
+          );
+        };
+        let snapshotRestored = false;
+        if (previousSnapshot) {
+          snapshotRestored = await restoreSecretsRuntimeSnapshotIfCurrent(
+            previousSnapshot,
+            publishedSnapshotRevision,
+            prepared,
+            { runtimeSourceConfig: previousRuntimeSourceConfig, onActivated: restoreGeneration },
+          );
+        } else if (getActiveSecretsRuntimeSnapshotRevisionState() === publishedSnapshotRevision) {
+          clearSecretsRuntimeSnapshotState();
+          snapshotRestored = true;
+          restoreGeneration();
+        }
+        if (snapshotRestored) {
+          if (previousSnapshot && shouldRefreshContextWindowCache(plan)) {
+            await refreshContextWindowCache(previousSnapshot.config);
+          }
+          runtimeSecretsPublished = false;
+        }
+        if (generationRestored && sharedGatewaySessionGenerationChanged) {
+          disconnectStaleSharedGatewayAuthClients({
+            state: params.sharedGatewaySessionGenerationState,
+            clients: params.clients,
+            expectedGeneration: previousSharedGatewaySessionGeneration,
+          });
+        }
+      };
       try {
         const publication: GatewayHotReloadPublication = {
           isCurrent: transactionOwnership.isCurrent,
@@ -407,8 +402,7 @@ export function createManagedReloadSecretHandlers(options: {
           publish: async (commit, isCommitted) => {
             const claimGenerationOwnership = () => {
               publishedSharedGatewaySessionGeneration ??=
-                claimSharedGatewaySessionGenerationIfOwned(
-                  params.sharedGatewaySessionGenerationState,
+                params.sharedGatewaySessionGenerationState.claim(
                   previousGenerationOwnership,
                   nextSharedGatewaySessionGeneration,
                 );
@@ -433,6 +427,8 @@ export function createManagedReloadSecretHandlers(options: {
                   // Published policy remains authoritative if a later service handoff fails.
                   // Commit admission policy before irreversible PTY and socket eviction.
                   if (isCommitted()) {
+                    runtimeCommitted = true;
+                    transactionOwnership.markRuntimeCommitted(prepared.config, plan);
                     if (!runtimePolicyReconciled) {
                       params.commitRuntimePolicy(prepared.config);
                       await params.reconcileRuntimePolicy(prepared.config, "committed");
@@ -440,6 +436,7 @@ export function createManagedReloadSecretHandlers(options: {
                     }
                     if (sharedGatewaySessionGenerationChanged) {
                       disconnectStaleSharedGatewayAuthClients({
+                        state: params.sharedGatewaySessionGenerationState,
                         clients: params.clients,
                         expectedGeneration: nextSharedGatewaySessionGeneration,
                       });
@@ -448,104 +445,32 @@ export function createManagedReloadSecretHandlers(options: {
                 }
               } catch (err) {
                 if (!isCommitted()) {
-                  let generationRestored = false;
-                  let snapshotRestored = false;
-                  const generationOwnership = publishedSharedGatewaySessionGeneration;
-                  if (previousSnapshot && generationOwnership) {
-                    snapshotRestored = await restoreSecretsRuntimeSnapshotIfCurrent(
-                      previousSnapshot,
-                      publishedSnapshotRevision ?? -1,
-                      prepared,
-                      {
-                        runtimeSourceConfig: previousRuntimeSourceConfig,
-                        onActivated: () => {
-                          generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
-                            params.sharedGatewaySessionGenerationState,
-                            generationOwnership,
-                            previousSharedGatewaySessionGeneration,
-                          );
-                        },
-                      },
-                    );
-                  } else if (
-                    publishedSnapshotRevision !== null &&
-                    getActiveSecretsRuntimeSnapshotRevisionState() === publishedSnapshotRevision
-                  ) {
-                    clearSecretsRuntimeSnapshotState();
-                    snapshotRestored = true;
-                    if (generationOwnership) {
-                      generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
-                        params.sharedGatewaySessionGenerationState,
-                        generationOwnership,
-                        previousSharedGatewaySessionGeneration,
-                      );
-                    }
-                  }
-                  if (snapshotRestored) {
-                    if (previousSnapshot && shouldRefreshContextWindowCache(plan)) {
-                      await refreshContextWindowCache(previousSnapshot.config);
-                    }
-                    runtimeSecretsPublished = false;
-                  }
-                  if (generationRestored && sharedGatewaySessionGenerationChanged) {
-                    disconnectStaleSharedGatewayAuthClients({
-                      clients: params.clients,
-                      expectedGeneration: previousSharedGatewaySessionGeneration,
-                    });
-                  }
+                  await rollbackPublication();
                 }
                 throw err;
-              } finally {
-                if (isCommitted()) {
-                  runtimeCommitted = true;
-                  transactionOwnership.markRuntimeCommitted(prepared.config, plan);
-                }
               }
             };
-            const activateIfCurrent =
-              params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
             const canActivate = () => {
               transactionOwnership.assertInvokerOwned?.();
               return (
                 transactionOwnership.isCurrent() &&
-                isSharedGatewaySessionGenerationOwnershipCurrent(
-                  params.sharedGatewaySessionGenerationState,
-                  previousGenerationOwnership,
-                )
+                params.sharedGatewaySessionGenerationState.owns(previousGenerationOwnership)
               );
             };
-            if (activateIfCurrent) {
-              const activated = await activateIfCurrent(
-                prepared,
-                previousSnapshotRevision,
-                {
-                  reason: "reload",
-                  activate: true,
-                  runtimeSourceConfig: sourceConfig,
-                },
-                publishRuntime,
-                canActivate,
-                transactionOwnership.checkpoint,
-              );
-              if (!activated) {
-                throw new GatewayHotReloadStaleSecretsError();
-              }
-            } else {
-              if (
-                !(await activateSecretsRuntimeSnapshotIfCurrent(
-                  prepared,
-                  previousSnapshotRevision,
-                  {
-                    canActivate,
-                    checkpoint: transactionOwnership.checkpoint,
-                    onActivated: claimGenerationOwnership,
-                    runtimeSourceConfig: sourceConfig,
-                  },
-                ))
-              ) {
-                throw new GatewayHotReloadStaleSecretsError();
-              }
-              await publishRuntime();
+            const activated = await params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
+              prepared,
+              previousSnapshotRevision,
+              {
+                reason: "reload",
+                activate: true,
+                runtimeSourceConfig: sourceConfig,
+              },
+              publishRuntime,
+              canActivate,
+              transactionOwnership.checkpoint,
+            );
+            if (!activated) {
+              throw new GatewayHotReloadStaleSecretsError();
             }
           },
         };
@@ -575,59 +500,14 @@ export function createManagedReloadSecretHandlers(options: {
         if (runtimeCommitted) {
           throw err;
         }
-        if (runtimeSecretsPublished) {
-          let generationRestored = false;
-          let snapshotRestored = false;
-          const generationOwnership = publishedSharedGatewaySessionGeneration;
-          if (previousSnapshot && publishedSnapshotRevision !== null && generationOwnership) {
-            snapshotRestored = await restoreSecretsRuntimeSnapshotIfCurrent(
-              previousSnapshot,
-              publishedSnapshotRevision,
-              prepared,
-              {
-                runtimeSourceConfig: previousRuntimeSourceConfig,
-                onActivated: () => {
-                  generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
-                    params.sharedGatewaySessionGenerationState,
-                    generationOwnership,
-                    previousSharedGatewaySessionGeneration,
-                  );
-                },
-              },
-            );
-          } else if (
-            publishedSnapshotRevision !== null &&
-            generationOwnership &&
-            getActiveSecretsRuntimeSnapshotRevisionState() === publishedSnapshotRevision
-          ) {
-            clearSecretsRuntimeSnapshotState();
-            snapshotRestored = true;
-            generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
-              params.sharedGatewaySessionGenerationState,
-              generationOwnership,
-              previousSharedGatewaySessionGeneration,
-            );
-          }
-          if (snapshotRestored) {
-            if (previousSnapshot && shouldRefreshContextWindowCache(plan)) {
-              await refreshContextWindowCache(previousSnapshot.config);
-            }
-          }
-          if (generationRestored && sharedGatewaySessionGenerationChanged) {
-            disconnectStaleSharedGatewayAuthClients({
-              clients: params.clients,
-              expectedGeneration: previousSharedGatewaySessionGeneration,
-            });
-          }
-        }
+        await rollbackPublication();
         throw err;
       }
       // Runtime-secret refreshes can legitimately advance the snapshot
       // revision after this commit. Finalize only while this transaction's
       // generation is still current so a genuinely newer generation wins.
       if (publishedSharedGatewaySessionGeneration) {
-        finalizeOwnedSharedGatewaySessionGeneration(
-          params.sharedGatewaySessionGenerationState,
+        params.sharedGatewaySessionGenerationState.finalize(
           publishedSharedGatewaySessionGeneration,
         );
       }

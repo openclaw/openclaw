@@ -124,9 +124,7 @@ export type ConfigPatchOptions = {
 };
 
 export type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
-export type ConfigPatchBuilder = (
-  config: Readonly<Record<string, unknown>>,
-) => ConfigPatchBuildResult;
+type ConfigPatchBuilder = (config: Readonly<Record<string, unknown>>) => ConfigPatchBuildResult;
 // Gateway commitGatewayConfigWrite returns persisted hashes; only a no-op patch omits one.
 export type ConfigPatchAck =
   | { noop: true; config: Record<string, unknown> }
@@ -154,7 +152,7 @@ export type RuntimeConfigExternalMutationOptions<T = unknown> = {
   configWriteAck?: (value: T) => ConfigPatchAck;
 };
 
-export type RuntimeConfigDispatchOptions = {
+type RuntimeConfigDispatchOptions = {
   canDispatch?: () => boolean;
 };
 

@@ -16,6 +16,10 @@ const observer = path.resolve("scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
 const sibling = path.resolve("scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs");
 const secret = "sk-survivorMigrationCaptureSecret1234567890";
 const privateBody = "PRIVATE_TRANSCRIPT_CONFIG_AND_UNLISTED_FIELDS";
+const baselineGatewayLogs = [
+  "missing-load-path/baseline-gateway.log",
+  "missing-load-path/baseline-gateway-convergence-refusal.log",
+];
 const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
 function fixture() {
@@ -47,11 +51,11 @@ function write(file: string, value: unknown) {
 }
 
 function capture(f: ReturnType<typeof fixture>) {
-  const result = spawnSync(node, [observer, "capture", f.artifacts, "update-candidate", "1"], {
-    env: f.env,
-    encoding: "utf8",
-    timeout: 10_000,
-  });
+  const result = spawnSync(
+    node,
+    [observer, "capture", f.artifacts, "update-candidate", "1", "", f.artifacts],
+    { env: f.env, encoding: "utf8", timeout: 10_000 },
+  );
   expect(result.status, result.stderr).toBe(0);
   const output = path.join(f.root, "public");
   publishDiagnostics(f.artifacts, output, redactSensitiveText);
@@ -61,7 +65,44 @@ function capture(f: ReturnType<typeof fixture>) {
   return JSON.parse(text);
 }
 
-it("retains Doctor IPC refusal facts before the parent consumes its file and log prefix", () => {
+it("publishes redacted baseline Gateway and agent-turn failures", () => {
+  const f = fixture();
+  fs.mkdirSync(path.join(f.artifacts, "missing-load-path"));
+  for (const name of baselineGatewayLogs) {
+    fs.writeFileSync(path.join(f.artifacts, name), `Baseline startup failed: token=${secret}\n`);
+  }
+  for (const stage of ["baseline", "candidate"]) {
+    fs.writeFileSync(
+      path.join(f.artifacts, `legacy-operator-${stage}-turn.err`),
+      `Provider request failed during ${stage}: token=${secret}\n`,
+    );
+    fs.writeFileSync(
+      path.join(f.artifacts, `legacy-operator-${stage}-turn.out`),
+      `Agent ${stage} turn ended before completion: apiKey=${secret}\n`,
+    );
+  }
+  const report = capture(f);
+  for (const name of baselineGatewayLogs) {
+    expect(report.logs[name]).toContain("Baseline startup failed");
+  }
+  for (const stage of ["baseline", "candidate"]) {
+    expect(report.logs[`legacy-operator-${stage}-turn.err`]).toContain(
+      `Provider request failed during ${stage}`,
+    );
+    expect(report.logs[`legacy-operator-${stage}-turn.out`]).toContain(
+      `Agent ${stage} turn ended before completion`,
+    );
+  }
+});
+
+it.each([
+  { name: "truncated Doctor output", opaqueCopies: 1, omission: "truncated at a complete line" },
+  {
+    name: "an oversized opaque plugin field",
+    opaqueCopies: 8192,
+    omission: "input exceeds cap; omitted whole",
+  },
+])("retains Doctor and plugin assertion failures with $name", ({ opaqueCopies, omission }) => {
   const f = fixture();
   write(path.join(f.root, "package.json"), {
     name: "openclaw",
@@ -94,8 +135,95 @@ it("retains Doctor IPC refusal facts before the parent consumes its file and log
   });
   expect(child.status, child.stderr).toBe(1);
   fs.unlinkSync(resultPath);
-  write(path.join(f.artifacts, "update.json"), { padding: "prior step\n".repeat(3000), steps: [] });
+  const updateFile = path.join(f.artifacts, "update.json");
+  fs.writeFileSync(
+    updateFile,
+    JSON.stringify(
+      {
+        status: "ok",
+        after: { version: "2026.9.5" },
+        steps: [
+          { name: "openclaw doctor", exitCode: 0, stdoutTail: "Doctor output\n".repeat(3000) },
+        ],
+        postUpdate: {
+          plugins: {
+            status: "warning",
+            changed: true,
+            sync: {
+              changed: true,
+              switchedToBundled: [],
+              switchedToNpm: [],
+              warnings: [],
+              errors: [`plugin sync failure token=${secret}`],
+            },
+            npm: {
+              changed: true,
+              outcomes: [
+                {
+                  pluginId: "discord",
+                  status: "error",
+                  code: "fixture-repair",
+                  message: `token=${secret}`,
+                },
+                { pluginId: "discord", status: "updated", nextVersion: "2026.9.5" },
+              ],
+            },
+            integrityDrifts: [{ pluginId: "discord", action: "kept", spec: `token=${secret}` }],
+            privateBody: privateBody.repeat(opaqueCopies),
+          },
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  const checked = spawnSync(
+    node,
+    [
+      path.resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs"),
+      "assert-successful-update-json",
+      updateFile,
+      "2026.9.5",
+      f.artifacts,
+    ],
+    { env: f.env, encoding: "utf8", timeout: 10_000 },
+  );
+  expect(checked.status).toBe(1);
+  expect(checked.stderr).toContain("successful update failed plugin convergence");
+  const receipt = fs.readFileSync(
+    path.join(f.artifacts, "diagnostics/successful-update-check.json"),
+    "utf8",
+  );
+  expect(Buffer.byteLength(receipt)).toBeLessThan(256 * 1024);
+  expect(receipt).not.toContain(privateBody);
+  expect(JSON.parse(receipt)).toMatchObject({
+    availability: "captured",
+    outcome: "failed",
+    plugins: { status: "warning" },
+  });
   const report = capture(f);
+  expect(report.omissions["update.json"]).toContain(omission);
+  if (opaqueCopies > 1) {
+    expect(report.logs["update.json"]).toBeNull();
+  } else {
+    expect(report.logs["update.json"]).not.toContain("postUpdate");
+  }
+  expect(report.successfulUpdateCheck).toMatchObject({
+    availability: "captured",
+    outcome: "failed",
+    message: "successful update failed plugin convergence",
+    plugins: {
+      status: "warning",
+      sync: { errors: [expect.stringContaining("plugin sync failure")] },
+      npm: {
+        outcomes: [
+          { pluginId: "discord", status: "error", code: "fixture-repair" },
+          { pluginId: "discord", status: "updated", nextVersion: "2026.9.5" },
+        ],
+      },
+      integrityDrifts: [{ pluginId: "discord", action: "kept" }],
+    },
+  });
   expect(report.migration.doctor).toMatchObject({
     availability: "captured",
     processes: [
@@ -229,6 +357,8 @@ it("omits unsafe migration files and oversized registration collections without 
   fs.writeFileSync(outside, privateBody);
   fs.symlinkSync(outside, path.join(f.state, "state/openclaw.sqlite"));
   fs.symlinkSync(f.root, path.join(f.state, "session-sqlite-migration-runs"));
+  fs.writeFileSync(path.join(f.root, "baseline-gateway.log"), privateBody);
+  fs.symlinkSync(f.root, path.join(f.artifacts, "missing-load-path"));
   fs.writeFileSync(
     path.join(f.artifacts, "sibling-registrations.jsonl"),
     Array.from({ length: 129 }, () =>
@@ -245,6 +375,10 @@ it("omits unsafe migration files and oversized registration collections without 
   for (const section of ["sessions", "archives", "sibling", "doctor"]) {
     expect(report.migration[section].availability).toBe("unavailable");
   }
+  for (const name of baselineGatewayLogs) {
+    expect(report.logs[name]).toBeNull();
+    expect(report.omissions[name]).toBe("missing or unsafe file");
+  }
   expect(report.limits).toMatchObject({
     inputBytesPerFile: 262144,
     outputBytesPerLog: 16384,
@@ -253,8 +387,16 @@ it("omits unsafe migration files and oversized registration collections without 
   });
 });
 
-it("does not reuse sibling observations when a retry fails before fixture seeding", () => {
+it("does not reuse sibling or startup observations when an attempt fails before fixture seeding", () => {
   const f = fixture();
+  const turnLogs = ["baseline", "candidate"].flatMap((stage) =>
+    ["out", "err"].map((extension) => `legacy-operator-${stage}-turn.${extension}`),
+  );
+  const logs = [...turnLogs, ...baselineGatewayLogs];
+  for (const name of logs) {
+    fs.mkdirSync(path.dirname(path.join(f.artifacts, name)), { recursive: true });
+    fs.writeFileSync(path.join(f.artifacts, name), "previous attempt failure");
+  }
   fs.writeFileSync(
     path.join(f.artifacts, "sibling-registrations.jsonl"),
     JSON.stringify({
@@ -266,13 +408,30 @@ it("does not reuse sibling observations when a retry fails before fixture seedin
       sourceSha256: "a".repeat(64),
     }) + "\n",
   );
+  const unsafeArtifacts = path.join(f.root, "unsafe-artifacts");
+  const outsideLogs = path.join(f.root, "outside-logs");
+  fs.mkdirSync(unsafeArtifacts);
+  fs.mkdirSync(outsideLogs);
+  fs.symlinkSync(outsideLogs, path.join(unsafeArtifacts, "missing-load-path"));
+  for (const name of baselineGatewayLogs) {
+    fs.writeFileSync(path.join(outsideLogs, path.basename(name)), "outside capture ownership");
+  }
   const prepared = spawnSync(
     "bash",
     [
       "-c",
-      'source "$1"; prepare_diagnostics_capture',
+      [
+        'source "$1"',
+        "prepare_diagnostics_capture",
+        'printf "owned-ready:%s\n" "${diagnostics_ready:-0}"',
+        'ARTIFACT_DIR="$2"',
+        "diagnostics_ready=0",
+        "prepare_diagnostics_capture",
+        'printf "symlink-ready:%s\n" "$diagnostics_ready"',
+      ].join("; "),
       "capture-test",
       path.resolve("scripts/lib/upgrade-survivor-diagnostics.sh"),
+      unsafeArtifacts,
     ],
     {
       env: { ...f.env, ARTIFACT_DIR: f.artifacts },
@@ -281,8 +440,18 @@ it("does not reuse sibling observations when a retry fails before fixture seedin
     },
   );
   expect(prepared.status, prepared.stderr).toBe(0);
+  for (const name of baselineGatewayLogs) {
+    expect(fs.readFileSync(path.join(outsideLogs, path.basename(name)), "utf8")).toBe(
+      "outside capture ownership",
+    );
+  }
+  expect(prepared.stdout).toBe("owned-ready:1\nsymlink-ready:0\n");
+  expect(prepared.stderr).toContain("private capture setup failed");
   const report = capture(f);
   expect(report.migration.sibling.availability).toBe("unavailable");
+  for (const name of logs) {
+    expect(report.logs[name]).toBeNull();
+  }
 });
 
 it("does not create missing WAL sidecars through either receipt or plugin-index capture", () => {

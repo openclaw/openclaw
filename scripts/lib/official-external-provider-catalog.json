@@ -2146,7 +2146,8 @@
           {
             "endpointClass": "zai-native",
             "hosts": [
-              "api.z.ai"
+              "api.z.ai",
+              "open.bigmodel.cn"
             ]
           }
         ],

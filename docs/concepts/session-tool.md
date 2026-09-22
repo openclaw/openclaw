@@ -55,7 +55,7 @@ Use the filters together to narrow the inventory before paging:
 - `ownerId` and `creatorId`: exact canonical actor IDs. Relationship filters narrow visibility; they never grant access.
 - `projectId` and `workspaceDir`: exact persisted project and working-directory associations. Listing does not inspect the filesystem or run Git.
 - `group` and `pinned`: exact sidebar group and pin state. An empty group selects ungrouped sessions.
-- `activeOnly`: current direct queued/running work on Gateway-backed inventories; it is unavailable in embedded mode without a live Gateway projection. `activeMinutes` is recency, not liveness. `excludeSubagents` omits subagent sessions.
+- `activeOnly`: current direct queued/running work on Gateway-backed inventories; it is unavailable in embedded mode without a live Gateway projection. `activeMinutes` is recency, not liveness. `excludeSubagents` omits subagent runs and ungrouped spawned sessions. Visible spawned conversations assigned to a custom group remain eligible under the normal visibility and archive filters.
 - `kinds`, `label`, `agentId`, and `search`: the existing classification, exact label/agent, and metadata-text filters. Kinds are `main`, `group`, `cron`, `hook`, `node`, and `other`.
 - `archived`: false or omitted selects unarchived sessions; true selects archived sessions; `"all"` includes both.
 
@@ -63,7 +63,7 @@ Use the filters together to narrow the inventory before paging:
 
 Pages are a live view, not a frozen snapshot. Concurrent updates, pinning, reassignment, or archiving can move rows between pages. Deduplicate by agent/key/session ID; restart from offset zero when a fresh complete inventory is required. Every call reapplies access checks. A continuation is not an access grant, and the tool does not expose a global count of hidden sessions.
 
-Transcript-derived fields are opt-in: `includeDerivedTitles`, `includeLastMessage`, or `messageLimit` (at most 20 messages per selected row). Metadata-only calls do not read transcripts or start sessions. Previews are hydrated only after session visibility filtering. If the first enriched row cannot fit the result budget, the call returns metadata without inline messages or transcript-derived previews and sets `enrichmentOmitted: true`; use `sessions_history` for the full conversation. A metadata row that still exceeds 64 KiB fails explicitly rather than silently losing identity or associations.
+Transcript-derived fields are opt-in: `includeDerivedTitles`, `includeLastMessage`, or `messageLimit` (at most 20 messages per selected row). Metadata-only calls do not read transcripts or start sessions. Previews are hydrated only after session visibility filtering. If a row becomes inaccessible or its session is replaced while enrichment is in progress, it is omitted from the completed inventory. If the first enriched row cannot fit the result budget, the call returns metadata without inline messages or transcript-derived previews and sets `enrichmentOmitted: true`; use `sessions_history` for the full conversation. A metadata row that still exceeds 64 KiB fails explicitly rather than silently losing identity or associations.
 
 Use the returned `sessionId` as `expectedSessionId` when the `sessions` tool archives, restores, or deletes a session, so a stale key cannot target a replacement. Delivery routing, detailed runtime settings, cost estimates, and transcript paths remain omitted. Restricted inventories include `visibility` metadata explaining the effective session-tool scope.
 
@@ -106,7 +106,7 @@ Use [`sessions_search`](/concepts/session-search) for exact full-text recall acr
 
 The owner-gated `sessions` tool exposes bounded self-service surfaces:
 
-- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, custom sidebar `group`, pin/archive state, model, and thinking level. Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions live in their parent's tree and reject pin requests. Pass `null` or an empty string to clear `group`; assigning a new name creates the group on first use. The icon accepts one emoji grapheme, one of the named icons `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`, or custom SVG markup/an SVG data URL; pass an empty string to clear it. SVGs must be self-contained, at most 16 KiB decoded, with no scripts, embedded documents, or external references. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`; SVG data URLs may use percent encoding or base64. The Gateway stores a canonical SVG data URL and the Control UI renders it as an image. The Control UI custom-icon picker accepts the same inputs and shows the macOS (Control-Command-Space) or Windows (Windows-period) system emoji picker shortcut. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
+- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, custom sidebar `group`, pin/archive state, model, and thinking level. Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions reject pin requests. Subagent runs appear in transcript activity and Tasks views, outside sidebar navigation. Pass `null` or an empty string to clear `group`; assigning a new name creates the group on first use. The icon accepts one emoji grapheme, one of the named icons `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`, or custom SVG markup/an SVG data URL; pass an empty string to clear it. SVGs must be self-contained, at most 16 KiB decoded, with no scripts, embedded documents, or external references. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`; SVG data URLs may use percent encoding or base64. The Gateway stores a canonical SVG data URL and the Control UI renders it as an image. The Control UI custom-icon picker accepts the same inputs and shows the macOS (Control-Command-Space) or Windows (Windows-period) system emoji picker shortcut. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
 - `action: "reset"` resets another visible session selected by `sessionKey`.
 - `action: "delete"` first archives and then deletes the exact same generation of another visible session selected by `sessionKey`. By default its transcript is retained as a deleted archive; pass `deleteTranscript: false` to leave the transcript state untouched. Resetting or deleting the session currently running the tool is rejected.
 - `action: "assign_owner"` hands session responsibility to a person or agent. Pass `ownerType` (`"human"` or `"agent"`) and `ownerId`; the target is the current session by default, or another visible session via `sessionKey`. Agent owner ids must name a configured agent. The assignment records who reassigned it and when, and the Control UI reflects the new owner immediately. Ownership is display and responsibility, not access control; see [Multi-user mode](/concepts/multi-user).
@@ -168,15 +168,29 @@ During healthy worker provisioning or workspace preparation, accepted input stay
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
-- **Resume a paused child task:** use `mode: "resume"` with the continuation message. The calling session must control the native child task, and that task must be paused by `sessions_yield`. This preserves its task identity and original completion recipient. Ordinary `followup` messages do not resume tasks.
+- **Continue a paused child task:** send the continuation without `mode`. When the caller controls a native child paused by `sessions_yield` with task-owned completion, the runtime resumes that task automatically, preserving its identity and original completion recipient. Use `mode: "resume"` to require this behavior explicitly. An explicit `mode: "followup"` starts a separate turn and leaves the paused task intact.
+
+A separate follow-up to your native child is accepted only after its task record
+has been saved. If registration fails, the send returns an error and the child
+does not start. A requested state watch is installed only after successful
+admission.
+
+A retry cannot restart a follow-up whose task record is already terminal.
+Completed input receipts are reconciled before rejecting the retry.
 
 Task resume returns `status: "accepted"`, `mode: "resume"`, the successor `runId`,
 the original `taskRunId`, and `completion: "task"`. The existing task owner delivers
 the eventual result once; the tool does not wait for the answer or start a separate
-reply-back loop. Omit `watch` and `timeoutSeconds`, or set `timeoutSeconds: 0`;
-`watch: true` and positive waits are rejected. Resume requires trusted in-process
+reply-back loop. Automatic resume accepts ordinary `watch` and `timeoutSeconds`
+arguments but leaves all result delivery with the existing task instead of adding
+an inline wait or a second watcher. Explicit `mode: "resume"` rejects `watch: true`
+and positive waits. Resume requires trusted in-process
 Gateway admission. Unrelated callers, completed tasks, and changed child sessions
 are rejected rather than falling back to ordinary messaging.
+Controller ownership remains bound to the originally recorded session store.
+Retained tasks created without store provenance keep ordinary default messaging
+and their existing explicit resume and cancellation controls. Newly registered
+tasks record their store and can use automatic continuation.
 
 `timeoutSeconds` limits the sending tool's wait, not the receiver's execution
 budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 0`.
@@ -193,6 +207,10 @@ An accepted result keeps target admission separate from announcement delivery.
 `delivery.status` describes only the later announcement as `pending` or `skipped`.
 Neither field is a target-completion receipt.
 
+If an idempotent retry finds that the original admission is still pending, the
+tool returns an error with `sentBeforeError: true` and the existing run ID, without
+installing a watch. Inspect that run before retrying.
+
 Replies come from the completed run's terminal result. When a same-session
 target has already delivered its final reply to the source conversation through
 `message`, OpenClaw skips the duplicate channel announcement. Progress messages
@@ -204,7 +222,16 @@ Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not vali
 
 Messages and A2A follow-up replies are marked as inter-session data in the receiving prompt (`[Inter-session message ... isUser=false]`) and in transcript provenance. The receiving agent should treat them as tool-routed data, not as a direct end-user-authored instruction.
 
-After an independent peer session responds, OpenClaw can run a **reply-back loop** where the agents alternate messages up to the built-in limit. The target agent can reply `REPLY_SKIP` to stop early. Ordinary UI threads remain independent peers.
+Agent shell commands must not substitute operator CLI message RPCs for this
+path. With the inherited `OPENCLAW_SHELL=exec` marker, the CLI rejects
+`sessions.send`, `sessions.steer`, `chat.send`, `agent`, and `sessions.create`
+requests containing an initial message, task, or attachment. Use the session tool
+when available; a subagent without it should return its result through normal
+completion. A delivery failure does not authorize switching to the operator CLI.
+This check prevents accidental loss of attribution; the environment marker is
+not authentication or isolation from other processes running as the same OS user.
+
+After an independent peer session responds, OpenClaw can run a **reply-back loop** where the agents alternate messages up to the built-in limit. The target agent can reply `REPLY_SKIP` to stop early. Control UI requesters instead receive the target result once; their human-facing response is not fed back into the target session.
 
 Subagent coordination does not use this loop. A child report goes to its recipient once, without an automatic acknowledgment turn in the child. An explicitly waiting caller can still receive the recipient's reply inline. For a new child turn, the child's reply returns inline or is delivered once after the wait expires; the receiver's response is not sent back to the child.
 
@@ -219,6 +246,8 @@ Pass `watch: true` to also register the sender as a state-change watcher of the 
 ## Status and orchestration helpers
 
 `session_status` is the lightweight `/status`-equivalent tool for the current or another visible session. It reports usage, time, model/runtime state, and linked background-task context when present. Like `/status`, it can backfill sparse token/cache counters from the latest transcript usage entry, and `model=default` clears a per-session override. Use `sessionKey="current"` for the caller's current session; visible client labels such as `openclaw-tui` are not session keys.
+
+Model changes stay scoped to the selected session and do not update the agent's or global default. Gateway-managed sessions apply the same model, runtime, and execution-environment checks as other session model selections. Repeating an unchanged choice does not update session activity or emit model-change notifications.
 
 When route metadata is available, `session_status` also includes a visible `Route context` JSON block and matching structured `details` fields. These fields disambiguate the session key from the route that is currently handling the live run:
 
@@ -250,7 +279,7 @@ Key options:
 - `thread: true` to bind the spawn to a chat thread (Discord, Slack, etc.).
 - `sandbox: "require"` to enforce sandboxing on the child.
 - `context: "fork"` when the child needs the current requester transcript; this requires `runtime: "subagent"` and the same agent as the requester, whether the child is hidden or visible. Use `context: "isolated"` explicitly for a clean child. Omission means isolated context for non-thread spawns; thread-bound native sub-agents follow `threadBindings.defaultSpawnContext`, which defaults to `fork`.
-- `visible: true` to create a persistent dashboard session instead of a hidden sub-agent session. Visible spawns support an explicit sidebar `group`, model, working directory, same-agent transcript fork, and an optional [managed worktree](/concepts/managed-worktrees); see [Sub-agents](/tools/subagents#tool-parameters) for the exact compatibility limits. The accepted result is a receipt: it includes the child session key, run id, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record naming the requesting agent. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second. The spawned session is attributed to the requesting agent in the sidebar; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
+- `visible: true` to create a persistent dashboard session instead of a hidden sub-agent session. Visible spawns support an explicit sidebar `group`, model, working directory, same-agent transcript fork, and an optional [managed worktree](/concepts/managed-worktrees); see [Sub-agents](/tools/subagents#tool-parameters) for the exact compatibility limits. The accepted result is a receipt: it includes the child session key, run id, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record naming the stored owner. When the active human requester matches the requesting session's verified human owner, a new visible child inherits that person as owner. Otherwise, the owner falls back to the requesting agent. The requesting agent is normally the immutable creator; a required sandbox instead preserves the parent's creator provenance as an isolation policy. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second. Ownership controls responsibility and display, not creator-based access; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
 
 Sub-agents below the default depth limit of `5` receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their own children. Set a lower `maxSpawnDepth` to turn sessions at that depth into leaves sooner.
 

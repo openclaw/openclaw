@@ -7,12 +7,7 @@ type InternalLoggingConfig = NonNullable<LoggingConfig> & {
 };
 
 const fullContextToolPayloadRedaction = Symbol("full-context-tool-payload-redaction");
-type PreparedToolText = {
-  text: string;
-  patterns: readonly string[];
-  fullContext: boolean;
-  registryRevision: number;
-};
+type PreparedToolText = { text: string } & ReturnType<typeof captureModelVisibleRedactionPolicy>;
 const preparedToolText = new WeakMap<object, PreparedToolText>();
 
 export const fullContextToolPayloadRedactionState = {
@@ -29,25 +24,40 @@ export const fullContextToolPayloadRedactionState = {
   },
 };
 
+export function captureModelVisibleRedactionPolicy(loggingConfig: LoggingConfig) {
+  return {
+    patterns: [...(loggingConfig?.redactPatterns ?? [])],
+    fullContext: fullContextToolPayloadRedactionState.isMarked(loggingConfig),
+    registryRevision: getSecretRedactionRegistryRevision(),
+  };
+}
+
+export function matchesModelVisibleRedactionPolicy(
+  policy: ReturnType<typeof captureModelVisibleRedactionPolicy>,
+  loggingConfig: LoggingConfig,
+): boolean {
+  const patterns = loggingConfig?.redactPatterns ?? [];
+  return (
+    policy.registryRevision === getSecretRedactionRegistryRevision() &&
+    policy.fullContext === fullContextToolPayloadRedactionState.isMarked(loggingConfig) &&
+    policy.patterns.length === patterns.length &&
+    policy.patterns.every((pattern, index) => pattern === patterns[index])
+  );
+}
+
 export const modelVisibleToolTextRedactionState = {
   record(block: object, text: string, loggingConfig: LoggingConfig): void {
     preparedToolText.set(block, {
       text,
-      patterns: [...(loggingConfig?.redactPatterns ?? [])],
-      fullContext: fullContextToolPayloadRedactionState.isMarked(loggingConfig),
-      registryRevision: getSecretRedactionRegistryRevision(),
+      ...captureModelVisibleRedactionPolicy(loggingConfig),
     });
   },
   matches(block: object, text: string, loggingConfig: LoggingConfig): boolean {
     const prepared = preparedToolText.get(block);
-    const patterns = loggingConfig?.redactPatterns ?? [];
     return (
       prepared !== undefined &&
       prepared.text === text &&
-      prepared.registryRevision === getSecretRedactionRegistryRevision() &&
-      prepared.fullContext === fullContextToolPayloadRedactionState.isMarked(loggingConfig) &&
-      prepared.patterns.length === patterns.length &&
-      prepared.patterns.every((pattern, index) => pattern === patterns[index])
+      matchesModelVisibleRedactionPolicy(prepared, loggingConfig)
     );
   },
   copy(source: object, target: object, text: string): void {

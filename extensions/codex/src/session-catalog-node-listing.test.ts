@@ -11,6 +11,7 @@ import {
   listCodexSessionCatalog,
   registerCodexSessionCatalog,
   createCodexSessionCatalogNodeHostCommands,
+  createCodexSessionCatalogControlFactory,
   config,
   idleThread,
   catalogThreadItem,
@@ -21,12 +22,12 @@ import {
   fs,
   os,
   path,
-  resolveCodexAppServerUserHomeDir,
   createCodexTestBindingStore,
   listPairedNode,
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,
   type PluginRuntime,
+  type OpenClawConfig,
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex supervision catalog", () => {
@@ -63,62 +64,75 @@ describe("Codex supervision catalog", () => {
     expect(result).toBe(reason);
   });
 
-  it("filters managed threads and backfills paired-node catalog pages", async () => {
-    const listPage = vi.fn(async ({ cursor }: { cursor?: string; limit: number }) =>
-      cursor
-        ? {
-            sessions: [{ threadId: "native-2", status: "idle", source: "cli", archived: false }],
-          }
-        : {
-            sessions: [
-              { threadId: "managed", status: "idle", source: "vscode", archived: false },
-              { threadId: "native-1", status: "idle", source: "cli", archived: false },
-            ],
-            nextCursor: "page-2",
-            backwardsCursor: "page-0",
-          },
-    );
-    const control = createControl({ listPage });
-    const bindingStore = Object.assign(createCodexTestBindingStore(), {
-      managedThreads: {
-        has: vi.fn(async () => false),
-        mark: vi.fn(async () => undefined),
-        snapshot: vi.fn(
-          async () => new Map<string, ReadonlySet<string>>([["home-main", new Set(["managed"])]]),
-        ),
-      },
-    });
-    const command = createCodexSessionCatalogNodeHostCommands(
-      {
-        forRequest: () => control,
-        forNode: async () => ({ control, sourceHomeId: "home-main", codexHome: "/node/.codex" }),
-        homesForAgent: async () => [],
-        forUpstream: async () => undefined,
-      },
-      bindingStore,
-    ).find((candidate) => candidate.command === CODEX_APP_SERVER_THREADS_LIST_COMMAND);
-    if (!command) {
-      throw new Error("Codex session catalog node command was not registered");
-    }
+  it.each(["stdio", "unix", "websocket"] as const)(
+    "filters managed threads and publishes source continuation support for %s",
+    async (transport) => {
+      const listPage = vi.fn(async ({ cursor }: { cursor?: string; limit: number }) =>
+        cursor
+          ? {
+              sessions: [{ threadId: "native-2", status: "idle", source: "cli", archived: false }],
+            }
+          : {
+              sessions: [
+                { threadId: "managed", status: "idle", source: "vscode", archived: false },
+                { threadId: "native-1", status: "idle", source: "cli", archived: false },
+              ],
+              nextCursor: "page-2",
+              backwardsCursor: "page-0",
+            },
+      );
+      const control = createControl({ listPage });
+      const bindingStore = Object.assign(createCodexTestBindingStore(), {
+        managedThreads: {
+          has: vi.fn(async () => false),
+          mark: vi.fn(async () => undefined),
+          snapshot: vi.fn(
+            async () => new Map<string, ReadonlySet<string>>([["home-main", new Set(["managed"])]]),
+          ),
+        },
+      });
+      const command = createCodexSessionCatalogNodeHostCommands(
+        {
+          hasActiveWork: () => false,
+          disconnect: async () => {},
+          forRequest: () => control,
+          forNode: async () => ({
+            control,
+            sourceHomeId: "home-main",
+            codexHome: "/node/.codex",
+            transport,
+            assertCurrent: () => {},
+          }),
+          homesForAgent: async () => [],
+          forUpstream: async () => undefined,
+        },
+        bindingStore,
+      ).find((candidate) => candidate.command === CODEX_APP_SERVER_THREADS_LIST_COMMAND);
+      if (!command) {
+        throw new Error("Codex session catalog node command was not registered");
+      }
 
-    const result = await command.handle(JSON.stringify({ limit: 2, agentId: "main" }));
-    expect(JSON.parse(result)).toEqual({
-      sessions: [
-        { threadId: "native-1", status: "idle", source: "cli", archived: false },
-        { threadId: "native-2", status: "idle", source: "cli", archived: false },
-      ],
-      backwardsCursor: "page-0",
-    });
-    expect(bindingStore.managedThreads.snapshot).toHaveBeenCalledTimes(1);
-    expect(listPage).toHaveBeenNthCalledWith(1, { limit: 2 }, undefined, {
-      headWalk: true,
-      maxScanPages: 20,
-    });
-    expect(listPage).toHaveBeenNthCalledWith(2, { cursor: "page-2", limit: 1 }, undefined, {
-      headWalk: true,
-      maxScanPages: 19,
-    });
-  });
+      const result = await command.handle(
+        JSON.stringify({ limit: 2, agentId: "main", sourceHomeId: "home-main" }),
+      );
+      expect(JSON.parse(result)).toEqual({
+        sourceHomeId: "home-main",
+        canContinueCodex: transport === "stdio",
+        sessions: [
+          { threadId: "native-1", status: "idle", source: "cli", archived: false },
+          { threadId: "native-2", status: "idle", source: "cli", archived: false },
+        ],
+        backwardsCursor: "page-0",
+      });
+      expect(bindingStore.managedThreads.snapshot).toHaveBeenCalledTimes(1);
+      expect(listPage).toHaveBeenNthCalledWith(1, { limit: 2 });
+      expect(listPage).toHaveBeenNthCalledWith(2, { cursor: "page-2", limit: 1 });
+      await expect(
+        command.handle(JSON.stringify({ limit: 2, agentId: "main", sourceHomeId: "home-old" })),
+      ).rejects.toThrow("source home changed");
+      expect(listPage).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("keeps paired-node catalogs non-archived and metadata-only", async () => {
     const control = createControl({
@@ -366,15 +380,11 @@ describe("Codex supervision catalog", () => {
       },
     });
 
-    expect(control.listPage).toHaveBeenCalledWith(
-      {
-        cursor: "local-page-2",
-        limit: 7,
-        searchTerm: "match",
-      },
-      undefined,
-      { headWalk: false, maxScanPages: 20 },
-    );
+    expect(control.listPage).toHaveBeenCalledWith({
+      cursor: "local-page-2",
+      limit: 7,
+      searchTerm: "match",
+    });
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -435,7 +445,6 @@ describe("Codex supervision catalog", () => {
           commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
         },
         query: { limitPerHost: 40 },
-        adoptedSessions: new Map(),
         terminalCapabilities: { canStartTerminal: true, canOpenTerminalCodex: true },
       });
 
@@ -594,7 +603,14 @@ describe("Codex supervision catalog", () => {
     }
 
     await expect(
-      command.handle(JSON.stringify({ threadId: "thread-1", cursor: "turns-page-1", limit: 25 })),
+      command.handle(
+        JSON.stringify({
+          threadId: "thread-1",
+          cursor: "turns-page-1",
+          limit: 25,
+          sourceHomeId: "node-native",
+        }),
+      ),
     ).resolves.toBe(
       JSON.stringify({
         data: [
@@ -637,7 +653,12 @@ describe("Codex supervision catalog", () => {
     }
 
     const payload = await command.handle(
-      JSON.stringify({ threadId: "thread-1", cursor: "native-start", limit: 2 }),
+      JSON.stringify({
+        threadId: "thread-1",
+        cursor: "native-start",
+        limit: 2,
+        sourceHomeId: "node-native",
+      }),
     );
     expect(JSON.parse(payload)).toEqual({
       items: [
@@ -678,57 +699,105 @@ describe("Codex supervision catalog", () => {
     ).rejects.toThrow("threadId must be a UUID");
   });
 
-  it("resolves node terminal eligibility and cwd from the node-owned catalog record", async () => {
-    const threadId = "123e4567-e89b-12d3-a456-426614174000";
-    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-node-terminal-"));
-    tempDirs.push(binDir);
-    const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
-    if (process.platform === "win32") {
-      await fs.writeFile(path.join(binDir, "codex"), "#!/bin/sh\n");
-    }
-    await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
-    if (process.platform !== "win32") {
-      await fs.chmod(executable, 0o755);
-    }
-    process.env.PATH = binDir;
-    const codexHome = resolveCodexAppServerUserHomeDir();
-    const command = createCodexSessionCatalogNodeHostCommands(
-      createEligibleControl({
-        requireEligibleThread: vi.fn(async () => {
-          vi.stubEnv("CODEX_HOME", "/changed/after/eligibility");
-          return idleThread({
-            id: threadId,
-            source: { custom: "atlas" },
-            cwd: "/node/catalog/cwd",
-          });
+  it.each([
+    { transport: "stdio", reload: false },
+    { transport: "stdio", reload: true },
+    { transport: "unix", reload: false },
+    { transport: "websocket", reload: false },
+  ] as const)(
+    "resolves node terminal eligibility from $transport with config reload $reload",
+    async ({ transport, reload }) => {
+      const threadId = "123e4567-e89b-12d3-a456-426614174000";
+      const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-node-terminal-"));
+      tempDirs.push(binDir);
+      const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
+      if (process.platform === "win32") {
+        await fs.writeFile(path.join(binDir, "codex"), "#!/bin/sh\n");
+      }
+      await fs.writeFile(
+        executable,
+        process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n",
+      );
+      if (process.platform !== "win32") {
+        await fs.chmod(executable, 0o755);
+      }
+      process.env.PATH = binDir;
+      const codexHome = await fs.realpath(binDir);
+      let runtimeConfig: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { beta: {} } },
+      };
+      const factory = createCodexSessionCatalogControlFactory({
+        env: { CODEX_HOME: codexHome, OPENCLAW_STATE_DIR: binDir },
+        getRuntimeConfig: () => runtimeConfig,
+        getPluginConfig: () => ({
+          appServer: {
+            transport,
+            homeScope: transport === "websocket" ? "agent" : "user",
+            ...(transport === "websocket" ? { url: "ws://127.0.0.1:1234" } : {}),
+          },
         }),
-      }),
-    ).find((candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND);
-    if (!command || command.duplex !== true) {
-      throw new Error("Codex terminal command was not registered as duplex");
-    }
-
-    await command.handle(
-      JSON.stringify({ agentId: "beta", threadId, cwd: "/caller/cwd", cols: 80, rows: 24 }),
-      {
-        signal: new AbortController().signal,
-        emitChunk: async () => {},
-        onInput: () => {},
-      },
-    );
-
-    expect(command.dangerous).toBe(false);
-    expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        file: executable,
-        cwd: "/node/catalog/cwd",
-        env: {
-          CODEX_HOME: codexHome,
+      });
+      const command = createCodexSessionCatalogNodeHostCommands({
+        ...factory,
+        forNode: async (agentId) => {
+          const source = await factory.forNode(agentId);
+          vi.spyOn(source.control, "requireEligibleThread").mockImplementation(async () => {
+            vi.stubEnv("CODEX_HOME", "/changed/after/eligibility");
+            if (reload) {
+              runtimeConfig = { ...runtimeConfig };
+            }
+            return idleThread({
+              id: threadId,
+              source: { custom: "atlas" },
+              cwd: "/node/catalog/cwd",
+            });
+          });
+          return source;
         },
-      }),
-      expect.any(Object),
-    );
-  });
+      }).find((candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND);
+      if (!command || command.duplex !== true) {
+        throw new Error("Codex terminal command was not registered as duplex");
+      }
+
+      expect(
+        command.isAvailable?.({
+          config: { plugins: { entries: { codex: { config: { appServer: { transport } } } } } },
+          env: process.env,
+        }),
+      ).toBe(transport === "stdio");
+      const invocation = command.handle(
+        JSON.stringify({ agentId: "beta", threadId, cwd: "/caller/cwd", cols: 80, rows: 24 }),
+        {
+          signal: new AbortController().signal,
+          emitChunk: async () => {},
+          onInput: () => {},
+        },
+      );
+      if (transport !== "stdio") {
+        await expect(invocation).rejects.toThrow("Native terminal requires a local Codex source");
+        expect(nodeHostMocks.runNodePtyCommand).not.toHaveBeenCalled();
+        return;
+      }
+      if (reload) {
+        await expect(invocation).rejects.toThrow("configuration changed");
+        expect(nodeHostMocks.runNodePtyCommand).not.toHaveBeenCalled();
+        return;
+      }
+      await invocation;
+
+      expect(command.dangerous).toBe(false);
+      expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          file: executable,
+          cwd: "/node/catalog/cwd",
+          env: {
+            CODEX_HOME: codexHome,
+          },
+        }),
+        expect.any(Object),
+      );
+    },
+  );
 
   it("rejects an oversized transcript page before returning it over node.invoke", async () => {
     const control = createEligibleControl({

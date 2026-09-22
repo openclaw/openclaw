@@ -61,7 +61,7 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 vi.mock("../../tasks/detached-task-runtime.js", () => ({
-  createRunningTaskRun: vi.fn(),
+  prepareRunningTaskRun: vi.fn(() => ({ kind: "receipt", create: async () => null })),
 }));
 
 import { agentHandlers } from "./agent.js";
@@ -127,7 +127,7 @@ describe("agent handler session create events", () => {
     const responseCall = firstMockCall(respond) as
       | [boolean, { status?: string; runId?: string }, unknown, { runId?: string }]
       | undefined;
-    expect(responseCall?.[0]).toBe(true);
+    expect(responseCall?.[0], JSON.stringify(responseCall)).toBe(true);
     expect(responseCall?.[1]?.status).toBe("accepted");
     expect(responseCall?.[1]?.runId).toBe("idem-agent-create-event");
     expect(responseCall?.[2]).toBeUndefined();

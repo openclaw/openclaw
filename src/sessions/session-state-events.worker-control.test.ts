@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { recordSessionGoalChanged, recordSessionStateEvent } from "./session-state-events.js";
 import type { SessionStateNotice } from "./session-state-events.kernel.js";
 
@@ -54,6 +55,8 @@ vi.mock("../infra/kysely-sync.js", () => ({
   executeSqliteQuerySync: edge.forbidden,
   executeSqliteQueryTakeFirstSync: edge.forbidden,
 }));
+// Keep config loading from publishing metadata readers that capture this fixture's native mocks.
+vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../config/sessions/session-accessor.js", () => ({ loadSessionEntryReadOnly: vi.fn() }));
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: edge.warn }),
@@ -77,6 +80,7 @@ vi.mock("./session-upstream-links.js", () => ({ deleteSessionUpstreamLink: vi.fn
 
 const notice: SessionStateNotice = {
   watcherSessionKey: "agent:main:main",
+  watcherStorePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
   targetSessionKey: "agent:main:child",
   lastSeenSequence: 17,
   queueOnly: false,
@@ -160,6 +164,7 @@ describe("Goal event worker reconciliation", () => {
           actorId: "operator",
           summary: "goal complete",
           watcherSessionKeys: ["agent:main:main"],
+          watcherStorePaths: { "agent:main:main": notice.watcherStorePath },
         },
       },
     });

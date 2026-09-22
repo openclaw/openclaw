@@ -353,7 +353,12 @@ describe("terminal persisted restore", () => {
   );
 
   it("opens a persisted catalog request after its restored tab is cancelled", async () => {
-    const catalog = { catalogId: "catalog-a", hostId: "host-a", threadId: "thread-a" };
+    const catalog = {
+      catalogId: "catalog-a",
+      hostId: "host-a",
+      threadId: "thread-a",
+      sourceHomeId: "synthetic-home-secondary",
+    };
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(["session-a"]));
     sessionStorage.setItem(
       "openclaw.terminal.actions.v1",

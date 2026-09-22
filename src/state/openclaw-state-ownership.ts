@@ -9,7 +9,7 @@ import {
   createSqliteLifecycleAggregateError,
   runWithSqliteCoordinator,
 } from "../infra/sqlite-coordinator.js";
-import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import { isSqliteLockError, withSqliteNativeOpen } from "../infra/sqlite-error-diagnostics.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -147,7 +147,7 @@ function inspectOwnershipThroughConnection(
   databasePath: string,
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): OpenClawExternalStateOwnership | null {
-  const database = openNodeSqliteDatabase(location, { readOnly: true });
+  const database = withSqliteNativeOpen(() => openNodeSqliteDatabase(location, { readOnly: true }));
   let closeAdmission: (() => void) | undefined;
   try {
     closeAdmission = openStateSchemaReadAdmission?.(database);
@@ -186,7 +186,8 @@ function inspectOwnershipWhileCoordinatorHeld(
   }
   // Write admission owns locking and recovery while the coordinator is held.
   // Inspect the live committed view without cloning a potentially busy family.
-  const database = openNodeSqliteDatabase(resolveExistingSqliteFileUri(resolvedPath));
+  const location = resolveExistingSqliteFileUri(resolvedPath);
+  const database = withSqliteNativeOpen(() => openNodeSqliteDatabase(location));
   let closeAdmission: (() => void) | undefined;
   try {
     closeAdmission = openStateSchemaReadAdmission?.(database);

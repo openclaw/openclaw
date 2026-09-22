@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 const packageManager = process.argv[2];
 const imageVersion = "12.3.4";
@@ -33,8 +33,8 @@ const cachedArchives = process.env.PNPM_CONFIG_STORE_DIR
   : undefined;
 const registry = "https://registry.npmjs.org";
 const registryConfigured = (process.env.COREPACK_NPM_REGISTRY || registry).replace(/\/$/u, "");
-// These approved native archives are glibc builds. Other platforms/registries
-// retain ordinary Corepack/pnpm selection rather than receiving the wrong binary.
+// These native archives are glibc builds. Windows seeds only the authenticated
+// wrapper; pnpm owns its native binary selection and signature verification.
 let supportedCurrentHost = !current;
 if (current && process.platform === "linux") {
   try {
@@ -49,19 +49,18 @@ const canDownload =
   process.env.COREPACK_ENABLE_NETWORK !== "0" &&
   process.env.COREPACK_INTEGRITY_KEYS === undefined;
 
+const seedNative = process.platform === "linux" && supportedCurrentHost && nativeHash;
 if (
-  process.platform === "linux" &&
-  supportedCurrentHost &&
-  nativeHash &&
+  (seedNative || (current && process.platform === "win32")) &&
   packageManager === `pnpm@${version}+sha512.${wrapperHash}`
 ) {
   const staging = await mkdtemp(join(process.env.RUNNER_TEMP || tmpdir(), "pnpm-image-"));
   let corepackHome;
   try {
-    const archives = [
-      [`pnpm-${version}.tgz`, wrapperHash],
-      [`exe.linux-${process.arch}-${version}.tgz`, nativeHash],
-    ];
+    const archives = [[`pnpm-${version}.tgz`, wrapperHash]];
+    if (seedNative) {
+      archives.push([`exe.linux-${process.arch}-${version}.tgz`, nativeHash]);
+    }
     let valid = true;
     for (const [name, hash] of archives) {
       const destination = join(staging, name);
@@ -133,8 +132,12 @@ if (
         await mkdir(roots[index], { recursive: true });
         const result = spawnSync(
           "tar",
-          ["-xzf", join(staging, name), "-C", roots[index], "--strip-components=1"],
-          { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
+          [
+            "-xzf",
+            relative(roots[index], join(staging, name)).split(sep).join("/"),
+            "--strip-components=1",
+          ],
+          { cwd: roots[index], stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
         );
         if (result.error || result.status !== 0) {
           throw new Error(`Cannot extract authenticated pnpm image archive: ${result.stderr}`, {

@@ -85,8 +85,10 @@ async function runClawhubInstallProof(options: {
   const scratch = path.join(root, "scratch");
   const callsPath = path.join(root, "calls.jsonl");
   const fixturePath = path.join(root, "fixture.json");
+  const redactorPath = path.join(root, "redactor.mjs");
   await mkdir(bin);
   await mkdir(scratch);
+  await writeFile(redactorPath, "export const redactSensitiveText = (value) => value;\n");
   await writeFile(
     path.join(bin, "node"),
     `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`,
@@ -149,6 +151,7 @@ switch (args[1]) {
         PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
         HOME: root,
         TMPDIR: scratch,
+        OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
         ...options.overrides,
       },
     },

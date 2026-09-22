@@ -1,7 +1,7 @@
 /** Interactive and noninteractive secrets configure workflow. */
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { log, confirm, select, text } from "@clack/prompts";
+import { log, confirm, select, text, type CANCEL_SYMBOL } from "@clack/prompts";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -38,7 +38,7 @@ import {
 } from "./configure-plan.js";
 import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
 import type { SecretsApplyPlan } from "./plan.js";
-import { getProviderEnvVars } from "./provider-env-vars.js";
+import { getProviderEnvVarsCore } from "./provider-env-vars.js";
 import {
   listSecretProviderIntegrationPresets,
   type SecretProviderIntegrationPreset,
@@ -203,7 +203,7 @@ function toSourceChoices(config: OpenClawConfig): Array<{ value: SecretRefSource
   return choices;
 }
 
-function assertNoCancel<T>(value: T | symbol, message: string): T {
+function assertNoCancel<T>(value: T | typeof CANCEL_SYMBOL, message: string): T {
   if (typeof value === "symbol") {
     throw new Error(message);
   }
@@ -297,7 +297,7 @@ function resolveSuggestedEnvSecretId(candidate: ConfigureCandidate): string | un
   if (!hintedProvider) {
     return undefined;
   }
-  const envCandidates = getProviderEnvVars(hintedProvider);
+  const envCandidates = getProviderEnvVarsCore(hintedProvider);
   if (!Array.isArray(envCandidates) || envCandidates.length === 0) {
     return undefined;
   }

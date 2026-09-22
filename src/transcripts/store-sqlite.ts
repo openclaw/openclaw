@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import {
@@ -77,6 +78,21 @@ export function readTranscriptSummaryInputRevision(
   return row ? transcriptSummaryInputRevisionFromRow(row) : undefined;
 }
 
+export function readStoredTranscriptSummaryRevision(
+  database: DatabaseSync,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+): string | undefined {
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptDb(database)
+      .selectFrom("meeting_transcript_summaries")
+      .select(["generated_at", "summary_json", "markdown", "utterance_count"])
+      .where("session_id", "=", session.sessionId)
+      .where("session_started_at", "=", session.startedAt),
+  );
+  return row ? sha256Hex(JSON.stringify(row)) : undefined;
+}
+
 export function readTranscriptSummaryKeys(database: DatabaseSync): Set<string> {
   const rows = executeSqliteQuerySync(
     database,
@@ -136,7 +152,7 @@ export function meetingTranscriptUtteranceQuery(
 function hasExactMeetingTranscriptUtterance(params: {
   database: DatabaseSync;
   metadataJson: string | null;
-  session: TranscriptSessionDescriptor;
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
   utterance: TranscriptUtterance & { id: string };
 }): boolean {
   const utterance = params.utterance;
@@ -174,7 +190,7 @@ export function appendMeetingTranscriptUtterance(params: {
   database: DatabaseSync;
   metadataJson: string | null;
   now: number;
-  session: TranscriptSessionDescriptor;
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
   utterance: TranscriptUtterance;
 }): void {
   const { database, session, utterance } = params;

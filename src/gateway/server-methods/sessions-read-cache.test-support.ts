@@ -3,9 +3,9 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   loadSessionEntry,
-  replaceSessionEntry,
-  upsertSessionEntryCore,
+  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import {
@@ -30,8 +30,9 @@ export { sessionReadHandlers };
 const projections = new Set<SessionRowProjection>();
 const profileSubscriptions = new Set<() => void>();
 const initializing = new WeakMap<GatewayRequestContext, Promise<void>>();
-export function disposeSessionReadContexts() {
-  for (const projection of projections) {
+export async function disposeSessionReadContexts() {
+  const disposing = [...projections];
+  for (const projection of disposing) {
     projection.dispose();
   }
   for (const stop of profileSubscriptions) {
@@ -39,6 +40,14 @@ export function disposeSessionReadContexts() {
   }
   projections.clear();
   profileSubscriptions.clear();
+  // Disposal stops publications; accepted reads still own native database custody.
+  const settled = await Promise.allSettled(
+    disposing.map((projection) => projection.ensureMaterialized()),
+  );
+  const errors = settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length) {
+    throw new AggregateError(errors, "Session read fixture cleanup failed");
+  }
 }
 afterEach(disposeSessionReadContexts);
 export function initializeSessionReadContext(context: GatewayRequestContext) {
@@ -47,12 +56,43 @@ export function initializeSessionReadContext(context: GatewayRequestContext) {
   }
   let pending = initializing.get(context);
   if (!pending) {
+    const placements = context.workerSessionPlacementService;
     pending = createSessionRowProjection({
       cfg: context.getRuntimeConfig(),
       getConfig: context.getRuntimeConfig,
       getModelCatalog: () =>
         readPreparedServerMethodModelCatalogs(context, listAgentIds(context.getRuntimeConfig())),
       context,
+      placementFactsReader: placements
+        ? {
+            async readProjection(sessionIds) {
+              const records = placements.getMany(sessionIds);
+              const environments = new Map();
+              for (const placement of records.values()) {
+                const environmentId = placement.environmentId;
+                const environment = environmentId
+                  ? context.workerEnvironmentService?.get(environmentId)
+                  : undefined;
+                if (environmentId && environment) {
+                  environments.set(environmentId, {
+                    ...environment,
+                    environmentId,
+                    profileSnapshot: { settings: {} },
+                    nodeDeviceId: environment.nodeDeviceId ?? null,
+                    attachedSessionIds: [...(environment.attachedSessionIds ?? [])],
+                  });
+                }
+              }
+              return {
+                placements: records,
+                moves: placements.getPlacementMoves?.(sessionIds) ?? new Map(),
+                workspaceResultReconcilingSessionIds:
+                  placements.getWorkspaceResultReconcilingSessionIds?.(sessionIds) ?? new Set(),
+                environments,
+              };
+            },
+          }
+        : undefined,
     }).then((projection) => {
       projections.add(projection);
       bindSessionRowProjection(context, () => projection);
@@ -137,15 +177,15 @@ export async function seedSessions(): Promise<OpenClawConfig> {
     ["main", "archived", 200, "viewer@example.com", { archivedAt: 200 }],
     ["work", "active", 100, "viewer@example.com", {}],
   ] as const) {
-    await upsertSessionEntryCore(
+    replaceSessionEntrySync(
       { agentId, sessionKey: `agent:${agentId}:${name}` },
-      {
+      mergeSessionEntry(undefined, {
         sessionId: `${agentId}-${name}`,
         updatedAt,
         createdActor: { type: "human", source: "profile", id: owner },
         visibility: "shared",
         ...overrides,
-      },
+      }),
     );
   }
   return config;
@@ -164,7 +204,7 @@ export async function seedSessionsWithActivityTimes() {
     if (!entry) {
       throw new Error(`Missing seeded session ${scope.sessionKey}`);
     }
-    await replaceSessionEntry(scope, { ...entry, updatedAt });
+    replaceSessionEntrySync(scope, { ...entry, updatedAt });
     expect(loadSessionEntry(scope)?.updatedAt).toBe(updatedAt);
   }
   return { clock, config };

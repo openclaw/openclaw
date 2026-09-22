@@ -30,9 +30,7 @@ export function bumpAgentRunIndexVersion(
     : [context]) {
     const { sessionKey, agentId } = target ?? {};
     sessionChanges.emit(
-      sessionKey
-        ? { sessionKey, agentId }
-        : { all: true, scope: agentId ? { agentId } : "agent-runs" },
+      sessionKey ? { sessionKey, agentId, scope: "runtime" } : { all: true, scope: "agent-runs" },
     );
   }
 }

@@ -51,6 +51,7 @@ function createPiSessionNodeHostBindings() {
     terminalCommand: PI_TERMINAL_RESUME_COMMAND,
     sessionIdPattern: PI_SESSION_ID_PATTERN,
     executable: "pi",
+    hasActiveWork: () => false,
     args: (threadId) => ["--session", threadId],
     listAvailable: storeAvailable,
     terminalAvailable: ({ config, env }) =>

@@ -1,9 +1,14 @@
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
-import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
+import type { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
+import type { GatewayClient } from "./server-methods/types.js";
+import {
+  projectSessionParticipant,
+  projectSessionProfileInvolvement,
+} from "./session-identity-projection.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
-import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   authorizeIncognitoSessionTarget,
   resolveSessionVisibility,
@@ -13,7 +18,9 @@ import { prepareProjectedSessionSharing } from "./session-sharing.js";
 import { projectGatewaySessionActiveRun } from "./session-utils-display.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
-type PresentationOptions = Omit<records.SnapshotOptions, "now" | "active">;
+type PresentationOptions = Omit<records.SnapshotOptions, "now" | "active" | "subagentRuns"> & {
+  includeActivitySummary?: boolean;
+};
 
 function toProjectedSessionSharingTarget(record: records.MaterializedRow): SessionSharingTarget {
   return {
@@ -28,16 +35,13 @@ function toProjectedSessionSharingTarget(record: records.MaterializedRow): Sessi
 
 /** Recreate after yields: the caller identity and clock belong to one synchronous presentation. */
 export function prepareProjectedSessionPresentation(
-  projection: SessionRowProjection,
+  projection: SessionRowReadView,
   client?: GatewayClient | null,
   now = Date.now(),
-  context?: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
+  projectRun?: ReturnType<typeof createVisibleActiveSessionRunProjector>,
 ) {
   const { cfg, rowContext } = projection.state;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
-  const projectRun = context
-    ? createVisibleActiveSessionRunProjector(context, rowContext.projectedAgentRuns)
-    : undefined;
   const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
     projectRun?.({
       requestedKey: key,
@@ -62,22 +66,27 @@ export function prepareProjectedSessionPresentation(
         })
         ?.membership.has(identityId) ?? false,
   });
+  const profile = gatewayClientSessionCreator(client ?? null);
+  const profiles = rowContext.userProfileIdentityById;
+  const profileId = profile
+    ? projectSessionParticipant({ type: "profile", id: profile.id }, profiles).identity.id
+    : undefined;
   const viewer = (value: SessionSharingTarget) => ({
     visibility: resolveSessionVisibility(value.entry),
+    ...(profileId && !value.entry.incognito && !isIncognitoSessionKey(value.canonicalKey)
+      ? {
+          hiddenFromInvolvingMe:
+            projectSessionProfileInvolvement(value.entry, profileId, profiles)?.hidden ?? false,
+        }
+      : {}),
     sharingRole: sharing.roleForTarget(value),
-    canEnsure:
-      !authorizeIncognitoSessionTarget({
-        client: client ?? null,
-        sessionKey: value.canonicalKey,
-        target: value,
-      }) && !sharing.authorizeTarget(value),
   });
   const present = (
     captured: records.MaterializedRow,
     options: PresentationOptions = {},
   ): GatewaySessionRow | null => {
     const record = projection.describe(
-      { ...captured, storePath: captured.storeTarget.storePath },
+      { agentId: captured.agentId, key: captured.key, storePath: captured.storeTarget.storePath },
       captured,
     );
     if (!record) {
@@ -94,6 +103,7 @@ export function prepareProjectedSessionPresentation(
     const row = projection.present(record, {
       ...options,
       now,
+      subagentRuns,
       active: run?.active,
       excludedChildKeys,
     });
@@ -107,7 +117,7 @@ export function prepareProjectedSessionPresentation(
               !excludedChildKeys.has(sessionKey) &&
               (client === undefined ||
                 !projection
-                  .select({ key: sessionKey })
+                  .selectEntries({ key: sessionKey })
                   .some((child) => sharing.entryFilter?.(child.key, child.entry) === false)),
           ),
         })),
@@ -120,11 +130,22 @@ export function prepareProjectedSessionPresentation(
         run.runIds === undefined ? {} : { activeRunIds: run.runIds },
       );
     }
+    if (options.includeActivitySummary === false) {
+      row.activitySummary = undefined;
+    }
     if (client !== undefined) {
-      const { canEnsure, ...fields } = viewer(toProjectedSessionSharingTarget(record));
-      Object.assign(row, fields);
+      const value = toProjectedSessionSharingTarget(record);
+      Object.assign(row, viewer(value));
       if (row.activitySummary) {
-        row.activitySummary = { ...row.activitySummary, canEnsure };
+        row.activitySummary = {
+          ...row.activitySummary,
+          canEnsure:
+            !authorizeIncognitoSessionTarget({
+              client: client ?? null,
+              sessionKey: value.canonicalKey,
+              target: value,
+            }) && !sharing.authorizeTarget(value),
+        };
       }
     }
     return row;

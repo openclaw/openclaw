@@ -328,8 +328,9 @@ describe("mcp-app-view localization", () => {
       },
     );
     let width = 640;
+    let height = 480;
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-      () => ({ width }) as DOMRect,
+      () => ({ width, height }) as DOMRect,
     );
     document.documentElement.dataset.themeMode = "dark";
     document.documentElement.style.setProperty("--card", "#161920");
@@ -382,14 +383,26 @@ describe("mcp-app-view localization", () => {
     bridge.onsizechange?.({ height: 900 });
     expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("900px");
 
-    view.fixedHeight = true;
+    view.fillContainer = true;
     await view.updateComplete;
-    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("100%");
     bridge.onsizechange?.({ height: 900 });
-    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("100%");
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
     );
+
+    height = 760;
+    resize?.();
+    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ containerDimensions: { width: 720, height: 760 } }),
+    );
+
+    view.fillContainer = false;
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    bridge.onsizechange?.({ height: 900 });
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("900px");
 
     view.remove();
     await expect.poll(() => disconnect).toHaveBeenCalledOnce();

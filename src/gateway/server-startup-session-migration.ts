@@ -1,6 +1,11 @@
+import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { hasSubagentSessionRecoveryOwner } from "../agents/subagents/registry/subagent-session-reconciliation.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { readSessionEntriesByStatus } from "../config/sessions/session-accessor.sqlite-status.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import {
+  hasSessionEntriesByStatus,
+  readSessionEntriesByStatus,
+} from "../config/sessions/session-accessor.sqlite-status.js";
 import {
   runSessionStartupMigration,
   type SessionStartupMigrationLogger,
@@ -15,6 +20,9 @@ import {
   isIncognitoSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
+import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
+import { recordGatewaySessionRunFailure } from "../sessions/session-run-error.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
@@ -60,6 +68,17 @@ async function reconcileStartupOrphans(
   if (!hasGatewayLifecycleCoordinator({ databasePath: statePath })) {
     return;
   }
+  try {
+    const running = withOpenClawAgentDatabaseReadOnly(
+      (connection) => hasSessionEntriesByStatus(connection, ["running"]),
+      database,
+    );
+    if (running.found && !running.value) {
+      return;
+    }
+  } catch {
+    // The writable owner retains schema repair and integrity diagnosis for uncertain reads.
+  }
   const lock = await readActiveGatewayLockIdentity({ env, requireInspection: true });
   if (lock?.pid !== process.pid || !lock.ownerId) {
     return;
@@ -90,40 +109,64 @@ async function reconcileStartupOrphans(
       continue;
     }
     const identity = { sessionKey, sessionId: entry.sessionId, env };
+    const target = {
+      agentId: resolveAgentIdFromSessionKey(sessionKey),
+      env,
+      sessionKey,
+      storePath: connection.path,
+    };
+    const matchesPredecessor = (current: InternalSessionEntry | undefined) =>
+      current !== undefined &&
+      current.sessionId === entry.sessionId &&
+      current.lifecycleRevision === entry.lifecycleRevision &&
+      current.lifecycleRunId === entry.lifecycleRunId &&
+      current.updatedAt === entry.updatedAt &&
+      current.startedAt === entry.startedAt &&
+      isUnsettledPredecessor(current);
     const assertOwnerless = () => {
       assertGatewayOwner();
-      if (hasSubagentSessionRecoveryOwner(identity)) {
+      if (
+        hasSubagentSessionRecoveryOwner(identity) ||
+        isSessionWorkAdmissionActive(connection.path, [sessionKey, entry.sessionId])
+      ) {
         throw new Error("a current or retained run/task owns this session");
       }
     };
     try {
       assertOwnerless();
-      const updated = await patchSessionEntryCore(
-        {
-          agentId: resolveAgentIdFromSessionKey(sessionKey),
-          env,
-          sessionKey,
-          storePath: connection.path,
+      const outcome = buildAgentRunTerminalOutcome({
+        status: "error",
+        error: "subagent run was interrupted before a terminal lifecycle event was persisted",
+        startedAt: entry.startedAt,
+        // This is the repair observation, not a reconstructed execution finish time.
+        endedAt: Date.now(),
+      });
+      await recordGatewaySessionRunFailure({
+        target: {
+          ...target,
+          sessionId: entry.sessionId,
+          expectedLifecycleRevision: entry.lifecycleRevision,
         },
-        (current) =>
-          current.sessionId === entry.sessionId &&
-          current.lifecycleRevision === entry.lifecycleRevision &&
-          current.lifecycleRunId === entry.lifecycleRunId &&
-          current.updatedAt === entry.updatedAt &&
-          current.startedAt === entry.startedAt &&
-          isUnsettledPredecessor(current)
-            ? {
-                status: "interrupted",
-                abortedLastRun: true,
-                lastRunError:
-                  "subagent run was interrupted before a terminal lifecycle event was persisted",
-              }
-            : null,
-        { preserveActivity: true, skipMaintenance: true, assertCommitAllowed: assertOwnerless },
-      );
-      if (updated?.status === "interrupted") {
-        count++;
-      }
+        // A recovery-only receipt identity must not suppress the notice after partial output.
+        runId: `startup-orphan:${entry.sessionId}:${entry.lifecycleRunId ?? entry.startedAt}`,
+        error: outcome.error,
+        assertCommitAllowed: assertOwnerless,
+        settleSession: () => {
+          const current = readSessionEntryRow(connection, sessionKey)?.entry;
+          if (!current || !matchesPredecessor(current)) {
+            throw new Error("startup subagent session changed before interruption receipt");
+          }
+          // The receipt owner holds the outer transaction; either both writes commit or neither does.
+          replaceSessionEntrySync(target, {
+            ...current,
+            status: "interrupted",
+            abortedLastRun: true,
+            endedAt: outcome.endedAt,
+            lastRunError: outcome.error,
+          });
+        },
+      });
+      count++;
     } catch (error) {
       log.warn(`session: retained startup subagent ${sessionKey}: ${String(error)}`);
     }

@@ -2,11 +2,6 @@ import type { ReactiveController } from "lit";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
-import {
-  deriveApprovalBadgeSnapshot,
-  type ApprovalBadgeSnapshot,
-} from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -103,7 +98,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private readonly childSessionQueries = new Map<string, ChildSessionQuery>();
   private cachedSessionResult: SessionsListResult | null = null;
   private stopCatalogBrowserEvents: (() => void) | null = null;
-  private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
+  private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayConnectionRevision = 0;
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
@@ -120,9 +115,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     () => ({ routeId: this.host.activeRouteId, key: this.host.getRouteSessionKey() }),
     () => this.childSessionScope,
   );
-  private approvalBadgeQueue: ApplicationContext<RouteId>["overlays"]["snapshot"]["approvalQueue"] =
-    [];
-  private approvalBadges: ApprovalBadgeSnapshot = deriveApprovalBadgeSnapshot([]);
 
   constructor(private readonly host: SessionDataControllerHost) {
     host.addController(this);
@@ -163,14 +155,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
         () => this.context?.agentSelection,
         (agentSelection, notify) => agentSelection.subscribe(notify),
         () => this.synchronizeSessionScope(),
-      )
-      .watch(
-        () => this.context?.overlays,
-        (overlays, notify) => overlays.subscribe(notify),
       );
   }
 
-  get context(): ApplicationContext<RouteId> | undefined {
+  get context(): ApplicationContext | undefined {
     return this.host.sessionDataContext;
   }
 
@@ -230,15 +218,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.scroll.dispose();
     this.lineage.disconnect();
     this.subscriptions.hostDisconnected();
-  }
-
-  approvalBadgeSnapshot(): ApprovalBadgeSnapshot {
-    const queue = this.context?.overlays?.snapshot.approvalQueue ?? [];
-    if (queue !== this.approvalBadgeQueue) {
-      this.approvalBadgeQueue = queue;
-      this.approvalBadges = deriveApprovalBadgeSnapshot(queue);
-    }
-    return this.approvalBadges;
   }
 
   sessionCatalogGatewayClient(): GatewayBrowserClient | null {
@@ -421,7 +400,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     }
   }
 
-  private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]): void {
+  private synchronizeGateway(gateway: ApplicationContext["gateway"]): void {
     this.lineage.synchronize();
     const client = gateway.snapshot.client;
     const connected = gateway.snapshot.phase === "connected";
@@ -545,6 +524,12 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       }
     }
     retireStaleChildSessionRows(this, this.lineage.routeKey, revalidating);
+  }
+
+  needsChildSessionLoad(parentKey: string): boolean {
+    return (
+      !this.childSessionQueries.has(parentKey) && !this.childSessionErrorsByParent.has(parentKey)
+    );
   }
 
   async loadChildSessions(parentKey: string, retry = false): Promise<void> {

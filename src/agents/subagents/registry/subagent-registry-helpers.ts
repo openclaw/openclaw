@@ -185,6 +185,8 @@ export async function persistSubagentSessionTiming(
       return next;
     },
     {
+      // A queued completion can lose ownership before commit; abandon its projection quietly.
+      shouldCommit: options?.isCurrentGeneration,
       assertCommitAllowed: options?.assertCommitAllowed,
       replaceEntry: true,
     },

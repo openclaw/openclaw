@@ -1,7 +1,7 @@
-// Memory Core plugin module implements rem evidence behavior.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readWorkspaceText } from "./memory-workspace-files.js";
+import { collectMarkdownFiles } from "./rem-evidence-files.js";
 
 const REM_BLOCKED_SECTION_RE =
   /\b(morning reminders|tasks? for today|to-?do|pickups?|action items?|next steps?|open questions?|stats|setup tasks?|priority contacts|visitors?|top priority candidates|timeline coverage|action items for morning review|test .* skill|heartbeat checks?|date semantics guardrail|still broken|last message (?:&|and) status|plugin \/ service warning|email triage cron)\b/i;
@@ -58,9 +58,6 @@ const REM_TIME_PREFIX_RE = /^\d{1,2}:\d{2}\s*-\s*/;
 const REM_CODE_FENCE_RE = /^\s*```/;
 const REM_TABLE_RE = /^\s*\|.*\|\s*$/;
 const REM_TABLE_DIVIDER_RE = /^\s*\|?[\s:-]+\|[\s|:-]*$/;
-const MAX_GROUNDED_REM_FILES = 512;
-const MAX_GROUNDED_REM_FILE_BYTES = 1_000_000;
-const GROUNDED_REM_SKIPPED_DIRS = new Set([".git", "node_modules"]);
 const REM_SUMMARY_FACT_LIMIT = 4;
 const REM_SUMMARY_REFLECTION_LIMIT = 4;
 const REM_SUMMARY_MEMORY_LIMIT = 3;
@@ -1037,54 +1034,15 @@ export function previewGroundedRemForFile(params: {
   };
 }
 
-async function collectMarkdownFiles(inputPaths: string[]): Promise<string[]> {
-  const found = new Set<string>();
-  async function walk(targetPath: string): Promise<void> {
-    if (found.size >= MAX_GROUNDED_REM_FILES) {
-      return;
-    }
-    const resolved = path.resolve(targetPath);
-    const stat = await fs.lstat(resolved);
-    if (stat.isSymbolicLink()) {
-      return;
-    }
-    if (stat.isDirectory()) {
-      const entries = await fs.readdir(resolved, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory() && GROUNDED_REM_SKIPPED_DIRS.has(entry.name)) {
-          continue;
-        }
-        await walk(path.join(resolved, entry.name));
-      }
-      return;
-    }
-    if (
-      stat.isFile() &&
-      stat.size <= MAX_GROUNDED_REM_FILE_BYTES &&
-      resolved.toLowerCase().endsWith(".md")
-    ) {
-      found.add(resolved);
-    }
-  }
-  for (const inputPath of inputPaths) {
-    const trimmed = inputPath.trim();
-    if (!trimmed) {
-      continue;
-    }
-    await walk(trimmed);
-  }
-  return Array.from(found).toSorted((left, right) => left.localeCompare(right));
-}
-
 export async function previewGroundedRemMarkdown(params: {
   workspaceDir: string;
   inputPaths: string[];
 }): Promise<GroundedRemPreviewResult> {
   const workspaceDir = params.workspaceDir.trim();
-  const files = await collectMarkdownFiles(params.inputPaths);
+  const files = await collectMarkdownFiles(workspaceDir, params.inputPaths);
   const previews: GroundedRemFilePreview[] = [];
   for (const filePath of files) {
-    const content = await fs.readFile(filePath, "utf-8");
+    const content = await readWorkspaceText(workspaceDir, filePath);
     const relPath = normalizePath(path.relative(workspaceDir, filePath));
     previews.push(previewGroundedRemForFile({ relPath, content }));
   }

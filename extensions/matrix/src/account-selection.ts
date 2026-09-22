@@ -1,4 +1,3 @@
-// Matrix plugin module implements account selection behavior.
 import {
   listCombinedAccountIds,
   listConfiguredAccountIds,
@@ -129,6 +128,23 @@ export function findMatrixAccountEntry(
   }
   const entry = resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId);
   return isRecord(entry) ? entry : null;
+}
+
+export function hasImplicitMatrixAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const normalized = normalizeAccountId(accountId);
+  return (
+    (normalized === DEFAULT_ACCOUNT_ID ||
+      listMatrixEnvAccountIds(env).some((id) => normalizeAccountId(id) === normalized)) &&
+    hasUsableEffectiveMatrixAccountSource({
+      channel: resolveMatrixChannelConfig(cfg),
+      accountId: normalized,
+      env,
+    })
+  );
 }
 
 export function resolveConfiguredMatrixAccountIds(

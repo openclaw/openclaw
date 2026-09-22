@@ -8,6 +8,7 @@ import {
   listSessionTranscriptCorpusEntriesForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
+  encodeMemoryEmbedding,
   MEMORY_CHUNKING_VERSION,
   type MemorySessionSyncTarget,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -21,11 +22,9 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
-import {
-  recordMemoryEntryOrigins,
-  recordMemorySessionTombstones,
-} from "../memory-entry-origins.js";
+import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
+import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import {
   createManagerIndexFixture,
@@ -51,12 +50,15 @@ describe("memory session update sync", () => {
       .prepare(
         "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'sessions', 1, 1, ?, ?, ?, ?, ?)",
       )
-      .run(sessionPath, sessionPath, "stale-chunk", "fts-only", text, "[]", 10);
-    database
-      .prepare(
-        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, 'sessions', ?, 1, 1)",
-      )
-      .run(text, sessionPath, sessionPath, "fts-only");
+      .run(
+        sessionPath,
+        sessionPath,
+        "stale-chunk",
+        "fts-only",
+        text,
+        encodeMemoryEmbedding([]),
+        10,
+      );
     database
       .prepare(
         "INSERT INTO memory_index_chunk_provenance (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'system', 'subagent', ?)",
@@ -544,7 +546,7 @@ describe("memory session update sync", () => {
       database.prepare("SELECT path FROM memory_index_chunks WHERE path = ?").get(sessionPath),
     ).toEqual({ path: sessionPath });
 
-    recordMemorySessionTombstones({ agentId: "main", sessionIds: [sessionId] });
+    seedMemoryForgetTombstones({ agentId: "main", sessionIds: [sessionId] });
     await manager.sync({ reason: "forced-reindex-after-forget", force: true });
 
     expectSessionIndexRemoved(database, sessionPath);
@@ -652,7 +654,7 @@ describe("memory session update sync", () => {
     if (repeatPurge) {
       // An earlier purge persisted its tombstone but failed before rewriting
       // this previously unindexed file. Retrying must fence a completed shadow.
-      recordMemorySessionTombstones({ agentId: "main", sessionIds: [sessionId] });
+      seedMemoryForgetTombstones({ agentId: "main", sessionIds: [sessionId] });
     }
     const manager = await getFreshManager(cfg, "cli", true);
     let releaseEmbedding = () => {};

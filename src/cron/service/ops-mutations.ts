@@ -23,7 +23,10 @@ import {
   systemOwnedDeclarationKeyNamespace,
 } from "../system-owned-declaration.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
-import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
+import {
+  resolveCronAuthenticatedCallerOrigin,
+  resolveCronAuthenticatedChannelRequester,
+} from "../tools-allow-provenance.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { declarativeFields } from "./jobs-declarative.js";
 import { cloneCronJobForMutation, finalizeUpdatedJob } from "./jobs-mutation.js";
@@ -36,6 +39,7 @@ import {
 import {
   consumeRuntimeAuthorityMutationOptions,
   cronJobMessageActionAuthorityInputsEqual,
+  cronJobMessageToolAuthorityInputsEqual,
   reconcileCronChannelRequesterAuthority,
   reconcileRuntimeAuthority,
 } from "./jobs-tool-policy.js";
@@ -145,11 +149,15 @@ async function persistUpdatedJob(params: {
   const scheduleChanged = !cronSchedulingInputsEqual(previousJob, nextJob);
   const messageActionAuthorityChanged =
     (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) ||
+    !cronJobMessageToolAuthorityInputsEqual(previousJob, nextJob);
+  const messageSourceAuthorityChanged =
     !cronJobMessageActionAuthorityInputsEqual(previousJob, nextJob) ||
     (triggerStateChanged &&
       Boolean(
         resolveCronAuthenticatedChannelRequester(previousJob) ||
-        resolveCronAuthenticatedChannelRequester(nextJob),
+        resolveCronAuthenticatedChannelRequester(nextJob) ||
+        resolveCronAuthenticatedCallerOrigin(previousJob) ||
+        resolveCronAuthenticatedCallerOrigin(nextJob),
       ));
   await persistStore(state, snapshot, {
     suppressScheduledJobId: nextJob.id,
@@ -161,6 +169,7 @@ async function persistUpdatedJob(params: {
         ownerChanged,
         triggerStateChanged,
         messageActionAuthorityChanged,
+        messageSourceAuthorityChanged,
         ...(scheduleChanged ? { scheduleChangedJob: nextJob } : {}),
       }),
     ),
@@ -449,6 +458,8 @@ async function updateLoadedJob(params: {
     previousJob: job,
     toolsAllowProvenance: opts?.toolsAllowProvenance,
     reauthorize: patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
+    reauthorizeCallerOrigin:
+      patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
   });
   const snapshot = snapshotStoreForRollback(state);
   await persistUpdatedJob({
@@ -571,7 +582,7 @@ export async function remove(
   const cleanup = async () => {
     try {
       const shouldRemove = await locked(state, async () => {
-        await ensureLoaded(state, { skipRecompute: true });
+        await ensureLoaded(state);
         return !state.store?.jobs.some((job) => job.id === id);
       });
       if (shouldRemove) {

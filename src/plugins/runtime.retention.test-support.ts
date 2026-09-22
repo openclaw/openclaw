@@ -47,6 +47,17 @@ async function retireSuccessors() {
   return { oldest, successors };
 }
 
+function inspectRetiredSuccessors(
+  inspect: (result: Awaited<ReturnType<typeof retireSuccessors>>) => Promise<void>,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    void retireSuccessors().then((result) => {
+      // Inspect inside the next task so no producer or outer resolution frame stays live.
+      void setImmediate().then(() => inspect(result).then(resolve, reject), reject);
+    }, reject);
+  });
+}
+
 async function retireCapturedCallback() {
   const marker = { label: "startup-only retirement capture" };
   const reference = new WeakRef(marker);
@@ -261,14 +272,15 @@ switch (process.argv[2]) {
     break;
   }
   case "registry": {
-    const { oldest, successors } = await retireSuccessors();
-    await collect();
-    assert.ok(
-      successors.every((reference) => reference.deref() === undefined),
-      "Completed retirement retained a successor registry",
-    );
-    assert.deepEqual(await waitForPluginRegistryRetirement(oldest), emptyResult);
-    assert.deepEqual(await disposePluginRegistryInstances(oldest), emptyResult);
+    await inspectRetiredSuccessors(async ({ oldest, successors }) => {
+      await collect();
+      assert.ok(
+        successors.every((reference) => reference.deref() === undefined),
+        "Completed retirement retained a successor registry",
+      );
+      assert.deepEqual(await waitForPluginRegistryRetirement(oldest), emptyResult);
+      assert.deepEqual(await disposePluginRegistryInstances(oldest), emptyResult);
+    });
     break;
   }
   case "cache": {

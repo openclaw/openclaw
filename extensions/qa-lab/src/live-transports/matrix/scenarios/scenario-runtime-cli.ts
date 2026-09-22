@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime cli behavior.
 import { spawn as startOpenClawCliProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";

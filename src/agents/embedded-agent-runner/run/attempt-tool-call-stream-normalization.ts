@@ -3,9 +3,9 @@ import { randomUUID } from "node:crypto";
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import type { StreamFn } from "../../runtime/index.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
-import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
+import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
-import { wrapStreamObjectEvents } from "./stream-wrapper.js";
+import { mapAssistantMessageStream, wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const BLANK_TOOL_CALL_NAME_DESCRIPTION = "blank tool name";
 type UnknownToolLoopGuardState = {
@@ -46,24 +46,20 @@ function normalizeToolCallsInMessage(
   let sawBlankStringToolCall = false;
   const hasAllowedToolNames = Boolean(allowedToolNames && allowedToolNames.size > 0);
   for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
-    if (!isRunnerToolCallBlockType(typedBlock.type)) {
+    if (!isRunnerToolCallBlock(block)) {
       continue;
     }
     usedIds ??= new Set<string>();
-    const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
-    if (typeof typedBlock.name === "string") {
-      const normalized = resolveToolCallName(typedBlock.name, allowedToolNames, rawId);
-      if (normalized !== null && normalized !== typedBlock.name) {
-        typedBlock.name = normalized;
+    const rawId = typeof block.id === "string" ? block.id : undefined;
+    if (typeof block.name === "string") {
+      const normalized = resolveToolCallName(block.name, allowedToolNames, rawId);
+      if (normalized !== null && normalized !== block.name) {
+        block.name = normalized;
       }
     } else {
       const inferred = resolveToolCallName("", allowedToolNames, rawId);
       if (inferred) {
-        typedBlock.name = inferred;
+        block.name = inferred;
       }
     }
     const trimmedId = rawId?.trim();
@@ -71,7 +67,7 @@ function normalizeToolCallsInMessage(
       usedIds.add(trimmedId);
     }
 
-    const rawBlockName = typedBlock.name;
+    const rawBlockName = block.name;
     const hasStringName = typeof rawBlockName === "string";
     const rawName = hasStringName ? rawBlockName.trim() : "";
     if (!rawName) {
@@ -105,19 +101,15 @@ function normalizeToolCallsInMessage(
 
   const assignedIds = new Set<string>();
   for (const [contentIndex, block] of content.entries()) {
-    if (!block || typeof block !== "object") {
+    if (!isRunnerToolCallBlock(block)) {
       continue;
     }
-    const typedBlock = block as { type?: unknown; id?: unknown };
-    if (!isRunnerToolCallBlockType(typedBlock.type)) {
-      continue;
-    }
-    if (typeof typedBlock.id === "string") {
-      const trimmedId = typedBlock.id.trim();
+    if (typeof block.id === "string") {
+      const trimmedId = block.id.trim();
       if (trimmedId) {
         if (!assignedIds.has(trimmedId)) {
-          if (typedBlock.id !== trimmedId) {
-            typedBlock.id = trimmedId;
+          if (block.id !== trimmedId) {
+            block.id = trimmedId;
           }
           assignedIds.add(trimmedId);
           continue;
@@ -130,7 +122,7 @@ function normalizeToolCallsInMessage(
       fallbackId = createStandaloneTextToolCallId();
     }
     fallbackIdByContentIndex[contentIndex] = fallbackId;
-    typedBlock.id = fallbackId;
+    block.id = fallbackId;
     usedIds.add(fallbackId);
     assignedIds.add(fallbackId);
   }
@@ -318,19 +310,11 @@ export function wrapStreamFnTrimToolCallNames(
     count: 0,
     countedMessages: new WeakSet<object>(),
   };
-  return (model, context, streamOptions) => {
-    const maybeStream = baseFn(model, context, streamOptions);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamTrimToolCallNames(stream, allowedToolNames, {
-          unknownToolThreshold: guardOptions?.unknownToolThreshold,
-          state: unknownToolGuardState,
-        }),
-      );
-    }
-    return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames, {
-      unknownToolThreshold: guardOptions?.unknownToolThreshold,
-      state: unknownToolGuardState,
-    });
-  };
+  return (model, context, streamOptions) =>
+    mapAssistantMessageStream(baseFn(model, context, streamOptions), (stream) =>
+      wrapStreamTrimToolCallNames(stream, allowedToolNames, {
+        unknownToolThreshold: guardOptions?.unknownToolThreshold,
+        state: unknownToolGuardState,
+      }),
+    );
 }

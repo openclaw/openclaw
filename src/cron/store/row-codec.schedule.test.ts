@@ -56,19 +56,16 @@ describe("canonical cron schedule JSON round-trip", () => {
   it.each(["final-executable-surface", "authenticated-requester"] as const)(
     "round-trips private %s provenance through canonical job JSON",
     (source) => {
-      const provenance: CronToolsAllowProvenance = {
-        version: 1,
-        source,
-        channelRequester: {
-          version: 1,
-          channel: "discord",
-          accountId: "work",
-          senderId: "123456789012345678",
-        },
+      const channelRequester = {
+        version: 1 as const,
+        channel: "discord",
+        accountId: "work",
+        senderId: "123456789012345678",
       };
-      if (provenance.source === "final-executable-surface") {
-        provenance.callerOrigin = { kind: "local" };
-      }
+      const provenance: CronToolsAllowProvenance =
+        source === "final-executable-surface"
+          ? { version: 1, source, callerOrigin: { kind: "local" }, channelRequester }
+          : { version: 1, source, channelRequester };
       const job = projectCronJobThroughStorageCodec({
         ...makeCronJob({}),
         toolsAllowProvenance: provenance,
@@ -123,18 +120,8 @@ describe("canonical cron schedule JSON round-trip", () => {
     });
   });
 
-  it("round-trips a stream schedule through canonical job JSON", () => {
-    expect(
-      roundTrip({
-        kind: "stream",
-        command: ["node", "events.mjs"],
-        cwd: "/repo",
-        mode: "match",
-        match: "^ready:",
-        batchMs: 100,
-        maxBatchBytes: 2_048,
-      }),
-    ).toEqual({
+  it("round-trips a paced stream without aliasing input config or runtime state", () => {
+    const schedule: CronSchedule = {
       kind: "stream",
       command: ["node", "events.mjs"],
       cwd: "/repo",
@@ -142,6 +129,29 @@ describe("canonical cron schedule JSON round-trip", () => {
       match: "^ready:",
       batchMs: 100,
       maxBatchBytes: 2_048,
+    };
+    const triggerState = { cursor: { position: 7 }, items: ["first"] };
+    const input = makeCronJob({
+      schedule,
+      pacing: { min: "15m", max: "4h" },
+      state: { lastStatus: "ok", triggerState, nextRunAtMs: 123_000 },
+    });
+    const before = structuredClone(input);
+    const projected = projectCronJobThroughStorageCodec(input);
+
+    expect(projected.schedule).toStrictEqual(schedule);
+    expect(projected.pacing).toStrictEqual(input.pacing);
+    expect(projected.state).toStrictEqual({ ...input.state, lastRunStatus: "ok" });
+    expect(input).toStrictEqual(before);
+    expect(Object.is(projected.schedule, input.schedule)).toBe(false);
+    expect(Object.is(projected.pacing, input.pacing)).toBe(false);
+    expect(Object.is(projected.state, input.state)).toBe(false);
+    expect(Object.is(projected.state.triggerState, triggerState)).toBe(false);
+    triggerState.cursor.position = 9;
+    triggerState.items.push("second");
+    expect(projected.state.triggerState).toStrictEqual({
+      cursor: { position: 7 },
+      items: ["first"],
     });
   });
 

@@ -1,4 +1,3 @@
-// Discord plugin module implements security behavior.
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {

@@ -1,3 +1,5 @@
+import { notifyListeners, registerListener } from "../shared/listeners.js";
+
 type CurrentCaller = () => boolean;
 
 type RevocationState = {
@@ -5,6 +7,7 @@ type RevocationState = {
   role: string | undefined;
   references: number;
   revoked: boolean;
+  listeners?: Set<() => void>;
 };
 
 type RevocationOwner = {
@@ -16,6 +19,9 @@ type CapturedRevocation = {
   owner: RevocationOwner;
   state: RevocationState;
   isCurrent: CurrentCaller;
+  isSourceCurrent: CurrentCaller;
+  isRevocationCurrent: CurrentCaller;
+  releaseClientRevocation?: () => void;
 };
 
 const owners = new WeakMap<object, RevocationOwner>();
@@ -30,7 +36,8 @@ function getOwner(context: object): RevocationOwner {
   return owner;
 }
 
-function releaseHold({ owner, state }: CapturedRevocation): () => void {
+function releaseHold(capture: CapturedRevocation): () => void {
+  const { owner, state } = capture;
   let released = false;
   return () => {
     if (released) {
@@ -38,7 +45,13 @@ function releaseHold({ owner, state }: CapturedRevocation): () => void {
     }
     released = true;
     state.references -= 1;
-    if (state.references !== 0 || !state.deviceId) {
+    if (state.references !== 0) {
+      return;
+    }
+    capture.releaseClientRevocation?.();
+    capture.releaseClientRevocation = undefined;
+    state.listeners?.clear();
+    if (!state.deviceId) {
       return;
     }
     const bucket = owner.devices.get(state.deviceId);
@@ -49,12 +62,24 @@ function releaseHold({ owner, state }: CapturedRevocation): () => void {
   };
 }
 
+function revoke(state: RevocationState): void {
+  if (state.revoked) {
+    return;
+  }
+  state.revoked = true;
+  notifyListeners(state.listeners ?? [], undefined);
+}
+
 /** Capture the attested identity before dispatch yields, without retaining credentials or sockets. */
 export function captureGatewayDeviceRevocation(
   context: object,
   identity: { deviceId?: string; role?: string },
   hasCurrentClientAuthority: CurrentCaller,
   connectionSignal?: AbortSignal,
+  sourceAuthority?: {
+    isCurrent: CurrentCaller;
+    subscribe: (onRevoked: () => void) => () => void;
+  },
 ): { isCurrent: CurrentCaller; release: () => void } {
   const owner = getOwner(context);
   const state: RevocationState = {
@@ -73,13 +98,25 @@ export function captureGatewayDeviceRevocation(
   }
   // A live connection remains in the Gateway's ordinary invalidation index.
   // After disconnect, only an owned request or continuation may use this capture.
-  const isCurrent = () =>
+  const isRevocationCurrent = () =>
     !owner.closed &&
     !state.revoked &&
-    (state.references > 0 || connectionSignal?.aborted === false) &&
-    hasCurrentClientAuthority();
-  const capture = { owner, state, isCurrent };
+    (state.references > 0 || connectionSignal?.aborted === false);
+  const isCurrent = () => isRevocationCurrent() && hasCurrentClientAuthority();
+  // The request callback also fences tentative transport generations. Accepted
+  // work follows the subscribed source owner's committed revocations instead.
+  const isSourceCurrent = sourceAuthority
+    ? () => isRevocationCurrent() && sourceAuthority.isCurrent()
+    : isCurrent;
+  const capture: CapturedRevocation = {
+    owner,
+    state,
+    isCurrent,
+    isSourceCurrent,
+    isRevocationCurrent,
+  };
   captures.set(isCurrent, capture);
+  capture.releaseClientRevocation = sourceAuthority?.subscribe(() => revoke(state));
   return { isCurrent, release: releaseHold(capture) };
 }
 
@@ -93,6 +130,36 @@ export function bindGatewayDeviceRevocation<T extends () => unknown>(
     captures.set(guard, capture);
   }
   return guard;
+}
+
+/** Read only owner-held revocation/lifetime facts, without invoking the caller authority callback. */
+export function readGatewayDeviceRevocationGuard(
+  guard: (() => unknown) | undefined,
+): CurrentCaller | undefined {
+  return guard ? captures.get(guard)?.isRevocationCurrent : undefined;
+}
+
+/** Original committed source authority, excluding tentative transport and later request lifetimes. */
+export function readGatewayDeviceSourceAuthority(
+  guard: (() => unknown) | undefined,
+): CurrentCaller | undefined {
+  return guard ? captures.get(guard)?.isSourceCurrent : undefined;
+}
+
+/** Notify retained work of access revocation, independently of transport or Gateway shutdown. */
+export function onGatewayDeviceSourceRevoked(
+  guard: (() => unknown) | undefined,
+  onRevoked: () => void,
+): (() => void) | undefined {
+  const capture = guard ? captures.get(guard) : undefined;
+  if (!capture) {
+    return undefined;
+  }
+  const unsubscribe = registerListener((capture.state.listeners ??= new Set()), onRevoked);
+  if (capture.state.revoked) {
+    onRevoked();
+  }
+  return unsubscribe;
 }
 
 /** Transfer a hold on the original captured state, never recapture a later device/session. */
@@ -117,7 +184,7 @@ export function invalidateGatewayDeviceRevocation(
 ): void {
   for (const state of owners.get(context)?.devices.get(deviceId) ?? []) {
     if (!role || state.role === role) {
-      state.revoked = true;
+      revoke(state);
     }
   }
 }

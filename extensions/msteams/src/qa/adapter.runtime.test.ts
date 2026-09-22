@@ -83,8 +83,9 @@ describe("Microsoft Teams QA transport adapter", () => {
       const env = adapter.createRuntimeEnvPatch?.();
       expect(env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
       expect(env).not.toHaveProperty("OPENCLAW_QA_MSTEAMS_CONNECTOR_URL");
-      const bootstrapUrl = /--import=(\S+)/u.exec(env?.NODE_OPTIONS ?? "")?.[1];
+      const [bootstrapUrl] = adapter.createRuntimePreloads?.() ?? [];
       expect(bootstrapUrl).toMatch(/^file:/u);
+      expect(env?.NODE_OPTIONS).toContain(`--import=${bootstrapUrl}`);
       bootstrapPath = fileURLToPath(bootstrapUrl!);
       const bootstrap = await fs.readFile(bootstrapPath, "utf8");
       expect(bootstrap).toContain('Symbol.for("openclaw.msteams.privateQaRuntime")');

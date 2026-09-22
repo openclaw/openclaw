@@ -26,7 +26,7 @@ import {
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../../infra/push-apns.js";
 import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -98,7 +98,7 @@ afterEach(async () => {
   resetNodeWakeStateForTest();
   pairingGenerationHooks.beforeCapture.mockReset();
   vi.clearAllMocks();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   while (createdStates.length > 0) {
     await createdStates.pop()?.cleanup();
   }

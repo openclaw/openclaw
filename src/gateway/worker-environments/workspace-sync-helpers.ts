@@ -176,7 +176,7 @@ export function workerWorkspaceSshArgv(
   ];
 }
 
-async function resolveRemoteWorkspaceBaseManifest(
+export async function resolveRemoteWorkspaceManifest(
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
   remoteWorkspaceDir: string,
   expectedRef: string,
@@ -204,18 +204,6 @@ async function resolveRemoteWorkspaceBaseManifest(
     throw new Error("Worker workspace base manifest resolution returned the wrong reference");
   }
   return baseDigest;
-}
-
-export async function resolveRemoteWorkspaceManifest(
-  runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
-  remoteWorkspaceDir: string,
-  expectedRef: string,
-) {
-  return await resolveRemoteWorkspaceBaseManifest(
-    runWorkspaceCommand,
-    remoteWorkspaceDir,
-    expectedRef,
-  );
 }
 
 export async function captureRemoteWorkspaceManifest(params: {

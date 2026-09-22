@@ -313,9 +313,8 @@ system Node packages.
   </Step>
 </Steps>
 
-On FreeBSD, use the default npm method (`--install-method npm`). The current
-checkout pins pnpm 12.3.4, which has no FreeBSD executable; some native source
-dependencies also lack FreeBSD support, so `--install-method git` is unsupported.
+On FreeBSD, use the default npm method (`--install-method npm`) with a published
+version or compatible built `.tgz` package. Source/git installation is unsupported.
 If OpenClaw is managed by pkg or Ports, keep using that package owner instead of
 installing over it.
 
@@ -326,7 +325,21 @@ The installer requires supported Node and npm commands on `PATH`, and verifies t
 It links that runtime into the local prefix without changing system packages.
 An explicit `--node-version` sets the minimum accepted system version on FreeBSD.
 
+The upstream Codex CLI does not provide a FreeBSD binary target.
+A successful installation or `openclaw doctor --fix` does not verify native Codex execution.
+For OpenAI API models, configure an API-key auth profile.
+Explicitly select `agentRuntime.id: "openclaw"` for the models you use.
+API-key access uses OpenAI Platform billing, separate from a ChatGPT/Codex subscription.
+See [OpenAI setup](/providers/openai/setup) and [runtime selection](/providers/openai/runtimes#implicit-agent-runtime).
+
 With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix>/tools/node-v<version>` and updating the `<prefix>/tools/node` alias. It skips Git, OpenClaw installation, onboarding, and Gateway service work. This mode refuses musl Linux and FreeBSD. Update their system Node packages manually.
+
+With `--runtime-only`, the script installs Node and the CLI but skips Gateway
+service discovery, refresh, and onboarding, even if `--onboard` is also supplied.
+The npm path also skips system Git provisioning. Desktop browser setup uses
+this with `--npm`, an exact app version, and a separate app-owned prefix; it does
+not replace an independently managed Gateway runtime. Normal installation keeps
+its existing service-refresh behavior.
 
 ### Examples (install-cli.sh)
 
@@ -378,6 +391,7 @@ With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix
 | `--compatible-with <ver>`               | Refuse a CLI that cannot modify config written by `<ver>`                         |
 | `--node-version <ver>`                  | Node version (default: `24.19.0`)                                                 |
 | `--node-only`                           | Install only the private Node runtime under `--prefix`; no system package changes |
+| `--runtime-only`                        | Install Node and CLI without Gateway probes, service refresh, or onboarding       |
 | `--json`                                | Emit NDJSON events                                                                |
 | `--onboard`                             | Run `openclaw onboard` after install                                              |
 | `--no-onboard`                          | Skip onboarding (default)                                                         |
@@ -420,7 +434,7 @@ With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix
     Requires PowerShell 5+.
   </Step>
   <Step title="Ensure a supported Node.js runtime">
-    If missing, attempts install via winget, then Chocolatey, then Scoop. If no package manager is available, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 24.16+ and Node 26.1+ are supported; Node 22, 23, and 25 are unsupported.
+    If missing, attempts install via winget, then Chocolatey, then Scoop. If those methods are unavailable, fail, or leave an unsupported runtime, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 24.16+ and Node 26.1+ are supported; Node 22, 23, and 25 are unsupported.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using the selected `-Tag`, launched from a writable installer temp directory so shells opened in protected folders such as `C:\` still work

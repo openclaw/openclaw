@@ -1,4 +1,5 @@
 import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
+import { isCompleteAgentPreamble } from "../../../../src/agents/agent-activity-presentation.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import { retireCommentaryStream } from "./stream-segment-pruning.ts";
@@ -45,6 +46,14 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
   const progress = readPreambleProgressEvent(payload);
   if (!progress) {
     return false;
+  }
+  if (
+    !isCompleteAgentPreamble({
+      phase: typeof payload.data.phase === "string" ? payload.data.phase : undefined,
+      progressText: progress.text,
+    })
+  ) {
+    return true;
   }
   // Preambles belong to the visible run; a sibling run must never replace,
   // clear, or persist its commentary into this transcript.

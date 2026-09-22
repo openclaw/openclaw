@@ -24,9 +24,10 @@ import {
 } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
@@ -35,21 +36,25 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import {
+  createTestApprovalManager,
+  installTestApprovalClock,
+} from "../exec-approval-manager.test-support.js";
 import type { ExecApprovalManagerOptions } from "../exec-approval-manager.types.js";
 import { getOperatorApprovalDetailed, insertOperatorApproval } from "../operator-approval-store.js";
+import * as operatorApprovalStore from "../operator-approval-store.js";
 
-function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
-  const result = getOperatorApprovalDetailed(params);
+async function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
+  const result = await getOperatorApprovalDetailed({ nowMs: Date.now(), ...params });
   return result.outcome === "found" ? result.record : null;
 }
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   cancelAgentRuntimeBoundApprovals,
   cancelUnboundRunApprovals,
-  cancelWorkerTurnClaimBoundApprovals,
 } from "./approval-run-cancellation.js";
 import { createApprovalHandlers } from "./approval.js";
+import { createContext, deleteDurableApproval } from "./approval.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
@@ -61,8 +66,8 @@ vi.mock("../approval-channel-custody.js", () => ({
 const tempDirs: string[] = [];
 type OperatorApprovalDatabase = Pick<OpenClawStateKyselyDatabase, "operator_approvals">;
 const managersForCleanup: Array<{
-  listPendingRecords(): Array<{ id: string }>;
-  expire(id: string, resolvedBy?: string | null): boolean;
+  listPendingRecords(): Promise<Array<{ id: string }>>;
+  expire(id: string, resolvedBy?: string | null): Promise<boolean>;
 }> = [];
 
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
@@ -100,15 +105,6 @@ function createManagers(databaseOptions: OpenClawStateDatabaseOptions) {
   return managers;
 }
 
-function deleteDurableApproval(databaseOptions: OpenClawStateDatabaseOptions, id: string): void {
-  const database = openOpenClawStateDatabase(databaseOptions);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    stateDb.deleteFrom("operator_approvals").where("approval_id", "=", id),
-  );
-}
-
 function corruptDurableApprovalPresentation(
   databaseOptions: OpenClawStateDatabaseOptions,
   id: string,
@@ -124,7 +120,7 @@ function corruptDurableApprovalPresentation(
   );
 }
 
-function registerExec(
+async function registerExec(
   manager: ExecApprovalManager,
   params: {
     id: string;
@@ -163,11 +159,11 @@ function registerExec(
   if (params.expiresAtMs !== undefined) {
     record.expiresAtMs = params.expiresAtMs;
   }
-  const decision = manager.register(record, 600_000);
+  const decision = (await manager.register(record, 600_000)).decision;
   return { record, decision };
 }
 
-function registerPlugin(
+async function registerPlugin(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
   params: {
     id: string;
@@ -193,11 +189,11 @@ function registerPlugin(
   record.requestedByClientId = "requester-client";
   record.requestedByDeviceTokenAuth = true;
   record.approvalReviewerDeviceIds = params.reviewerDeviceIds ?? ["reviewer"];
-  const decision = manager.register(record, 600_000);
+  const decision = (await manager.register(record, 600_000)).decision;
   return { record, decision };
 }
 
-function registerSystemAgent(
+async function registerSystemAgent(
   manager: ExecApprovalManager<SystemAgentApprovalRequestPayload>,
   id: string,
 ) {
@@ -215,7 +211,7 @@ function registerSystemAgent(
     600_000,
     id,
   );
-  const decision = manager.register(record, 600_000);
+  const decision = (await manager.register(record, 600_000)).decision;
   return { record, decision };
 }
 
@@ -234,24 +230,6 @@ function createClient(params: {
     },
     ...(params.internal ? { internal: { approvalRuntime: true } } : {}),
   } as unknown as GatewayRequestHandlerOptions["client"];
-}
-
-function createContext(
-  controlUiBasePath?: string,
-  approvalWebPushDelivery?: GatewayRequestHandlerOptions["context"]["approvalWebPushDelivery"],
-) {
-  return {
-    broadcast: vi.fn(),
-    broadcastToConnIds: vi.fn(),
-    approvalEvents: {
-      publishRequested: vi.fn(() => 0),
-      publishResolved: vi.fn(),
-    },
-    getApprovalClientConnIds: vi.fn(() => new Set(["approval-client"])),
-    getRuntimeConfig: () => ({ gateway: { controlUi: { basePath: controlUiBasePath } } }),
-    approvalWebPushDelivery,
-    logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
-  } as unknown as GatewayRequestHandlerOptions["context"];
 }
 
 async function invoke(params: {
@@ -289,17 +267,19 @@ function approvalFromResult(result: unknown) {
 }
 
 describe("unified approval handlers", () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     for (const manager of managersForCleanup.splice(0)) {
-      for (const record of manager.listPendingRecords()) {
-        manager.expire(record.id, "test-cleanup");
+      for (const record of await manager.listPendingRecords()) {
+        await manager.expire(record.id, "test-cleanup");
       }
     }
     closeOpenClawAgentDatabasesForTest();
     for (const dir of tempDirs.splice(0)) {
-      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }));
-      closeOpenClawStateDatabaseByPath(path.join(dir, "state.sqlite"));
+      await closeOpenClawStateDatabaseByPathAsync(
+        resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
+      );
+      await closeOpenClawStateDatabaseByPathAsync(path.join(dir, "state.sqlite"));
       fs.rmSync(dir, { force: true, recursive: true });
     }
   });
@@ -307,7 +287,7 @@ describe("unified approval handlers", () => {
   it("resolves a system-agent proposal only through unified operator approval", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerSystemAgent(managers.systemAgent, "system-agent:proposal-1");
+    const pending = await registerSystemAgent(managers.systemAgent, "system-agent:proposal-1");
     const handlers = createApprovalHandlers({
       execApprovalManager: managers.exec,
       pluginApprovalManager: managers.plugin,
@@ -345,7 +325,10 @@ describe("unified approval handlers", () => {
   it("resolves a system-agent proposal through its channel reviewer custody", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerSystemAgent(managers.systemAgent, "system-agent:channel-reviewer");
+    const pending = await registerSystemAgent(
+      managers.systemAgent,
+      "system-agent:channel-reviewer",
+    );
     prepareApprovalChannelCustodyMock.mockImplementation(
       ({ approvalKind }: { approvalKind: string }) =>
         approvalKind === "system-agent"
@@ -385,7 +368,7 @@ describe("unified approval handlers", () => {
   it("checks live channel custody before the canonical resolution CAS", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, {
+    const pending = await registerExec(managers.exec, {
       id: "channel-custody-cas",
       request: { turnSourceChannel: "telegram", turnSourceAccountId: "ops" },
       reviewerDeviceIds: [],
@@ -417,7 +400,9 @@ describe("unified approval handlers", () => {
       applied: true,
       approval: { status: "denied", decision: "deny" },
     });
-    expect(getOperatorApproval({ id: pending.record.id, databaseOptions })?.resolver).toEqual({
+    expect(
+      (await getOperatorApproval({ id: pending.record.id, databaseOptions }))?.resolver,
+    ).toEqual({
       kind: "channel",
       id: "telegram:ops",
     });
@@ -426,8 +411,8 @@ describe("unified approval handlers", () => {
   it("returns mapped terminal history with attribution and a next cursor", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const first = registerExec(managers.exec, { id: "history:first" });
-    const second = registerPlugin(managers.plugin, { id: "history:second" });
+    const first = await registerExec(managers.exec, { id: "history:first" });
+    const second = await registerPlugin(managers.plugin, { id: "history:second" });
     const handlers = createApprovalHandlers({
       execApprovalManager: managers.exec,
       pluginApprovalManager: managers.plugin,
@@ -501,11 +486,11 @@ describe("unified approval handlers", () => {
         );
       }
       const managers = createManagers(databaseOptions);
-      const own = registerExec(managers.exec, {
+      const own = await registerExec(managers.exec, {
         id: "approval:owned",
         request: { sessionKey: ownerKey },
       });
-      const foreign = registerExec(managers.exec, {
+      const foreign = await registerExec(managers.exec, {
         id: "approval:foreign",
         request: { sessionKey: foreignKey },
       });
@@ -618,7 +603,7 @@ describe("unified approval handlers", () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
     const id = "exec:approval.with_safe-punctuation";
-    registerExec(managers.exec, {
+    await registerExec(managers.exec, {
       id,
       reviewerDeviceIds: ["reviewer-a"],
       request: {
@@ -682,7 +667,7 @@ describe("unified approval handlers", () => {
   it("makes missing and unauthorized approval lookups indistinguishable", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    registerExec(managers.exec, { id: "authorization" });
+    await registerExec(managers.exec, { id: "authorization" });
     const handlers = createApprovalHandlers({
       execApprovalManager: managers.exec,
       pluginApprovalManager: managers.plugin,
@@ -723,7 +708,7 @@ describe("unified approval handlers", () => {
   it("enforces explicit reviewer bindings over requester ownership", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, {
+    const pending = await registerExec(managers.exec, {
       id: "reviewer-bound-unified-approval",
       reviewerDeviceIds: ["reviewer-a"],
     });
@@ -778,7 +763,7 @@ describe("unified approval handlers", () => {
   it("lets only the server-authenticated device-less runtime resolve", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, { id: "trusted-runtime-resolve" });
+    const pending = await registerExec(managers.exec, { id: "trusted-runtime-resolve" });
     const handlers = createApprovalHandlers({
       execApprovalManager: managers.exec,
       pluginApprovalManager: managers.plugin,
@@ -820,7 +805,9 @@ describe("unified approval handlers", () => {
       applied: true,
       approval: { status: "denied", decision: "deny", reason: "user" },
     });
-    expect(getOperatorApproval({ id: pending.record.id, databaseOptions })?.resolver).toEqual({
+    expect(
+      (await getOperatorApproval({ id: pending.record.id, databaseOptions }))?.resolver,
+    ).toEqual({
       kind: "runtime",
       id: "approval-test",
     });
@@ -897,12 +884,12 @@ describe("unified approval handlers", () => {
   it("cancels only approvals owned by the aborted active run", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const aborted = registerExec(managers.exec, {
+    const aborted = await registerExec(managers.exec, {
       id: "aborted-run-approval",
       request: { runId: "run-active", toolCallId: "tool-active" },
       reviewerDeviceIds: ["later-surface"],
     });
-    const completedRun = registerExec(managers.exec, {
+    const completedRun = await registerExec(managers.exec, {
       id: "completed-run-approval",
       request: { runId: "run-completed", toolCallId: "tool-completed" },
     });
@@ -910,7 +897,7 @@ describe("unified approval handlers", () => {
     const publish = vi.fn();
 
     expect(
-      cancelUnboundRunApprovals({
+      await cancelUnboundRunApprovals({
         runId: "run-active",
         manager: managers.exec,
         publish,
@@ -918,11 +905,11 @@ describe("unified approval handlers", () => {
     ).toBe(1);
 
     await expect(aborted.decision).resolves.toBeNull();
-    expect(managers.exec.getSnapshot(aborted.record.id)).toMatchObject({
+    expect(await managers.exec.getSnapshot(aborted.record.id)).toMatchObject({
       status: "cancelled",
       terminalReason: "run-aborted",
     });
-    const completedRunSnapshot = managers.exec.getSnapshot(completedRun.record.id);
+    const completedRunSnapshot = await managers.exec.getSnapshot(completedRun.record.id);
     expect(completedRunSnapshot).toMatchObject({
       request: { runId: "run-completed" },
     });
@@ -954,46 +941,6 @@ describe("unified approval handlers", () => {
     });
   });
 
-  it("cancels only approvals bound to the exact fenced worker claim", async (testContext) => {
-    const manager = createTestApprovalManager(testContext, {
-      validateAgentRuntimeDelegatedAuthority: () => true,
-    });
-    const claim = {
-      sessionId: "session-worker",
-      claimId: "claim-worker",
-      runId: "run-worker",
-      placementGeneration: 4,
-      owner: { kind: "worker" as const, environmentId: "environment-1", ownerEpoch: 7 },
-    };
-    const bind = (id: string, ownerEpoch: number) => {
-      const record = manager.create({ command: "echo ok", runId: claim.runId }, 60_000, id);
-      record.agentRuntimeDelegatedAuthority = {
-        kind: "worker",
-        operationalRunInstance: { instanceId: `instance-${id}`, runId: claim.runId },
-        lifecycleGeneration: "lifecycle-1",
-        claimId: `run-claim-${id}`,
-        turnClaim: { ...claim, owner: { ...claim.owner, ownerEpoch } },
-      };
-      const decision = manager.register(record, 60_000);
-      return { record, decision };
-    };
-    const fenced = bind("worker-fenced", 7);
-    const successor = bind("worker-successor", 8);
-    const publish = vi.fn();
-
-    expect(cancelWorkerTurnClaimBoundApprovals({ claim, manager, publish })).toBe(1);
-    await expect(fenced.decision).resolves.toBeNull();
-    expect(successor.record.resolvedAtMs).toBeUndefined();
-    expect(publish).toHaveBeenCalledOnce();
-    manager.forceDenyDetailed(
-      successor.record.id,
-      "run-aborted",
-      { kind: "system", id: null },
-      "cancelled",
-    );
-    await expect(successor.decision).resolves.toBeNull();
-  });
-
   it("cancels exact exec and plugin authority without touching a same-run successor", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
@@ -1009,19 +956,19 @@ describe("unified approval handlers", () => {
       lifecycleGeneration: "generation-1",
       claimId: "claim-new",
     };
-    const oldExec = registerExec(managers.exec, {
+    const oldExec = await registerExec(managers.exec, {
       id: "old-exec-authority",
       request: { runId: "run-reused" },
     });
-    const successorExec = registerExec(managers.exec, {
+    const successorExec = await registerExec(managers.exec, {
       id: "successor-exec-authority",
       request: { runId: "run-reused" },
     });
-    const oldPlugin = registerPlugin(managers.plugin, {
+    const oldPlugin = await registerPlugin(managers.plugin, {
       id: "old-plugin-authority",
       request: { runId: "run-reused" },
     });
-    const successorPlugin = registerPlugin(managers.plugin, {
+    const successorPlugin = await registerPlugin(managers.plugin, {
       id: "successor-plugin-authority",
       request: { runId: "run-reused" },
     });
@@ -1031,7 +978,7 @@ describe("unified approval handlers", () => {
     successorPlugin.record.agentRuntimeDelegatedAuthority = successorAuthority;
 
     expect(
-      cancelAgentRuntimeBoundApprovals({
+      await cancelAgentRuntimeBoundApprovals({
         authority: oldAuthority,
         reason: "permission-change",
         manager: managers.exec,
@@ -1039,7 +986,7 @@ describe("unified approval handlers", () => {
       }),
     ).toBe(1);
     expect(
-      cancelAgentRuntimeBoundApprovals({
+      await cancelAgentRuntimeBoundApprovals({
         authority: oldAuthority,
         reason: "permission-change",
         manager: managers.plugin,
@@ -1051,10 +998,14 @@ describe("unified approval handlers", () => {
     await expect(oldPlugin.decision).resolves.toBeNull();
     expect(oldExec.record.resolvedBy).toBe("permission-change");
     expect(oldPlugin.record.resolvedBy).toBe("permission-change");
-    expect(managers.exec.getSnapshot(successorExec.record.id)?.resolvedAtMs).toBeUndefined();
-    expect(managers.plugin.getSnapshot(successorPlugin.record.id)?.resolvedAtMs).toBeUndefined();
-    managers.exec.resolve(successorExec.record.id, "deny");
-    managers.plugin.resolve(successorPlugin.record.id, "deny");
+    expect(
+      (await managers.exec.getSnapshot(successorExec.record.id))?.resolvedAtMs,
+    ).toBeUndefined();
+    expect(
+      (await managers.plugin.getSnapshot(successorPlugin.record.id))?.resolvedAtMs,
+    ).toBeUndefined();
+    await managers.exec.resolve(successorExec.record.id, "deny");
+    await managers.plugin.resolve(successorPlugin.record.id, "deny");
     await successorExec.decision;
     await successorPlugin.decision;
   });
@@ -1064,7 +1015,7 @@ describe("unified approval handlers", () => {
     const managers = createManagers(databaseOptions);
     const title = String.fromCodePoint(0x1f680).repeat(80);
     const description = String.fromCodePoint(0x1f6e1).repeat(512);
-    const pending = registerPlugin(managers.plugin, {
+    const pending = await registerPlugin(managers.plugin, {
       id: "plugin:unicode-boundaries",
       request: { title, description },
     });
@@ -1093,7 +1044,7 @@ describe("unified approval handlers", () => {
     const managers = createManagers(databaseOptions);
     const id = "durable-deny-without-live-request";
     const nowMs = Date.now();
-    insertOperatorApproval({
+    await insertOperatorApproval({
       approval: {
         id,
         kind: "exec",
@@ -1138,10 +1089,15 @@ describe("unified approval handlers", () => {
   });
 
   it("expires durable state on a forward-clock lookup and settles the live waiter", async () => {
+    installTestApprovalClock();
+    const get = operatorApprovalStore.getOperatorApprovalDetailed;
+    vi.spyOn(operatorApprovalStore, "getOperatorApprovalDetailed").mockImplementation((params) =>
+      get({ ...params, nowMs: Date.now() }),
+    );
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, {
+    const pending = await registerExec(managers.exec, {
       id: "forward-clock-expiry",
       expiresAtMs: 2_000,
     });
@@ -1172,7 +1128,7 @@ describe("unified approval handlers", () => {
   ] as const)("fails a live waiter closed when durable state is %s", async (_label, mutate) => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, { id: `durable-${_label}` });
+    const pending = await registerExec(managers.exec, { id: `durable-${_label}` });
     mutate(databaseOptions, pending.record.id);
     const handlers = createApprovalHandlers({
       execApprovalManager: managers.exec,
@@ -1201,8 +1157,8 @@ describe("unified approval handlers", () => {
   it("settles the canonical live waiter when a transport-ref lookup finds corrupt state", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, { id: "corrupt-through-transport-ref" });
-    const durable = getOperatorApproval({ id: pending.record.id, databaseOptions });
+    const pending = await registerExec(managers.exec, { id: "corrupt-through-transport-ref" });
+    const durable = await getOperatorApproval({ id: pending.record.id, databaseOptions });
     if (!durable) {
       throw new Error("expected durable approval");
     }
@@ -1238,18 +1194,19 @@ describe("unified approval handlers", () => {
     const backupPath = path.join(stateDir, "state.backup.sqlite");
     const databaseOptions = { path: databasePath } satisfies OpenClawStateDatabaseOptions;
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, { id: "transient-storage-repair" });
+    const pending = await registerExec(managers.exec, { id: "transient-storage-repair" });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     fs.renameSync(databasePath, backupPath);
     fs.mkdirSync(databasePath);
-    expect(() =>
+    await expect(
       managers.exec.resolveDetailed(
         pending.record.id,
         "deny",
         { kind: "device", id: "reviewer-device" },
         "Reviewer",
       ),
-    ).toThrow();
+    ).rejects.toThrow();
     await expect(pending.decision).resolves.toBe("deny");
     fs.rmSync(databasePath, { recursive: true });
     fs.renameSync(backupPath, databasePath);
@@ -1273,7 +1230,7 @@ describe("unified approval handlers", () => {
         reason: "storage-corrupt",
       },
     });
-    expect(getOperatorApproval({ id: pending.record.id, databaseOptions })).toMatchObject({
+    expect(await getOperatorApproval({ id: pending.record.id, databaseOptions })).toMatchObject({
       status: "denied",
       terminalReason: "storage-corrupt",
     });
@@ -1282,7 +1239,7 @@ describe("unified approval handlers", () => {
   it("does not mutate a live waiter for an unauthorized durable lookup", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, { id: "unauthorized-missing-durable-row" });
+    const pending = await registerExec(managers.exec, { id: "unauthorized-missing-durable-row" });
     deleteDurableApproval(databaseOptions, pending.record.id);
     const handlers = createApprovalHandlers({
       execApprovalManager: managers.exec,
@@ -1304,7 +1261,7 @@ describe("unified approval handlers", () => {
   it("resolves plugin approvals through the durable CAS and publishes once", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerPlugin(managers.plugin, {
+    const pending = await registerPlugin(managers.plugin, {
       id: "plugin:deny-is-always-valid",
       request: { allowedDecisions: ["allow-once"] },
       reviewerDeviceIds: ["phone-device"],
@@ -1374,7 +1331,9 @@ describe("unified approval handlers", () => {
         resolvedBy: "Approval Test",
       }),
     );
-    expect(getOperatorApproval({ id: pending.record.id, databaseOptions })?.resolver).toEqual({
+    expect(
+      (await getOperatorApproval({ id: pending.record.id, databaseOptions }))?.resolver,
+    ).toEqual({
       kind: "device",
       id: "phone-device",
     });
@@ -1424,7 +1383,7 @@ describe("unified approval handlers", () => {
   it("returns durable exec truth and continues follow-ups after publication failures", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, { id: "exec-publication-failures" });
+    const pending = await registerExec(managers.exec, { id: "exec-publication-failures" });
     const context = createContext();
     const broadcastToConnIds = context.broadcastToConnIds as ReturnType<typeof vi.fn>;
     broadcastToConnIds.mockImplementation(() => {
@@ -1463,7 +1422,7 @@ describe("unified approval handlers", () => {
     });
     expect(validateApprovalResolveResult(response.result)).toBe(true);
     await expect(pending.decision).resolves.toBe("deny");
-    expect(getOperatorApproval({ id: pending.record.id, databaseOptions })).toMatchObject({
+    expect(await getOperatorApproval({ id: pending.record.id, databaseOptions })).toMatchObject({
       status: "denied",
       decision: "deny",
     });
@@ -1484,7 +1443,7 @@ describe("unified approval handlers", () => {
   it("responds with committed truth before a slow resolution forwarder finishes", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, { id: "exec-slow-resolution-forwarder" });
+    const pending = await registerExec(managers.exec, { id: "exec-slow-resolution-forwarder" });
     const { promise: forwarderPending, resolve: releaseForwarder } = createDeferred();
     const handleResolved = vi.fn(() => forwarderPending);
     const forwarder = {
@@ -1539,7 +1498,7 @@ describe("unified approval handlers", () => {
   it("continues plugin forwarding when the resolved-event broadcast fails", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerPlugin(managers.plugin, { id: "plugin-publication-failure" });
+    const pending = await registerPlugin(managers.plugin, { id: "plugin-publication-failure" });
     const context = createContext();
     const broadcastToConnIds = context.broadcastToConnIds as ReturnType<typeof vi.fn>;
     broadcastToConnIds.mockImplementation(() => {
@@ -1581,7 +1540,7 @@ describe("unified approval handlers", () => {
   it("uses the live requester connection when filtering legacy resolved events", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, {
+    const pending = await registerExec(managers.exec, {
       id: "device-less-requester",
       reviewerDeviceIds: ["reviewer-device"],
       requester: {
@@ -1637,7 +1596,7 @@ describe("unified approval handlers", () => {
   it("returns the recorded winner to a competing surface without rebroadcasting", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, {
+    const pending = await registerExec(managers.exec, {
       id: "first-answer-wins",
       reviewerDeviceIds: ["control-ui", "telegram"],
     });
@@ -1683,11 +1642,11 @@ describe("unified approval handlers", () => {
   it("resolves a maximum-length canonical id through its fixed-size transport reference", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, {
+    const pending = await registerExec(managers.exec, {
       id: `approval-${"a".repeat(119)}`,
       reviewerDeviceIds: ["telegram"],
     });
-    const durable = getOperatorApproval({ id: pending.record.id, databaseOptions });
+    const durable = await getOperatorApproval({ id: pending.record.id, databaseOptions });
     expect(durable?.resolutionRef).toHaveLength(43);
     const handlers = createApprovalHandlers({
       execApprovalManager: managers.exec,
@@ -1715,12 +1674,12 @@ describe("unified approval handlers", () => {
     const managers = createManagers(databaseOptions);
     // No explicit reviewer binding: any authorized reviewer device may resolve,
     // and the opaque transport ref must behave exactly like the canonical id.
-    const pending = registerExec(managers.exec, {
+    const pending = await registerExec(managers.exec, {
       id: "ref-parity-approval",
       requester: { connId: "conn-owner", deviceId: null, clientId: null },
       reviewerDeviceIds: [],
     });
-    const durable = getOperatorApproval({ id: pending.record.id, databaseOptions });
+    const durable = await getOperatorApproval({ id: pending.record.id, databaseOptions });
     expect(durable?.resolutionRef).toHaveLength(43);
     const handlers = createApprovalHandlers({
       execApprovalManager: managers.exec,
@@ -1761,17 +1720,17 @@ describe("unified approval handlers", () => {
     async ({ status, decision, terminalDecision }) => {
       const databaseOptions = createDatabaseOptions();
       const managers = createManagers(databaseOptions);
-      const pending = registerExec(managers.exec, {
+      const pending = await registerExec(managers.exec, {
         id: `terminal-after-restart-${status}`,
         reviewerDeviceIds: ["later-surface"],
       });
       if (status === "allowed" || status === "denied") {
-        managers.exec.resolveDetailed(pending.record.id, terminalDecision, {
+        await managers.exec.resolveDetailed(pending.record.id, terminalDecision, {
           kind: "device",
           id: "first-surface",
         });
       } else {
-        managers.exec.forceDenyDetailed(
+        await managers.exec.forceDenyDetailed(
           pending.record.id,
           status === "expired" ? "timeout" : "run-aborted",
           { kind: "system", id: null },
@@ -1811,15 +1770,15 @@ describe("unified approval handlers", () => {
   it("atomically denies malformed, mismatched-kind, and disallowed approving verdicts", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const disallowed = registerExec(managers.exec, {
+    const disallowed = await registerExec(managers.exec, {
       id: "disallowed-allow-always",
       request: { unavailableDecisions: ["allow-always"] },
     });
-    const malformed = registerPlugin(managers.plugin, {
+    const malformed = await registerPlugin(managers.plugin, {
       id: "plugin:malformed",
       request: { allowedDecisions: ["allow-once"] },
     });
-    const mismatchedKind = registerPlugin(managers.plugin, {
+    const mismatchedKind = await registerPlugin(managers.plugin, {
       id: "opaque-plugin-id",
       request: { allowedDecisions: ["allow-once"] },
     });
@@ -1873,10 +1832,15 @@ describe("unified approval handlers", () => {
   });
 
   it("lets the exact deadline beat a malformed verdict", async () => {
+    installTestApprovalClock();
+    const get = operatorApprovalStore.getOperatorApprovalDetailed;
+    vi.spyOn(operatorApprovalStore, "getOperatorApprovalDetailed").mockImplementation((params) =>
+      get({ ...params, nowMs: Date.now() }),
+    );
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const pending = registerExec(managers.exec, {
+    const pending = await registerExec(managers.exec, {
       id: "malformed-at-deadline",
       expiresAtMs: 2_000,
     });

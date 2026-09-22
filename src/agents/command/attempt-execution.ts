@@ -52,10 +52,7 @@ import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-ter
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
-import {
-  resizeExecApprovalContinuationPrompt,
-  type ExecApprovalContinuationPromptRange,
-} from "../bash-tools.exec-approval-output.js";
+import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import {
@@ -108,6 +105,7 @@ import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
+  rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import {
@@ -123,24 +121,6 @@ export {
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-function rebaseExecApprovalContinuationPromptRange(params: {
-  body: string;
-  prompt: string;
-  range?: ExecApprovalContinuationPromptRange;
-}): ExecApprovalContinuationPromptRange | undefined {
-  if (!params.range) {
-    return undefined;
-  }
-  if (!params.prompt.endsWith(params.body)) {
-    throw new Error("exec approval continuation prompt range could not be rebased");
-  }
-  const offset = params.prompt.length - params.body.length;
-  return {
-    start: offset + params.range.start,
-    end: offset + params.range.end,
-  };
-}
 
 function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
@@ -437,8 +417,7 @@ export function runAgentAttempt(params: {
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
-  const bootstrapPromptWarningSignature =
-    bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+  const bootstrapPromptWarningSignature = bootstrapPromptWarningSignaturesSeen.at(-1);
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
   const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
   const pinnedHarnessId = isRawModelRun
@@ -600,6 +579,54 @@ export function runAgentAttempt(params: {
     (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);
+  // Read session fields at invocation time, after admitted CLI binding recovery.
+  const buildCommonRunParams = () =>
+    ({
+      preparedRunAdmission: params.preparedRunAdmission,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
+      chatType: params.sessionEntry?.chatType,
+      contextWindow: params.sessionEntry?.contextWindow,
+      agentId: params.sessionAgentId,
+      trigger: "user",
+      sessionFile: params.sessionFile,
+      workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
+      config: params.cfg,
+      modelHasVision: params.modelHasVision,
+      model: params.modelOverride,
+      modelRoutingProvenance: params.modelRoutingProvenance,
+      thinkLevel: params.resolvedThinkLevel,
+      fastMode: params.fastMode,
+      fastModeStartedAtMs: params.fastModeStartedAtMs,
+      fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
+      timeoutMs: params.timeoutMs,
+      runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+      runId: params.runId,
+      lifecycleGeneration: params.lifecycleGeneration,
+      onExecutionPhase: onRuntimeActivity,
+      lane: params.opts.lane,
+      extraSystemPrompt: params.opts.extraSystemPrompt,
+      inputProvenance: params.opts.inputProvenance,
+      skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
+      sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+      media: params.opts.media,
+      skillsSnapshot: params.skillsSnapshot,
+      streamParams: params.opts.streamParams,
+      approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
+      bashElevated: params.opts.bashElevated,
+      cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
+      oneShotCliRun: params.opts.oneShotCliRun,
+      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+      contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+      onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
+      suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+      disableTools,
+      allowEmptyAssistantReplyAsSilent: isSubagentLane || isSubagentAnnounceHandoff,
+      bootstrapPromptWarningSignaturesSeen,
+      bootstrapPromptWarningSignature,
+    }) satisfies Partial<RunEmbeddedAgentInternalParams>;
   if (!isRawModelRun && isCliExecutionProvider) {
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
     return withLocalSessionPlacementTurnSettlement(
@@ -612,6 +639,7 @@ export function runAgentAttempt(params: {
       async (assertSettlementCurrent) => {
         if (params.sessionKey && params.storePath) {
           params.sessionEntry = loadSessionEntry({
+            agentId: params.sessionAgentId,
             sessionKey: params.sessionKey,
             storePath: params.storePath,
             readConsistency: "latest",
@@ -672,6 +700,7 @@ export function runAgentAttempt(params: {
         const mutableCliSessionStore =
           params.sessionKey && params.sessionStore && params.storePath
             ? {
+                agentId: params.sessionAgentId,
                 sessionKey: params.sessionKey,
                 sessionStore: params.sessionStore,
                 storePath: params.storePath,
@@ -749,48 +778,20 @@ export function runAgentAttempt(params: {
                 }
               : undefined;
           return await runCliAgent({
-            preparedRunAdmission: params.preparedRunAdmission,
+            ...buildCommonRunParams(),
             diagnosticOwner,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            sessionTarget: params.sessionTarget,
             sessionEntry: params.sessionEntry,
-            chatType: params.sessionEntry?.chatType,
-            contextWindow: params.sessionEntry?.contextWindow,
-            agentId: params.sessionAgentId,
-            trigger: "user",
-            sessionFile: params.sessionFile,
             storePath: params.storePath,
             persistAssistantTranscript:
               params.storePath !== undefined && params.sessionStore !== undefined,
-            workspaceDir: params.workspaceDir,
-            cwd: params.cwd,
-            config: params.cfg,
             prompt: cliPrompt,
             transcriptPrompt: cliTranscriptPrompt,
             modelProvider: params.providerOverride,
             requesterModel: { provider: params.providerOverride, model: params.modelOverride },
-            modelHasVision: params.modelHasVision,
             provider: cliExecutionProvider,
-            model: params.modelOverride,
-            modelRoutingProvenance: params.modelRoutingProvenance,
-            thinkLevel: params.resolvedThinkLevel,
-            fastMode: params.fastMode,
-            fastModeStartedAtMs: params.fastModeStartedAtMs,
-            fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
-            timeoutMs: params.timeoutMs,
-            runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-            runId: params.runId,
-            lifecycleGeneration: params.lifecycleGeneration,
             abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
             onExecutionStarted: params.opts.onExecutionStarted,
-            onExecutionPhase: onRuntimeActivity,
-            lane: params.opts.lane,
-            extraSystemPrompt: params.opts.extraSystemPrompt,
-            inputProvenance: params.opts.inputProvenance,
-            skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
             cronCreatorCallerOrigin: params.opts.cronCreatorAuthorityCapability?.callerOrigin,
-            sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
             requireExplicitMessageTarget:
               params.opts.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             cliSessionBindingFacts: params.opts.cliSessionBindingFacts,
@@ -832,18 +833,13 @@ export function runAgentAttempt(params: {
                 }
               : {}),
             authProfileId: cliAuthProfileId,
-            bootstrapPromptWarningSignaturesSeen,
-            bootstrapPromptWarningSignature,
             // Image discovery must use the original turn, before retry/history decoration.
             imagePrompt: params.body,
             // Fallback prompts repeat the current task, so prompt-local images must
             // accompany every CLI process. Native dedupe requires a runtime receipt.
             images: params.opts.images,
             imageOrder: params.opts.imageOrder,
-            media: params.opts.media,
-            skillsSnapshot: params.skillsSnapshot,
             ...toolContext,
-            streamParams: params.opts.streamParams,
             // Completion relays can carry the trusted source only in their
             // delivery target; the restricted CLI grant must retain that owner.
             currentChannelId:
@@ -851,8 +847,6 @@ export function runAgentAttempt(params: {
               (completionNeedsMessageDelivery
                 ? (params.opts.replyTo ?? params.opts.to)
                 : undefined),
-            approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
-            bashElevated: params.opts.bashElevated,
             toolsAllow: resolveCliRuntimeToolsAllow(
               cliRuntimeToolsAllow,
               params.opts.toolsAllowIsDefault,
@@ -868,15 +862,7 @@ export function runAgentAttempt(params: {
                 toolsAllow: runtimeToolsAllow,
               }),
             ),
-            cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
-            oneShotCliRun: params.opts.oneShotCliRun,
-            userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-            contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
-            onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
-            suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
-            disableTools,
-            allowEmptyAssistantReplyAsSilent: isSubagentLane || isSubagentAnnounceHandoff,
             ...(forkStoreParams && !forkCliSessionOnResume
               ? {
                   onBeforeForkedCliSessionRetry: async (retry) => {
@@ -912,6 +898,7 @@ export function runAgentAttempt(params: {
                       ) ||
                       getCliSessionBinding(
                         loadSessionEntry({
+                          agentId: params.sessionAgentId,
                           sessionKey: mutableCliSessionStore.sessionKey,
                           storePath: mutableCliSessionStore.storePath,
                           readConsistency: "latest",
@@ -987,6 +974,7 @@ export function runAgentAttempt(params: {
           (!classification || result.meta.agentMeta?.clearCliSessionBinding === true)
         ) {
           return await persistCliSessionBindingResult({
+            agentId: params.sessionAgentId,
             provider: cliExecutionProvider,
             result,
             sessionKey: params.sessionKey,
@@ -1002,6 +990,7 @@ export function runAgentAttempt(params: {
       {
         preparedRunAdmission: params.preparedRunAdmission,
         lifecycleGeneration: params.lifecycleGeneration,
+        isFinalFallbackAttempt: params.isFinalFallbackAttempt,
         abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
         trigger: "user",
         inputProvenance: params.opts.inputProvenance,
@@ -1010,71 +999,43 @@ export function runAgentAttempt(params: {
   }
 
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
-    preparedRunAdmission: params.preparedRunAdmission,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    chatType: params.sessionEntry?.chatType,
-    contextWindow: params.sessionEntry?.contextWindow,
-    sessionTarget: params.sessionTarget,
+    ...buildCommonRunParams(),
     sandboxSessionKey: params.sessionKey,
-    agentId: params.sessionAgentId,
-    trigger: "user",
     // Subagent lifecycle owns the stricter explicit visible/silent/empty evidence check.
     terminalReplyExpectation: isSubagentLane ? "optional" : undefined,
     ...toolContext,
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,
     hasRepliedRef: params.runContext.hasRepliedRef,
-    sessionFile: params.sessionFile,
-    workspaceDir: params.workspaceDir,
-    cwd: params.cwd,
     permissionMode: params.sessionEntry?.permissionMode,
     toolOverrides: params.sessionEntry?.toolOverrides,
     sessionRoot: params.sessionEntry?.sessionRoot,
-    config: params.cfg,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
     agentHarnessId: pinnedHarnessId,
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     agentHarnessRuntimePreparationHint:
       agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
-    skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     transcriptPrompt: continuationTranscriptBody,
     // CLI retries cannot replay a persisted turn after orphan-user repair removes it.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
-    media: params.opts.media,
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
-    model: params.modelOverride,
-    modelRoutingProvenance: params.modelRoutingProvenance,
     requestedRouteResolution: "resolved",
-    modelHasVision: params.modelHasVision,
     modelThinkingCapability: params.modelThinkingCapability,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
-    thinkLevel: params.resolvedThinkLevel,
-    fastMode: params.fastMode,
-    fastModeStartedAtMs: params.fastModeStartedAtMs,
-    fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     execSession: params.sessionEntry,
-    bashElevated: params.opts.bashElevated,
     execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,
     execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
-    approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
-    timeoutMs: params.timeoutMs,
-    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-    runId: params.runId,
-    lifecycleGeneration: params.lifecycleGeneration,
-    lane: params.opts.lane,
     // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
     suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
     abortSignal: params.opts.abortSignal,
-    extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
     toolsAllow: runtimeToolsAllow,
@@ -1083,11 +1044,8 @@ export function runAgentAttempt(params: {
       ? params.opts.trustedInternalHandoff
       : undefined,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
-    skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
     internalEvents: params.opts.internalEvents,
     runtimeContextFragments: params.opts.runtimeContextFragments,
-    inputProvenance: params.opts.inputProvenance,
-    sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
     requireExplicitMessageTarget: params.opts.requireExplicitMessageTarget,
     disableMessageTool: params.opts.disableMessageTool,
     swarmCollector: params.opts.swarmCollector,
@@ -1095,28 +1053,18 @@ export function runAgentAttempt(params: {
     forceRestartSafeTools: params.opts.forceRestartSafeTools,
     forceCodeModeTools: params.opts.forceCodeModeTools,
     codeModeOverride: params.opts.codeModeOverride,
-    streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-    cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
-    oneShotCliRun: params.opts.oneShotCliRun,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
-    disableTools,
-    allowEmptyAssistantReplyAsSilent: isSubagentLane || isSubagentAnnounceHandoff,
     onAgentEvent: params.onAgentEvent,
-    onExecutionPhase: onRuntimeActivity,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     onDeferredLifecycleOwner: params.deferredLifecycle?.adopt,
     onDeferredLifecycleAbort: params.deferredLifecycle?.abort,
     onRetryWait: params.deferredLifecycle?.beginRetryWait,
-    suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
-    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     assistantErrorTranscript: params.assistantErrorTranscript,
     authProfileFailurePolicy: params.authProfileFailurePolicy,
-    contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
-    onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,
     onCompactionAccounting: params.onCompactionAccounting,
     onCompactionRequestBudget: params.onCompactionRequestBudget,
@@ -1131,15 +1079,13 @@ export function runAgentAttempt(params: {
               : undefined,
           })
       : undefined,
-    onExecutionStarted: (info) => {
-      params.opts.onExecutionStarted?.();
+    onExecutionStarted: async (info) => {
+      await params.opts.onExecutionStarted?.();
       if (info?.lifecycleGeneration) {
         params.onLifecycleGenerationChanged?.(info.lifecycleGeneration);
       }
     },
     onSessionIdChanged: params.opts.onSessionIdChanged,
-    bootstrapPromptWarningSignaturesSeen,
-    bootstrapPromptWarningSignature,
   };
   setChannelSourceTurnId(embeddedRunParams, readChannelSourceTurnId(params.runContext));
   setChannelSourceTurnSameThreadRequired(
@@ -1174,27 +1120,39 @@ export function buildAcpResult(params: {
   };
 }
 
-export function emitAcpLifecycleStart(params: {
-  runId: string;
-  startedAt: number;
-  sessionKey?: string;
-  agentId?: string;
+type AcpRunIdentity = Pick<
+  Parameters<typeof emitAgentEvent>[0],
+  "runId" | "sessionKey" | "agentId"
+>;
+type AcpLifecycleContext = AcpRunIdentity & {
   lifecycleGeneration?: string;
   auditOnly?: boolean;
   completionSource?: "reply-dispatch";
-}) {
-  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
-  emit({
+};
+
+function acpRunIdentity(params: AcpRunIdentity) {
+  return {
     runId: params.runId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
+  };
+}
+
+function emitAcpLifecycleEvent(params: AcpLifecycleContext, data: Record<string, unknown>) {
+  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
+  emit({
+    ...acpRunIdentity(params),
     ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
-    data: {
-      phase: "start",
-      ...(params.completionSource ? { completionSource: params.completionSource } : {}),
-      startedAt: params.startedAt,
-    },
+    data,
+  });
+}
+
+export function emitAcpLifecycleStart(params: AcpLifecycleContext & { startedAt: number }) {
+  emitAcpLifecycleEvent(params, {
+    phase: "start",
+    ...(params.completionSource ? { completionSource: params.completionSource } : {}),
+    startedAt: params.startedAt,
   });
 }
 
@@ -1206,10 +1164,7 @@ const ACP_PROXY_ENV_KEYS = [
   "https_proxy",
   "all_proxy",
 ] as const;
-type ActiveAcpTool = {
-  runId: string;
-  sessionKey?: string;
-  agentId?: string;
+type ActiveAcpTool = AcpRunIdentity & {
   toolCallId: string;
   toolName: string;
   startedAt: number;
@@ -1306,14 +1261,13 @@ export function resolveAcpLifecycleEndFields(
   return {};
 }
 
-function emitAcpToolExecutionEvent(params: {
-  runId: string;
-  toolTracker: AcpToolLifecycleTracker;
-  sessionKey?: string;
-  agentId?: string;
-  abortSignal?: AbortSignal;
-  event: Extract<AcpRuntimeEvent, { type: "tool_call" }>;
-}): void {
+function emitAcpToolExecutionEvent(
+  params: AcpRunIdentity & {
+    toolTracker: AcpToolLifecycleTracker;
+    abortSignal?: AbortSignal;
+    event: Extract<AcpRuntimeEvent, { type: "tool_call" }>;
+  },
+): void {
   const { event } = params;
   const now = Date.now();
   const toolCallId = event.toolCallId?.trim() ? event.toolCallId : undefined;
@@ -1341,9 +1295,7 @@ function emitAcpToolExecutionEvent(params: {
   if (!activeTool && (toolCallId !== undefined || startsUnidentifiedTool)) {
     emitTrustedDiagnosticEvent({
       type: "tool.execution.started",
-      runId: params.runId,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...acpRunIdentity(params),
       ...(toolCallId ? { toolCallId } : {}),
       toolName,
       toolSource: "core",
@@ -1351,9 +1303,7 @@ function emitAcpToolExecutionEvent(params: {
     });
     if (toolCallId) {
       params.toolTracker.active.set(toolCallId, {
-        runId: params.runId,
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...acpRunIdentity(params),
         toolCallId,
         toolName,
         startedAt: now,
@@ -1370,29 +1320,20 @@ function emitAcpToolExecutionEvent(params: {
     terminalOutcome === "cancelled" ? "cancelled" : undefined,
   );
   const durationMs = Math.max(0, now - (activeTool?.startedAt ?? now));
+  const terminalFields = {
+    ...acpRunIdentity(params),
+    ...(toolCallId ? { toolCallId } : {}),
+    toolName: activeTool?.toolName ?? toolName,
+    toolSource: "core" as const,
+    toolOwner: "acp",
+    durationMs,
+  };
   emitTrustedDiagnosticEvent(
     terminalOutcome === "completed"
-      ? {
-          type: "tool.execution.completed",
-          runId: params.runId,
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          ...(toolCallId ? { toolCallId } : {}),
-          toolName: activeTool?.toolName ?? toolName,
-          toolSource: "core",
-          toolOwner: "acp",
-          durationMs,
-        }
+      ? { type: "tool.execution.completed", ...terminalFields }
       : {
           type: "tool.execution.error",
-          runId: params.runId,
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          ...(toolCallId ? { toolCallId } : {}),
-          toolName: activeTool?.toolName ?? toolName,
-          toolSource: "core",
-          toolOwner: "acp",
-          durationMs,
+          ...terminalFields,
           errorCategory: terminalReason === "cancelled" ? "aborted" : "acp_tool",
           terminalReason,
         },
@@ -1438,21 +1379,20 @@ function sanitizeAcpDiagnosticText(value: string): string {
 }
 
 function acpRuntimeEventDiagnostics(event: AcpRuntimeEvent): Record<string, unknown> {
-  if (event.type === "status") {
+  if (event.type === "status" || event.type === "tool_call") {
     return {
       eventType: event.type,
       text: sanitizeAcpDiagnosticText(event.text),
       ...(event.tag ? { tag: event.tag } : {}),
-    };
-  }
-  if (event.type === "tool_call") {
-    return {
-      eventType: event.type,
-      text: sanitizeAcpDiagnosticText(event.text),
-      ...(event.tag ? { tag: event.tag } : {}),
-      ...(event.status ? { status: sanitizeAcpDiagnosticText(event.status) } : {}),
-      ...(event.title ? { title: sanitizeAcpDiagnosticText(event.title) } : {}),
-      ...(event.toolCallId ? { toolCallId: sanitizeAcpDiagnosticText(event.toolCallId) } : {}),
+      ...(event.type === "tool_call"
+        ? {
+            ...(event.status ? { status: sanitizeAcpDiagnosticText(event.status) } : {}),
+            ...(event.title ? { title: sanitizeAcpDiagnosticText(event.title) } : {}),
+            ...(event.toolCallId
+              ? { toolCallId: sanitizeAcpDiagnosticText(event.toolCallId) }
+              : {}),
+          }
+        : {}),
     };
   }
   if (event.type === "error") {
@@ -1489,15 +1429,14 @@ export function emitAcpPromptSubmitted(params: { runId: string; sessionKey?: str
   });
 }
 
-export function emitAcpRuntimeEvent(params: {
-  runId: string;
-  toolTracker: AcpToolLifecycleTracker;
-  event: AcpRuntimeEvent;
-  sessionKey?: string;
-  agentId?: string;
-  abortSignal?: AbortSignal;
-  auditOnly?: boolean;
-}) {
+export function emitAcpRuntimeEvent(
+  params: AcpRunIdentity & {
+    toolTracker: AcpToolLifecycleTracker;
+    event: AcpRuntimeEvent;
+    abortSignal?: AbortSignal;
+    auditOnly?: boolean;
+  },
+) {
   if (params.event.type === "tool_call") {
     emitAcpToolExecutionEvent({
       runId: params.runId,
@@ -1523,14 +1462,7 @@ export function emitAcpRuntimeEvent(params: {
 }
 
 function emitAcpTerminalLifecycle(
-  params: {
-    runId: string;
-    sessionKey?: string;
-    agentId?: string;
-    lifecycleGeneration?: string;
-    auditOnly?: boolean;
-    completionSource?: "reply-dispatch";
-  },
+  params: AcpLifecycleContext,
   terminal: Record<string, unknown> & { phase: "end" | "error"; endedAt: number },
 ) {
   const data = {
@@ -1538,15 +1470,7 @@ function emitAcpTerminalLifecycle(
     executionSettled: true,
     ...(params.completionSource ? { completionSource: params.completionSource } : {}),
   };
-  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
-  emit({
-    runId: params.runId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-    stream: "lifecycle",
-    data,
-  });
+  emitAcpLifecycleEvent(params, data);
   return buildAgentRunTerminalOutcomeFromLifecycleEvent({
     phase: terminal.phase,
     data,
@@ -1554,17 +1478,13 @@ function emitAcpTerminalLifecycle(
   });
 }
 
-export function emitAcpLifecycleEnd(params: {
-  runId: string;
-  toolTracker: AcpToolLifecycleTracker;
-  sessionKey?: string;
-  agentId?: string;
-  lifecycleGeneration?: string;
-  endFields: ReturnType<typeof resolveAcpLifecycleEndFields>;
-  terminalReply?: AgentRunTerminalReplySnapshot;
-  auditOnly?: boolean;
-  completionSource?: "reply-dispatch";
-}) {
+export function emitAcpLifecycleEnd(
+  params: AcpLifecycleContext & {
+    toolTracker: AcpToolLifecycleTracker;
+    endFields: ReturnType<typeof resolveAcpLifecycleEndFields>;
+    terminalReply?: AgentRunTerminalReplySnapshot;
+  },
+) {
   finalizeAcpToolsForRun(
     params.toolTracker,
     params.runId,
@@ -1582,18 +1502,14 @@ export function emitAcpLifecycleEnd(params: {
   });
 }
 
-export function emitAcpLifecycleError(params: {
-  runId: string;
-  toolTracker: AcpToolLifecycleTracker;
-  error: unknown;
-  sessionKey?: string;
-  agentId?: string;
-  lifecycleGeneration?: string;
-  abortSignal?: AbortSignal;
-  terminalOutcome?: "blocked";
-  auditOnly?: boolean;
-  completionSource?: "reply-dispatch";
-}) {
+export function emitAcpLifecycleError(
+  params: AcpLifecycleContext & {
+    toolTracker: AcpToolLifecycleTracker;
+    error: unknown;
+    abortSignal?: AbortSignal;
+    terminalOutcome?: "blocked";
+  },
+) {
   const terminalReason = resolveAcpToolTerminalReason(params.abortSignal, undefined, params.error);
   finalizeAcpToolsForRun(params.toolTracker, params.runId, terminalReason);
   const lifecycleFields =

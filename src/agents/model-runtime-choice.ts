@@ -1,9 +1,33 @@
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { FailoverError } from "./failover/error.js";
+import type { AgentHarness } from "./harness/types.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
 import { modelKey, type ModelRef } from "./model-ref-shared.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
+
+// Cache process-stable modules, not the catalog/auth facts read from each request's owner.
+const loadPreparedModelCatalog = createLazyPromise(() => import("./prepared-model-catalog.js"));
+const loadModelResolver = createLazyPromise(() => import("./embedded-agent-runner/model.js"));
+const loadModelSelection = createLazyPromise(() => import("./model-selection.js"));
+const loadModelRefProfile = createLazyPromise(() => import("./model-ref-profile.js"));
+const loadModelCatalogDecisions = createLazyPromise(() => import("./model-catalog-decisions.js"));
+const loadPreparedRuntimeAuth = createLazyPromise(() => import("./prepared-model-runtime-auth.js"));
+const loadProviderModelRoute = createLazyPromise(() => import("./provider-model-route.js"));
+const loadRuntimeModelMaterializer = createLazyPromise(
+  () => import("./runtime-plan/materialize-model.js"),
+);
+const loadModelFallbackCandidates = createLazyPromise(
+  () => import("./model-fallback-candidates.js"),
+);
+const loadProviderAuthAliases = createLazyPromise(() => import("./provider-auth-aliases.js"));
+const loadPluginGenerationScope = createLazyPromise(
+  () => import("../plugins/runtime/generation-scope.js"),
+);
+const loadModelCatalogEntry = createLazyPromise(() => import("./model-catalog-entry.js"));
 
 type PreparedModelChoice =
   | { kind: "resolved"; ref: ModelRef; model: ProviderRuntimeModel }
@@ -21,24 +45,23 @@ export async function prepareModelChoice(params: {
   resolvedRef?: ModelRef;
   fallbacks?: string[];
 }): Promise<PreparedModelChoice> {
-  const { withPreparedModelCatalogOwner } = await import("./prepared-model-catalog.js");
-  const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
+  const { withPreparedModelCatalogOwner } = await loadPreparedModelCatalog();
+  const { resolveModelAsync } = await loadModelResolver();
   const {
     buildModelAliasIndex,
     resolveAllowedModelRef,
     resolveDefaultModelForAgent,
     resolveModelRefFromString,
-  } = await import("./model-selection.js");
-  const { splitTrailingAuthProfile } = await import("./model-ref-profile.js");
+  } = await loadModelSelection();
+  const { splitTrailingAuthProfile } = await loadModelRefProfile();
   const { createModelCatalogDecisions, resolveCatalogDecisionRuntime } =
-    await import("./model-catalog-decisions.js");
-  const { getPreparedModelRuntimeAuthStore } = await import("./prepared-model-runtime-auth.js");
-  const { projectProviderModelRouteConfig } = await import("./provider-model-route.js");
-  const { validatePreparedRuntimeModel } = await import("./runtime-plan/materialize-model.js");
-  const { resolveModelCandidateChain } = await import("./model-fallback-candidates.js");
-  const { resolveProviderIdForAuth } = await import("./provider-auth-aliases.js");
-  const { withPluginRuntimeGenerationScope } =
-    await import("../plugins/runtime/generation-scope.js");
+    await loadModelCatalogDecisions();
+  const { getPreparedModelRuntimeAuthStore } = await loadPreparedRuntimeAuth();
+  const { projectProviderModelRouteConfig } = await loadProviderModelRoute();
+  const { validatePreparedRuntimeModel } = await loadRuntimeModelMaterializer();
+  const { resolveModelCandidateChain } = await loadModelFallbackCandidates();
+  const { resolveProviderIdForAuth } = await loadProviderAuthAliases();
+  const { withPluginRuntimeGenerationScope } = await loadPluginGenerationScope();
   return await withPreparedModelCatalogOwner(
     {
       config: params.cfg,
@@ -234,24 +257,31 @@ export async function preparePublishedModelRuntimeChoice(params: {
   workspaceDir?: string;
   provider: string;
   model: string;
-  runtimeId: string;
+  runtimeId?: string;
+  preferredRuntimeId?: string;
   sessionEntry?: Pick<
     SessionEntry,
     "authProfileOverride" | "authProfileOverrideSource" | "providerOverride" | "modelProvider"
   >;
 }): Promise<
-  { kind: "unavailable"; message: string } | { kind: "ready"; validate: () => string | undefined }
+  | { kind: "unavailable"; message: string }
+  | {
+      kind: "ready";
+      runtimeId: string;
+      harness?: AgentHarness;
+      validate: () => string | undefined;
+    }
 > {
   const { getPublishedPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
-    await import("./prepared-model-catalog.js");
-  const { getPreparedModelRuntimeAuthStore } = await import("./prepared-model-runtime-auth.js");
-  const { createModelCatalogDecisions } = await import("./model-catalog-decisions.js");
+    await loadPreparedModelCatalog();
+  const { getPreparedModelRuntimeAuthStore } = await loadPreparedRuntimeAuth();
+  const { createModelCatalogDecisions } = await loadModelCatalogDecisions();
   const published = getPublishedPreparedModelCatalogOwnerSnapshot({
     config: params.cfg,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
   });
-  const unavailable = `Runtime "${params.runtimeId}" is not available for ${params.provider}/${params.model}. Refresh the model catalog and choose again.`;
+  const unavailable = `${params.runtimeId ? `Runtime "${params.runtimeId}"` : "A runtime"} is not available for ${params.provider}/${params.model}. Refresh the model catalog and choose again.`;
   if (!published) {
     return { kind: "unavailable", message: unavailable };
   }
@@ -279,18 +309,29 @@ export async function preparePublishedModelRuntimeChoice(params: {
         : undefined,
     profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
   });
-  let entry = decisions.snapshot.entries.find(
-    (row) => modelKey(row.provider, row.id) === modelKey(params.provider, params.model),
-  );
+  let entry =
+    findModelInCatalog(decisions.snapshot.entries, params.provider, params.model) ??
+    decisions.snapshot.entries.find(
+      (row) => modelKey(row.provider, row.id) === modelKey(params.provider, params.model),
+    );
   if (!entry) {
     // Explicit selections may be outside finite browse inventory. The normal
     // resolver still owns the requested model's provider and physical route.
-    const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
-    const { modelCatalogRowToEntry } = await import("./model-catalog-entry.js");
+    const { resolveModelAsync } = await loadModelResolver();
+    const { modelCatalogRowToEntry } = await loadModelCatalogEntry();
+    const requestedEntry = { provider: params.provider, id: params.model, name: params.model };
+    const materializationRuntime =
+      params.runtimeId ??
+      (params.preferredRuntimeId &&
+      (await decisions.runtimeChoices(requestedEntry, [requestedEntry]))?.includes(
+        params.preferredRuntimeId,
+      )
+        ? params.preferredRuntimeId
+        : undefined);
     const selectedAuth = await decisions.evaluateEntry(
-      { provider: params.provider, id: params.model },
+      requestedEntry,
       undefined,
-      params.runtimeId,
+      materializationRuntime,
     );
     const authProfileMode = resolveProviderModelMaterializationAuthMode(
       selectedAuth.selectedAuthMode,
@@ -307,7 +348,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
         agentId: owner.agentId ?? params.agentId,
         workspaceDir: owner.workspaceDir,
         preparedModelRuntime: owner,
-        agentRuntimeId: params.runtimeId,
+        agentRuntimeId: materializationRuntime,
         allowBundledStaticCatalogFallback: true,
         // Discovery must retain the prepared account instead of rereading live auth stores.
         authProfileMode,
@@ -321,23 +362,37 @@ export async function preparePublishedModelRuntimeChoice(params: {
     }
     entry = modelCatalogRowToEntry(resolved.model);
   }
+  const identityKey = createModelCatalogIdentityKeyResolver();
+  const selectedIdentity = identityKey(entry);
   const variants = decisions.snapshot.routeVariants.filter(
-    (row) => modelKey(row.provider, row.id) === modelKey(entry.provider, entry.id),
+    (row) => identityKey(row) === selectedIdentity,
   );
   const choices = await decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
-  if (!choices?.includes(params.runtimeId)) {
+  const runtimeId =
+    params.runtimeId ??
+    (params.preferredRuntimeId && choices?.includes(params.preferredRuntimeId)
+      ? params.preferredRuntimeId
+      : choices?.[0]);
+  if (!runtimeId || !choices?.includes(runtimeId)) {
     return { kind: "unavailable", message: unavailable };
   }
   const host = await decisions.evaluateEntry(
     entry,
     variants.length ? variants : [entry],
-    params.runtimeId,
+    runtimeId,
   );
   const validate = () =>
-    decisions.isCurrent() &&
-    decisions.evaluateNative(entry, host, params.runtimeId).availability === true
+    decisions.isCurrent() && decisions.evaluateNative(entry, host, runtimeId).availability === true
       ? undefined
       : unavailable;
 
-  return { kind: "ready", validate };
+  const harness = owner.pluginRegistry?.agentHarnesses.find(
+    (registration) => registration.harness.id === runtimeId,
+  )?.harness;
+  return {
+    kind: "ready",
+    runtimeId,
+    validate,
+    harness,
+  };
 }

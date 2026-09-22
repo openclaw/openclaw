@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
@@ -19,7 +19,60 @@ const scope = { agentId: "main", sessionKey: "agent:main:retained" };
 const commands: ChatMetadataResult = { commands: [] };
 const models = [{ id: "fresh", name: "Fresh", provider: "test" }];
 
+afterEach(() => vi.useRealTimers());
+
 describe("automatic metadata admission", () => {
+  it.each(["visible", "hidden", "released", "global invalidation"])(
+    "coalesces session patches and rechecks admission when %s",
+    async (transition) => {
+      vi.useFakeTimers();
+      const request = vi.fn(async (method: string) =>
+        method === "chat.metadata" ? commands : { models },
+      );
+      const client = createTestGatewayClient(request);
+      let active = true;
+      const refreshes: ReturnType<typeof loadChatMetadataRefresh>[] = [];
+      const release = subscribeChatMetadata(
+        client,
+        scope,
+        (update) => {
+          if (update.type === "invalidated") {
+            refreshes.push(loadChatMetadataRefresh(client, scope));
+          }
+        },
+        () => active,
+      );
+      await loadChatMetadataRefresh(client, scope).completed;
+      request.mockClear();
+      for (let index = 0; index < 5; index++) {
+        invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      expect(request).not.toHaveBeenCalled();
+      if (transition === "hidden") {
+        active = false;
+      } else if (transition === "released") {
+        release();
+      } else if (transition === "global invalidation") {
+        invalidateChatMetadataStore(client);
+        expect(request).toHaveBeenCalledWith("chat.metadata", scope);
+      }
+      await vi.advanceTimersByTimeAsync(2_500);
+      await Promise.all(refreshes.map((refresh) => refresh.completed));
+      const admitted = transition === "visible" || transition === "global invalidation";
+      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
+        admitted ? 1 : 0,
+      );
+      if (transition === "hidden") {
+        active = true;
+        await loadChatMetadataRefresh(client, scope).completed;
+        expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(1);
+      }
+      release();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it("reuses metadata across concurrent presentations and route remounts until invalidated", async () => {
     let metadataReads = 0;
     const client = createTestGatewayClient((method) => {

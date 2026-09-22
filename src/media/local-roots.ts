@@ -3,13 +3,10 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import {
-  resolveEffectiveToolFsRootExpansionAllowed,
-  resolveEffectiveToolFsWorkspaceOnly,
-} from "../agents/tool-fs-policy.js";
+import { resolveEffectiveToolFsRootExpansionAllowed } from "../agents/tool-fs-policy.js";
 import { resolveDeliveryQueueMediaDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveLocalPathFromRootsSync } from "../infra/fs-safe.js";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir } from "../utils.js";
@@ -22,11 +19,7 @@ type BuildMediaLocalRootsOptions = {
 let cachedPreferredTmpDir: string | undefined;
 
 function resolveCanonicalRoot(root: string): string {
-  const resolved = path.resolve(root);
-  return (
-    resolveLocalPathFromRootsSync({ filePath: resolved, roots: [resolved], allowMissing: true })
-      ?.path ?? resolved
-  );
+  return resolvePathViaExistingAncestorSync(path.resolve(root));
 }
 
 function resolveCachedPreferredTmpDir(): string {
@@ -199,16 +192,14 @@ export function getAgentScopedMediaLocalRootsForSources(params: {
   agentId?: string;
   mediaSources?: readonly string[];
   sessionWorkspaceDir?: string;
+  workspaceOnly?: boolean;
 }): readonly string[] {
   const roots = getAgentScopedMediaLocalRoots(
     params.cfg,
     params.agentId,
     params.sessionWorkspaceDir,
   );
-  if (resolveEffectiveToolFsWorkspaceOnly({ cfg: params.cfg, agentId: params.agentId })) {
-    return roots;
-  }
-  if (!resolveEffectiveToolFsRootExpansionAllowed({ cfg: params.cfg, agentId: params.agentId })) {
+  if (!resolveEffectiveToolFsRootExpansionAllowed(params)) {
     return roots;
   }
   const expanded = appendLocalMediaParentRoots(roots, params.mediaSources);

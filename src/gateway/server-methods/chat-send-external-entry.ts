@@ -28,6 +28,7 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
       resolvedSessionKey: params.sessionKey,
       spawnedBy: params.spawnedBy,
       client: params.client,
+      isCurrent: params.isCurrent,
       inputProvenance: params.inputProvenance,
       hasExplicitOrigin: params.hasExplicitOrigin,
       hasRestoredCronContinuation: params.hasRestoredCronContinuation,
@@ -42,6 +43,10 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
           authority.runId,
           authority.callerOrigin,
           authority.managementEntitlement,
+          authority.isCurrent,
+          undefined,
+          authority.requesterOwner,
+          authority.callerScopedCreation,
         )
       : undefined;
   },

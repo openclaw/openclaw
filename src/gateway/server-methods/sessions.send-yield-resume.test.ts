@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { setSubagentAnnounceDeliveryDepsForTest } from "../../agents/subagents/announce/subagent-announce-delivery.runtime.js";
+import { setSubagentAnnounceDeliveryDepsForTest } from "../../agents/subagents/announce/subagent-announce-overrides.test-support.js";
 import { dispatchGatewayMethodInProcess } from "../../agents/subagents/announce/subagent-announce.runtime.js";
 import { useSubagentControlFixture } from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
@@ -22,7 +22,7 @@ import { sessionSharingTestContext, soloClient } from "./sessions-sharing.test-s
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
 
 const chatSend = vi.hoisted(() => vi.fn<GatewayRequestHandler>());
-vi.mock("./chat.js", () => ({ chatHandlers: { "chat.send": chatSend } }));
+vi.mock("./chat-send-external-entry.js", () => ({ handleDirectExternalChatSend: chatSend }));
 
 const fixture = useSubagentControlFixture();
 afterEach(() => {

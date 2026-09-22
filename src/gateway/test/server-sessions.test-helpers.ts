@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { registerAcpSessionResetControls } from "../../acp/control-plane/manager.reset-controls.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -15,17 +16,14 @@ import {
   initializeSessionReadContext,
 } from "../server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import { embeddedRunMock, agentDiscoveryMock, testState } from "../test-helpers.runtime-state.js";
+import { embeddedRunMock, testState } from "../test-helpers.runtime-state.js";
 import * as gatewayTestHelpers from "../test-helpers.server.js";
 import {
   installGatewaySessionsTestResources,
   type GatewaySessionsSuiteSetup,
 } from "./server-sessions-resources.test-helpers.js";
 
-export {
-  createCheckpointFixture,
-  getSessionManagerModule,
-} from "./server-sessions-checkpoint.test-helpers.js";
+export { createCompactedSessionFixture } from "./server-sessions-compaction.test-helpers.js";
 
 export const getGatewayConfigModule = createLazyRuntimeModule(
   () => import("../../config/config.js"),
@@ -171,9 +169,12 @@ const acpRuntimeMocks = vi.hoisted(() => ({
   requireAcpRuntimeBackend: vi.fn(),
 }));
 const acpManagerMocks = vi.hoisted(() => ({
+  captureSessionRuntimeOwnership: vi.fn(() => ({ isCurrent: () => true, release: vi.fn() })),
   cancelSession: vi.fn(async () => {}),
   closeSession: vi.fn(async () => {}),
+  forceDiscardSessionRuntime: vi.fn(async () => {}),
 }));
+registerAcpSessionResetControls(acpManagerMocks, acpManagerMocks);
 const browserSessionTabMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));
@@ -286,10 +287,7 @@ vi.mock("../../acp/runtime/registry.js", async () => {
 });
 
 vi.mock("../../acp/control-plane/manager.js", () => ({
-  getAcpSessionManager: () => ({
-    cancelSession: acpManagerMocks.cancelSession,
-    closeSession: acpManagerMocks.closeSession,
-  }),
+  getAcpSessionManager: () => acpManagerMocks,
 }));
 
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
@@ -318,8 +316,10 @@ export function setupGatewaySessionsTestHarness(setup?: GatewaySessionsSuiteSetu
 }
 
 function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewaySessionsSuiteSetup) {
-  const { defaultAgentWorkspace, requireHarness, requireSharedSessionStoreDir } =
-    installGatewaySessionsTestResources(startServer, setup);
+  const { requireHarness, requireSharedSessionStoreDir } = installGatewaySessionsTestResources(
+    startServer,
+    setup,
+  );
   afterEach(disposeSessionReadContexts);
   let sessionStoreCaseSeq = 0;
 
@@ -351,8 +351,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     acpRuntimeMocks.requireAcpRuntimeBackend.mockImplementation((backendId?: string) =>
       acpRuntimeMocks.getAcpRuntimeBackend(backendId),
     );
-    acpManagerMocks.cancelSession.mockClear();
-    acpManagerMocks.closeSession.mockClear();
+    Object.values(acpManagerMocks).forEach((mock) => mock.mockClear());
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
     bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockClear();
@@ -448,7 +447,6 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
         storePath: workStorePath,
       });
     }
-
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
       throw new Error("OPENCLAW_CONFIG_PATH is required");
@@ -511,7 +509,6 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     createConfiguredGlobalAgentSessionStore,
     createSessionStoreDir,
     createSelectedGlobalSessionStore,
-    defaultAgentWorkspace,
     getHarness: requireHarness,
     openClient,
     resetConfiguredGlobalAgentSessionStore,
@@ -591,24 +588,6 @@ export async function directSessionReq<TPayload = unknown>(
 }> {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const loadGatewayModelCatalog =
-    (opts?.context?.loadGatewayModelCatalog as GatewayRequestContext["loadGatewayModelCatalog"]) ??
-    (async () => agentDiscoveryMock.models);
-  const loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] =
-    (opts?.context
-      ?.loadGatewayModelCatalogSnapshot as GatewayRequestContext["loadGatewayModelCatalogSnapshot"]) ??
-    (async (request) => {
-      const entries = await loadGatewayModelCatalog(request);
-      return {
-        entries,
-        routeVariants: entries,
-        agentId: request?.agentId ?? "main",
-        agentDir: "/tmp/session-catalog-agent",
-        workspaceDir: "/tmp/session-catalog-workspace",
-        config: getRuntimeConfig(),
-        catalogComplete: true,
-      };
-    });
   let result:
     | {
         ok: boolean;
@@ -620,22 +599,19 @@ export async function directSessionReq<TPayload = unknown>(
   if (!handler) {
     throw new Error(`missing sessions handler for ${method}`);
   }
-  const contextFields = {
-    ...createDirectChatContext(),
+  const contextFields: GatewayRequestContext = createDirectChatContext({
     broadcastToConnIds: vi.fn(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
-    loadGatewayModelCatalog,
-    loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog: async () => {
-      const catalog = await loadGatewayModelCatalogSnapshot();
+      const catalog = await contextFields.loadGatewayModelCatalogSnapshot();
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };
     },
     getRuntimeConfig,
     ...opts?.context,
-  };
+  });
   const contextKey = opts?.context ?? defaultDirectContext;
   const context = directContexts.get(contextKey) ?? createDirectChatContext();
   Object.assign(context, contextFields);
@@ -646,6 +622,8 @@ export async function directSessionReq<TPayload = unknown>(
       "chat.history",
       "sessions.list",
       "sessions.describe",
+      "sessions.get",
+      "sessions.preview",
       "sessions.resolve",
       "sessions.create",
       "sessions.patch",

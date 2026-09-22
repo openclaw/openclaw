@@ -1,6 +1,6 @@
 // Repairs canonical binding references after agent config migration.
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { AgentSelectionRequiredError, listAgentIds } from "../../../agents/agent-scope-config.js";
+import { AgentSelectionRequiredError } from "../../../agents/agent-scope-config.js";
 import { resolveReadOnlyChannelPluginsForConfig } from "../../../channels/plugins/read-only.js";
 import { projectLegacyAgentRosterEntries } from "../../../config/legacy.roster.js";
 import type { AgentRouteBinding } from "../../../config/types.agents.js";
@@ -13,6 +13,7 @@ import {
   normalizeAgentId,
 } from "../../../routing/session-key.js";
 import type { DoctorConfigMutationResult } from "./config-mutation-state.js";
+import { resolveChannelAccountBindingRepairInput } from "./legacy-config-binding-repair-input.js";
 
 export function pruneBindingsForMissingAgents(
   cfg: OpenClawConfig,
@@ -62,27 +63,13 @@ export function repairUnownedChannelAccountBindings({
   config: OpenClawConfig;
   sourceConfigBeforeMigrations: unknown;
 }): DoctorConfigMutationResult & { warnings?: string[] } {
-  const agentIds = new Set(listAgentIds(cfg));
-  const additions: AgentRouteBinding[] = [];
-  const warnings: string[] = [];
-  const bindings = cfg.bindings === undefined ? [] : cfg.bindings;
-  // Malformed or ownerless bindings cannot establish an explicit repair owner.
-  if (
-    agentIds.size < 2 ||
-    cfg.plugins?.enabled === false ||
-    !Array.isArray(bindings) ||
-    !bindings.every(
-      (binding) =>
-        isRecord(binding) &&
-        isRecord(binding.match) &&
-        typeof binding.agentId === "string" &&
-        binding.agentId.trim().length > 0 &&
-        typeof binding.match.channel === "string" &&
-        (binding.match.accountId === undefined || typeof binding.match.accountId === "string"),
-    )
-  ) {
+  const input = resolveChannelAccountBindingRepairInput(cfg);
+  if (!input) {
     return { config: cfg, changes: [] };
   }
+  const { agentIds, bindings } = input;
+  const additions: AgentRouteBinding[] = [];
+  const warnings: string[] = [];
   const sourceAgents = asNullableRecord(asNullableRecord(sourceConfigBeforeMigrations)?.agents);
   const sourceList = sourceAgents?.list;
   // The shipped list fallback used source array order, which keyed rosters cannot recover.

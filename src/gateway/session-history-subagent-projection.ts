@@ -14,6 +14,7 @@ import { prepareGatewaySessionStoreReadSources } from "./session-utils-store-sou
 /** Bind host-owned stores and retain their admission for one display operation. */
 export function createSessionHistorySubagentProjection(
   scope: SessionTranscriptReadScope,
+  options: { deferSources?: boolean } = {},
 ): SubagentCoordinationDisplayResolver {
   const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptReadScope(scope));
   const currentSource = {
@@ -26,6 +27,7 @@ export function createSessionHistorySubagentProjection(
     currentSource,
     env: process.env,
     registryPath: context.admission.databasePath,
+    deferSources: options.deferSources,
   });
   const bound = createBoundSessionHistorySubagentProjection(
     (read) => withCurrentProjectionSnapshot(scope, read, { readOnly: true }),
@@ -34,7 +36,7 @@ export function createSessionHistorySubagentProjection(
       environment: context.environment,
       coordinatorRuntime: context.coordinatorRuntime,
     },
-    sourceReads.sources,
+    () => sourceReads.sources,
   );
   const assertCurrent = () => {
     context.maintenanceScope?.assertAdmission();

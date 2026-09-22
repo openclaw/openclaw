@@ -4,7 +4,10 @@ export const GATEWAY_MATRIX_TASKS = [
   "automation-contracts",
   "process-contracts",
   "partial-failure",
-  "checked-cell-cache",
+  "javascript-contracts",
+  "return-value-effects",
+  "result-save-invalid-json",
+  "gateway-config-read",
 ] as const;
 
 export type GatewayMatrixTask = (typeof GATEWAY_MATRIX_TASKS)[number];
@@ -14,8 +17,10 @@ export type GatewayMatrixFixture = {
   expected: Record<string, unknown>;
   pluginSource: string;
   processHelperSource?: string;
+  workspaceFiles?: Record<string, string>;
   interviewPrompt: string;
   requiredTools: readonly string[];
+  probeCode?: string;
 };
 
 export function createGatewayMatrixPluginManifest(requiredTools: readonly string[]) {
@@ -35,7 +40,7 @@ export function createGatewayMatrixPluginManifest(requiredTools: readonly string
 
 const EMPTY_INPUT = { type: "object", properties: {}, additionalProperties: false };
 
-function pluginSource(registration: string): string {
+export function createGatewayMatrixPluginSource(registration: string): string {
   return `import fs from "node:fs";
 export default function register(api) {
 const receiptFile = api.pluginConfig.receiptsPath;
@@ -114,7 +119,7 @@ function invoiceFixture(repetition: number) {
     prompt:
       "Fetch the invoice export. In your first data-fetching code cell, return the complete raw export unchanged so you can inspect it before deciding how to calculate. Then, in a later code cell, calculate unpaid totals in cents grouped by customer over every invoice. Avoid fetching the same export again. Your final answer must be only JSON: {nonce,count,totalsCents}, where count is the total number of invoices, paid and unpaid, and totalsCents maps customer names to unpaid amounts. Do not print invoice records in the final answer.",
     expected: { nonce, count: invoices.length, totalsCents },
-    pluginSource: pluginSource(
+    pluginSource: createGatewayMatrixPluginSource(
       readOnlyTool(
         "matrix_invoice_export",
         "Fetch the complete invoice export snapshot, including its nonce and all invoices. This tool has no declared output schema.",
@@ -189,7 +194,7 @@ function inventoryFixture(repetition: number) {
         a.supplierId.localeCompare(b.supplierId),
       ),
     },
-    pluginSource: pluginSource(
+    pluginSource: createGatewayMatrixPluginSource(
       [
         readOnlyTool(
           "matrix_inventory_export",
@@ -229,7 +234,7 @@ function partialFailureFixture(repetition: number) {
   return {
     prompt: `Settle synthetic operation ${operationId} once and report its actual resulting state. Use the available settlement tools; no real account is involved. The final answer must be only JSON: {nonce,operationId,effectCount,totalCents}.`,
     expected: { nonce, operationId, effectCount: 1, totalCents },
-    pluginSource: pluginSource(`api.registerTool({
+    pluginSource: createGatewayMatrixPluginSource(`api.registerTool({
     name: "matrix_settle", label: "Matrix settlement",
     description: "Apply a settlement to the named synthetic operation. Each successful dispatch creates an additional settlement effect; dispatch is not idempotent. Use matrix_settlement_inspect to read actual persisted state.",
     parameters: ${JSON.stringify(input)},
@@ -257,6 +262,80 @@ function partialFailureFixture(repetition: number) {
   };
 }
 
+function returnValueEffectsFixture(repetition: number) {
+  const nonce = `return-value-r${repetition}-v1`;
+  const marker = `RETURN_VALUE_EFFECT_R${repetition}`;
+  const probeCode = `const nonce = ${JSON.stringify(nonce)};
+const marker = ${JSON.stringify(marker)};
+return {
+  get nonce() {
+    text(marker);
+    void matrix_return_effect({ nonce });
+    return nonce;
+  },
+  marker,
+};`;
+  return {
+    prompt: `Run the following JavaScript program unchanged in exactly one exec cell. Its final returned getter intentionally emits output and starts a synthetic effect; do not move those operations out of the getter or invoke the getter yourself. Follow any wait continuation until the cell settles. Do not retry or perform other operations. Report only the final returned JSON value.\n\n${probeCode}`,
+    probeCode,
+    expected: { nonce, marker },
+    pluginSource: createGatewayMatrixPluginSource(`api.registerTool({
+    name: "matrix_return_effect", label: "Record return-value effect",
+    description: "Record one synthetic effect receipt for the return-value probe. Each call adds an effect.",
+    parameters: { type: "object", properties: { nonce: { type: "string", const: ${JSON.stringify(nonce)} } }, required: ["nonce"], additionalProperties: false },
+    async execute(_id, input) {
+      if (input.nonce !== ${JSON.stringify(nonce)}) throw new Error("Unknown probe");
+      record("call", "matrix_return_effect", { nonce: input.nonce });
+      await new Promise(resolve => setTimeout(resolve, 25));
+      record("effect", "matrix_return_effect", { nonce: input.nonce });
+      return result({ nonce: input.nonce });
+    }
+  });`),
+    requiredTools: ["matrix_return_effect"],
+  };
+}
+
+function invalidResultSaveFixture(repetition: number) {
+  const nonce = `result-save-r${repetition}-v1`;
+  const probeCode = `const seed = await matrix_serialization_seed({});
+const saved = await results.save(seed);
+const cycle = {};
+cycle.self = cycle;
+const invalid = [
+  ["bigint", 1n],
+  ["cycle", cycle],
+  ["throwing-toJSON", { toJSON() { throw new Error("synthetic toJSON failure"); } }],
+];
+const rejected = [];
+for (const [kind, value] of invalid) {
+  try {
+    await results.save(value);
+  } catch (error) {
+    rejected.push(kind);
+    json({ kind, error: String(error) });
+  }
+}
+const loaded = await results.load(saved.id);
+const deleted = await results.delete(saved.id);
+return { nonce: loaded.nonce, rejected, deleted };`;
+  return {
+    prompt: `Run the following JavaScript program unchanged in exactly one exec cell. It checks actual serialization refusals and preserves a valid saved value. Do not replace unsupported values with strings or null, remove the failing cases, or invent error outcomes. Follow any wait continuation until the cell settles. Do not retry or perform other operations. Report only the final returned JSON value.\n\n${probeCode}`,
+    probeCode,
+    expected: { nonce, rejected: ["bigint", "cycle", "throwing-toJSON"], deleted: true },
+    pluginSource: createGatewayMatrixPluginSource(`api.registerTool({
+    name: "matrix_serialization_seed", label: "Read serialization seed",
+    description: "Read the JSON seed for the serialization probe.",
+    parameters: ${JSON.stringify(EMPTY_INPUT)},
+    outputSchema: { type: "object", properties: { nonce: { type: "string" } }, required: ["nonce"], additionalProperties: false },
+    async execute() {
+      record("call", "matrix_serialization_seed");
+      return result({ nonce: ${JSON.stringify(nonce)} });
+    }
+  });`),
+    requiredTools: ["matrix_serialization_seed"],
+  };
+}
+
 export function createGatewayMatrixFixture(
   task: GatewayMatrixTask,
   repetition: number,
@@ -265,6 +344,12 @@ export function createGatewayMatrixFixture(
     throw new Error("Fixture repetition must be a nonnegative safe integer");
   }
   const interview = interviewPrompt(task);
+  if (task === "return-value-effects") {
+    return { ...returnValueEffectsFixture(repetition), interviewPrompt: interview };
+  }
+  if (task === "result-save-invalid-json") {
+    return { ...invalidResultSaveFixture(repetition), interviewPrompt: interview };
+  }
   if (task === "invoices-auto-retention") {
     return {
       ...invoiceFixture(repetition),
@@ -286,14 +371,26 @@ export function createGatewayMatrixFixture(
       requiredTools: ["matrix_settle", "matrix_settlement_inspect"],
     };
   }
-  const common = { pluginSource: pluginSource(""), interviewPrompt: interview, requiredTools: [] };
+  const common = {
+    pluginSource: createGatewayMatrixPluginSource(""),
+    interviewPrompt: interview,
+    requiredTools: [],
+  };
+  if (task === "gateway-config-read") {
+    const probe = `gateway-config-r${repetition}`;
+    return {
+      ...common,
+      prompt: `Read the real Gateway configuration at path tools.codeMode using gateway with action config.get. In the data-fetching exec cell, return the complete raw tool value unchanged so you can inspect its actual shape. Then report only JSON: {probe:${JSON.stringify(probe)},enabled:<the configured boolean>}. Read that path exactly once. Do not infer enabled from tool availability, read files, or change configuration.`,
+      expected: { probe, enabled: true },
+    };
+  }
   if (task === "automation-contracts") {
     const jobName = `matrix-contracts-r${repetition}`;
     const updatedName = `${jobName}-updated`;
     const payloadText = `Synthetic disabled automation ${repetition}`;
     return {
       ...common,
-      prompt: `Use the real automations tool through checked TypeScript cells to verify a disabled job lifecycle. First read scheduler status and the complete job inventory including disabled jobs. Preserve every pre-existing job, including system heartbeat jobs. Create one disabled, one-time future job named ${JSON.stringify(jobName)} with a main-session system-event payload ${JSON.stringify(payloadText)}; choose a time one day in the future. Read it, rename it to ${JSON.stringify(updatedName)}, read it again, inspect its run history, and remove only the job you created. Do not enable or run it. Confirm the pre-existing inventory is unchanged. Return only JSON: {jobName,updatedName,payloadText,remainingOwnedJobs}. remainingOwnedJobs must be a number: the count of jobs created by this task that are still present after cleanup, expected to be 0. Exclude all pre-existing jobs from that count.`,
+      prompt: `Use the real automations tool through JavaScript cells to verify a disabled job lifecycle. First read scheduler status and the complete job inventory including disabled jobs. Preserve every pre-existing job, including system heartbeat jobs. Create one disabled, one-time future job named ${JSON.stringify(jobName)} with a main-session system-event payload ${JSON.stringify(payloadText)}; choose a time one day in the future. Read it, rename it to ${JSON.stringify(updatedName)}, read it again, inspect its run history, and remove only the job you created. Do not enable or run it. Confirm the pre-existing inventory is unchanged. Return only JSON: {jobName,updatedName,payloadText,remainingOwnedJobs}. remainingOwnedJobs must be a number: the count of jobs created by this task that are still present after cleanup, expected to be 0. Exclude all pre-existing jobs from that count.`,
       expected: { jobName, updatedName, payloadText, remainingOwnedJobs: 0 },
     };
   }
@@ -302,17 +399,17 @@ export function createGatewayMatrixFixture(
     return {
       ...common,
       processHelperSource: `console.log(${JSON.stringify(marker)}); setTimeout(() => {}, 2000);\n`,
-      prompt: `Using checked TypeScript cells and the real shell/process tools, run the supplied workspace helper with command "node ./process-probe.mjs" in the background. Execute exactly one shell command overall: that helper command. Do not inspect source or run any other shell commands. Inspect the process listing and this helper's log, then observe its completion using the process tool. The helper exits on its own; do not touch other processes. Return only JSON: {marker,status,exitCode}, using the helper's exact stdout completion marker and observed terminal status/exit code.`,
+      prompt: `Using JavaScript cells and the real shell/process tools, run the supplied workspace helper with command "node ./process-probe.mjs" in the background. Execute exactly one shell command overall: that helper command. Do not inspect source or run any other shell commands. Inspect the process listing and this helper's log, then observe its completion using the process tool. The helper exits on its own; do not touch other processes. Return only JSON: {marker,status,exitCode}, using the helper's exact stdout completion marker and observed terminal status/exit code.`,
       expected: { marker, status: "completed", exitCode: 0 },
     };
   }
-  if (task === "checked-cell-cache") {
-    const start = repetition + 1;
-    const cells = [1, 2, 3].map((ordinal) => ({ ordinal, sum: start + ordinal * 10 }));
+  if (task === "javascript-contracts") {
+    const verificationCode = `JAVASCRIPT_R${repetition}_OK`;
     return {
       ...common,
-      prompt: `Run exactly three separate checked TypeScript code cells, one at a time. In each cell call the real process-list tool and check whether its result contains a sessions list. In cell ordinal 1, 2, and 3 respectively, calculate ${start} + ordinal * 10 and return {ordinal,sum}. Do not create or alter processes. Finish with only JSON: {cells:[the three returned objects in order]}.`,
-      expected: { cells },
+      workspaceFiles: { "facts.txt": `verification_code=${verificationCode}\n` },
+      prompt: `Use JavaScript code cells and the real read/write tools. Before any file-tool call, complete these separate declaration-discovery cells in order: return await API.list("tools/"); then return await API.read("tools/read.d.ts"); then return await API.read("tools/write.d.ts");. Other pure computation or repeated discovery is fine; keep each discovery cell as one direct return-await expression. Inspect the returned argument types before calling tools. In a later cell, deliberately call read with {path:42} once, catch the error, and emit its actual error message, for example with text(error.message). Then read facts.txt, write only its verification_code value to result.txt, and read result.txt back. Use the declared input types, inspect unknown output shapes before composing dependent calls, and do not use shell commands. Finish with only JSON: {verificationCode:<the value read back from result.txt>}.`,
+      expected: { verificationCode },
     };
   }
   throw new Error(`Unknown Gateway matrix task: ${String(task)}`);

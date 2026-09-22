@@ -237,7 +237,7 @@ describe("AppSidebar session catalog request errors", () => {
       const refresh = sidebar.sessionData.refreshSessionCatalogs();
       gateway.publish({ suspensionPhase: "draining" });
       gateway.publish({ suspensionPhase: "accepting" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(2);
       pending.reject(
         new GatewayRequestError({
@@ -250,7 +250,7 @@ describe("AppSidebar session catalog request errors", () => {
       await refresh;
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(request).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(1);
       await sidebar.updateComplete;
@@ -300,7 +300,7 @@ describe("AppSidebar session catalog request errors", () => {
           new GatewayRequestError({
             code,
             message,
-            retryable: true,
+            retryable: Boolean(reason),
             details: reason ? { reason, phase: "draining" } : undefined,
           }),
         );
@@ -324,7 +324,7 @@ describe("AppSidebar session catalog request errors", () => {
           catalogPage([{ threadId: "thread-one", name: "Recovered session" }]),
         );
         gateway.publish({ suspensionPhase: "accepting" });
-        await vi.advanceTimersByTimeAsync(199);
+        await vi.advanceTimersByTimeAsync(4_999);
         expect(request).toHaveBeenCalledTimes(2);
         await vi.advanceTimersByTimeAsync(1);
         await sidebar.updateComplete;

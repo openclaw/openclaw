@@ -163,3 +163,21 @@ export function resolveAutomaticDevicePlacementDisabledReason(
     ? undefined
     : devices.find((device) => sessionHostIds.has(`node:${device.deviceId}`))?.disabledReason;
 }
+
+export function resolveSelectedDevicePlacement(
+  devices: readonly DevicePlacementOption[],
+  environments: readonly DraftEnvironment[] | null,
+  selection: Readonly<{ deviceId: string; autoDevice: boolean }>,
+) {
+  const selected = devices.find((device) => device.deviceId === selection.deviceId);
+  return {
+    ready: selection.autoDevice
+      ? devices.some((device) => device.selectable)
+      : !selection.deviceId || selected?.selectable === true,
+    disabledReason: selection.autoDevice
+      ? resolveAutomaticDevicePlacementDisabledReason(environments, devices)
+      : !selection.deviceId
+        ? undefined
+        : (selected?.disabledReason ?? t("newSession.nodeUnavailable")),
+  };
+}

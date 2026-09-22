@@ -14,12 +14,14 @@ import {
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
+import { createUpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { CLI_NAME } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
 import {
+  requiresRetainedUpdateCommandOwner,
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
@@ -28,10 +30,8 @@ import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
 } from "./update-command-migrated-types.js";
-import {
-  createUpdateCommandFinalizationFence,
-  UpdateCommandRecoveryPendingError,
-} from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import {
   resolveUpdatedInstallCommandEnv,
@@ -97,7 +97,7 @@ export async function inspectActivatedUpdateState(
     result.status = "error";
     result.reason = "rollback-state-unverified";
     result.steps.push({
-      name: "state schema verification",
+      name: "state-schema-verification",
       command: "openclaw update",
       cwd: result.root ?? root,
       durationMs: 0,
@@ -112,7 +112,7 @@ export async function inspectActivatedUpdateState(
 export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
-): Promise<Omit<MigratedUpdateFinalizationResult, "terminalRunId">> {
+): Promise<Pick<MigratedUpdateFinalizationResult, "result" | "exitCode" | "automaticTriage">> {
   if (params.opts.recovery) {
     throw new UpdateCommandRecoveryPendingError("Full-state checkpoint recovery is deferred.");
   }
@@ -145,8 +145,11 @@ export async function continueMigratedUpdateInFreshProcess(
       TMP: scratchDir,
       TEMP: scratchDir,
     };
-    if (run.executorFence) {
+    if (run.executorFence || run.completionOwner) {
       assertCurrent();
+      const requiresRetainedOwner = run.executorFence
+        ? requiresRetainedUpdateCommandOwner(run.executorFence)
+        : false;
       // Compatibility only, never authority. An older installed worker ignores
       // new JSON fields, so refuse before exposing any continuation input.
       const check = await runUtf8CommandWithTimeout([...workerCommand, "--check"], {
@@ -174,10 +177,16 @@ export async function continueMigratedUpdateInFreshProcess(
         check.code !== 0 ||
         check.cleanup !== "normal" ||
         !isRecord(contract) ||
-        contract.executorDelegation !== "pid-start-v1"
+        (run.executorFence && contract.executorDelegation !== "pid-start-v1") ||
+        (requiresRetainedOwner && contract.retainedOwnerBinding !== true)
       ) {
         throw new UpdateCommandRecoveryPendingError(
           "Update runtime does not support live executor delegation; recovery remains pending.",
+        );
+      }
+      if (run.completionOwner === "gateway-restart" && contract.gatewayRestartCompletion !== true) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Candidate runtime cannot defer foreground update completion to Gateway restart; recovery remains pending.",
         );
       }
     }
@@ -198,23 +207,28 @@ export async function continueMigratedUpdateInFreshProcess(
       const { windowsTaskAutoStartRecovery: _windows, ...serializableStop } = preManagedServiceStop;
       stopState = serializableStop;
     }
-    run.activationTimeoutMs ??= await resolveUpdateFinalizationTimeoutMs(
-      params.updateStepTimeoutMs,
-      {
-        env: params.ownedManagedUpdateEnv ?? run.env,
-        databases: params.schemaVersions,
-        pluginCount: Object.keys(params.preUpdatePluginInstallRecords).length,
-        nodeRunner: params.packageUpdateNodeRunner,
-      },
-    );
+    if (params.opts.timeout !== undefined) {
+      run.activationTimeoutMs ??= await resolveUpdateFinalizationTimeoutMs(
+        params.updateStepTimeoutMs,
+        {
+          env: params.ownedManagedUpdateEnv ?? run.env,
+          databases: params.schemaVersions,
+          pluginCount: Object.keys(params.preUpdatePluginInstallRecords).length,
+          nodeRunner: params.packageUpdateNodeRunner,
+        },
+      );
+    }
+    const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.updateStepTimeoutMs);
     assertCurrent();
     const resultPath = path.join(scratchDir, "result.json");
     const { requesterAuthority, executorFence, ...runIdentity } = run;
     const input: MigratedUpdateFinalizationInput = {
+      ...handoff,
       params: {
         ...serializable,
         opts: {
           ...params.opts,
+          timeout: handoff.timeout.serialized,
           run: {
             ...runIdentity,
             ...(requesterAuthority
@@ -239,8 +253,8 @@ export async function continueMigratedUpdateInFreshProcess(
         env: workerEnv,
         input: JSON.stringify({ ...input, ...(grant ? { executor: grant } : {}) }),
         beforeInput: bindChild,
-        // This continuation includes bounded plugin steps as well as service
-        // verification; the whole-process bound must exceed one step's budget.
+        // Only an operator deadline bounds forward finalization. Probes and
+        // cancellation settlement keep their separate finite allowances.
         timeoutMs: run.activationTimeoutMs,
         killProcessTree: true,
         requireProcessTreeExtinction: true,
@@ -264,7 +278,13 @@ export async function continueMigratedUpdateInFreshProcess(
       child.code !== 0 ||
       child.cleanup !== "normal" ||
       (executorFence && response.executorDelegation !== "pid-start-v1") ||
-      response.terminalRunId !== run.runId ||
+      (response.terminalRunId !== run.runId &&
+        !(
+          run.completionOwner === "gateway-restart" &&
+          run.gatewayRestartRequired === true &&
+          response.restartRunId === run.runId &&
+          response.result.status === "ok"
+        )) ||
       response.result.runId !== run.runId ||
       !Number.isInteger(response.exitCode)
     ) {

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { summarizeTranscriptsWithModel } from "./summary-model.js";
 import { summarizeTranscripts } from "./summary.js";
@@ -61,6 +63,38 @@ afterEach(() => {
 });
 
 describe("model-backed transcript summaries", () => {
+  it("does not request model notes for an artifact-only transcript", async () => {
+    const summary = await summarizeTranscriptsWithModel({
+      ...params,
+      utterances: [{ text: "context:" }, { text: "###" }, { text: "Transcribe the audio." }],
+    });
+    expect(summary).toBeUndefined();
+    expect(runIsolatedCompletion).not.toHaveBeenCalled();
+  });
+  it("joins tracked resource release before admitting a fallback model", async () => {
+    const cleanup = createDeferred();
+    runIsolatedCompletion.mockImplementationOnce(() =>
+      runWithAsyncWorkResources(async (onAcquired) => {
+        onAcquired({ release: () => cleanup.promise });
+        return completion("invalid notes");
+      }),
+    );
+    const pending = summarizeTranscriptsWithModel(params);
+    try {
+      await vi.waitFor(() => expect(runIsolatedCompletion).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runIsolatedCompletion).toHaveBeenCalledOnce();
+      cleanup.resolve();
+      expect(await pending).toMatchObject({ source: "model" });
+      expect(runIsolatedCompletion.mock.calls.map(([request]) => request.model)).toEqual([
+        "gpt-5.6-luna",
+        "primary-test-model",
+      ]);
+    } finally {
+      cleanup.resolve();
+      await pending;
+    }
+  });
   it("uses visible JSON notes while retaining deterministic transcript identity and participants", async () => {
     runIsolatedCompletion.mockResolvedValue(
       completion(
@@ -171,16 +205,28 @@ describe("model-backed transcript summaries", () => {
     },
   );
 
-  it("aborts timed-out inference and leaves no timer or primary attempt running", async () => {
-    runIsolatedCompletion.mockImplementation(() => new Promise(() => {}));
+  it("aborts timed-out inference and joins its cleanup before returning", async () => {
+    const held = createDeferred<ReturnType<typeof completion>>();
+    runIsolatedCompletion.mockReturnValue(held.promise);
     const pending = summarizeTranscriptsWithModel(params);
-    await vi.waitFor(() => expect(runIsolatedCompletion).toHaveBeenCalledOnce());
-    const request = runIsolatedCompletion.mock.calls[0]![0];
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(await pending).toBeUndefined();
-    expect(request.abortSignal.aborted).toBe(true);
-    expect(runIsolatedCompletion).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
+    let completed = false;
+    void pending.then(() => {
+      completed = true;
+    });
+    try {
+      await vi.waitFor(() => expect(runIsolatedCompletion).toHaveBeenCalledOnce());
+      const request = runIsolatedCompletion.mock.calls[0]![0];
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(request.abortSignal.aborted).toBe(true);
+      expect(completed).toBe(false);
+      held.resolve(completion(JSON.stringify(notes)));
+      expect(await pending).toBeUndefined();
+      expect(runIsolatedCompletion).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      held.resolve(completion(JSON.stringify(notes)));
+      await pending;
+    }
   });
 
   it("does not retry the same model when utility and primary select the same route", async () => {

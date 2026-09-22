@@ -5,7 +5,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { AgentToolsConfig } from "../../../config/types.tools.js";
+import {
+  agentRosterCases,
+  createMessagePolicyAgents,
+} from "./preview-agent-fixtures.test-support.js";
 import { collectDoctorPreviewNotes } from "./preview-warnings.js";
 
 async function collectDoctorPreviewWarnings(
@@ -23,23 +26,6 @@ async function collectProfileConfiguredToolSectionWarningsThroughDoctor(
   });
   return warnings.filter((warning) => warning.includes("is configured, but configured sections"));
 }
-
-const agentRosterCases = [
-  {
-    name: "list",
-    path: "agents.list[0]",
-    otherPath: "agents.entries",
-    agents: (tools: AgentToolsConfig) => ({ list: [{ id: "sage", tools }] }),
-  },
-  {
-    name: "keyed",
-    path: "agents.entries.sage",
-    otherPath: "agents.list",
-    agents: (tools: AgentToolsConfig) => ({
-      entries: { main: { default: true }, sage: { tools } },
-    }),
-  },
-];
 
 async function collectVisibleReplyToolPolicyWarningsThroughDoctor(
   cfg: OpenClawConfig,
@@ -59,26 +45,6 @@ async function collectChannelBoundMessageToolPolicyWarningsThroughDoctor(
     doctorFixCommand: "openclaw doctor --fix",
   });
   return warnings.filter((warning) => warning.includes("is routed from channel"));
-}
-
-function createMessagePolicyAgents(routedAgentId: string): NonNullable<OpenClawConfig["agents"]> {
-  return {
-    list: [
-      {
-        id: "main",
-        default: true,
-        tools: {
-          allow: ["read"],
-        },
-      },
-      {
-        id: routedAgentId,
-        tools: {
-          profile: "messaging",
-        },
-      },
-    ],
-  };
 }
 
 type TestManifestRecord = {
@@ -110,11 +76,6 @@ const repairMergedGatewayOwnerProfile = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../state/user-profiles-owner-migration.js", () => ({
   repairMergedGatewayOwnerProfile,
-}));
-
-const activeToolSchemaState = vi.hoisted(() => ({
-  warnings: [] as string[],
-  params: undefined as { runWithPluginMetadataSnapshot?: unknown } | undefined,
 }));
 
 const commandSecretState = vi.hoisted(() => ({
@@ -152,7 +113,6 @@ vi.mock("../channel-capabilities.js", () => {
 });
 
 vi.mock("./channel-doctor.js", () => ({
-  collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(() => []),
   collectChannelDoctorPreviewWarnings: vi.fn(
     async ({ cfg }: { cfg: { channels?: Record<string, unknown> } }) => {
       const telegram = cfg.channels?.telegram as { allowFrom?: unknown } | undefined;
@@ -359,15 +319,6 @@ vi.mock("./stale-auth-order.js", () => ({
   collectStaleConfiguredAuthOrderWarnings: () => staleAuthOrderState.warnings,
 }));
 
-vi.mock("./active-tool-schema-warnings.js", () => ({
-  collectActiveToolSchemaProjectionWarnings: async (params: {
-    runWithPluginMetadataSnapshot?: unknown;
-  }) => {
-    activeToolSchemaState.params = params;
-    return activeToolSchemaState.warnings;
-  },
-}));
-
 vi.mock("./codex-route-warnings.js", () => ({
   collectCodexRouteWarnings: vi.fn(() => []),
 }));
@@ -443,8 +394,6 @@ describe("doctor preview warnings", () => {
       changes: [],
       warnings: [],
     });
-    activeToolSchemaState.warnings = [];
-    activeToolSchemaState.params = undefined;
     commandSecretState.targetIds = new Set<string>();
     commandSecretState.resolvedConfig = undefined;
     commandSecretState.diagnostics = [];
@@ -512,6 +461,11 @@ describe("doctor preview warnings", () => {
   });
 
   it("collects provider and shared preview warnings", async () => {
+    const channelDoctor = await import("./channel-doctor.js");
+    vi.mocked(channelDoctor.createChannelDoctorEmptyAllowlistPolicyHooks).mockReturnValueOnce({
+      extraWarningsForAccount: ({ prefix }) => [`extra:${prefix}`],
+      shouldSkipDefaultEmptyGroupAllowlistWarning: () => false,
+    });
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
         channels: {
@@ -535,6 +489,8 @@ describe("doctor preview warnings", () => {
     expect(
       warnings.some((warning) => warning.includes('channels.signal.allowFrom: set to ["*"]')),
     ).toBe(true);
+    expect(warnings.join("\n")).toContain("extra:channels.telegram");
+    expect(warnings.join("\n")).toContain("extra:channels.signal");
   });
 
   it("resolves configured channel SecretRefs before collecting channel preview warnings", async () => {
@@ -756,38 +712,6 @@ describe("doctor preview warnings", () => {
     expectSingleWarningContaining(
       warnings,
       "auth.order.anthropic references only missing profiles",
-    );
-  });
-
-  it("includes active tool schema projection warnings", async () => {
-    activeToolSchemaState.warnings = [
-      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
-    ];
-
-    const warnings = await collectDoctorPreviewWarnings({
-      cfg: { tools: { allow: ["fuzzplugin_move_angles"] } },
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(
-      warnings.some((warning) => warning.includes('active tool "fuzzplugin_move_angles"')),
-    ).toBe(true);
-  });
-
-  it("scopes active tool schema preview checks to the Doctor metadata lifecycle", async () => {
-    const runWithPluginMetadataSnapshot = <T>(
-      _scope: { config: OpenClawConfig; workspaceDir?: string },
-      run: () => T,
-    ): T => run();
-
-    await collectDoctorPreviewWarnings({
-      cfg: {},
-      doctorFixCommand: "openclaw doctor --fix",
-      runWithPluginMetadataSnapshot,
-    });
-
-    expect(activeToolSchemaState.params?.runWithPluginMetadataSnapshot).toBe(
-      runWithPluginMetadataSnapshot,
     );
   });
 

@@ -249,7 +249,9 @@ function createPackageUpdateMaintenanceLanes() {
     npmLane("update-first-hop-compat", updateFirstHopCompatCommand, {
       resources: ["service"],
       stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
+      // Four serial packaged-updater hops (2026.9.1 through 2026.9.4) take
+      // ~6 minutes each on hosted runners; 25 minutes cut the fourth hop off.
+      timeoutMs: 45 * 60 * 1000,
       weight: 3,
     }),
     npmLane("update-run-package-self-upgrade", updateRunPackageSelfUpgradeCommand, {

@@ -149,6 +149,11 @@ openclaw fleet status acme
 openclaw fleet status acme --json
 ```
 
+Human-readable status includes `Runtime: docker` or `Runtime: podman` from the cell's
+recorded runtime. This identifies the container engine selected for the cell, not
+whether that engine is currently available. JSON output retains the existing
+`runtime` field.
+
 Status combines the fleet registry row, live container inspection, and a short best-effort request to:
 
 ```text
@@ -185,7 +190,7 @@ openclaw fleet stop acme
 openclaw fleet restart acme
 ```
 
-These commands operate on the registered container name. They fail if the tenant is unknown or the recorded runtime cannot perform the operation.
+These commands resolve the registered container name, verify ownership, and act on that inspected container's ID. They fail if the tenant is unknown or the recorded runtime cannot perform the operation.
 
 ## `fleet upgrade`
 

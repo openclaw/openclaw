@@ -240,7 +240,7 @@ describe("SystemAgentChatEngine approval", () => {
       );
 
       expect(createAgent).toHaveBeenCalledWith({
-        name: "researcher",
+        entry: { id: "researcher" },
         workspace: "/tmp/researcher",
         provenance: { createdVia: "agent", creatorAgentId: expectedCreatorAgentId },
       });

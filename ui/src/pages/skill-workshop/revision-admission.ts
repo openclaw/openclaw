@@ -5,6 +5,8 @@ import type {
   SkillWorkshopRevisionAdmissionEntry,
 } from "../../app/skill-workshop-revision-admissions.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import type { ChatSendAck } from "../chat/chat-send-ack.ts";
+import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
 import type { SkillProposalInspectResult } from "./proposal-records.ts";
 import { resolveSkillWorkshopRevisionTarget } from "./revision-session.ts";
 
@@ -17,6 +19,7 @@ export async function requestSkillWorkshopRevisionAdmission(params: {
 }) {
   const source = params.context.gateway.snapshot;
   const client = source.client;
+  const createdAt = Date.now();
   if (!client) {
     throw new Error("Gateway is not connected.");
   }
@@ -58,19 +61,16 @@ export async function requestSkillWorkshopRevisionAdmission(params: {
     throw new Error("Revision request was interrupted before admission.");
   }
   const result = await client
-    .request<{ status: "started" | "in_flight" | "ok" | "timeout" | "error" }>(
-      "skills.proposals.requestRevision",
-      {
-        agentId: normalizeAgentId(entry.proposalOriginAgentId ?? entry.proposalAgentId),
-        targetAgentId: target.targetAgentId,
-        proposalId: entry.proposalId,
-        expectedRevisionHash: entry.expectedRevisionHash,
-        instructions: entry.instructions,
-        sessionKey: target.sessionKey,
-        ...(target.sessionId ? { sessionId: target.sessionId } : {}),
-        idempotencyKey: entry.idempotencyKey,
-      },
-    )
+    .request<ChatSendAck>("skills.proposals.requestRevision", {
+      agentId: normalizeAgentId(entry.proposalOriginAgentId ?? entry.proposalAgentId),
+      targetAgentId: target.targetAgentId,
+      proposalId: entry.proposalId,
+      expectedRevisionHash: entry.expectedRevisionHash,
+      instructions: entry.instructions,
+      sessionKey: target.sessionKey,
+      ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+      idempotencyKey: entry.idempotencyKey,
+    })
     .catch((error: unknown) => {
       if (readSkillProposalRevisionChangedError(error)) {
         return { status: "revision-changed" as const };
@@ -82,6 +82,17 @@ export async function requestSkillWorkshopRevisionAdmission(params: {
   }
   if (result.status !== "started" && result.status !== "in_flight" && result.status !== "ok") {
     throw new Error(`Gateway returned ${result.status} before admitting the revision request.`);
+  }
+  // Transfer display custody before the admission owner retires the saved instructions.
+  if (isCurrent()) {
+    params.context.chatSubmissions.retain(
+      buildInitialChatSubmission(
+        target.sessionKey,
+        { text: entry.instructions, createdAt },
+        client,
+        result.runId,
+      ),
+    );
   }
   return { sessionKey: target.sessionKey, status: "admitted" as const };
 }

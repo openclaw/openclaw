@@ -19,6 +19,7 @@ import { parsePluginInstallRecordMap } from "../../config/plugin-install-record-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { shouldWarnOnTouchedVersion } from "../../config/version.js";
+import { composeConfigWriteAssertions } from "../../config/write-authority.js";
 import { normalizeUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -26,6 +27,22 @@ import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 
 const PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/** Preserve captured path ownership while adding the update's original executor. */
+export function withUpdateConfigWriteAuthority(
+  writeOptions: ConfigWriteOptions,
+  assertCurrent?: () => void,
+): ConfigWriteOptions {
+  if (!assertCurrent) {
+    return writeOptions;
+  }
+  const assertOwner = writeOptions.assertCurrent;
+  return {
+    ...writeOptions,
+    observe: false,
+    assertCurrent: composeConfigWriteAssertions(assertOwner, assertCurrent),
+  };
+}
 
 export function normalizePluginInstallRecordMap(
   value: unknown,
@@ -237,6 +254,7 @@ function resolveRestoredAuthoredChannels(params: {
 
 export async function persistValidatedDowngradeConfig(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+  assertCurrent?: () => void,
 ): Promise<void> {
   if (
     snapshot.valid &&
@@ -245,8 +263,19 @@ export async function persistValidatedDowngradeConfig(
     // Strict target validation permits this write even when Doctor execution failed.
     // Committing unchanged config through its normal writer stamps the target version,
     // so same-channel downgrades retain ordinary restart eligibility.
-    await withPluginLifecycleLease({}, async () => {
-      await mutateConfigFileWithRetry({ mutate: () => undefined });
+    await withPluginLifecycleLease({ assertCurrent }, async () => {
+      assertCurrent?.();
+      await mutateConfigFileWithRetry({
+        mutate: () => undefined,
+        ...(assertCurrent
+          ? {
+              writeOptions: withUpdateConfigWriteAuthority(
+                { beforeCommit: assertCurrent },
+                assertCurrent,
+              ),
+            }
+          : {}),
+      });
     });
   }
 }
@@ -254,6 +283,7 @@ export async function persistValidatedDowngradeConfig(
 export async function persistRequestedUpdateChannel(params: {
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   requestedChannel: UpdateChannel | null;
+  assertCurrent?: () => void;
 }): Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> {
   if (!params.requestedChannel || !params.configSnapshot.valid) {
     return params.configSnapshot;
@@ -265,7 +295,13 @@ export async function persistRequestedUpdateChannel(params: {
   const requestedChannel = params.requestedChannel;
 
   const mutation = await mutateConfigFileWithRetry({
-    writeOptions: { skipPluginValidation: true },
+    writeOptions: withUpdateConfigWriteAuthority(
+      {
+        skipPluginValidation: true,
+        ...(params.assertCurrent ? { beforeCommit: params.assertCurrent } : {}),
+      },
+      params.assertCurrent,
+    ),
     mutate: (draft) => {
       draft.update = {
         ...draft.update,
@@ -282,6 +318,7 @@ export async function preparePostCorePluginConfig(params: {
   preUpdateConfig?: PreUpdateConfigRestoreInput;
   suppressFutureVersionWarning?: boolean;
   observe?: boolean;
+  assertCurrent?: () => void;
 }) {
   const io = createConfigIO({
     pluginValidation: "skip",
@@ -289,17 +326,26 @@ export async function preparePostCorePluginConfig(params: {
     observe: params.observe,
   });
   let prepared = await io.readConfigFileSnapshotForWrite();
+  params.assertCurrent?.();
   const channelSnapshot = await persistRequestedUpdateChannel({
     configSnapshot: prepared.snapshot,
     requestedChannel: params.requestedChannel,
+    assertCurrent: params.assertCurrent,
   });
   if (channelSnapshot !== prepared.snapshot) {
     prepared = await io.readConfigFileSnapshotForWrite();
   }
+  params.assertCurrent?.();
   const restored = restoreDroppedPreUpdateChannels(prepared.snapshot, params.preUpdateConfig);
   return {
     configSnapshot: restored.snapshot,
-    configWriteOptions: prepared.writeOptions,
+    configWriteOptions: withUpdateConfigWriteAuthority(
+      {
+        ...prepared.writeOptions,
+        ...(params.assertCurrent ? { beforeCommit: params.assertCurrent } : {}),
+      },
+      params.assertCurrent,
+    ),
     configChanged: restored.changed,
     restoredAuthoredChannels: restored.authoredChannels,
   };

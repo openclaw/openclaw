@@ -1,3 +1,7 @@
+import type {
+  ExactProvisionedSnapshot,
+  ExactStateRetirement,
+} from "./snapshot-exact-state-contract.js";
 import type { ProvisionedFileState } from "./types.js";
 
 export type GitWorktreeOperations = {
@@ -8,8 +12,17 @@ export type GitWorktreeOperations = {
       repoRoot: string;
       reason: string;
       provisionedPaths: readonly string[];
+      exactState?: { branch: string; expected: ExactStateRetirement; retirementName: string };
     };
-    output: { snapshotRef: string; provisionedState: ProvisionedFileState[] };
+    output: {
+      snapshotRef: string;
+      provisionedState: ProvisionedFileState[];
+      exactStateDigest?: string;
+    };
+  };
+  "worktree.snapshot-verify-exact": {
+    input: GitWorktreeOperations["worktree.snapshot"]["input"] & { expectedDigest: string };
+    output: boolean;
   };
   "worktree.provisioning-inspection": {
     input: { sourceRoot: string };
@@ -59,7 +72,7 @@ export type GitWorktreeEffects = {
     output: void;
   };
   "worktree.snapshot-provisioned": {
-    input: Record<string, never>;
+    input: { expected?: ExactProvisionedSnapshot };
     output: ProvisionedFileState[];
   };
 };

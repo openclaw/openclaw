@@ -153,6 +153,8 @@ export async function sendMessageMatrix(
       cfg: opts.cfg,
       timeoutMs: opts.timeoutMs,
       accountId: opts.accountId,
+      signal: opts.signal,
+      assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
     },
     async (client) => {
       const roomId = await resolveMatrixRoomId(client, to);

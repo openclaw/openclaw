@@ -32,6 +32,7 @@ import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
+import { reportPlacementTransition } from "../worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import {
   identifiedClient,
@@ -181,8 +182,27 @@ async function whilePaused(
   }
 }
 
+async function afterCommittedChange(
+  context: GatewayRequestContext,
+  start: () => Promise<unknown>,
+  change: () => Promise<void> | void,
+) {
+  await initializeSessionReadContext(context);
+  const projection = getSessionRowProjection(context)!;
+  await projection.ensureMaterialized();
+  await change();
+  const readiness = vi.spyOn(projection, "ensureMaterialized").mockImplementation(() => {
+    throw new Error("describe must not join bulk readiness");
+  });
+  try {
+    return await start();
+  } finally {
+    readiness.mockRestore();
+  }
+}
+
 it.each(["describe", "list"] as const)(
-  "captures current registry facts after %s projection readiness",
+  "captures current registry facts after %s owner publications",
   async (method) => {
     await withFixture(async ({ context, viewer }) => {
       await describeSession(context, viewer);
@@ -191,7 +211,8 @@ it.each(["describe", "list"] as const)(
         controllerSessionKey: "agent:main:current-controller",
       });
       try {
-        const response = await whilePaused(
+        const read = method === "list" ? whilePaused : afterCommittedChange;
+        const response = await read(
           context,
           () =>
             method === "describe"
@@ -226,7 +247,7 @@ it.each(["describe", "list"] as const)(
   },
 );
 
-it("projects current target, lineage, children and placement after projection readiness", async () => {
+it("projects current target, lineage, children and placement after committed changes", async () => {
   await withFixture(async ({ context, viewer }) => {
     const childKey = "agent:main:direct-child";
     const removedKey = "agent:main:removed-child";
@@ -253,7 +274,7 @@ it("projects current target, lineage, children and placement after projection re
     );
     const placements = createWorkerSessionPlacementStore();
     context.workerSessionPlacementService = placements;
-    const response = await whilePaused(
+    const response = await afterCommittedChange(
       context,
       () => describeSession(context, viewer),
       async () => {
@@ -275,11 +296,14 @@ it("projects current target, lineage, children and placement after projection re
           target: { canonicalKey: removedKey, storeKeys: [removedKey] },
           archiveTranscript: false,
         });
-        placements.startDispatch({
-          sessionId: "replacement",
-          agentId: "main",
-          sessionKey: targetKey,
-        });
+        reportPlacementTransition(
+          undefined,
+          placements.startDispatch({
+            sessionId: "replacement",
+            agentId: "main",
+            sessionKey: targetKey,
+          }),
+        );
       },
     );
     expect(response).toMatchObject({
@@ -307,10 +331,10 @@ it("projects current target, lineage, children and placement after projection re
 });
 
 it.each(["draft", "role", "creator alias"] as const)(
-  "rechecks sharing visibility after a %s change during projection readiness",
+  "rechecks sharing visibility after a %s change before the synchronous read",
   async (change) => {
     await withFixture(async ({ cfg, context, viewer }) => {
-      const response = await whilePaused(
+      const response = await afterCommittedChange(
         context,
         () => describeSession(context, viewer),
         async () => {
@@ -348,7 +372,7 @@ it.each(["draft", "role", "creator alias"] as const)(
   },
 );
 
-it("resolves the current agent store and main alias after projection readiness", async () => {
+it("resolves the current agent store and main alias after committed changes", async () => {
   for (const route of ["agent", "main alias"] as const) {
     await withFixture(async ({ cfg, context, viewer }) => {
       const initial: OpenClawConfig = {
@@ -408,7 +432,7 @@ it("resolves the current agent store and main alias after projection readiness",
         session: { agentId: "main", thinkingLevels: [] },
       });
       catalogs.mockClear();
-      const response = await whilePaused(
+      const response = await afterCommittedChange(
         context,
         () => describeSession(context, viewer, key),
         async () => {
@@ -436,7 +460,7 @@ it("resolves the current agent store and main alias after projection readiness",
   }
 });
 
-it("projects elapsed runtime, status expiry and budget time after projection readiness", async () => {
+it("projects elapsed runtime, status expiry and budget time after committed changes", async () => {
   await withFixture(async ({ context, viewer }) => {
     const startedAt = Date.now() - 1000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt + 1000);
@@ -481,7 +505,7 @@ it("projects elapsed runtime, status expiry and budget time after projection rea
           agentStatus: { note: "Working" },
         },
       });
-      const response = await whilePaused(
+      const response = await afterCommittedChange(
         context,
         () => describeSession(context, viewer),
         () => {
@@ -509,7 +533,7 @@ it("projects elapsed runtime, status expiry and budget time after projection rea
   });
 });
 
-it("refreshes retained control ownership after projection readiness", async () => {
+it("refreshes retained control ownership after committed changes", async () => {
   await withFixture(async ({ context, viewer }) => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -533,7 +557,7 @@ it("refreshes retained control ownership after projection readiness", async () =
       expect(await describeSession(context, viewer)).toMatchObject({
         session: { controlOwnerSessionKey: older.controllerSessionKey },
       });
-      const response = await whilePaused(
+      const response = await afterCommittedChange(
         context,
         () => describeSession(context, viewer),
         () => {
@@ -550,7 +574,7 @@ it("refreshes retained control ownership after projection readiness", async () =
 });
 
 it.each(["executor", "reservation"] as const)(
-  "rechecks the sole %s owner after projection readiness",
+  "rechecks the sole %s owner after committed changes",
   async (owner) => {
     await withFixture(async ({ context, viewer }) => {
       const old = Date.now() - 3 * 60 * 60 * 1000;
@@ -588,7 +612,7 @@ it.each(["executor", "reservation"] as const)(
         expect(await describeSession(context, viewer)).toMatchObject({
           session: { hasActiveSubagentRun: true },
         });
-        const response = await whilePaused(
+        const response = await afterCommittedChange(
           context,
           () => describeSession(context, viewer),
           () => {

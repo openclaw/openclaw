@@ -71,6 +71,7 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
       const binding = readBinding();
       const selection = codexBindingConnectionSelection(binding);
       const assertCurrent = () => {
+        options.context.assertInvocationCurrent?.();
         if (
           runtimeConfig() !== config ||
           !isDeepStrictEqual(options.getPluginConfig(), pluginConfig) ||

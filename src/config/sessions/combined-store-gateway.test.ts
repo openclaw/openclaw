@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   createSessionRowProjection,
   type SessionRowProjection,
@@ -201,18 +201,33 @@ it("projects shared rows under their logical owner while retaining the physical 
     for (const sessionKey of ["global", "unknown", "agent:worker:task"]) {
       replaceSessionEntrySync(
         { agentId: sessionKey.startsWith("agent:") ? "worker" : "ops", sessionKey, storePath },
-        { sessionId: `session-${sessionKey}`, updatedAt: 1 },
+        {
+          sessionId: `session-${sessionKey}`,
+          updatedAt: 1,
+          displayName: sessionKey === "global" ? "Shared physical global title" : undefined,
+        },
       );
     }
     await persistSessionTranscriptTurn(
       { agentId: "main", storePath, sessionKey: "global", sessionId: "session-global" },
       {
-        messages: [{ message: { role: "user", content: "Shared physical global title" } }],
+        messages: [{ message: { role: "user", content: "Shared physical global preview" } }],
         touchSessionEntry: false,
       },
     );
 
     await withResidentRows(cfg, async (projection) => {
+      await vi.waitFor(() =>
+        expect(
+          projection.snapshot(
+            { key: "global", agentId: "ops", storePath },
+            { includeDerivedTitles: true, includeLastMessage: true },
+          ).row,
+        ).toMatchObject({
+          derivedTitle: "Shared physical global title",
+          lastMessagePreview: "Shared physical global preview",
+        }),
+      );
       for (const configuredAgentsOnly of [false, true]) {
         const combined = loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly });
         expect(combined.durableTargets).toEqual([{ agentId: "main", storePath }]);
@@ -244,6 +259,7 @@ it("projects shared rows under their logical owner while retaining the physical 
             includeGlobal: true,
             includeUnknown: true,
             includeDerivedTitles: true,
+            includeLastMessage: true,
           },
         });
         expect(listed.sessions).toHaveLength(3);
@@ -253,6 +269,7 @@ it("projects shared rows under their logical owner while retaining the physical 
             agentId: "ops",
             sessionId: "session-global",
             derivedTitle: "Shared physical global title",
+            lastMessagePreview: "Shared physical global preview",
           }),
         );
         expect(listed.sessions).toContainEqual(

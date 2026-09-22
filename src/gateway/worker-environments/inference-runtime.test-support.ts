@@ -1,18 +1,17 @@
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import type { WorkerInferenceStartParams } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import type { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
-import type { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
-import type { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
-import type { resolveEmbeddedAgentStream } from "../../agents/embedded-agent-runner/stream-resolution.js";
-import type {
-  acquireAgentRunPreparedModelRuntime,
-  PreparedModelRuntimeSnapshot,
-} from "../../agents/prepared-model-runtime.js";
-import type { registerProviderStreamForModel } from "../../agents/provider-stream.js";
-import type { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
+import * as sessionAuthRuntime from "../../agents/auth-profiles/session-override.js";
+import * as extraParamsRuntime from "../../agents/embedded-agent-runner/extra-params.js";
+import * as diagnosticModelCallRuntime from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
+import * as streamResolutionRuntime from "../../agents/embedded-agent-runner/stream-resolution.js";
+import * as modelSelectionRuntime from "../../agents/model-selection.js";
+import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
+import * as providerStreamRuntime from "../../agents/provider-stream.js";
+import * as simpleCompletionRuntime from "../../agents/simple-completion-runtime.js";
 import { createEmptyPluginMetadataSnapshot } from "../../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as diagnosticTraceRuntime from "../../infra/diagnostic-trace-context.js";
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
@@ -22,20 +21,25 @@ import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
-  createWorkerInferenceExecutor,
+  executeWorkerInference,
   type WorkerInferenceExecutionParams,
 } from "./inference-runtime.js";
+import * as sessionTargetRuntime from "./session-target.js";
 
 type Deps = {
-  applyStreamPolicy: typeof applyExtraParamsToAgent;
-  acquireRuntimeLease: typeof acquireAgentRunPreparedModelRuntime;
-  prepareModel: typeof prepareSimpleCompletionModel;
-  resolveSessionAuthSelection: typeof resolveSessionAuthSelection;
-  resolveModel: typeof resolveModelAsync;
-  resolveProviderStream: typeof registerProviderStreamForModel;
-  resolveStream: typeof resolveEmbeddedAgentStream;
+  applyStreamPolicy: typeof extraParamsRuntime.applyExtraParamsToAgent;
+  acquireRuntimeLease: typeof preparedRuntime.acquireAgentRunPreparedModelRuntime;
+  prepareModel: typeof simpleCompletionRuntime.prepareSimpleCompletionModel;
+  resolveSessionAuthSelection: typeof sessionAuthRuntime.resolveSessionAuthSelection;
+  resolveProviderStream: typeof providerStreamRuntime.registerProviderStreamForModel;
+  resolveStream: typeof streamResolutionRuntime.resolveEmbeddedAgentStream;
 };
 export type Execution = WorkerInferenceExecutionParams;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 export const PROVIDER = "openai";
 export const MODEL = "gpt-5.4";
@@ -185,6 +189,8 @@ export function setup(
     ) => void;
   } = {},
 ) {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(100);
   const scope: {
     agentDir?: string;
     agentRuntime?: string;
@@ -212,13 +218,11 @@ export function setup(
       routeVariants: [],
     },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
-  } satisfies PreparedModelRuntimeSnapshot;
-  let leasedPreparedModelRuntime: PreparedModelRuntimeSnapshot | undefined;
-  const resolveModel = vi.fn<Deps["resolveModel"]>(async () => {
-    return {} as Awaited<ReturnType<Deps["resolveModel"]>>;
-  });
+  } satisfies preparedRuntime.PreparedModelRuntimeSnapshot;
+  let leasedPreparedModelRuntime: preparedRuntime.PreparedModelRuntimeSnapshot | undefined;
   const prepareModel = vi.fn<Deps["prepareModel"]>(async (modelParams) => {
     if (options.catalogOnlyModel && !modelParams.allowBundledStaticCatalogFallback) {
       return { error: `Unknown model: ${modelParams.provider}/${modelParams.modelId}` };
@@ -286,32 +290,49 @@ export function setup(
       [Symbol.asyncDispose]: releaseRuntime,
     };
   });
-  const dependencies = {
-    now: vi.fn<() => number>().mockReturnValueOnce(100).mockReturnValue(125),
-    resolveSessionTarget: vi.fn(() => ({
-      agentId: "runtime-agent",
-      sessionEntry: entry,
-      sessionKey: SESSION_KEY,
-      sessionStore: { [SESSION_KEY]: entry },
-      storePath: "runtime-sessions.json",
-    })),
+  vi.spyOn(sessionTargetRuntime, "resolveWorkerSessionTarget").mockReturnValue({
+    agentId: "runtime-agent",
+    sessionEntry: entry,
+    sessionId: SESSION_ID,
+    sessionKey: SESSION_KEY,
+    sessionStore: { [SESSION_KEY]: entry },
+    storePath: "runtime-sessions.json",
+  });
+  vi.spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
     acquireRuntimeLease,
-    resolveDefaultModel: vi.fn(() => ({ provider: PROVIDER, model: MODEL })),
-    resolveSessionAuthSelection: resolveAuthSelection,
-    resolveModel,
+  );
+  vi.spyOn(modelSelectionRuntime, "resolveDefaultModelForAgent").mockReturnValue({
+    provider: PROVIDER,
+    model: MODEL,
+  });
+  vi.spyOn(sessionAuthRuntime, "resolveSessionAuthSelection").mockImplementation(
+    resolveAuthSelection,
+  );
+  vi.spyOn(simpleCompletionRuntime, "prepareSimpleCompletionModel").mockImplementation(
     prepareModel,
+  );
+  vi.spyOn(providerStreamRuntime, "registerProviderStreamForModel").mockImplementation(
     resolveProviderStream,
-    resolveStream,
-    applyStreamPolicy,
-    wrapStream: vi.fn((streamFn: StreamFn) => {
-      options.observeStage?.("wrapper", observedRegistry());
-      return streamFn;
-    }),
-    createTrace: vi.fn(() => ({ traceId: "1".repeat(32), spanId: "2".repeat(16) })),
-  };
+  );
+  vi.spyOn(streamResolutionRuntime, "resolveEmbeddedAgentStream").mockImplementation(resolveStream);
+  vi.spyOn(extraParamsRuntime, "applyExtraParamsToAgent").mockImplementation(applyStreamPolicy);
+  vi.spyOn(
+    diagnosticModelCallRuntime,
+    "wrapStreamFnWithDiagnosticModelCallEvents",
+  ).mockImplementation((streamFn) => {
+    options.observeStage?.("wrapper", observedRegistry());
+    return (...args) => {
+      vi.setSystemTime(125);
+      return streamFn(...args);
+    };
+  });
+  vi.spyOn(diagnosticTraceRuntime, "createDiagnosticTraceContextFromActiveScope").mockReturnValue({
+    traceId: "1".repeat(32),
+    spanId: "2".repeat(16),
+  });
   return {
     applyStreamPolicy,
-    executor: createWorkerInferenceExecutor(dependencies),
+    executor: executeWorkerInference,
     acquireRuntimeLease,
     prepareModel,
     releaseRuntime,

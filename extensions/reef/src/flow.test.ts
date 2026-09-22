@@ -4,14 +4,13 @@ import {
   canonicalBytes,
   generateIdentity,
   guardInstructions,
-  MemoryAuditStore,
-  MemoryReplayStore,
   open,
   sha256Hex,
   verifyReceipt,
   type ReplayStore,
   type Verdict,
 } from "../protocol/index.js";
+import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
 import {

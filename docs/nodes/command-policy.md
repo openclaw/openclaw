@@ -50,9 +50,9 @@ plugin defaults.
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
 
-Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `mcp.tools.call.v1`, and `screen.snapshot` on macOS/Windows/Linux) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
+Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `mcp.tools.call.v1`, `screen.snapshot`, and `desktop.stream` on macOS/Windows/Linux) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect. Desktop sharing is enabled by default on desktop nodes; the Mac app exposes its local switch under **Settings → This Mac → Capabilities → Desktop sharing**.
 
-Dangerous or privacy-heavy commands require a one-time persistent opt-in with `gateway.nodes.commands.allow`, even if a node declares them: `camera.snap`, `camera.clip`, `camera.ptz.control`, `desktop.stream`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `health.summary`, `sms.send`, `sms.search`. `gateway.nodes.commands.deny` always wins over defaults and extra allowlist entries. See [Paired node desktops](/gateway/config-browser-ui-desktop#paired-node-desktops), [HealthKit summaries](/platforms/ios-healthkit), and [Computer use](/nodes/computer-use) for the local enablement, pairing, capability, and tool-policy gates around desktop access.
+Dangerous or privacy-heavy commands require a one-time persistent opt-in with `gateway.nodes.commands.allow`, even if a node declares them: `camera.snap`, `camera.clip`, `camera.ptz.control`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `health.summary`, `sms.send`, `sms.search`. `gateway.nodes.commands.deny` always wins over defaults and extra allowlist entries. See [Paired node desktops](/gateway/config-browser-ui-desktop#paired-node-desktops), [HealthKit summaries](/platforms/ios-healthkit), and [Computer use](/nodes/computer-use) for the local enablement, pairing, capability, and tool-policy gates around desktop access.
 
 Plugin-owned node commands can add a Gateway node-invoke policy. That policy runs after the allowlist check and before forwarding to the node, so raw `node.invoke`, CLI helpers, and dedicated agent tools share the same plugin permission boundary. Dangerous plugin node commands still require explicit `gateway.nodes.commands.allow` opt-in.
 
@@ -90,7 +90,7 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
       },
       // Persistently enable dangerous/privacy-heavy node commands.
       commands: {
-        allow: ["camera.snap", "desktop.stream", "screen.record"],
+        allow: ["camera.snap", "screen.record"],
         // Block exact command names even if defaults or commands.allow include them.
         deny: ["camera.clip"],
       },

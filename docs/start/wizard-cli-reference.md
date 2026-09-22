@@ -216,8 +216,10 @@ What you set:
     When a beacon is selected, choose direct WebSocket or an SSH tunnel:
     - **Direct**: connects over `wss://` and prompts to trust the discovered
       TLS fingerprint (trust-on-first-use pinning; only pinned if you accept).
-    - **SSH tunnel**: prints an `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
-      command to run first, then connects to the local tunnel endpoint.
+    - **SSH tunnel**: prints an `ssh -N -L 18789:127.0.0.1:<gateway-port> <user>@<host>`
+      command using the resolved Gateway service port, with `-p <ssh-port>` when
+      advertised. Run it first, then connect to the local tunnel endpoint at
+      `ws://127.0.0.1:18789`.
   </Step>
   <Step title="Auth">
     Enter the configured token or password in **Gateway secret**. The Gateway

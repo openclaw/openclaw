@@ -63,12 +63,13 @@ function hasOwnPath(value: Record<string, unknown>, pathSegments: readonly strin
 
 function settingsRow(page: Page, title: string): Locator {
   return page.locator(".settings-row").filter({
-    has: page.locator(".settings-row__title", { hasText: title }),
+    has: page.locator(".settings-row__title").getByText(title, { exact: true }),
   });
 }
 
-async function expectInherited(row: Locator, value: string) {
-  await expect.poll(() => row.textContent()).toContain(`Using default: ${value}`);
+async function expectQuietDefault(row: Locator) {
+  await row.waitFor();
+  await expect.poll(() => row.textContent()).not.toContain("Using default:");
 }
 
 async function expectDefaultInfo(row: Locator, explanation: string) {
@@ -113,7 +114,7 @@ suite.define(() => {
         const afterLabsReset = {
           agents: initialConfig.agents,
           browser: initialConfig.browser,
-          tools: { profile: "minimal" },
+          tools: { codeMode: {}, profile: "minimal" },
         };
         const afterThinkingReset = {
           agents: {
@@ -158,7 +159,7 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
           .toBe(configGetsBeforeLabsReset + 1);
-        await expectInherited(codeModeRow, "Disabled");
+        await expectQuietDefault(codeModeRow);
         expect(await codeModeSwitch.getAttribute("aria-checked")).toBe("false");
 
         if (captureUiProofEnabled) {
@@ -193,7 +194,7 @@ suite.define(() => {
         const securitySavesBefore = (await gateway.getRequests("config.set")).length;
         await browserRow.locator(".settings-row__title").click();
         await profileRow.getByRole("radio", { name: "Full", exact: true }).click();
-        await expectInherited(browserRow, "Enabled");
+        await expectQuietDefault(browserRow);
         await expect
           .poll(() =>
             profileRow
@@ -231,7 +232,7 @@ suite.define(() => {
         }
 
         expect((await page.reload())?.status()).toBe(200);
-        await expectInherited(settingsRow(page, "Browser enabled"), "Enabled");
+        await expectQuietDefault(settingsRow(page, "Browser enabled"));
         const reloadedProfileRow = settingsRow(page, "Available tools");
         await expect
           .poll(() =>
@@ -246,7 +247,7 @@ suite.define(() => {
           200,
         );
         const thinkingRow = settingsRow(page, "Thinking");
-        const fastModeRow = settingsRow(page, "Fast mode");
+        const fastModeRow = settingsRow(page, "Fast Mode");
         await thinkingRow.getByRole("radio", { name: "High", exact: true }).waitFor();
         expect(
           await thinkingRow
@@ -335,7 +336,7 @@ suite.define(() => {
 
         expect((await page.reload())?.status()).toBe(200);
         const reloadedThinkingRow = settingsRow(page, "Thinking");
-        const reloadedFastModeRow = settingsRow(page, "Fast mode");
+        const reloadedFastModeRow = settingsRow(page, "Fast Mode");
         await expectDefaultInfo(reloadedThinkingRow, thinkingDefaultExplanation);
         await expectDefaultInfo(reloadedFastModeRow, fastModeDefaultExplanation);
         expect(
@@ -351,12 +352,12 @@ suite.define(() => {
 
         expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
         const reloadedCodeModeRow = settingsRow(page, "Code Mode");
-        await expectInherited(reloadedCodeModeRow, "Disabled");
+        await expectQuietDefault(reloadedCodeModeRow);
         expect(
           await reloadedCodeModeRow
             .getByRole("switch", { name: "Code Mode", exact: true })
             .getAttribute("aria-checked"),
-        ).toBe("false");
+        ).toBe("true");
 
         if (captureUiProofEnabled) {
           await page.screenshot({

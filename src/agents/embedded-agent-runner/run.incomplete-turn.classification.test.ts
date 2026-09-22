@@ -8,7 +8,6 @@ import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
 } from "./run/incomplete-turn-recovery.js";
-import { resolveIncompleteTurnPayloadText } from "./run/incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
@@ -52,18 +51,6 @@ function makeEmptyResponseRetryParams(
     timedOut: false,
     attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
     ...overrides,
-  };
-}
-
-function makeIncompleteTurnParams(
-  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
-): Parameters<typeof resolveIncompleteTurnPayloadText>[0] {
-  return {
-    payloadCount: 0,
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
   };
 }
 
@@ -369,27 +356,5 @@ describe("incomplete-turn classification", () => {
     );
 
     expect(retryInstruction).toBeNull();
-  });
-
-  it("treats exact NO_REPLY as a deliberate silent assistant reply", () => {
-    const incompleteTurnText = resolveIncompleteTurnPayloadText(
-      makeIncompleteTurnParams({
-        assistantTexts: ["NO_REPLY"],
-        lastAssistant: makeLastAssistant({
-          model: "gpt-5.4",
-          content: [
-            {
-              type: "thinking",
-              thinking: "internal reasoning",
-              thinkingSignature: JSON.stringify({ id: "rs_no_reply", type: "reasoning" }),
-            },
-            { type: "text", text: "" },
-            { type: "text", text: "NO_REPLY" },
-          ],
-        }),
-      }),
-    );
-
-    expect(incompleteTurnText).toBeNull();
   });
 });

@@ -5,7 +5,7 @@ import {
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
-import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
+import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
 

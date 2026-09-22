@@ -63,32 +63,101 @@ const run = LedgerRecordSchema.parse({
 });
 
 describe("update run wire contract", () => {
-  it("carries a bounded failing check through history responses", () => {
-    const fact = {
-      check: "readyz",
-      code: "readyz-unhealthy",
-      message: "Readiness returned HTTP 503.",
-    };
-    const step = { step: "gateway verification", status: "failed", failureFacts: [fact] };
-    const failed = {
-      ...run,
-      steps: [step],
-    };
-    expect(validateUpdateRunsGetResult({ run: failed })).toBe(true);
-    expect(
-      validateUpdateRunsGetResult({
-        run: {
-          ...failed,
-          steps: [
-            {
-              ...step,
-              failureFacts: Array.from({ length: 6 }, () => fact),
-            },
-          ],
+  it.each([
+    undefined,
+    {
+      ownership: "foreign",
+      cause: "package-mismatch",
+      destinationKind: "npm-global",
+      prefix: "/other-prefix",
+      packageRoot: "/other-prefix/lib/node_modules/openclaw",
+      runningRoot: "~/.npm-global/lib/node_modules/openclaw",
+      runningPrefix: "~/.npm-global",
+      launcher: "/other-prefix/bin/openclaw",
+      launcherTarget: null,
+    },
+  ])(
+    "carries a bounded failing check through history responses (destination=%j)",
+    (destination) => {
+      const fact = {
+        check: destination ? "package-install" : "readyz",
+        code: destination ? "global-install-foreign-destination" : "readyz-unhealthy",
+        message: "Readiness returned HTTP 503.",
+        errorName: "Error",
+        location: "src/infra/update-runner-git.ts:42:7",
+        ...(destination ? { destination } : {}),
+      };
+      const step = { step: "gateway verification", status: "failed", failureFacts: [fact] };
+      const failed = {
+        ...run,
+        target: { ...run.target, installationMethod: "git-checkout" },
+        verification: {
+          ...run.verification,
+          rollbackOutcome: { status: "succeeded", reason: "Previous package restored" },
+          recovery: {
+            serviceRestartSafe: true,
+            packageRollbackVerified: true,
+            version: "2026.8.1",
+          },
         },
-      }),
-    ).toBe(false);
-  });
+        steps: [step],
+      };
+      expect(LedgerRecordSchema.parse(failed)).toEqual(failed);
+      expect(validateUpdateRunsGetResult({ run: failed })).toBe(true);
+      if (destination) {
+        for (const invalid of [
+          { ownership: "private-owner" },
+          { prefix: "x".repeat(241) },
+          { extra: "private-text" },
+        ]) {
+          const malformed = {
+            ...failed,
+            steps: [
+              { ...step, failureFacts: [{ ...fact, destination: { ...destination, ...invalid } }] },
+            ],
+          };
+          expect(LedgerRecordSchema.safeParse(malformed).success).toBe(false);
+          expect(validateUpdateRunsGetResult({ run: malformed })).toBe(false);
+        }
+      }
+      expect(
+        validateUpdateRunsGetResult({
+          run: {
+            ...failed,
+            steps: [
+              {
+                ...step,
+                failureFacts: Array.from({ length: 6 }, () => fact),
+              },
+            ],
+          },
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it.each([null, { serviceRestartSafe: false, reason: "source-rollback-failed" }])(
+    "carries nullable failure evidence and recovery through history (%j)",
+    (recovery) => {
+      const record = LedgerRecordSchema.parse({
+        ...run,
+        target: { installationMethod: null },
+        steps: [
+          {
+            step: "staging",
+            status: "failed",
+            failureFacts: [{ check: "staging", code: "Error", errorName: null, location: null }],
+          },
+        ],
+        verification: { rollbackOutcome: null, recovery },
+      });
+      expect(validateUpdateRunsGetResult({ run: record })).toBe(true);
+      expect(validateUpdateRunsListResult({ runs: [record] })).toBe(true);
+      expect(
+        validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
+      ).toBe(true);
+    },
+  );
 
   it.each([
     { exitCode: 23 },
@@ -202,6 +271,35 @@ describe("update run wire contract", () => {
       },
     ],
     ["invalid service port", { verification: { port: 65536 } }],
+    ["unknown installation method", { target: { installationMethod: "other" } }],
+    [
+      "unknown rollback status",
+      { verification: { rollbackOutcome: { status: "unknown", reason: "unknown" } } },
+    ],
+    [
+      "unknown recovery refusal",
+      { verification: { recovery: { serviceRestartSafe: false, reason: "unknown" } } },
+    ],
+    ...(
+      [
+        ["errorName", 81],
+        ["location", 161],
+      ] as const
+    ).map(
+      ([field, length]) =>
+        [
+          `oversized failure ${field}`,
+          {
+            steps: [
+              {
+                step: "staging",
+                status: "failed",
+                failureFacts: [{ check: "staging", code: "Error", [field]: "x".repeat(length) }],
+              },
+            ],
+          },
+        ] as const,
+    ),
     [
       "oversized driver host",
       { origin: { driver: { ...run.origin.driver, host: "x".repeat(256) } } },
@@ -222,7 +320,7 @@ describe("update run wire contract", () => {
       "oversized plugin errors",
       { verification: { pluginErrors: Array.from({ length: 33 }, () => "failed") } },
     ],
-  ])("rejects %s consistently with the canonical ledger", (_name, fields) => {
+  ] as const)("rejects %s consistently with the canonical ledger", (_name, fields) => {
     const invalid = { ...run, ...fields };
     expect(LedgerRecordSchema.safeParse(invalid).success).toBe(false);
     expect(validateUpdateRunRecord(invalid)).toBe(false);
@@ -255,6 +353,17 @@ describe("update run wire contract", () => {
     };
     expect(validateUpdateRunResult({ ...outcome, runId: run.runId })).toBe(true);
     expect(validateUpdateRunResult(outcome)).toBe(false);
+    const acknowledged = {
+      ...outcome,
+      runId: run.runId,
+      ackDelivered: true,
+      ackQueued: true,
+      acknowledgement: "Updating OpenClaw.",
+    };
+    expect(validateUpdateRunResult(acknowledged)).toBe(true);
+    for (const invalid of [{ ackQueued: "true" }, { acknowledgement: false }]) {
+      expect(validateUpdateRunResult({ ...acknowledged, ...invalid })).toBe(false);
+    }
     const change = { runId: run.runId, phase: "verifying", status: "running", updatedAtMs: 250 };
     expect(validateUpdateRunChangedEvent(change)).toBe(true);
     expect(validateUpdateRunChangedEvent({ ...change, phase: "complete" })).toBe(false);

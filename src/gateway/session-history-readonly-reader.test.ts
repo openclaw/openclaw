@@ -246,7 +246,14 @@ it.each(["missing", "successor", "retained"] as const)(
 it("keeps canonical key validation on each admitted reader handle", async () => {
   await withHistory(async ({ target, database }) => {
     const reader = createReadonlySessionHistoryReader(target);
-    await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
+    const firstScope = new OpenClawAgentDatabaseReadOnlyScope();
+    try {
+      await firstScope.run(target.database, () =>
+        reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
+      );
+    } finally {
+      firstScope.close();
+    }
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) SELECT ?, current_session_id, entry_json, updated_at FROM session_nodes WHERE session_key = ?",
@@ -358,26 +365,40 @@ it("keeps display history separate from the current-turn context cutoff", async 
     if (!anchor) {
       throw new Error("expected requested message anchor");
     }
-    const reader = createReadonlySessionHistoryReader(target);
-    const admission = { ...anchor, logicalTurnId: "read-fence", role: "user" as const };
-    const page = await runWithSessionTranscriptReadFence(admission, () => {
-      // Context excludes the admitted turn; display history retains it and validates its identity.
-      expect(
-        readLatestSessionTranscriptMessageEvent({
-          ...target.transcript,
-          storePath: target.database.path,
-        }),
-      ).toBeUndefined();
-      return reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
-    });
-    expect(page.messages.map(readChatHistoryMessageId)).toEqual(["requested-message"]);
-    expect(page.totalMessages).toBe(1);
-    await expect(
-      runWithSessionTranscriptReadFence(
-        { ...admission, storePath: `${target.database.path}.other` },
-        () =>
-          reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
-      ),
-    ).rejects.toThrow("different transcript store");
+    const retained = new OpenClawAgentDatabaseReadOnlyScope();
+    try {
+      await retained.run(target.database, async () => {
+        const reader = createReadonlySessionHistoryReader(target);
+        await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+          maxMessages: 10,
+        });
+        const admission = { ...anchor, logicalTurnId: "read-fence", role: "user" as const };
+        const page = await runWithSessionTranscriptReadFence(admission, () => {
+          // Context excludes the admitted turn; display history retains it and validates its identity.
+          expect(
+            readLatestSessionTranscriptMessageEvent({
+              ...target.transcript,
+              storePath: target.database.path,
+            }),
+          ).toBeUndefined();
+          return reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+            maxMessages: 10,
+          });
+        });
+        expect(page.messages.map(readChatHistoryMessageId)).toEqual(["requested-message"]);
+        expect(page.totalMessages).toBe(1);
+        await expect(
+          runWithSessionTranscriptReadFence(
+            { ...admission, storePath: `${target.database.path}.other` },
+            () =>
+              reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+                maxMessages: 10,
+              }),
+          ),
+        ).rejects.toThrow("different transcript store");
+      });
+    } finally {
+      retained.close();
+    }
   });
 });

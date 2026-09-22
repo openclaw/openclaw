@@ -16,10 +16,14 @@ let epochCounter = 0;
 let registeredEpoch = 0;
 
 let memo: {
-  jobs: readonly CronJob[];
+  jobs: readonly CronJob[] | undefined;
+  defaultAgentId: string | undefined;
   cfg: OpenClawConfig;
   keys: ReadonlySet<string>;
 } | null = null;
+// Keep the last publication separate from reader refreshes: cron replaces its
+// jobs array before awaited persistence, so a read must not consume that delta.
+let publishedKeys: ReadonlySet<string> | undefined;
 
 /**
  * Claimed at cron service build time so registration authority follows build
@@ -58,8 +62,30 @@ export function unregisterSessionAutomationSource(owner: SessionAutomationSource
 
 /** Called from the cron onEvent hook after any job/store change. */
 export function invalidateSessionAutomationIndex(): void {
-  memo = null;
-  sessionChanges.emit({ all: true, scope: "automation" });
+  // Even an empty source retains the last reader's config so the first added
+  // binding can invalidate rows that were materialized before cron loaded.
+  if (!memo) {
+    return;
+  }
+  publishAutomationKeys(refreshAutomationKeys(memo.cfg).keys);
+}
+
+/** Publish membership deltas without letting speculative reader refreshes consume them. */
+function publishAutomationKeys(current: ReadonlySet<string>) {
+  const previous = publishedKeys ?? new Set<string>();
+  publishedKeys = current;
+  // Install the complete snapshot before notifying synchronous consumers.
+  for (const identity of new Set([...previous, ...current])) {
+    if (previous.has(identity) === current.has(identity)) {
+      continue;
+    }
+    const separator = identity.indexOf("\0");
+    sessionChanges.emit({
+      scope: "automation",
+      sessionKey: separator < 0 ? identity : identity.slice(separator + 1),
+      ...(separator < 0 ? {} : { agentId: identity.slice(0, separator) }),
+    });
+  }
 }
 
 function buildAutomationKeys(
@@ -84,6 +110,20 @@ function buildAutomationKeys(
   return keys;
 }
 
+/** Replace the existing memo with a snapshot, never retaining mutable job facts. */
+function refreshAutomationKeys(cfg: OpenClawConfig) {
+  const jobs = source?.getJobs();
+  const defaultAgentId = source?.getDefaultAgentId();
+  memo = {
+    jobs,
+    cfg,
+    defaultAgentId,
+    keys: buildAutomationKeys(jobs ?? [], cfg, defaultAgentId),
+  };
+  publishedKeys ??= memo.keys;
+  return memo;
+}
+
 /** True when an enabled cron job is bound to the canonical session key. */
 export function sessionHasAutomation(
   sessionKey: string,
@@ -91,20 +131,21 @@ export function sessionHasAutomation(
   agentId?: string,
 ): boolean {
   const jobs = source?.getJobs();
-  if (!source || !jobs || jobs.length === 0) {
-    return false;
-  }
-  if (!memo || memo.jobs !== jobs || memo.cfg !== cfg) {
-    memo = {
-      jobs,
-      cfg,
-      keys: buildAutomationKeys(jobs, cfg, source.getDefaultAgentId()),
-    };
+  const defaultAgentId = source?.getDefaultAgentId();
+  // Config publications rebuild resident rows; their reads adopt the new
+  // routing config even when the cron jobs array itself has not changed.
+  const configChanged = memo && memo.cfg !== cfg;
+  const current =
+    memo && memo.jobs === jobs && memo.cfg === cfg && memo.defaultAgentId === defaultAgentId
+      ? memo
+      : refreshAutomationKeys(cfg);
+  if (configChanged) {
+    publishAutomationKeys(current.keys);
   }
   const identity = parseAgentSessionKey(sessionKey)
     ? sessionKey
     : agentId
       ? `${normalizeAgentId(agentId)}\0${sessionKey}`
       : undefined;
-  return identity ? memo.keys.has(identity) : false;
+  return identity ? current.keys.has(identity) : false;
 }

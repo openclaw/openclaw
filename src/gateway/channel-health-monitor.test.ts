@@ -6,31 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelId, ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
+import { createMockChannelManager } from "./channel-health-monitor.test-support.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import type { ChannelManager } from "./server-channels.js";
-
-function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
-  return {
-    getRuntimeSnapshot: vi.fn(() => ({ channels: {}, channelAccounts: {} })),
-    pauseChannelStarts: vi.fn(() => () => {}),
-    startChannels: vi.fn(async () => {}),
-    startChannel: vi.fn(async () => new Map()),
-    stopChannel: vi.fn(async () => {}),
-    releaseChannelRouteHandoffs: vi.fn(),
-    setAutostartSuppression: vi.fn(),
-    getAutostartSuppression: vi.fn(() => null),
-    recoverAutostartSuppression: vi.fn(async () => false),
-    setAmbientAutostartSuppressedChannelIds: vi.fn(),
-    isAmbientAutostartSuppressed: vi.fn(() => false),
-    markChannelLoggedOut: vi.fn(),
-    isHealthMonitorEnabled: vi.fn(() => true),
-    isAccountListed: vi.fn(() => true),
-    isManuallyStopped: vi.fn(() => false),
-    isAutoRestartScheduled: vi.fn(() => false),
-    resetRestartAttempts: vi.fn(),
-    ...overrides,
-  };
-}
 
 function snapshotWith(
   accounts: Record<string, Record<string, Partial<ChannelAccountSnapshot>>>,
@@ -256,6 +234,31 @@ describe("channel-health-monitor", () => {
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
     expect(manager.startChannel).not.toHaveBeenCalled();
     monitor.stop();
+  });
+
+  it("preserves the restart budget during plugin reload and recovers when its pause clears", async () => {
+    const snapshot = snapshotWith({
+      discord: { default: managedStoppedAccount("Plugin replacement pending") },
+    });
+    const reloadingChannels = new Map<ChannelId, string | undefined>([["discord", "default"]]);
+    snapshot.reloadingChannels = reloadingChannels;
+    const manager = createMockChannelManager({ getRuntimeSnapshot: vi.fn(() => snapshot) });
+    const monitor = startDefaultMonitor(manager, {
+      cooldownCycles: 0,
+      maxRestartsPerHour: 1,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(2 * DEFAULT_CHECK_INTERVAL_MS + 1);
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+
+      reloadingChannels.clear();
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+      expect(manager.startChannel).toHaveBeenCalledExactlyOnceWith("discord", "default");
+      expect(manager.resetRestartAttempts).toHaveBeenCalledExactlyOnceWith("discord", "default");
+    } finally {
+      monitor.stop();
+    }
   });
 
   it("does not start a replacement when channel teardown fails", async () => {

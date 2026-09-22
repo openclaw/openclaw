@@ -60,24 +60,6 @@ import {
   type ThreadBindingRecord,
 } from "./thread-bindings.types.js";
 
-function createNoopManager(accountIdRaw?: string): ThreadBindingManager {
-  const accountId = normalizeAccountId(accountIdRaw);
-  return {
-    accountId,
-    getIdleTimeoutMs: () => DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
-    getMaxAgeMs: () => DEFAULT_THREAD_BINDING_MAX_AGE_MS,
-    getByThreadId: () => undefined,
-    getBySessionKey: () => undefined,
-    listBySessionKey: () => [],
-    listBindings: () => [],
-    touchThread: () => null,
-    bindTarget: async () => null,
-    unbindThread: () => null,
-    unbindBySessionKey: () => [],
-    stop: () => {},
-  };
-}
-
 function isDirectConversationBindingId(value?: string | null): boolean {
   const trimmed = normalizeOptionalString(value);
   return Boolean(trimmed && /^(user:|channel:)/i.test(trimmed));
@@ -269,17 +251,31 @@ export function createThreadBindingManager(params: {
       }
       return nextRecord;
     },
-    bindTarget: async (bindParams) => {
+    bindTarget: async (input) => {
+      const bindParams = {
+        ...input,
+        metadata: input.metadata ? { ...input.metadata } : undefined,
+      };
+      const assertCurrent = bindParams.assertCurrent;
+      assertCurrent?.();
       const cfg = resolveCurrentCfg();
       let threadId = normalizeThreadId(bindParams.threadId);
       let channelId = normalizeOptionalString(bindParams.channelId) ?? "";
       const directConversationBinding =
         isDirectConversationBindingId(threadId) || isDirectConversationBindingId(channelId);
+      let nativeBindingCreated = false;
+      const targetSessionKey = normalizeOptionalString(bindParams.targetSessionKey) ?? "";
+      if (!targetSessionKey) {
+        return null;
+      }
+      const targetKind = normalizeTargetKind(bindParams.targetKind, targetSessionKey);
+      let agentId = normalizeOptionalString(bindParams.agentId);
 
       if (!threadId && bindParams.createThread) {
         if (!channelId) {
           return null;
         }
+        agentId ??= resolveSessionAgentIdStrict({ config: cfg, sessionKey: targetSessionKey });
         const threadName = resolveThreadBindingThreadName({
           agentId: bindParams.agentId,
           label: bindParams.label,
@@ -291,7 +287,9 @@ export function createThreadBindingManager(params: {
             token: resolveCurrentToken(),
             channelId,
             threadName: normalizeOptionalString(bindParams.threadName) ?? threadName,
+            ...(assertCurrent ? { assertCreateAllowed: assertCurrent } : {}),
           })) ?? undefined;
+        nativeBindingCreated = Boolean(threadId);
       }
 
       if (!threadId) {
@@ -317,17 +315,14 @@ export function createThreadBindingManager(params: {
       }
 
       const existingValue = manager.getByThreadId(threadId);
-      const targetSessionKey = normalizeOptionalString(bindParams.targetSessionKey) ?? "";
-      if (!targetSessionKey) {
-        return null;
-      }
-
-      const targetKind = normalizeTargetKind(bindParams.targetKind, targetSessionKey);
       const previous =
         existingValue?.targetSessionKey === targetSessionKey &&
         existingValue.targetKind === targetKind
           ? existingValue
           : undefined;
+      agentId ??=
+        normalizeOptionalString(previous?.agentId) ??
+        resolveSessionAgentIdStrict({ config: cfg, sessionKey: targetSessionKey });
       let webhookId =
         normalizeOptionalString(bindParams.webhookId) ??
         normalizeOptionalString(existingValue?.webhookId) ??
@@ -347,9 +342,11 @@ export function createThreadBindingManager(params: {
           accountId,
           token: resolveCurrentToken(),
           channelId,
+          ...(assertCurrent ? { assertCreateAllowed: assertCurrent } : {}),
         });
         webhookId = createdWebhook.webhookId ?? "";
         webhookToken = createdWebhook.webhookToken ?? "";
+        nativeBindingCreated ||= Boolean(webhookId && webhookToken);
       }
 
       const now = Date.now();
@@ -359,10 +356,7 @@ export function createThreadBindingManager(params: {
         threadId,
         targetKind,
         targetSessionKey,
-        agentId:
-          normalizeOptionalString(bindParams.agentId) ??
-          normalizeOptionalString(previous?.agentId) ??
-          resolveSessionAgentIdStrict({ config: cfg, sessionKey: targetSessionKey }),
+        agentId,
         label:
           normalizeOptionalString(bindParams.label) ?? normalizeOptionalString(previous?.label),
         webhookId: webhookId || undefined,
@@ -381,6 +375,10 @@ export function createThreadBindingManager(params: {
         metadata: { ...previous?.metadata, ...bindParams.metadata },
       };
 
+      // A confirmed native create must be published even if its initiator was revoked in flight.
+      if (!nativeBindingCreated) {
+        assertCurrent?.();
+      }
       setBindingRecord(record);
       if (persist) {
         saveBindingsToDisk();
@@ -388,7 +386,12 @@ export function createThreadBindingManager(params: {
 
       const introText = bindParams.introText?.trim();
       if (introText && cfg) {
-        void maybeSendBindingMessage({ cfg, record, text: introText });
+        void maybeSendBindingMessage({
+          cfg,
+          record,
+          text: introText,
+          ...(assertCurrent ? { assertCurrent } : {}),
+        });
       }
       return record;
     },
@@ -513,10 +516,6 @@ export async function createThreadBindingManagerAsync(
 ): Promise<ThreadBindingManager> {
   await ensureBindingsLoadedAsync();
   return createThreadBindingManager(params);
-}
-
-export function createNoopThreadBindingManager(accountId?: string): ThreadBindingManager {
-  return createNoopManager(accountId);
 }
 
 export function getThreadBindingManager(accountId?: string): ThreadBindingManager | null {

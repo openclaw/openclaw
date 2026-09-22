@@ -151,6 +151,7 @@ export function createModelsTestOwner(
     allowGatewaySubagentBinding: false,
     modelCatalog: { entries, routeVariants: entries },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores() {
       throw new Error("Browsing must not start model execution");

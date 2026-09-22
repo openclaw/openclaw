@@ -11,6 +11,7 @@ import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { getTrackedWorkerCpuSources } from "./worker-cpu.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
@@ -60,12 +61,32 @@ afterEach(async () => {
 });
 
 describe("worker task pool", () => {
+  it("acknowledges input custody on its channel without a host exchange and reuses the healthy worker", async () => {
+    const pool = createPool();
+    const released = vi.fn();
+    const onRequest = vi.fn(async () => {
+      throw new Error("Consumption-only task must not request host work");
+    });
+    const first = await pool.run(
+      { label: "closed", consumeInput: true },
+      { onInputConsumed: released, onRequest },
+    );
+    expect(released).toHaveBeenCalledOnce();
+    expect(onRequest).not.toHaveBeenCalled();
+    const next = await pool.run({ label: "next" }, {});
+    expect(next.threadId).toBe(first.threadId);
+    expect(workers).toHaveLength(1);
+  });
+
   it("rotates after active settlement and native exit while preserving queued order and deadlines", async () => {
+    const initialCpuSources = getTrackedWorkerCpuSources();
     const pool = createPool();
     const counters = new Int32Array(new SharedArrayBuffer(8));
     const active = pool.run({ label: "active", counters: counters.buffer, wait: true }, {});
     await expect.poll(() => Atomics.load(counters, 0)).toBe(1);
     const oldWorker = workers.at(-1)!;
+    const oldCpuSources = getTrackedWorkerCpuSources();
+    expect(oldCpuSources.workers).toHaveLength(initialCpuSources.workers.length + 1);
     const order: string[] = [];
     const next = pool.run(() => {
       expect(oldWorker.threadId).toBe(-1);
@@ -92,6 +113,12 @@ describe("worker task pool", () => {
     expect(results[0].threadId).not.toBe(first.threadId);
     expect(results[1].threadId).toBe(results[0].threadId);
     expect(order).toEqual(["next", "last"]);
+    const newCpuSources = getTrackedWorkerCpuSources();
+    expect(newCpuSources.workers).toHaveLength(oldCpuSources.workers.length);
+    expect(newCpuSources.revision).toBeGreaterThan(oldCpuSources.revision);
+    expect(newCpuSources.workers).not.toContain(oldCpuSources.workers.at(-1));
+    await pool.close();
+    expect(getTrackedWorkerCpuSources().workers).toEqual(initialCpuSources.workers);
   });
 
   it("never feeds canceled asynchronous preparation to a worker after rotation", async () => {
@@ -275,13 +302,22 @@ describe("worker task pool", () => {
     const pool = createPool({ workerUrl, maxPendingTasks: 1 });
     const gate = createDeferredCore<PoolFixtureInput>();
     const controller = new AbortController();
-    const first = pool.run(() => gate.promise, { signal: controller.signal });
+    const executionSettled = vi.fn();
+    const disposed = createDeferredCore();
+    const first = pool.run(() => gate.promise, {
+      signal: controller.signal,
+      onExecutionSettled: executionSettled,
+      onInputConsumed: disposed.resolve,
+    });
     const settled = Promise.allSettled([first]);
     controller.abort();
     await settled;
+    expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: true });
     await expect(pool.run({ label: "excess" }, {})).rejects.toMatchObject({ code: "overloaded" });
     gate.resolve({ label: "canceled" });
-    await gate.promise;
+    await disposed.promise;
+    expect(pool.getSnapshot().pendingTasks).toBe(0);
+    expect(executionSettled).toHaveBeenCalledOnce();
     expect(await pool.run({ label: "recovered" }, {})).toMatchObject({ label: "recovered" });
   });
 

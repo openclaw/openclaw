@@ -7,6 +7,8 @@ import { parseVideoGenerationModelRef } from "../../media-generation/model-ref.j
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import { createInstalledPluginEnabledPredicate } from "../../plugins/installed-plugin-index.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";
@@ -246,6 +248,10 @@ function shouldExposeVideoReferenceAudioParams(params: {
     modelConfig: coerceToolModelConfig(params.cfg.agents?.defaults?.mediaModels?.video),
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   });
+  let normalizedConfig: ReturnType<typeof normalizePluginsConfig> | undefined;
+  let isInstalledPluginEnabled:
+    | ReturnType<typeof createInstalledPluginEnabledPredicate>
+    | undefined;
 
   for (const plugin of snapshot.plugins) {
     if (
@@ -254,6 +260,11 @@ function shouldExposeVideoReferenceAudioParams(params: {
         snapshot,
         plugin,
         config: params.cfg,
+        normalizedConfig: params.cfg.plugins
+          ? (normalizedConfig ??= normalizePluginsConfig(params.cfg.plugins))
+          : undefined,
+        isInstalledPluginEnabled: (isInstalledPluginEnabled ??=
+          createInstalledPluginEnabledPredicate(snapshot.index.plugins, params.cfg)),
       })
     ) {
       continue;

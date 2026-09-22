@@ -5,7 +5,12 @@ import { Socket } from "node:net";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { releasePipe } from "./pipe.js";
-import { SpawnBrokerError, type BrokerRequest, type BrokerResponse } from "./protocol.js";
+import {
+  serializeBrokerError,
+  SpawnBrokerError,
+  type BrokerRequest,
+  type BrokerResponse,
+} from "./protocol.js";
 
 type ChildMessage = Exclude<
   BrokerResponse,
@@ -40,6 +45,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
   private readonly pendingEvents: Array<() => void> = [];
   private exited = false;
   private closed = false;
+  private processNotStarted = false;
 
   constructor(
     readonly requestId: number,
@@ -52,6 +58,15 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
     void this.opened.promise.catch(() => {});
     // Errors remain observable after admission and before caller listeners attach.
     this.on("error", () => {});
+  }
+
+  /** Only the admission owner can establish that no native process was started. */
+  markNotStarted(): void {
+    this.processNotStarted = true;
+  }
+
+  get notStarted(): boolean {
+    return this.processNotStarted;
   }
 
   ready(): Promise<void> {
@@ -92,7 +107,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
         type: "output-drained",
         id: this.requestId,
         fd,
-        error: error?.message,
+        error: error ? serializeBrokerError(error) : undefined,
       }).catch(() => {});
     };
     socket.once(fd === 0 ? "finish" : "end", () => acknowledge());

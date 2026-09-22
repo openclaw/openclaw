@@ -49,6 +49,8 @@ vi.mock("../state/openclaw-state-lease.js", () => ({
 }));
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
+}));
+vi.mock("../state/openclaw-state-lease-worker-storage.js", () => ({
   runWithOpenClawStateLeaseWorker: async (
     _lease: unknown,
     context: unknown,
@@ -91,7 +93,7 @@ vi.mock("./project-clone-runtime.js", () => ({
 }));
 vi.mock("./project-registry.kernel.js", () => ({
   ensureProjectRegistrySchema: mocks.forbiddenSqlite,
-  rowToProject: mocks.forbiddenSqlite,
+  removeProjectCheckoutReferenceInDatabase: mocks.forbiddenSqlite,
 }));
 
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";

@@ -2,13 +2,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasAnyMatrixAuth } from "../../auth-presence.js";
 import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
+import { resolveConfiguredMatrixBotUserIds } from "./accounts.js";
 import { loadMatrixCredentialsAsync, openMatrixCredentialsStore } from "./credentials-read.js";
 import {
   clearMatrixCredentials,
@@ -73,6 +76,91 @@ describe("matrix credentials storage", () => {
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
     expect(fs.existsSync(path.join(stateDir, "credentials", "matrix"))).toBe(false);
   });
+
+  it.each([
+    { platform: "win32", mixedCase: true, expected: ["@alerts:example.org", "@main:example.org"] },
+    { platform: "linux", mixedCase: true, expected: [] },
+    { platform: "linux", mixedCase: false, expected: ["@alerts:example.org", "@main:example.org"] },
+  ] as const)(
+    "keeps $platform mixedCase=$mixedCase bot discovery on its captured credential source",
+    async ({ platform, mixedCase, expected }) => {
+      for (const [accountId, userId] of [
+        ["default", "@main:example.org"],
+        ["alerts", "@alerts:example.org"],
+      ] as const) {
+        await saveMatrixCredentials(
+          {
+            homeserver: "https://matrix.example.org",
+            userId,
+            accessToken: "synthetic-token",
+          },
+          { OPENCLAW_STATE_DIR: stateDir },
+          accountId,
+        );
+      }
+      const values = {
+        Matrix_Homeserver: "https://matrix.example.org",
+        Matrix_Access_Token: "synthetic-token",
+        Matrix_Alerts_Homeserver: "https://matrix.example.org",
+        Matrix_Alerts_Access_Token: "synthetic-token",
+        OpenClaw_State_Dir: stateDir,
+        OpenClaw_Supervisor_Mode: "internal",
+      };
+      const env: NodeJS.ProcessEnv = Object.fromEntries(
+        Object.entries(values).map(([key, value]) => [mixedCase ? key : key.toUpperCase(), value]),
+      );
+      if (platform === "win32" && mixedCase) {
+        // Windows lookups ignore casing without changing the enumerated key spelling.
+        for (const key of Object.keys(env)) {
+          Object.defineProperty(env, key.toUpperCase(), {
+            get: () => env[key],
+            set: (value: string | undefined) => {
+              env[key] = value;
+            },
+          });
+        }
+      }
+      const runtime = getMatrixRuntime();
+      vi.spyOn(runtime.state, "resolveStateDir").mockImplementation((input) =>
+        input?.OPENCLAW_STATE_DIR ? resolveStateDir(input) : stateDir,
+      );
+      const openStore = runtime.state.openKeyedStore.bind(runtime.state);
+      const observedSources: Array<{ root: string | undefined; supervisor: string | undefined }> =
+        [];
+      vi.spyOn(runtime.state, "openKeyedStore").mockImplementation(
+        <T>(options: Parameters<typeof runtime.state.openKeyedStore>[0]) => {
+          observedSources.push({
+            root: options.env?.OPENCLAW_STATE_DIR,
+            supervisor: options.env?.OPENCLAW_SUPERVISOR_MODE,
+          });
+          const store = openStore<T>(options);
+          const lookup = store.lookup.bind(store);
+          return {
+            ...store,
+            lookup: async (key) => {
+              const value = await lookup(key);
+              env.OPENCLAW_STATE_DIR = path.join(stateDir, "replacement");
+              env.OPENCLAW_SUPERVISOR_MODE = "external";
+              env.MATRIX_ALERTS_ACCESS_TOKEN = "replacement-token";
+              return value;
+            },
+          };
+        },
+      );
+
+      const ids = await resolveConfiguredMatrixBotUserIds({
+        cfg: { channels: { matrix: { accounts: { alerts: {} } } } },
+        accountId: "ops",
+        env,
+      });
+      expect([...ids].toSorted()).toEqual(expected);
+      expect(observedSources).toEqual([
+        { root: stateDir, supervisor: mixedCase && platform === "linux" ? undefined : "internal" },
+        { root: stateDir, supervisor: mixedCase && platform === "linux" ? undefined : "internal" },
+      ]);
+      expect(fs.existsSync(path.join(stateDir, "replacement"))).toBe(false);
+    },
+  );
 
   it("touch updates lastUsedAt while preserving createdAt", async () => {
     vi.useFakeTimers();
@@ -172,7 +260,7 @@ describe("matrix credentials storage", () => {
         const openStore = runtime.state.openKeyedStore.bind(runtime.state);
         let revoked = false;
         vi.spyOn(runtime.state, "openKeyedStore").mockImplementation(
-          <T>(options: OpenKeyedStoreOptions) => {
+          <T>(options: OpenAsyncKeyedStoreOptions) => {
             const store = openStore<T>(options);
             if (store.compareAndApply) {
               const compare = store.compareAndApply.bind(store);
@@ -262,6 +350,47 @@ describe("matrix credentials storage", () => {
     );
 
     expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(true);
+  });
+
+  it("keeps persisted-auth presence scoped to valid live records and the supplied environment", () => {
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const store = createPluginStateSyncKeyedStore<unknown>("matrix", {
+      namespace: "credentials",
+      maxEntries: 256,
+      overflowPolicy: "reject-new",
+      env,
+    });
+    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
+    store.register("account:default", {
+      accountId: "default",
+      homeserver: "https://matrix.example.org",
+    });
+    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
+    store.register("account:default", {
+      kind: "revoked",
+      accountId: "default",
+      revokedAt: "2026-01-01",
+    });
+    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    store.register(
+      "account:default",
+      {
+        accountId: "default",
+        homeserver: "https://matrix.example.org",
+        userId: "@fixture:example.org",
+        accessToken: "synthetic-fixture-token",
+        createdAt: "2026-01-01",
+      },
+      { ttlMs: 1 },
+    );
+    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(true);
+    expect(
+      hasAnyMatrixAuth({ cfg: {}, env: { OPENCLAW_STATE_DIR: path.join(stateDir, "other") } }),
+    ).toBe(false);
+    clock.mockReturnValue(now + 2);
+    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
   });
 
   it("requires a token match when userId is absent", () => {

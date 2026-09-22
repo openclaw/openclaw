@@ -97,6 +97,54 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it.each(["pending", "settled"] as const)(
+  "keeps the %s roster window through recap-only updates",
+  async (phase) => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const detach = f.store.subscribe(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      if (phase === "settled") {
+        f.respond(0, "Current activity");
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      f.source.publishEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          reason: "activity-summary",
+          session: {
+            key: "agent:main:main",
+            kind: "direct",
+            lastMessagePreview: "Current activity",
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      if (phase === "pending") {
+        f.respond(0, "Current activity");
+      }
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(f.requests).toHaveLength(1);
+      expect(f.store.snapshot.cards[0]?.preview).toBe("Current activity");
+      expect(f.store.snapshot.loading).toBe(false);
+
+      f.invalidate();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(f.requests).toHaveLength(2);
+      f.respond(1, "Refreshed membership");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.store.snapshot.cards[0]?.preview).toBe("Refreshed membership");
+    } finally {
+      detach();
+      f.close();
+    }
+  },
+);
+
 it("coalesces repeated invalidations behind one correlated roster request", async () => {
   vi.useFakeTimers();
   const f = fixture();
@@ -105,7 +153,7 @@ it("coalesces repeated invalidations behind one correlated roster request", asyn
     await vi.advanceTimersByTimeAsync(0);
     for (let i = 0; i < 8; i++) {
       f.invalidate();
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(1_000);
     }
     expect(f.requests).toHaveLength(1);
     f.respond(0, "Stale page", true);
@@ -133,7 +181,7 @@ it("revokes pagination immediately while the replacement debounce is pending", a
     f.respond(0, "Invalidated page", true);
     await vi.advanceTimersByTimeAsync(0);
     expect(f.requests).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(f.requests).toHaveLength(2);
     expect(f.requests[1]?.params.offset).toBeUndefined();
     f.respond(1, "Current page");
@@ -152,13 +200,13 @@ it("absorbs a newer debounce when the queued window starts", async () => {
   try {
     await vi.advanceTimersByTimeAsync(0);
     f.invalidate();
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(5_000);
     f.invalidate();
     f.respond(0, "Old window", true);
     await vi.advanceTimersByTimeAsync(0);
     expect(f.requests).toHaveLength(2);
     f.respond(1, "Latest window");
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(f.requests).toHaveLength(2);
     expect(f.store.snapshot.cards[0]?.preview).toBe("Latest window");
     expect(f.store.snapshot.loading).toBe(false);

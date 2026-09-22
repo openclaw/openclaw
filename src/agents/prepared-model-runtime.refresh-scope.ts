@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
 import {
   advancePreparedModelRuntimeOwnerConfig,
   normalizePreparedModelRuntimeInput,
@@ -91,29 +92,14 @@ export function listConfiguredRefreshInputs(
       workspacesByDir.set(agentDir, workspaceDir);
     }
   }
-  return withAgentRosterFactsBatch(config, () => {
-    const inputs: PreparedModelRuntimeInput[] = [];
-    for (const rawInput of listConfiguredOwnerInputs(
+  return withAgentRosterFactsBatch(config, () =>
+    listConfiguredOwnerInputs(
       config,
       options.defaultWorkspaceDir,
       options.allowGatewaySubagentBinding,
-    )) {
-      const input = normalizePreparedModelRuntimeInput(rawInput);
-      const preservedWorkspaceDir = input.agentId
-        ? preservedWorkspaceByAgentDir.get(input.agentId)?.get(input.agentDir)
-        : undefined;
-      inputs.push(
-        preservedWorkspaceDir
-          ? {
-              ...input,
-              workspaceDir: preservedWorkspaceDir,
-              preserveWorkspaceDirOnRefresh: true,
-            }
-          : input,
-      );
-    }
-    return inputs;
-  });
+      preservedWorkspaceByAgentDir,
+    ).map(normalizePreparedModelRuntimeInput),
+  );
 }
 
 /** Invalidates scoped owners and optionally advances retained owners to a new config stamp. */
@@ -128,6 +114,7 @@ export function updateOwnersForScopedRefresh(
     resetPluginGeneration?: boolean;
   } = {},
 ): void {
+  const retiredPublications: PreparedModelRuntimeOwner[] = [];
   for (const [key, owner] of owners) {
     if (!isPreparedModelRuntimeOwnerInRefreshScope(owner, agentIds)) {
       if (options.retainedConfig) {
@@ -138,10 +125,12 @@ export function updateOwnersForScopedRefresh(
     if (options.retireStandalone && owner.provenance === "standalone") {
       owner.generation += 1;
       owners.delete(key);
-      releasePreparedPluginPublication(owner);
+      retirePreparedModelRuntimeGeneration(owner);
+      retiredPublications.push(owner);
       continue;
     }
     owner.generation += 1;
+    retirePreparedModelRuntimeGeneration(owner);
     owner.needsRefresh = true;
     owner.refreshError = staleError;
     if (options.clearPending) {
@@ -149,8 +138,12 @@ export function updateOwnersForScopedRefresh(
     }
     if (options.resetPluginGeneration) {
       owner.pluginGeneration = undefined;
+      retiredPublications.push(owner);
     }
   }
+  // Fence the whole scope before disposal can reenter plugin code. Idle publications
+  // must not hold the replacement drain; admitted leases retain their own generation.
+  retiredPublications.forEach(releasePreparedPluginPublication);
 }
 
 /** Keeps a requested scope only when every retained owner has identical prepared dependencies. */

@@ -211,8 +211,8 @@ describe("doctor transcript owner repair", () => {
             env,
           }).path,
         });
-        for (const { columnName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
-          database.db.exec(`ALTER TABLE session_nodes DROP COLUMN ${columnName};`);
+        for (const { columnName, tableName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+          database.db.exec(`ALTER TABLE ${tableName} DROP COLUMN ${columnName};`);
         }
       }
 

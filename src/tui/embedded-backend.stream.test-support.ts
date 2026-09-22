@@ -32,6 +32,49 @@ export function registerEmbeddedBackendStreamTests({
   flushMicrotasks,
   embeddedEventTimestamp,
 }: StreamTestContext) {
+  it("keeps internal context private when local deltas split its delimiters", async () => {
+    const pending = createPendingReply();
+    prepareReply(pending.promise);
+
+    const backend = createBackend();
+    const events = captureBackendEvents(backend);
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "split internal context",
+      runId: "run-local-split-context",
+    });
+
+    const deltas = [
+      `Visible\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`,
+      "private runtime detail\n",
+      `${INTERNAL_RUNTIME_CONTEXT_END}\nAfter`,
+    ];
+    deltas.forEach((delta) => {
+      emitAgentEvent({
+        runId: "run-local-split-context",
+        stream: "assistant",
+        data: { delta },
+      });
+    });
+    emitAgentEvent({
+      runId: "run-local-split-context",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+    pending.resolve({ payloads: [{ text: "Visible\n\nAfter" }], meta: {} });
+    await flushMicrotasks();
+
+    const chatPayloads = events
+      .filter((entry) => entry.event === "chat")
+      .map((entry) => entry.payload);
+    expect(JSON.stringify(chatPayloads)).not.toContain("private runtime detail");
+    expect(chatPayloads.at(-1)).toMatchObject({
+      state: "final",
+      message: { content: [{ text: "Visible\n\nAfter" }] },
+    });
+  });
+
   it.each([
     {
       name: "unkeyed replacement snapshots",

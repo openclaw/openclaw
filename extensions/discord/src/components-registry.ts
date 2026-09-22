@@ -1,4 +1,3 @@
-// Discord plugin module implements components registry behavior.
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,

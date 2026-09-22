@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   describeTelegramDispatch,
   createContext,
@@ -21,10 +21,7 @@ import {
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
-import {
-  recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual,
-  registerTelegramOutboundGroupHistoryRecorder,
-} from "./outbound-message-context.js";
+import { recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual } from "./outbound-message-context.js";
 
 describeTelegramDispatch("dispatchTelegramMessage reply-targets", () => {
   it("honors disabled reply targeting and silent errors for native commands", async () => {
@@ -481,6 +478,7 @@ describeTelegramDispatch("dispatchTelegramMessage reply-targets", () => {
   });
 
   it("records native-quote direct fallback sends as one complete projection", async () => {
+    const storePath = `/tmp/openclaw-telegram-native-quote-${process.pid}.json`;
     const transcriptTimestamp = Date.now() + 1_000;
     const context = createContext({
       ctxPayload: {
@@ -496,11 +494,6 @@ describeTelegramDispatch("dispatchTelegramMessage reply-targets", () => {
       id: "assistant-native-quote",
       text: "Final answer",
       timestamp: transcriptTimestamp,
-    });
-    const groupHistoryRecorder = vi.fn();
-    const unregisterGroupHistoryRecorder = registerTelegramOutboundGroupHistoryRecorder({
-      accountId: "default",
-      recorder: groupHistoryRecorder,
     });
     recordOutboundMessageForPromptContext.mockImplementation(
       recordOutboundMessageForPromptContextActual,
@@ -520,23 +513,32 @@ describeTelegramDispatch("dispatchTelegramMessage reply-targets", () => {
       return { queuedFinal: true };
     });
 
-    try {
-      await dispatchWithContext({ context, streamMode: "off" });
-    } finally {
-      unregisterGroupHistoryRecorder();
-    }
+    await dispatchWithContext({
+      context,
+      streamMode: "off",
+      cfg: { session: { store: storePath } },
+    });
 
     expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenCalledTimes(1);
-    expect(recordOutboundMessageForPromptContext).toHaveBeenCalledTimes(1);
-    expect(groupHistoryRecorder).toHaveBeenCalledTimes(1);
-    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext, 0), {
-      messageId: 2001,
-      text: "Final answer",
-      promptContextProjection: {
-        transcriptMessageId: "assistant-native-quote",
-        partIndex: 0,
-        finalPart: true,
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const cached = await cache.get({
+      accountId: "default",
+      chatId: "123",
+      messageId: "2001",
+    });
+    expect(cached).toMatchObject({
+      messageId: "2001",
+      body: "Final answer",
+      promptContextProjectionMarker: {
+        kind: "valid",
+        projection: {
+          transcriptMessageId: "assistant-native-quote",
+          partIndex: 0,
+          finalPart: true,
+        },
       },
     });
   });

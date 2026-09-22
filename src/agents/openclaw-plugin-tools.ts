@@ -24,6 +24,7 @@ import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { bindRequesterOwnerIdentity } from "./cron-creator-authority-context.js";
 import {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
@@ -37,6 +38,7 @@ import {
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { captureGatewayToolCallerAssertion } from "./tools/gateway-caller-context.js";
 import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
@@ -230,6 +232,15 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     getRuntimeConfig: resolveCurrentRuntimeConfig,
   });
   const authProfileStore = params.options?.authProfileStore;
+  const requesterOwner =
+    pluginToolInputs.context.senderIsOwner === true
+      ? undefined
+      : bindRequesterOwnerIdentity({
+          runId: params.options?.runId,
+          sessionKey: pluginToolInputs.context.sessionKey,
+          sessionId: pluginToolInputs.context.sessionId,
+          agentId: pluginToolInputs.context.agentId,
+        });
   const delivery = createPluginToolDelivery({
     options: params.options,
     context: pluginToolInputs.context,
@@ -317,6 +328,8 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     : requestRegistry;
   const loadContext = getPluginRuntimeLoadContext(preparedRegistry);
   const metadataSnapshot = preparedModelRuntime?.metadataSnapshot ?? loadContext?.metadataSnapshot;
+  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const assertRequestCurrent = params.options?.assertInvocationCurrent;
   const pluginTools = resolvePluginTools({
     ...pluginToolInputs,
     context: {
@@ -326,6 +339,13 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       ...(resolveApiKeyForProvider ? { resolveApiKeyForProvider } : {}),
     },
     existingToolNames,
+    assertInvocationCurrent: assertRequestCurrent
+      ? () => {
+          assertCallerCurrent?.();
+          assertRequestCurrent();
+        }
+      : assertCallerCurrent,
+    ownerContinuation: requesterOwner,
     clientCaps: params.options?.clientCaps,
     toolAllowlist: params.options?.pluginToolAllowlist,
     toolDenylist: params.options?.pluginToolDenylist,

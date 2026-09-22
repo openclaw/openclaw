@@ -8,7 +8,7 @@ import type {
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { augmentChatHistoryWithCanvasBlocks } from "../chat-display-projection.canvas.js";
 import {
-  projectChatDisplayMessages,
+  projectChatDisplayMessagesWithState,
   createCurrentUserProfileMessageProjector,
 } from "../chat-display-projection.core.js";
 import {
@@ -190,12 +190,15 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
                 completeCliHistory.messages,
                 typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
               );
-              const displayMessages = projectChatDisplayMessages(mergedMessages, {
-                subagentCoordination,
-                includeCommentaryFallbacks: true,
-                maxChars: effectiveMaxChars,
-                resolveCurrentUserProfileDisplay,
-              });
+              const { messages: displayMessages, activity } = projectChatDisplayMessagesWithState(
+                mergedMessages,
+                {
+                  subagentCoordination,
+                  includeCommentaryFallbacks: true,
+                  maxChars: effectiveMaxChars,
+                  resolveCurrentUserProfileDisplay,
+                },
+              );
               if (!completeCliHistory.expanded && !messageId) {
                 // A tail-only merge can look expanded because older imported rows are absent
                 // from that local window. Preserve normal local pagination after the full merge
@@ -222,6 +225,7 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
               return {
                 activeLeafEntryId,
                 messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
+                activity,
                 completeCliImport: true,
                 pagination: {
                   offset: 0,

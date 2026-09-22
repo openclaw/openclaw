@@ -1,25 +1,17 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import type { OpenClawConfig } from "../config/types.js";
 import { finishCapabilityOperation } from "../plugins/capability-provider-acquisition.js";
-import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { normalizeSpeechText } from "./speech-text.js";
 import type { TtsStreamResult, TtsSynthesisStreamResult } from "./tts-runtime-types.js";
 import { captureSpeechProviderStream, ownSpeechStream } from "./tts-streaming-resources.js";
 import { executeTtsProviderAttempts, acquireTtsRequest } from "./tts-synthesis-support.js";
-import { resolveTtsSynthesisTarget } from "./tts-synthesis.js";
+import { resolveTtsSynthesisTarget, type synthesizeSpeech } from "./tts-synthesis.js";
 
-export async function streamSpeech(params: {
-  text: string;
-  cfg: OpenClawConfig;
-  prefsPath?: string;
-  channel?: string;
-  overrides?: TtsDirectiveOverrides;
-  disableFallback?: boolean;
-  timeoutMs?: number;
-  agentId?: string;
-  accountId?: string;
-}): Promise<TtsSynthesisStreamResult> {
+type SpeechSynthesisParams = Parameters<typeof synthesizeSpeech>[0];
+
+export async function streamSpeech(
+  params: SpeechSynthesisParams,
+): Promise<TtsSynthesisStreamResult> {
   assertSpeechRuntimeAvailable();
   const acquired = await acquireTtsRequest({
     text: params.text,
@@ -107,17 +99,7 @@ export async function streamSpeech(params: {
   return await finishCapabilityOperation(outcome, acquired.release);
 }
 
-export async function textToSpeechStream(params: {
-  text: string;
-  cfg: OpenClawConfig;
-  prefsPath?: string;
-  channel?: string;
-  overrides?: TtsDirectiveOverrides;
-  disableFallback?: boolean;
-  timeoutMs?: number;
-  agentId?: string;
-  accountId?: string;
-}): Promise<TtsStreamResult> {
+export async function textToSpeechStream(params: SpeechSynthesisParams): Promise<TtsStreamResult> {
   const synthesis = await streamSpeech(params);
   if (!synthesis.success || !synthesis.audioStream || !synthesis.fileExtension) {
     await synthesis.release?.();

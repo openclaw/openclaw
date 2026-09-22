@@ -1,4 +1,3 @@
-// Discord plugin module implements runtime.messaging.reactions behavior.
 import {
   jsonResult,
   readPositiveIntegerParam,

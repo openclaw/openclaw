@@ -30,6 +30,7 @@ type CronManagementCaller = {
 const activeManagement = new AsyncLocalStorage<{
   identity: CronManagementCaller;
   assertActive: () => void;
+  callerOrigin?: CronScheduledToolCallerOrigin;
   channelRequester?: CronAuthenticatedChannelRequester;
 }>();
 
@@ -44,6 +45,15 @@ export type CronCreatorAuthorityRunScope = {
   readonly signal: AbortSignal;
   readonly grantTokens: Set<string>;
   readonly managementEntitlement?: CronManagementEntitlement;
+  /** Separately admitted channel-owner identity, not implied by automation management rights. */
+  readonly requesterOwner?: Readonly<{
+    isCurrent: () => boolean;
+    senderId?: string;
+    channel?: string;
+    accountId?: string;
+  }>;
+  /** Fresh admission only; never transferred with a management continuation. */
+  readonly callerScopedCreation?: true;
   /** @deprecated Read managementEntitlement. Harness source compatibility lasts through 2026-10-12. */
   readonly controlUiAdmin?: true;
   readonly isCurrent?: () => boolean;
@@ -82,6 +92,8 @@ export function createCronCreatorAuthorityRunScope(
   managementEntitlement?: CronManagementEntitlement,
   isCurrent?: () => boolean,
   channelRequester?: CronAuthenticatedChannelRequester,
+  requesterOwner?: CronCreatorAuthorityRunScope["requesterOwner"],
+  callerScopedCreation?: true,
 ): CronCreatorAuthorityRunScope {
   const abortController = new AbortController();
   const requester = normalizeCronAuthenticatedChannelRequester(channelRequester);
@@ -91,6 +103,8 @@ export function createCronCreatorAuthorityRunScope(
     signal: abortController.signal,
     grantTokens: new Set(),
     ...(managementEntitlement ? { managementEntitlement } : {}),
+    ...(requesterOwner ? { requesterOwner } : {}),
+    ...(callerScopedCreation ? { callerScopedCreation } : {}),
     get controlUiAdmin(): true | undefined {
       return managementEntitlement?.source === "control-ui-admin" ? true : undefined;
     },
@@ -107,6 +121,14 @@ export function createCronCreatorAuthorityRunScope(
 /** Keeps native identity out of the capability transported through harness contracts. */
 export function hasCronChannelRequester(scope: CronCreatorAuthorityRunScope): boolean {
   return channelRequestersByScope.has(scope);
+}
+
+function hasCronAuthenticatedRequester(scope: CronCreatorAuthorityRunScope): boolean {
+  return (
+    scope.callerOrigin.kind === "local" ||
+    hasCronChannelRequester(scope) ||
+    scope.callerScopedCreation === true
+  );
 }
 
 export function mintCronCreatorAuthorityGrant(
@@ -128,18 +150,22 @@ export function mintCronCreatorAuthorityGrant(
   ) {
     throw management ? expiredManagementError() : expiredAuthorityError();
   }
-  if (!management && scope.managementEntitlement && scope.callerOrigin.kind === "unknown") {
+  // Remote admission can prove the requester, never materialize fresh runtime authority.
+  if (
+    !management &&
+    scope.managementEntitlement &&
+    scope.callerOrigin.kind === "unknown" &&
+    !(capture === "requester" && scope.callerScopedCreation)
+  ) {
     throw new TypeError(
       "Automation creation is not granted to this turn. Use the Automations page to create an automation.",
     );
   }
   if (
     capture === "requester" &&
-    (!hasCronChannelRequester(scope) || runtimeAuthority || management)
+    (!hasCronAuthenticatedRequester(scope) || runtimeAuthority || management)
   ) {
-    throw new TypeError(
-      "requester-only cron authority requires an authenticated channel requester",
-    );
+    throw new TypeError("requester-only cron authority requires authenticated creator facts");
   }
   if (
     management &&
@@ -183,6 +209,7 @@ export function resolveCronCreatorAuthorityGrantProvenance(
 ):
   | {
       capturesRuntimeAuthority: boolean;
+      callerOrigin?: CronScheduledToolCallerOrigin;
       channelRequester?: CronAuthenticatedChannelRequester;
     }
   | undefined {
@@ -207,6 +234,7 @@ export function resolveCronCreatorAuthorityGrantProvenance(
   const channelRequester = channelRequestersByScope.get(scope);
   return {
     capturesRuntimeAuthority: entry.capturesRuntimeAuthority,
+    ...(scope.callerOrigin.kind === "local" ? { callerOrigin: { kind: "local" as const } } : {}),
     ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),
   };
 }
@@ -219,14 +247,17 @@ export function hasCronCreatorGrantProvenance(
   },
   runId: string,
 ): boolean {
-  return (
+  if (
     !input.cronCreatorAuthorityGrant ||
-    input.cronToolsAllowCapture === "final-executable-surface" ||
-    Boolean(
-      resolveCronCreatorAuthorityGrantProvenance(input.cronCreatorAuthorityGrant, runId)
-        ?.channelRequester,
-    )
+    input.cronToolsAllowCapture === "final-executable-surface"
+  ) {
+    return true;
+  }
+  const provenance = resolveCronCreatorAuthorityGrantProvenance(
+    input.cronCreatorAuthorityGrant,
+    runId,
   );
+  return Boolean(provenance?.callerOrigin || provenance?.channelRequester);
 }
 
 function revokeCronCreatorAuthorityGrant(token: string): void {
@@ -338,7 +369,14 @@ export async function withCronManagementGrant<T>(
   // Queue acknowledgement precedes reservation. Its retained guard still
   // belongs to this exact live run, signal, and expiry after the RPC returns.
   return await activeManagement.run(
-    { identity, assertActive, channelRequester: channelRequestersByScope.get(entry.scope) },
+    {
+      identity,
+      assertActive,
+      ...(entry.scope.callerOrigin.kind === "local"
+        ? { callerOrigin: { kind: "local" as const } }
+        : {}),
+      channelRequester: channelRequestersByScope.get(entry.scope),
+    },
     run,
   );
 }
@@ -359,4 +397,15 @@ export function getCronManagementChannelRequester(
   }
   management.assertActive();
   return management.channelRequester ? { ...management.channelRequester } : undefined;
+}
+
+export function getCronManagementCallerOrigin(
+  identity: CronManagementCaller,
+): CronScheduledToolCallerOrigin | undefined {
+  const management = activeManagement.getStore();
+  if (management?.identity !== identity) {
+    return undefined;
+  }
+  management.assertActive();
+  return management.callerOrigin ? { ...management.callerOrigin } : undefined;
 }

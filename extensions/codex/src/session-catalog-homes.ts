@@ -7,6 +7,7 @@ import {
   resolveSessionAgentIdsStrict,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
@@ -101,8 +102,7 @@ export function createCodexCatalogHomeResolver(params: {
       return cached;
     }
     const resolved = path.resolve(value);
-    const discovery = fs
-      .realpath(resolved)
+    const discovery = canonicalPathFromExistingAncestor(resolved)
       .catch(() => resolved)
       .then(async (canonical) => {
         if (
@@ -134,7 +134,8 @@ export function createCodexCatalogHomeResolver(params: {
       for (const id of agentIds(snapshot)) {
         // The SDK registers directory identity synchronously. Resolve at most one per task.
         await scheduler.yield();
-        await append(resolveCodexAppServerHomeDir(agentDir(snapshot, id)), id);
+        const directory = await homePath(snapshot, agentDir(snapshot, id));
+        await append(resolveCodexAppServerHomeDir(directory), id);
         if (candidates.length === MAX_HOST_COUNT) {
           return candidates;
         }
@@ -168,7 +169,7 @@ export function createCodexCatalogHomeResolver(params: {
     if (!agentIds(snapshot).includes(agentId)) {
       return [];
     }
-    const ownerAgentDir = agentDir(snapshot, agentId);
+    const ownerAgentDir = await homePath(snapshot, agentDir(snapshot, agentId));
     const base = params.resolveRuntimeOptions({
       config: snapshot.config,
       pluginConfig: snapshot.pluginConfig,
@@ -220,16 +221,22 @@ export function createCodexCatalogHomeResolver(params: {
           : `${CODEX_LOCAL_SESSION_HOST_ID}:${sourceHomeId}`,
         label: candidate.label,
         agentDir: ownerAgentDir,
-        appServer: primary
-          ? base
-          : {
-              ...base,
-              start: {
-                ...base.start,
-                homeScope: "user",
-                env: { ...base.start.env, CODEX_HOME: candidate.codexHome },
+        appServer:
+          base.start.transport !== "stdio"
+            ? base
+            : {
+                ...base,
+                start: {
+                  ...base.start,
+                  codexHome: candidate.codexHome,
+                  ...(!primary
+                    ? {
+                        homeScope: "user" as const,
+                        env: { ...base.start.env, CODEX_HOME: candidate.codexHome },
+                      }
+                    : {}),
+                },
               },
-            },
         ...(base.connectionClass === "remote"
           ? {}
           : { localSessionsRoot: path.join(candidate.codexHome, "sessions") }),

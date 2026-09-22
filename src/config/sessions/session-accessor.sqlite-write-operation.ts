@@ -32,7 +32,6 @@ export type SqliteSessionWriteOperation =
   | "session.lifecycle.reset"
   | "session.maintenance.finalize"
   | "session.maintenance.plan"
-  | "session.maintenance.planner-statistics"
   | "session.message-cut.mutate"
   | "session.parent.fork-entry"
   | "session.parent.fork-transcript"

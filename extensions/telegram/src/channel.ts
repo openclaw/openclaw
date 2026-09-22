@@ -1,4 +1,3 @@
-// Telegram plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildDmGroupAccountAllowlistAdapter,
@@ -42,12 +41,12 @@ import {
   inspectTelegramAccount,
 } from "./account-inspect.js";
 import {
-  mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
 } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
+import { telegramAgentPrompt } from "./agent-prompt.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { telegramApprovalCapability } from "./approval-native.js";
 import * as auditModule from "./audit.js";
@@ -72,7 +71,6 @@ import {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
 } from "./group-policy.js";
-import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import * as monitorModule from "./monitor.js";
 import {
   looksLikeTelegramTargetId,
@@ -84,7 +82,6 @@ import { parseTelegramThreadId } from "./outbound-params.js";
 import { releaseStoppedTelegramPollingLease } from "./polling-lease.js";
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
-import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getOptionalTelegramRuntime, getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
@@ -121,11 +118,6 @@ function resolveTelegramProbe() {
   return (
     getOptionalTelegramRuntime()?.channel?.telegram?.probeTelegram ?? probeModule.probeTelegram
   );
-}
-
-function isTelegramRichMessagesEnabled(cfg: OpenClawConfig, accountId?: string | null): boolean {
-  const selectedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
-  return mergeTelegramAccountConfig(cfg, selectedAccountId).richMessages === true;
 }
 
 async function readStartupBotInfoCache(params: {
@@ -794,50 +786,7 @@ export const telegramPlugin = createChatChannelPlugin({
       resolveRequireMention: resolveTelegramGroupRequireMention,
       resolveToolPolicy: resolveTelegramGroupToolPolicy,
     },
-    agentPrompt: {
-      messageToolCapabilities: ({ cfg, accountId }) => {
-        const inlineButtonsScope = resolveTelegramInlineButtonsScope({
-          cfg,
-          accountId: accountId ?? undefined,
-        });
-        return [
-          ...(inlineButtonsScope === "off" ? [] : ["inlineButtons"]),
-          ...(isTelegramRichMessagesEnabled(cfg, accountId) ? ["markdownDetails"] : []),
-        ];
-      },
-      // Authoring contract lives here so every runtime (including native Codex)
-      // sees it via inbound-meta response_format; core system-prompt no longer owns it.
-      inboundFormattingHints: ({ cfg, accountId }) => {
-        const richMessages = isTelegramRichMessagesEnabled(cfg, accountId);
-        if (richMessages) {
-          return {
-            text_markup: "markdown_telegram_rich",
-            rules: [
-              "Telegram rich ON (Bot API 10.3 blocks; OpenClaw maps markdown + these HTML islands to typed blocks).",
-              'Supported: headings, tables (markdown, or `<table>` HTML for caption/colspan/rowspan/align), block/pull quotes (`<aside>` + `<cite>`), `<details><summary>` (+`open`), dividers `<hr/>`, sup/sub/mark/spoilers, `<ul>`/`<ol>` + `<input type="checkbox" checked/>` tasks, code, anchors `<a name="x"></a>` + `<a href="#x">label</a>`, custom emoji `<tg-emoji emoji-id="...">`, maps `<tg-map lat="" long="" zoom=""/>`, collages/slideshows `<tg-collage>`/`<tg-slideshow>`, block media e.g. `<img src="https://..."/>` (+`<figure>`/`<figcaption>`).',
-              "Math: `<tg-math>` inline, `<tg-math-block>` block; never `$...$`/`\\(...\\)`.",
-              "Not MarkdownV2/parse_mode.",
-              "Collapse=`<details>` (not expandable blockquote); structured bullets=`<ul><li>` (not literal bullets).",
-              "Media https URLs only, block-level only, captions/credits when useful; buttons plain text; normal files via attachments.",
-            ],
-          };
-        }
-        return {
-          text_markup: "markdown",
-          rules: [
-            "Telegram rich OFF. Standard Telegram formatting only; no rich tables/details/block media/formulas.",
-            "Owner can enable `richMessages` for this Telegram account.",
-          ],
-        };
-      },
-      reactionGuidance: ({ cfg, accountId }) => {
-        const level = resolveTelegramReactionLevel({
-          cfg,
-          accountId: accountId ?? undefined,
-        }).agentReactionGuidance;
-        return level ? { level, channelLabel: "Telegram" } : undefined;
-      },
-    },
+    agentPrompt: telegramAgentPrompt,
     messaging: {
       defaultMarkdownTableMode: "block",
       targetPrefixes: ["telegram", "tg"],

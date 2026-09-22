@@ -11,7 +11,7 @@ describe("internal history display projection", () => {
       provenance: {
         kind: "inter_session",
         sourceSessionKey: "agent:main:visible-worker",
-        sourceTool: "sessions_send",
+        sourceTool: "  sessions_send\t",
         sourceRole: "subagent",
       },
     };

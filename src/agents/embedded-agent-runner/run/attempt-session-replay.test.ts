@@ -1,8 +1,8 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createFailureMessage,
-  createInterruptedTurnMessage,
+  appendInterruptedTurnMessage,
 } from "../../../../packages/agent-core/src/turn-interruption.js";
 import {
   loadTranscriptEventsSync,
@@ -20,7 +20,11 @@ import {
   type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../state/openclaw-agent-db.js";
+import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -36,6 +40,7 @@ import {
 import { createResourceLoader } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
+import { sessionManagerPrepareCurrentTurnReplay } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
@@ -167,18 +172,24 @@ async function withInterruptedTurn(
       original.appendMessage(
         createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
       );
-      const interrupted = createInterruptedTurnMessage();
-      if (interrupted.role !== "custom") {
-        throw new Error("expected interruption context");
-      }
-      original.appendCustomMessageEntry(
-        interrupted.customType,
-        interrupted.content,
-        interrupted.display,
-      );
+      await appendInterruptedTurnMessage([], (event) => {
+        if (event.type !== "message_end") {
+          return;
+        }
+        const interrupted = event.message;
+        if (interrupted.role !== "custom") {
+          throw new Error("expected interruption context");
+        }
+        original.appendCustomMessageEntry(
+          interrupted.customType,
+          interrupted.content,
+          interrupted.display,
+        );
+      });
     }
     previous.finishPendingInput!("interrupted");
     rotateAgentEventLifecycleGeneration();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const recorder = makeRecorder();
     await recorder.stageApproved!({ runId, assertCurrent: () => {} });
@@ -252,6 +263,7 @@ async function withReplaySession(
   run: (session: AgentSession, submit: () => Promise<void>) => Promise<void>,
   options: {
     beforeStart?: () => Promise<unknown>;
+    afterReplayPreparation?: () => Promise<unknown>;
     recovery?: "retry" | "compaction";
     images?: ImageContent[];
   } = {},
@@ -290,7 +302,11 @@ async function withReplaySession(
       retry: { enabled: options.recovery === "retry", baseDelayMs: 1 },
     }),
   });
-  session[agentSessionSetPromptPreparation](async () => prepared.assertInitialUserTurnReplay);
+  session[agentSessionSetPromptPreparation](async () => {
+    const admit = await prepared.prepareInitialUserTurnReplay?.();
+    await options.afterReplayPreparation?.();
+    return admit;
+  });
   try {
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession: session,
@@ -399,6 +415,27 @@ describe("interrupted canonical user replay", () => {
   ])(
     "replays one user after restart (carrier=$appendOnly, abort row=$interruptedTurn, tools=$toolProgress)",
     async ({ appendOnly, interruptedTurn, toolProgress }) => {
+      let observedWalks = 0;
+      const nativeReadFailures: unknown[] = [];
+      const prepare = SessionManager.prototype[sessionManagerPrepareCurrentTurnReplay];
+      const replayRead = vi
+        .spyOn(SessionManager.prototype, sessionManagerPrepareCurrentTurnReplay)
+        .mockImplementation(async function (this: SessionManager, ...args) {
+          const sql = observeMainThreadSql();
+          try {
+            return await prepare.apply(this, args);
+          } finally {
+            observedWalks++;
+            try {
+              sql.expectIdle();
+            } catch (error) {
+              nativeReadFailures.push(error);
+            } finally {
+              sql.restore();
+            }
+          }
+        });
+      onTestFinished(() => replayRead.mockRestore());
       await withInterruptedTurn(
         appendOnly,
         async (fixture) => {
@@ -441,6 +478,8 @@ describe("interrupted canonical user replay", () => {
         },
         { interruptedTurn, toolProgress },
       );
+      expect(observedWalks).toBeGreaterThan(0);
+      expect(nativeReadFailures).toEqual([]);
     },
   );
 
@@ -799,17 +838,24 @@ describe("interrupted canonical user replay", () => {
     },
   );
 
-  it.each([
-    "later-user",
-    "excluded-user",
-    "excluded-user-with-tail",
-    "final",
-    "reset",
-    "branch",
-    "writer",
-    "session",
-    "closed",
-  ] as const)("refuses a replay after %s changes during SDK hooks", async (change) => {
+  it.each(
+    (
+      [
+        "later-user",
+        "excluded-user",
+        "excluded-user-with-tail",
+        "final",
+        "reset",
+        "branch",
+        "writer",
+        "session",
+        "closed",
+      ] as const
+    ).flatMap((change) => [
+      { change, phase: "SDK hooks" as const },
+      { change, phase: "prepared replay" as const },
+    ]),
+  )("refuses a replay after $change changes during $phase", async ({ change, phase }) => {
     await withInterruptedTurn(false, async (fixture) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -818,7 +864,12 @@ describe("interrupted canonical user replay", () => {
         false,
         async (_session, submit) => {
           const settled = Promise.allSettled([submit()]);
-          await entered.promise;
+          await Promise.race([
+            entered.promise,
+            settled.then(() => {
+              throw new Error("Replay settled before the mutation barrier");
+            }),
+          ]);
           const other = SessionManager.open(fixture.target);
           if (change === "later-user" || change.startsWith("excluded-user")) {
             const laterUser = {
@@ -861,12 +912,19 @@ describe("interrupted canonical user replay", () => {
           expect(streamMocks.streamSimple).not.toHaveBeenCalled();
           expect(loadTranscriptEventsSync(fixture.target)).toEqual(before);
         },
-        {
-          beforeStart: async () => {
-            entered.resolve();
-            await release.promise;
-          },
-        },
+        phase === "SDK hooks"
+          ? {
+              beforeStart: async () => {
+                entered.resolve();
+                await release.promise;
+              },
+            }
+          : {
+              afterReplayPreparation: async () => {
+                entered.resolve();
+                await release.promise;
+              },
+            },
       );
     });
   });

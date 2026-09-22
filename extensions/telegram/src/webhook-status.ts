@@ -1,4 +1,3 @@
-// Telegram plugin module implements webhook status behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 

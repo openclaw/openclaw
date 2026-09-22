@@ -67,6 +67,8 @@ const caller: ReplyToolAuthorityOverlay = {
   disableTools: false,
   traceAuthorized: false,
 };
+let fixtureSignal: AbortSignal;
+const fixtureRuns = new Set<Promise<void>>();
 let nativeToolProjector: ((tools: readonly string[]) => readonly string[]) | undefined;
 
 type McpResponse = {
@@ -77,7 +79,8 @@ type McpResponse = {
   };
 };
 
-beforeEach(() => {
+beforeEach(({ signal }) => {
+  fixtureSignal = signal;
   nativeToolProjector = undefined;
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
@@ -102,7 +105,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // A timed-out fixture must finish before shared state belongs to the next test.
+  await Promise.allSettled(fixtureRuns);
   resetPendingAskUserQuestionsForTest();
   resetCliRunnerPrepareTestDeps();
   cliBackendsTesting.resetDepsForTest();
@@ -138,10 +143,12 @@ async function withCliQuestionLoopback(
     resolveRequestCount: () => number;
     persist: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
+  signal = fixtureSignal,
 ) {
+  signal.throwIfAborted();
   const cli = createCliRunnerPrepareFixture(prepareCliRunContext);
   const { dir } = cli.session;
-  await runQaGatewayFixture(
+  const fixtureRun = runQaGatewayFixture(
     async () =>
       await withQuestionGateway(async (gateway) => {
         const config: OpenClawConfig = {
@@ -176,6 +183,7 @@ async function withCliQuestionLoopback(
             return scoped;
           });
         const requestController = new AbortController();
+        const requestSignal = AbortSignal.any([signal, requestController.signal]);
         const contexts: PreparedCliRunContext[] = [];
         const admissions: PreparedAgentRunAdmission[] = [];
         const requests: Promise<McpResponse>[] = [];
@@ -187,7 +195,7 @@ async function withCliQuestionLoopback(
         ) => {
           const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
             method: "POST",
-            signal: requestController.signal,
+            signal: requestSignal,
             headers: {
               authorization: `Bearer ${token}`,
               "content-type": "application/json",
@@ -207,8 +215,10 @@ async function withCliQuestionLoopback(
         };
         await runQaGatewayFixture(
           async () => {
+            signal.throwIfAborted();
             await run({
               prepare: async (runId = "mcp-question-run", target = { sessionKey }) => {
+                signal.throwIfAborted();
                 const source = new AbortController();
                 const admission = prepareAgentRunAdmission({
                   cfg: config,
@@ -227,12 +237,13 @@ async function withCliQuestionLoopback(
                   sessionKey: target.sessionKey,
                   runId,
                   timeoutMs: 60_000,
-                  abortSignal: source.signal,
+                  abortSignal: AbortSignal.any([signal, source.signal]),
                   messageProvider: "webchat",
                   senderIsOwner: true,
                   toolsAllow: originalToolsAllow,
                 });
                 contexts.push(context);
+                signal.throwIfAborted();
                 const token = expectDefined(
                   context.preparedBackend.env?.OPENCLAW_MCP_TOKEN,
                   "prepared CLI grant",
@@ -259,8 +270,10 @@ async function withCliQuestionLoopback(
                 try {
                   await Promise.race([
                     registration.entered,
-                    response.then(() => {
-                      throw new Error("ask_user completed before question registration");
+                    response.then((result) => {
+                      throw new Error("ask_user completed before question registration", {
+                        cause: result,
+                      });
                     }),
                   ]);
                   expect(gateway.manager.list()).toHaveLength(1);
@@ -314,6 +327,9 @@ async function withCliQuestionLoopback(
     () => closeOpenClawStateDatabaseForTest(),
     () => cli.cleanup(),
   );
+  fixtureRuns.add(fixtureRun);
+  void fixtureRun.finally(() => fixtureRuns.delete(fixtureRun)).catch(() => {});
+  return fixtureRun;
 }
 
 function expectAnswered(response: McpResponse) {
@@ -513,45 +529,59 @@ describe("CLI loopback question creator authority", () => {
     });
   });
 
-  it.for(["before", "after"] as const)(
-    "joins a question request when the fixture fails %s registration",
-    async (stage, { onTestFinished, signal }) => {
+  it.for([
+    { stage: "before", ending: "failure" },
+    { stage: "after", ending: "failure" },
+    { stage: "before", ending: "cancellation" },
+    { stage: "after", ending: "cancellation" },
+  ] as const)(
+    "joins a question request on fixture $ending $stage registration",
+    async ({ stage, ending }, { onTestFinished, signal }) => {
+      const cancellation = new AbortController();
       const expectedError = new Error(`fixture stopped ${stage} question registration`);
       let releaseHello = () => {};
       let asking: Promise<{ id: string; response: Promise<McpResponse> }> | undefined;
       let requestSettled = false;
       let manager: Parameters<Parameters<typeof withQuestionGateway>[0]>[0]["manager"] | undefined;
-      const run = withCliQuestionLoopback(async (fixture) => {
-        // Timed-out setup must not start a late request.
-        signal.throwIfAborted();
-        manager = fixture.manager;
-        const grant = mintAttachGrant({ sessionKey });
-        const hello = stage === "before" ? fixture.holdNextHello() : undefined;
-        if (hello) {
-          releaseHello = hello.release;
-        }
-        try {
-          asking = fixture.ask(grant.token, true);
-          void asking.catch(() => {});
-          const request = hello ? asking : (await asking).response;
-          void request.then(
-            () => {
-              requestSettled = true;
-            },
-            () => {
-              requestSettled = true;
-            },
-          );
+      const run = withCliQuestionLoopback(
+        async (fixture) => {
+          // Timed-out setup must not start a late request.
+          signal.throwIfAborted();
+          manager = fixture.manager;
+          const grant = mintAttachGrant({ sessionKey });
+          const hello = stage === "before" ? fixture.holdNextHello() : undefined;
           if (hello) {
-            await Promise.race([hello.entered, asking]);
+            releaseHello = hello.release;
           }
-          expect(fixture.manager.list()).toHaveLength(stage === "before" ? 0 : 1);
-          expect(requestSettled).toBe(false);
-          throw expectedError;
-        } finally {
-          revokeAttachGrant(grant.token);
-        }
-      });
+          try {
+            asking = fixture.ask(grant.token, true);
+            void asking.catch(() => {});
+            const request = hello ? asking : (await asking).response;
+            void request.then(
+              () => {
+                requestSettled = true;
+              },
+              () => {
+                requestSettled = true;
+              },
+            );
+            if (hello) {
+              await Promise.race([hello.entered, asking]);
+            }
+            expect(fixture.manager.list()).toHaveLength(stage === "before" ? 0 : 1);
+            expect(requestSettled).toBe(false);
+            if (ending === "cancellation") {
+              cancellation.abort(expectedError);
+              await request;
+            } else {
+              throw expectedError;
+            }
+          } finally {
+            revokeAttachGrant(grant.token);
+          }
+        },
+        AbortSignal.any([signal, cancellation.signal]),
+      );
       onTestFinished(() =>
         runQaGatewayFixture(
           async () => {

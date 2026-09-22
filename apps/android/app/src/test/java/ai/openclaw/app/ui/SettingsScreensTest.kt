@@ -417,18 +417,18 @@ class SettingsScreensTest {
   fun gatewayScreenOrdersPairingAheadOfManualSetup() {
     val source = settingsScreensSource()
     val screenStart = source.indexOf("private fun GatewaySettingsScreen(")
-    // Pairing stays reachable without scrolling: nav-bar scanner action plus a
-    // hero CTA while nothing is paired, then Add Gateway before manual plumbing.
+    // Pairing stays reachable without scrolling; management precedes technical details.
     val trailingScan = source.indexOf("trailingAction = {", screenStart)
     val scanHero = source.indexOf("nativeString(\"Scan QR to Pair\")", screenStart)
-    val addPanel = source.indexOf("nativeString(\"Add Gateway\")", screenStart)
+    val addAction = source.indexOf("nativeString(\"Add Gateway\")", screenStart)
     val pairedPanel = source.indexOf("nativeString(\"Gateways\")", screenStart)
     val manualPanel = source.indexOf("nativeString(\"Manual Gateway\")", screenStart)
     assertTrue(screenStart >= 0 && trailingScan > screenStart && scanHero > trailingScan)
-    assertTrue(addPanel > scanHero && pairedPanel > addPanel && manualPanel > pairedPanel)
-    // Discovered gateways surface inside Add Gateway with a per-row connect.
+    assertTrue(pairedPanel > scanHero && addAction > pairedPanel && manualPanel > addAction)
+    // Discovered gateways retain per-row Connect behind their own disclosure.
     val discoveredRows = source.indexOf("discoveredGateways.forEachIndexed", screenStart)
-    assertTrue(discoveredRows > addPanel && discoveredRows < pairedPanel)
+    val discoveryDisclosure = source.indexOf("if (showDiscovery)", screenStart)
+    assertTrue(discoveredRows > discoveryDisclosure && discoveryDisclosure > pairedPanel)
   }
 
   @Test

@@ -2,7 +2,9 @@ import { isDeepStrictEqual } from "node:util";
 import type { ConfigSnapshotReadMeasure } from "../../../config/io.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
+import type { PreparedAgentDatabaseMigrationDiscovery } from "../../../infra/state-migrations.media-persistence-targets.js";
 import type {
+  LegacyStateMigrationInvocationPurpose,
   LegacyStateMigrationStepReceipt,
   PreparedPostSessionPluginMigration,
 } from "../../../infra/state-migrations.types.js";
@@ -10,7 +12,10 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import type { CronCodexRuntimePolicyTarget } from "../cron/store-migration.js";
 
 export type DoctorConfigPreflightOptions = {
+  agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   migrateState?: boolean;
+  /** Select Doctor normalization without enabling repair-only migrations. */
+  invocationPurpose?: LegacyStateMigrationInvocationPurpose;
   migrateLegacyConfig?: boolean;
   repairPrefixedConfig?: boolean;
   recoverCorruptTargetStore?: boolean;
@@ -30,7 +35,7 @@ export type DoctorConfigPreflightOptions = {
   skipPristineCoreStateMigrations?: boolean;
   /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
   skipPristineStartupStateMigrations?: boolean;
-  /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
+  /** Enable Doctor-owned migrations under explicit repair or exclusive startup maintenance. */
   doctorOnlyStateMigrations?: boolean;
 };
 

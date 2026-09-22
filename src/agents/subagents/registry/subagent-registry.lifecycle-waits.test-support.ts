@@ -2,10 +2,7 @@ import { vi } from "vitest";
 import * as mod from "./subagent-registry.test-helpers.js";
 
 export function createLifecycleWaits(requesterSessionKey: string) {
-  const flushAsync = async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  };
+  const flushAsync = () => vi.dynamicImportSettled();
 
   const waitForCleanupHandledFalse = async (runId: string) => {
     // Cleanup can be released asynchronously after announce failure; poll fake
@@ -56,5 +53,29 @@ export function createLifecycleWaits(requesterSessionKey: string) {
     );
   };
 
-  return { waitForCleanupHandledFalse, waitForDeliveredCleanup };
+  const waitForFrozenResult = async (runId: string, matches: (resultText: string) => boolean) => {
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const run = mod
+        .listSubagentRunsForRequester(requesterSessionKey)
+        .find((candidate) => candidate.runId === runId);
+      const resultText = run?.completion?.resultText;
+      if (run && typeof resultText === "string" && matches(resultText)) {
+        return run;
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      await flushAsync();
+    }
+    throw new Error(`run ${runId} frozen result did not refresh`);
+  };
+
+  const waitForFrozenResultText = async (runId: string, expectedText: string) =>
+    waitForFrozenResult(runId, (resultText) => resultText === expectedText);
+
+  return {
+    flushAsync,
+    waitForCleanupHandledFalse,
+    waitForDeliveredCleanup,
+    waitForFrozenResult,
+    waitForFrozenResultText,
+  };
 }

@@ -1,5 +1,5 @@
 import { t } from "../i18n/index.ts";
-import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
@@ -12,9 +12,12 @@ import type {
   SessionPlacementTarget,
 } from "../lib/sessions/session-placement-recovery.ts";
 import { showToast } from "../lib/toast.ts";
+import { restoreChatApiAttachments } from "../pages/chat/attachment-restoration.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
+import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { buildPlacementStartupInitialTurn } from "./session-placement-initial-turn.ts";
 import {
   isStaleChunkImportError,
   reloadControlUiDocument,
@@ -33,6 +36,8 @@ export type ApplicationPlacementStartupStatus = {
     | "starting"
     | "active"
     | "sending"
+    | "reconnecting"
+    | "cancelled"
     | "failed";
   readonly startedAt: number;
   readonly error?: string;
@@ -47,6 +52,7 @@ type PlacementStartupInput = {
   readonly persistRecovery: boolean;
   readonly mode: SessionPlacementStartMode;
   readonly createdAt: number;
+  readonly displayAttachments?: ChatAttachment[];
 };
 
 export type ApplicationPlacementStartupDependencies = {
@@ -73,18 +79,23 @@ export type ApplicationPlacementStartupRuntime = {
 
 export type ApplicationPlacementStartup = ApplicationPlacementStartupRuntime;
 
-// A transport loss retains ownership, not permission to display content or execute.
+// Submitted display survives transport loss; a changed connection owner revokes it.
 export function capturePlacementStartupConnection(
   gateway: ApplicationGateway,
   { gatewayUrl, recoveryScope }: Pick<SessionPlacementRecovery, "gatewayUrl" | "recoveryScope">,
 ): () => boolean {
   const revision = gateway.connectionRevision;
+  const presentationScope = gatewayPresentationScope(gateway);
   return () => {
     const client = gateway.snapshot.client;
+    const currentScope =
+      gateway.snapshot.hello?.auth?.recoveryScope ??
+      (client?.recoveryScopeReady ? client.recoveryScope : undefined);
     return (
       gateway.connectionRevision === revision &&
+      gatewayPresentationScope(gateway) === presentationScope &&
       gateway.connection.gatewayUrl === gatewayUrl &&
-      (!client?.recoveryScopeReady || client.recoveryScope === recoveryScope)
+      (!currentScope || currentScope === recoveryScope)
     );
   };
 }
@@ -98,7 +109,10 @@ export function createApplicationPlacementStartup(
     import("./session-placement-startup.runtime.ts"),
 ): ApplicationPlacementStartup {
   type PendingInput = { input: PlacementStartupInput; persisted: boolean };
-  const preRuntimeEntries = new Map<string, () => PendingInput | undefined>();
+  type PreparedPendingInput = PendingInput & {
+    input: PlacementStartupInput & { displayAttachments: ChatAttachment[] };
+  };
+  const preRuntimeEntries = new Map<string, () => PreparedPendingInput | undefined>();
   const { gateway } = dependencies;
   let disposed = false;
   let runtime: ApplicationPlacementStartupRuntime | undefined;
@@ -155,18 +169,18 @@ export function createApplicationPlacementStartup(
   );
 
   const resumeRecovery = (pending?: PendingInput, retry = false) => {
-    const input = pending?.input;
     if (disposed) {
       return;
     }
     stopGateway ??= gateway.subscribe(() => resumeRecovery());
-    if ((input || retry) && runtimeLoad?.error) {
+    if ((pending || retry) && runtimeLoad?.error) {
       runtimeLoad = undefined;
-      if (!input) {
+      if (!pending) {
         publish();
       }
     }
-    if (input) {
+    if (pending) {
+      const { input } = pending;
       if (runtime) {
         runtime.start(input);
         return;
@@ -174,7 +188,15 @@ export function createApplicationPlacementStartup(
       const sessionKey = input.recovery.sessionKey;
       preRuntimeEntries.delete(sessionKey);
       const current = capturePlacementStartupConnection(gateway, input.recovery);
-      preRuntimeEntries.set(sessionKey, () => (current() ? pending : undefined));
+      const prepared: PreparedPendingInput = {
+        ...pending,
+        input: {
+          ...input,
+          displayAttachments:
+            input.displayAttachments ?? restoreChatApiAttachments(input.recovery.attachments),
+        },
+      };
+      preRuntimeEntries.set(sessionKey, () => (current() ? prepared : undefined));
       // Each start adds at most one entry, so one oldest-entry deletion maintains the bound.
       if (preRuntimeEntries.size > 32) {
         preRuntimeEntries.delete(preRuntimeEntries.keys().next().value!);
@@ -200,7 +222,7 @@ export function createApplicationPlacementStartup(
       }
       return;
     }
-    if (client && !input) {
+    if (client && !pending) {
       // Keys hold admission until runtime validation, even if import finishes offline.
       // They carry neither payload content nor execution permission.
       if (!pendingStoredRecovery?.current()) {
@@ -262,14 +284,29 @@ export function createApplicationPlacementStartup(
       }
       const error = runtimeLoad?.error;
       const reloadBlocked = isStaleChunkImportError(error) && !canReload();
-      return readyClient()
+      const displayError = reloadBlocked ? t("newSession.placementReloadBlocked") : error?.message;
+      const reconnecting = !readyClient();
+      return !reconnecting || input
         ? {
             sessionKey,
             ...pending,
-            phase: error ? "failed" : "pending",
-            error: reloadBlocked ? t("newSession.placementReloadBlocked") : error?.message,
-            retryable: Boolean(error) && !reloadBlocked,
-            ...(reloadBlocked ? { discardAndReload: captureDiscardAndReload() } : {}),
+            phase: reconnecting ? "reconnecting" : error ? "failed" : "pending",
+            error: displayError,
+            retryable: !reconnecting && Boolean(error) && !reloadBlocked,
+            ...(input
+              ? {
+                  initialTurn: buildPlacementStartupInitialTurn({
+                    recovery: input.recovery,
+                    attachments: input.displayAttachments,
+                    createdAt: input.createdAt,
+                    error: displayError,
+                    reconnecting,
+                  }),
+                }
+              : {}),
+            ...(reloadBlocked && !reconnecting
+              ? { discardAndReload: captureDiscardAndReload() }
+              : {}),
           }
         : null;
     },
@@ -314,11 +351,15 @@ export function createApplicationPlacementStartup(
           persistRecovery: pending?.persistRecovery ?? true,
           mode: "recover",
           createdAt: pending?.createdAt ?? Date.now(),
+          displayAttachments: pending?.displayAttachments,
         },
         persisted,
       });
     },
     retry(sessionKey) {
+      if (!readyClient()) {
+        return;
+      }
       const pending = preRuntimeEntries.get(sessionKey)?.();
       if (pending || pendingStoredRecovery?.read(sessionKey)) {
         const loading = runtimeLoad;

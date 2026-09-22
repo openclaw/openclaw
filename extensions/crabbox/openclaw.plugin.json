@@ -20,7 +20,12 @@
   },
   "commandAliases": [{ "name": "crabbox", "kind": "cli" }],
   "contracts": {
-    "workerProviders": ["crabbox"]
+    "workerProviders": ["crabbox"],
+    "tools": ["crabbox"]
+  },
+  "skills": ["./skills"],
+  "toolMetadata": {
+    "crabbox": { "profiles": ["coding"] }
   },
   "configGroups": [
     {

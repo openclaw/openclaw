@@ -7,41 +7,91 @@
 }
 
 .agent-chat__composer-shell {
-  --chat-composer-shell-gap: 6px;
-
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: end;
-  gap: var(--chat-composer-shell-gap);
+  gap: 6px;
   /* The new-session page reuses this shell outside .chat, where the tokens are
      not defined; the fallbacks keep its geometry identical there. */
   width: calc(100% - var(--chat-composer-side-inset, 36px));
   max-width: var(--chat-thread-max-width, 48rem);
   margin: var(--chat-composer-top-margin, 8px) auto var(--chat-composer-bottom-gap, 14px);
 }
-/* Input-affecting notices belong to the composer owner but not its layout.
-   One absolute lane keeps model, placement, voice and lifecycle feedback on
-   the same axis without changing transcript or composer geometry. */
-.agent-chat__composer-overlay {
-  position: absolute;
-  z-index: 24;
-  inset-inline: 0;
-  bottom: calc(100% + var(--chat-composer-shell-gap));
+.agent-chat__composer-notices {
   display: grid;
   justify-items: center;
   gap: 6px;
-  pointer-events: none;
+  min-width: 0;
 }
-.agent-chat__composer-overlay:empty {
+.agent-chat__composer-notices:not(:has(> *)) {
   display: none;
 }
-/* Reserve notice height beside publication controls instead of covering them. */
-.chat-prs:has(.chat-pr__create) ~ .agent-chat__composer-shell .agent-chat__composer-overlay {
-  position: static;
+
+.chat-footer .agent-chat__composer-shell {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  align-items: stretch;
+  min-height: 0;
+  max-height: calc(
+    var(--chat-footer-max-height) - var(--chat-composer-top-margin) -
+      var(--chat-composer-bottom-gap)
+  );
 }
-.agent-chat__composer-overlay > * {
-  pointer-events: auto;
+
+/* Persistent context scrolls as one stack; the writing surface and menus stay outside. */
+.chat-footer__context {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.chat-footer__context:not(
+  :has(
+    > :not(.agent-chat__composer-notices, openclaw-plugin-contributions),
+    > .agent-chat__composer-notices > *,
+    > openclaw-plugin-contributions > *
+  )
+) {
+  display: none;
+}
+
+.chat-footer__context > * {
+  flex-shrink: 0;
+}
+
+.chat-footer
+  .chat-footer__context
+  :is(
+    .session-progress-card__body,
+    .chat-queue__scroll,
+    .agent-chat__goal-detail-objective,
+    .chat-swarm__tasks,
+    .chat-error__diagnostic
+  ) {
+  overscroll-behavior: auto;
+}
+
+:root[data-theme-mode="light"]
+  :is(.session-progress-card--composer, .chat-queue, .agent-chat__goal--active) {
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1px var(--chat-composer-light-outline);
+}
+
+.chat-footer > openclaw-plugin-view > .chat-footer__context {
+  width: calc(100% - var(--chat-composer-side-inset));
+  max-width: var(--chat-thread-max-width);
+  margin: var(--chat-composer-top-margin) auto 0;
+}
+
+.chat-footer .agent-chat__composer-shell > :not(.chat-footer__context) {
+  flex-shrink: 0;
 }
 
 /* One surface, no internal rules. Separation inside the composer is carried by
@@ -50,8 +100,10 @@
    heavy shadow on top of each other. Every foreground step below is a mix
    toward that same surface, which keeps the ramp correct in light themes too,
    where --text-strong is dark rather than near-white. */
+.chat-footer,
 .agent-chat__composer-shell,
 .agent-chat__input {
+  --chat-composer-radius: calc(20px * var(--openclaw-corner-radius-scale));
   --chat-composer-surface: var(--popover);
   --chat-composer-light-outline: rgb(0 0 0 / 6%);
   --composer-attached-surface: color-mix(
@@ -60,6 +112,18 @@
     var(--background, var(--bg))
   );
   --chat-composer-hairline: color-mix(in srgb, var(--text-strong) 16%, transparent);
+}
+
+.agent-chat__input,
+.agent-chat__disabled-banner.callout,
+.agent-chat__composer-notices
+  > :is(
+    .chat-composer-neighbor-card,
+    .agent-chat__composer-errors--standalone,
+    .agent-chat__talk-status.callout
+  ) {
+  border-radius: var(--chat-composer-radius);
+  corner-shape: var(--chat-composer-corner-shape);
 }
 
 .agent-chat__input {
@@ -130,9 +194,6 @@
   --chat-composer-editor-line: calc(var(--chat-composer-editor-size) * 1.5);
 
   position: relative;
-  /* Queue, goal and status rows deliberately underlap the composer. Keep the
-     writing surface in the foreground so their backgrounds cannot paint over
-     the footer controls while their exposed content remains below it. */
   z-index: 1;
   display: flex;
   flex-direction: column;
@@ -148,9 +209,10 @@
   min-height: var(--chat-composer-min-height, 112px);
   margin: 0;
   padding: 0;
-  background: var(--chat-composer-surface);
+  /* The app owns the artwork; keep one translucent writing surface, not a
+     second texture. Foreground/menu tokens retain their opaque surface color. */
+  background: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
   border: 1px solid var(--chat-composer-hairline);
-  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   /* Deliberately lighter than --shadow-sm: with the border and the luminance
      step already doing the separating, a heavier drop reads as a second frame. */
   box-shadow: 0 4px 16px rgb(0 0 0 / 5%);
@@ -160,7 +222,7 @@
     box-shadow var(--duration-fast) ease;
 }
 
-:root[data-theme-mode="dark"] :is(.agent-chat__composer-shell, .agent-chat__input) {
+:root[data-theme-mode="dark"] :is(.chat-footer, .agent-chat__composer-shell, .agent-chat__input) {
   --chat-composer-hairline: color-mix(in srgb, var(--text-strong) 9%, transparent);
 }
 
@@ -234,10 +296,9 @@
   z-index: 1;
 }
 
-@supports (backdrop-filter: blur(1px)) {
+@media (forced-colors: active), (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
   .agent-chat__input {
-    backdrop-filter: blur(12px) saturate(1.6);
-    -webkit-backdrop-filter: blur(12px) saturate(1.6);
+    background: var(--chat-composer-surface);
   }
 }
 
@@ -309,13 +370,37 @@
 }
 
 .agent-chat__composer-combobox > :is(textarea, input)::placeholder {
-  color: var(--chat-composer-tertiary);
+  color: var(--muted);
 }
 
-/* One ellipsized line while empty: long agent names otherwise wrap the
-   placeholder, grow the box, and surface the overlay scrollbar as a stray
-   gray pill. On the control (not ::placeholder) so Firefox honors it too;
-   typing unsets :placeholder-shown, restoring normal wrapping. */
+/* Chromium forces native placeholders to clip while focused. A noneditable
+   sibling keeps the ellipsis while the native placeholder supplies semantics. */
+.agent-chat__composer-combobox:has(> .agent-chat__composer-placeholder)
+  > :is(textarea, input)::placeholder {
+  color: transparent;
+}
+
+.agent-chat__composer-placeholder {
+  display: none;
+  position: absolute;
+  inset: 0 0 auto;
+  padding-block: var(--chat-composer-editor-inset-block);
+  color: var(--muted);
+  font-size: var(--chat-composer-editor-size);
+  line-height: var(--chat-composer-editor-line);
+  font-variant-ligatures: no-contextual;
+  letter-spacing: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.agent-chat__composer-combobox > :placeholder-shown ~ .agent-chat__composer-placeholder {
+  display: block;
+}
+
+/* Keep an empty editor one line tall; typed drafts retain normal wrapping. */
 .agent-chat__composer-combobox > :is(textarea, input):placeholder-shown {
   white-space: nowrap;
   overflow: hidden;
@@ -379,7 +464,8 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  flex: 0 1 auto;
+  /* These icon groups must not shrink below their controls; model labels can. */
+  flex: 0 0 auto;
   min-width: 0;
 }
 
@@ -534,13 +620,6 @@
 .agent-chat__attach-menu[open] > button {
   color: var(--text);
   background: var(--bg-hover);
-}
-
-.agent-chat__attach-menu::part(menu) {
-  width: 176px;
-  min-width: 176px;
-  max-width: min(176px, calc(100vw - 24px));
-  padding: var(--menu-padding);
 }
 
 /* Send is the primary action of the whole surface, so it gets the same solid
@@ -857,7 +936,7 @@
     align-self: stretch;
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input) {
+  .agent-chat__composer-combobox > :is(textarea, input, .agent-chat__composer-placeholder) {
     flex: 1 1 auto;
     padding-top: 10px;
     padding-bottom: 10px;
@@ -894,9 +973,8 @@
   }
 
   .agent-chat__input:has(.chat-attachments-preview) {
-    /* The rail's overhang must also clear this outer scrollport. */
+    /* The rail's top overhang must also clear this outer scrollport. */
     padding-block-start: var(--chat-attachment-hit-slop);
-    padding-inline-end: var(--chat-attachment-hit-slop);
   }
 
   .agent-chat__input:has(.agent-chat__attach-menu[open]) {
@@ -958,9 +1036,9 @@
   /* New Session can load composer styles before the chat layout defaults. */
   .chat-thread-inner,
   .agent-chat__composer-shell,
-  .chat :is(.chat-prs, .chat-swarm, .session-suggestions, .chat-inline-approval) {
-    --chat-frame-inset-left: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px));
-    --chat-frame-inset-right: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px));
+  .chat-footer > openclaw-plugin-view > .chat-footer__context {
+    --chat-frame-inset-left: max(var(--chat-mobile-edge-inset), var(--safe-area-left, 0px));
+    --chat-frame-inset-right: max(var(--chat-mobile-edge-inset), var(--safe-area-right, 0px));
     width: calc(100% - var(--chat-frame-inset-left) - var(--chat-frame-inset-right));
     margin-left: var(--chat-frame-inset-left);
     margin-right: var(--chat-frame-inset-right);
@@ -968,7 +1046,7 @@
 
   .chat-thread-inner,
   .chat .agent-chat__composer-shell,
-  .chat :is(.chat-prs, .chat-swarm, .session-suggestions, .chat-inline-approval) {
+  .chat-footer > openclaw-plugin-view > .chat-footer__context {
     position: relative;
     /* Center within physical safe areas without doing arithmetic on max-width keywords. */
     left: calc((var(--chat-frame-inset-left) - var(--chat-frame-inset-right)) / 2);
@@ -976,7 +1054,9 @@
   }
 
   .agent-chat__composer-shell {
-    margin-block: var(--chat-composer-top-margin, 0px) calc(14px + var(--safe-area-bottom, 0px));
+    --chat-composer-bottom-gap: calc(6px + var(--safe-area-bottom, 0px));
+
+    margin-block: var(--chat-composer-top-margin, 0px) var(--chat-composer-bottom-gap);
     gap: 6px;
   }
 
@@ -990,13 +1070,13 @@
   (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-thread-inner,
   .agent-chat__composer-shell,
-  .chat :is(.chat-prs, .chat-swarm, .session-suggestions, .chat-inline-approval) {
-    --chat-frame-inset-left: var(--chat-mobile-edge-inset, 4px);
-    --chat-frame-inset-right: var(--chat-mobile-edge-inset, 4px);
+  .chat-footer > openclaw-plugin-view > .chat-footer__context {
+    --chat-frame-inset-left: var(--chat-mobile-edge-inset);
+    --chat-frame-inset-right: var(--chat-mobile-edge-inset);
   }
 
   .agent-chat__composer-shell {
-    margin-bottom: 14px;
+    --chat-composer-bottom-gap: 6px;
   }
 }
 
@@ -1042,11 +1122,9 @@
   }
 }
 
-/* Phone composers keep a dense information row without changing the compact
-   desktop/split-pane treatment above. Plus and Send retain full touch targets;
-   the secondary controls share one smaller box so model and effort can remain
-   visible instead of collapsing into the model menu. */
-@media (max-width: 560px) {
+/* Density follows the composer, including narrow split panes in wider windows.
+   Plus and Send retain their targets while model and effort remain separate. */
+@container chat-composer (max-width: 560px) {
   .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
     flex: 1 1 0;
     min-width: 0;
@@ -1175,5 +1253,36 @@
     color: var(--muted);
     opacity: var(--chat-mobile-row-mic-opacity);
     stroke-width: var(--chat-mobile-row-mic-stroke);
+  }
+}
+
+/* Short split panes need the natural editor height before reserving transcript space. */
+@container chat-conversation (max-height: 320px) {
+  .chat-footer {
+    --chat-footer-max-height: calc(100cqh - clamp(24px, 12cqh, 48px));
+  }
+
+  .chat-footer::before {
+    display: none;
+  }
+
+  .chat-thread {
+    --chat-thread-padding-top: 0px;
+    --chat-thread-padding-bottom: 0px;
+  }
+
+  .agent-chat__input {
+    --chat-composer-min-height: 0px;
+  }
+
+  .agent-chat__composer-shell {
+    --chat-composer-top-margin: 4px;
+    --chat-composer-bottom-gap: calc(4px + var(--safe-area-bottom, 0px));
+
+    gap: 4px;
+  }
+
+  .agent-chat__composer-combobox > :is(textarea, input) {
+    max-height: calc(var(--chat-composer-editor-line) + 8px);
   }
 }

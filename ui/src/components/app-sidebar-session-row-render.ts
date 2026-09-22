@@ -5,9 +5,8 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
-import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import { t } from "../i18n/index.ts";
@@ -18,6 +17,7 @@ import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type {
   CatalogBackingSessionDisplay,
@@ -49,7 +49,9 @@ const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 export interface SessionListHost {
   readonly sidebarAgentsMode?: "chip" | "roster";
   readonly basePath: string;
-  readonly sessionDataContext: Pick<ApplicationContext, "gateway" | "agentSelection"> | undefined;
+  readonly sessionDataContext:
+    | Pick<ApplicationContext, "gateway" | "agentSelection" | "agents" | "sessions">
+    | undefined;
   readonly sidebarLiveActivity: boolean;
   readonly sessionsShowPreview: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
@@ -59,7 +61,6 @@ export interface SessionListHost {
   readonly connected: boolean;
   readonly sessionData: Pick<
     SessionDataController,
-    | "approvalBadgeSnapshot"
     | "childSessionErrorsByParent"
     | "loadMoreSessionCatalog"
     | "presenceInstanceId"
@@ -80,6 +81,8 @@ export interface SessionListHost {
     | "sidebarSectionDropTarget"
     | "sessionListRemovalDrop"
     | "setSessionsStatusFilter"
+    | "archiveSessionWithUndo"
+    | "patchSession"
   >;
   readonly sidebarMenus: Pick<
     SidebarMenusController,
@@ -99,7 +102,7 @@ export interface SessionListHost {
   readonly sessionOwnerFilterId: string | null;
   readonly sessionInvolvingMeFilterActive: boolean;
   readonly sessionOwnerOptions: readonly SessionOwnerOption[];
-  readonly sessionOwnershipVisible: boolean;
+  readonly sessionOwnershipVisibility: { filters: boolean; avatars: boolean };
   readonly onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   readonly onNavigate?: (
     routeId: NavigationRouteId,
@@ -107,7 +110,7 @@ export interface SessionListHost {
   ) => void;
 
   readonly sessionPullRequests: Pick<SessionPullRequestIndicatorsController, "summary">;
-  mainSessionRow(): { key: string } | null;
+  mainSessionRow(): GatewaySessionRow | null;
   setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
   isSessionChildrenFullyShown(sessionKey: string): boolean;
@@ -184,7 +187,7 @@ function renderSidebarSessionIndicators(
       : session.owner?.assignedAt !== undefined
         ? "owned"
         : "created";
-  const ownerActor = host.sessionOwnershipVisible
+  const ownerActor = host.sessionOwnershipVisibility.avatars
     ? host.sessionsStatusFilter === "archived"
       ? session.archivedBy
       : session.owner?.actor
@@ -243,21 +246,16 @@ function renderSidebarSessionIndicators(
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
   const stateId = !team && stateDescription ? sidebarSessionStateId(session.key) : undefined;
-  const persistentIndicator =
-    team && leadingIndicator === nothing && session.visibility !== "draft"
-      ? nothing
-      : html`<span class="sidebar-session-indicator"
-          >${leadingIndicator}
-          ${
-            session.visibility === "draft"
-              ? html`<span
-                  class="session-row-draft-indicator"
-                  title=${t("chat.sessionSharing.draft")}
-                  >👻</span
-                >`
-              : nothing
-          }</span
-        >`;
+  const persistentIndicator = html`<span class="sidebar-session-indicator"
+    >${leadingIndicator}
+    ${
+      session.visibility === "draft"
+        ? html`<span class="session-row-draft-indicator" title=${t("chat.sessionSharing.draft")}
+            >👻</span
+          >`
+        : nothing
+    }</span
+  >`;
   const originIndicators = html`${session.archived ? html`<span class="sidebar-session__archive-glyph" role="img" aria-label=${t("sessionsView.archived")} title=${t("sessionsView.archived")}>${icons.archive}</span>` : nothing}${session.forkSource ? html`<span class="sidebar-session-fork-indicator" aria-hidden=${team || session.isChild ? nothing : "true"} role="img" aria-label=${t("sessionsView.forkedSession")}>${icons.gitFork}</span>` : nothing}`;
   const trail = hasTrail
     ? html`<span class="session-row-trail" id=${metaId}
@@ -293,8 +291,8 @@ function renderSidebarSessionIndicators(
         .maxVisible=${3}
         variant="session"
       ></openclaw-viewer-facepile>
-      ${team ? originIndicators : nothing} ${team ? persistentIndicator : nothing}
-      ${team && (session.workSession || session.acpSession) && !pullRequest ? html`<span class="session-row-badge" role="img" aria-label=${t("chat.sidebar.coding")} title=${session.subtitle ?? t("chat.sidebar.coding")}>${icons.terminal}</span>` : nothing}
+      ${team ? originIndicators : nothing}
+      ${team && (session.workSession || session.acpSession) && !session.workspaceKind && !pullRequest ? html`<span class="session-row-badge" role="img" aria-label=${t("chat.sidebar.coding")} title=${session.subtitle ?? t("chat.sidebar.coding")}>${icons.terminal}</span>` : nothing}
       ${team && session.hasAutomation ? html`<span class="session-row-badge" role="img" aria-label=${t("tabs.cron")} title=${t("tabs.cron")}>${icons.clock}</span>` : nothing}
       ${renderSessionRowBadges({
         isChild: session.isChild,
@@ -309,8 +307,9 @@ function renderSidebarSessionIndicators(
         hasComposerDraft: session.hasComposerDraft === true,
         pullRequest,
         hasApproval:
-          !(team && ownAttention.kind === "approval") &&
-          sessionHasPendingApproval(host.sessionData.approvalBadgeSnapshot(), session.key),
+          ownAttention.kind === "question"
+            ? ownAttention.requests.some((request) => request.kind === "approval")
+            : !team && ownAttention.kind === "approval",
       })}
       ${team ? trail : nothing}
       ${
@@ -335,6 +334,20 @@ export function renderRecentSession(params: {
     method: "sessions.patch",
     params: { key: session.key, pinned: !session.pinned },
   });
+  const archiveAccess = host.readSessionMutationAccess({
+    method: "sessions.patch",
+    params: { key: session.key, archived: !session.archived },
+  });
+  const archiveAllowed =
+    session.archived ||
+    canArchiveSessionRow(
+      session,
+      resolveUiConfiguredMainKey({
+        agentsList: host.sessionDataContext?.agents.state.agentsList,
+        hello: host.sessionDataContext?.gateway.snapshot.hello,
+      }),
+    );
+  const archiving = host.sessionDataContext?.sessions.archiveVisibility(session.key) === "pending";
   const team = host.sidebarAgentsMode === "roster";
   const ownAttention = session.ownAttention ?? session.attention;
   const label = session.label;
@@ -353,7 +366,7 @@ export function renderRecentSession(params: {
   const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
     handleContextMenuEvent(
       event,
-      (event.currentTarget as HTMLElement).querySelector("[data-session-menu]"),
+      (event.currentTarget as HTMLElement).querySelector(".sidebar-recent-session__link"),
       (trigger, x, y) => {
         if (display?.catalogMenu) {
           host.openCatalogMenu(display.catalogMenu, x, y, trigger ?? undefined);
@@ -363,10 +376,12 @@ export function renderRecentSession(params: {
       },
     );
   const pinLabel = t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
-  const menuTooltip = t("chat.sidebar.openSessionMenu");
-  const menuLabel = `${menuTooltip}: ${label}`;
-  const menuOpen =
-    host.sidebarMenus.sessionMenu?.session.key === session.key || display?.catalogMenuOpen === true;
+  const archiveLabel = t(
+    session.archived ? "sessionsView.restoreSession" : "sessionsView.archiveSession",
+  );
+  const menuOpen = display?.catalogMenu
+    ? host.sidebarMenus.catalogMenu.isOpenFor(display.catalogMenu.key)
+    : host.sidebarMenus.sessionMenu?.session.key === session.key;
   const color = normalizeSessionColorValue(session.color ?? "");
   const rowClass = [
     "sidebar-recent-session",
@@ -374,7 +389,9 @@ export function renderRecentSession(params: {
     team ? "sidebar-recent-session--team" : "",
     color ? "sidebar-recent-session--colored" : "",
     session.isChild ? "sidebar-recent-session--child" : "",
-    team || !subtitle ? "sidebar-recent-session--single-line" : "",
+    team || (!subtitle && !session.channelPresentation)
+      ? "sidebar-recent-session--single-line"
+      : "",
     session.archived ? "sidebar-session--archived" : "",
     session.visuallyActive ? "sidebar-recent-session--active" : "",
     host.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
@@ -449,17 +466,18 @@ export function renderRecentSession(params: {
       @keydown=${openMenuFromEvent}
     >
       <a
-        href=${withSidebarNavCollapseIntent(host.sidebarSessionHref(session))}
+        href=${host.sidebarSessionHref(session)}
         class="sidebar-recent-session__link"
         draggable="false"
         aria-current=${session.visuallyActive ? "page" : nothing}
         aria-describedby=${[stateId, metaId].filter(Boolean).join(" ") || nothing}
         @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}
       >
-        ${team ? nothing : persistentIndicator}
+        ${persistentIndicator}
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
           <span class="sidebar-recent-session__details">
+            ${session.channelPresentation ? html`<span class="sidebar-recent-session__channel" aria-label=${t("sessionHovercard.linkedChannel", { channel: session.channelPresentation.channelLabel })}>${session.channelPresentation.channelLabel}</span>` : nothing}
             ${team ? nothing : renderSidebarSessionSubtitle({ subtitle, narration })}
             ${indicators.content}
           </span>
@@ -521,23 +539,47 @@ export function renderRecentSession(params: {
                   ${icons.pin}
                 </button>`
           }
-          <openclaw-tooltip .content=${menuTooltip} .describe=${false} .disabled=${menuOpen}>
+          <openclaw-tooltip
+            .content=${archiveAccess.allowed ? archiveLabel : archiveAccess.reason}
+            .describe=${false}
+          >
             <button
               class="session-action"
-              data-session-menu="true"
+              data-sidebar-session-archive="true"
               type="button"
-              aria-label=${menuLabel}
-              aria-haspopup="menu"
-              aria-expanded=${String(menuOpen)}
+              aria-label=${`${archiveLabel}: ${label}`}
+              ?disabled=${!archiveAccess.allowed || !archiveAllowed || archiving}
               @click=${(event: MouseEvent) => {
                 event.stopPropagation();
-                const trigger = event.currentTarget as HTMLElement;
-                host.toggleSessionMenu(session, trigger, display?.catalogMenu);
+                if (session.archived) {
+                  void host.sessionOrganizer.patchSession(session, { archived: false });
+                } else {
+                  void host.sessionOrganizer.archiveSessionWithUndo(session);
+                }
               }}
             >
-              ${icons.moreHorizontal}
+              ${session.archived ? icons.archiveRestore : icons.archive}
             </button>
           </openclaw-tooltip>
+          <button
+            class="session-action session-action--touch-menu"
+            data-sidebar-session-menu="true"
+            type="button"
+            title=${t("chat.sidebar.openSessionMenu")}
+            aria-label=${`${t("chat.sidebar.openSessionMenu")}: ${label}`}
+            aria-haspopup="menu"
+            aria-expanded=${String(menuOpen)}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              host.toggleSessionMenu(
+                session,
+                event.currentTarget as HTMLElement,
+                display?.catalogMenu,
+              );
+            }}
+          >
+            ${icons.moreHorizontal}
+          </button>
         </span>
       </span>
     </div>
@@ -619,7 +661,7 @@ export function renderSessionTree(params: {
                   </button>`
                 : nothing
             }
-            ${renderChildSessionLoadError(host, session.key)}
+            ${(session.childLoadParentKeys ?? [session.key]).map((key) => renderChildSessionLoadError(host, key))}
             ${
               session.loadingChildren && session.children.length === 0
                 ? html`<span

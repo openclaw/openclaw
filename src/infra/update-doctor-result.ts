@@ -4,8 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
+import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import {
   resolvePreferredOpenClawTmpDir,
   type ResolvePreferredOpenClawTmpDirOptions,
@@ -40,10 +42,28 @@ export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
 };
 
 const configHashSchema = z.string().regex(/^[0-9a-f]{64}$/u);
+const DoctorMaintenanceRefusalSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("deferred"),
+    reason: z.enum(["coordinator-contention", "agent-database-in-use", "admission-unavailable"]),
+  }),
+  z.object({
+    kind: z.literal("data-at-risk"),
+    reason: z.enum([
+      "active-mutation",
+      "unreadable-state",
+      "incomplete-migration",
+      "gateway-state-unverified",
+    ]),
+  }),
+]);
+export type DoctorMaintenanceRefusal = z.infer<typeof DoctorMaintenanceRefusalSchema>;
+
 const doctorResultEvidence = {
   configHash: z.union([z.literal("unchanged"), configHashSchema]).optional(),
   configInputHash: configHashSchema.optional(),
   warnings: z.array(z.string()).optional(),
+  maintenanceRefusal: DoctorMaintenanceRefusalSchema.optional(),
   // Invalid optional diagnostics cannot change the child's classified outcome.
   failureFacts: z.array(UpdateFailureFactSchema).catch([]).optional(),
   configChanges: z.array(UpdateDoctorConfigChangeSchema).optional(),
@@ -78,11 +98,30 @@ export class UpdateDoctorError extends Error {
   }
 }
 
+export class DoctorMaintenanceRefusalError extends UpdateDoctorError {
+  constructor(
+    message: string,
+    readonly refusal: DoctorMaintenanceRefusal,
+    options?: ErrorOptions & { failureFacts?: UpdateFailureFact[] },
+  ) {
+    super(message, options?.failureFacts ?? [], options);
+    this.name = "DoctorMaintenanceRefusalError";
+  }
+}
+
+export function collectUpdateDoctorFailureFacts(error: unknown): UpdateFailureFact[] {
+  return normalizeUpdateFailureFacts(
+    collectNestedErrorCandidates(error).flatMap((candidate) =>
+      candidate instanceof UpdateDoctorError ? candidate.failureFacts : [],
+    ),
+  );
+}
+
 /** Keep optional health diagnostics bounded across Doctor and its update parent. */
 export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly string[]): string[] {
   const normalized: string[] = [];
   for (const warning of warnings) {
-    const message = warning.trim().slice(0, 500);
+    const message = truncateUtf16Safe(warning.trim(), 500);
     if (message) {
       normalized.push(message);
       if (normalized.length === 32) {
@@ -100,7 +139,11 @@ export type DoctorConfigCapture = {
   configChanges: UpdateDoctorConfigChange[];
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
 };
-export type UpdateDoctorWriteAuthority = { inputHash: string; assertCurrent: () => void };
+export type UpdateDoctorWriteAuthority = {
+  inputHash: string;
+  assertCurrent: () => void;
+  postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
+};
 const doctorConfigWrites = new AsyncLocalStorage<{
   capture: DoctorConfigCapture;
   authority?: UpdateDoctorWriteAuthority;

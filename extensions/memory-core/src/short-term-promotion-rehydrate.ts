@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { readWorkspaceText } from "./memory-workspace-files.js";
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
 import { normalizeSnippet, SHORT_TERM_BASENAME_RE } from "./short-term-promotion-utils.js";
@@ -309,7 +309,7 @@ export async function rehydratePromotionCandidate(
   for (const sourcePath of sourcePaths) {
     let rawSource: string;
     try {
-      rawSource = await fs.readFile(sourcePath, "utf-8");
+      rawSource = await readWorkspaceText(workspaceDir, sourcePath);
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
         continue;

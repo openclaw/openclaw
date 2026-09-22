@@ -881,7 +881,7 @@ impl Routing {
 }
 
 pub(crate) struct GatewayWindows {
-    profiles: GatewayProfiles,
+    profiles: Arc<GatewayProfiles>,
     routing: Mutex<Routing>,
     menus: Mutex<Vec<Submenu<tauri::Wry>>>,
     idle: Condvar,
@@ -1107,9 +1107,9 @@ fn scoped_script(document: &Document, body: &str) -> String {
 }
 
 impl GatewayWindows {
-    pub fn new(namespace: &str) -> Self {
+    pub fn new(profiles: Arc<GatewayProfiles>) -> Self {
         Self {
-            profiles: GatewayProfiles::new(namespace),
+            profiles,
             routing: Mutex::new(Routing::default()),
             menus: Mutex::new(Vec::new()),
             idle: Condvar::new(),

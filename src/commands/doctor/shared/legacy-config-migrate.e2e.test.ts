@@ -7,6 +7,108 @@ import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 describe("legacy config migration end to end", () => {
+  it.each([
+    { prefsPath: "/tmp/synthetic-tts.json" },
+    { personas: { narrator: { prompt: { style: "Synthetic instruction" } } } },
+  ])("converges legacy TTS ownership and retirement in one pass: %j", (tts) => {
+    const raw = { messages: { tts: { ...tts, summaryModel: "anthropic/claude-sonnet-4-5" } } };
+    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    expect(result.partiallyValid).toBeUndefined();
+    const validation = validateConfigObjectRaw(result.config);
+    expect(validation.ok, JSON.stringify(validation)).toBe(true);
+    expect(result.config).not.toHaveProperty("messages.tts");
+    expect(result.config).not.toHaveProperty("tts.prefsPath");
+    expect(result.config).not.toHaveProperty("tts.personas.narrator.prompt");
+    expect(result.config?.tts?.summaryModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(
+      migrateLegacyConfig(result.config, { sourceConfigBeforeMigrations: result.config }),
+    ).toEqual({ config: null, changes: [] });
+  });
+
+  it.each([
+    {
+      name: "port repair before origin seeding",
+      raw: { gateway: { bind: "lan", port: 70000 } },
+      expected: {
+        gateway: {
+          controlUi: { allowedOrigins: expect.arrayContaining(["http://localhost:18789"]) },
+        },
+      },
+    },
+    {
+      name: "Deepgram options before media consolidation",
+      raw: {
+        tools: {
+          media: {
+            audio: {
+              models: [{ provider: "deepgram", model: "nova-2", deepgram: { punctuate: true } }],
+            },
+          },
+        },
+      },
+      expected: {
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "deepgram",
+                model: "nova-2",
+                providerOptions: { deepgram: { punctuate: true } },
+                capabilities: ["audio"],
+              },
+            ],
+          },
+        },
+      },
+    },
+    {
+      name: "memory owner before QMD collections",
+      raw: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "none",
+              qmd: { extraCollections: [{ path: "/synthetic/qmd", pattern: "**/*.md" }] },
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      expected: {
+        memory: {
+          search: {
+            provider: "none",
+            extraPaths: [{ path: "/synthetic/qmd", pattern: "**/*.md" }],
+          },
+        },
+      },
+    },
+    {
+      name: "session aliases before validation",
+      raw: {
+        session: {
+          maintenance: { pruneDays: 7 },
+          resetByType: { dm: { mode: "idle", idleMinutes: 45 } },
+        },
+      },
+      expected: {
+        session: {
+          maintenance: { pruneAfter: 7 },
+          resetByType: { direct: { mode: "idle", idleMinutes: 45 } },
+        },
+      },
+    },
+  ])("converges $name in one pass", ({ raw, expected }) => {
+    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    expect(result.partiallyValid).toBeUndefined();
+    expect(result.config).toMatchObject(expected);
+    expect(validateConfigObjectRaw(result.config).ok).toBe(true);
+    expect(findLegacyConfigIssues(result.sourceConfig)).toEqual([]);
+    expect(
+      migrateLegacyConfig(result.config, { sourceConfigBeforeMigrations: result.config }),
+    ).toEqual({ config: null, changes: [] });
+  });
+
   it("reshapes duplicate agent ids deterministically and keeps canonical entries", () => {
     const duplicateRaw = {
       agents: {

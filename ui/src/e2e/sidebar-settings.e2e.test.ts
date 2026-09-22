@@ -4,6 +4,7 @@ import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 import {
@@ -16,7 +17,7 @@ const suite = createSidebarCustomizationSuite("Control UI sidebar settings mocke
 
 const FAILED_CRON_RESPONSE = {
   jobs: [
-    {
+    compactCronJobFixture({
       id: "failed-settings-transition",
       name: "Failed settings transition",
       enabled: true,
@@ -27,7 +28,7 @@ const FAILED_CRON_RESPONSE = {
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "test" },
       state: { lastRunStatus: "error", lastError: "Provider request failed" },
-    },
+    }),
   ],
   snapshotRevision: "settings-transition-attention",
   total: 1,
@@ -59,6 +60,7 @@ suite.define(() => {
     const page = await context.newPage();
     await page.clock.setFixedTime(Date.now());
     const gateway = await installMockGateway(page, {
+      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
       methodResponses: {
         "cron.list": FAILED_CRON_RESPONSE,
         "models.authStatus": MISSING_AUTH_RESPONSE,

@@ -7,6 +7,7 @@ import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugi
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import * as machineState from "../state/config-machine-state.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -343,17 +344,25 @@ it("reads the installed ledger inside the existing install lifecycle lease witho
   });
 });
 
-it.each(
-  [false, true].flatMap((pinned) =>
-    ["sync", "async", "async-empty-memo"].map((reader) => ({ pinned, reader })),
+it.each([
+  ...[false, true].flatMap((pinned) =>
+    ["sync", "async", "async-empty-memo"].map((reader) => ({
+      pinned,
+      reader,
+      initialMode: "compat" as const,
+    })),
   ),
-)(
-  "keeps captured inventory and policy together after a concurrent memo refresh ($reader, pinned roots: $pinned)",
-  async ({ pinned, reader }) => {
+  { pinned: false, reader: "sync", initialMode: undefined },
+])(
+  "reads captured policy once and keeps it with inventory after a concurrent memo refresh ($reader, pinned roots: $pinned, mode: $initialMode)",
+  async ({ pinned, reader, initialMode }) => {
     const env = environment();
     await seed(env, index("captured ledger"));
-    writeConfigMachineState("plugins.bundledDiscovery", "compat", { env });
+    if (initialMode) {
+      writeConfigMachineState("plugins.bundledDiscovery", initialMode, { env });
+    }
     await closeOpenClawStateDatabaseAsync();
+    const policyReads = vi.spyOn(machineState, "readConfigMachineState");
     const readEnv = pinned ? environment() : env;
     const captured = createDeferredCore();
     const resume = createDeferredCore();
@@ -368,6 +377,7 @@ it.each(
             async () => {
               captured.resolve();
               await resume.promise;
+              const previousReads = policyReads.mock.calls.length;
               if (reader !== "sync") {
                 await resolveConfigWidePluginMetadataSnapshotAsync({
                   config: {},
@@ -377,6 +387,14 @@ it.each(
               }
               const stored = readPersistedInstalledPluginIndexSync({ env: readEnv });
               const mode = bundledDiscovery.readBundledDiscoveryModeMemoized(readEnv);
+              for (let decision = 0; decision < 3; decision++) {
+                expect(bundledDiscovery.readBundledDiscoveryModeMemoized(readEnv)).toBe(mode);
+              }
+              expect(
+                policyReads.mock.calls
+                  .slice(previousReads)
+                  .filter(([key]) => key === "plugins.bundledDiscovery"),
+              ).toHaveLength(1);
               descendant = afterCleanup.promise.then(() =>
                 bundledDiscovery.readBundledDiscoveryModeMemoized(readEnv),
               );
@@ -404,14 +422,14 @@ it.each(
       }
       resume.resolve();
       expect(await reading).toEqual({
-        mode: "compat",
+        mode: initialMode,
         diagnostics: [{ level: "warn", message: "captured ledger" }],
       });
       expect(bundledDiscovery.readBundledDiscoveryModeMemoized(env)).toBe("allowlist");
-      // An escaped descendant must resume ordinary memo semantics after snapshot cleanup.
+      // An escaped descendant cannot replace its closed snapshot with live policy.
       writeConfigMachineState("plugins.bundledDiscovery", "compat", { env });
       afterCleanup.resolve();
-      expect(await descendant).toBe("allowlist");
+      await expect(descendant).rejects.toThrow(PluginCacheFactInvalidatedError);
     } finally {
       resume.resolve();
       afterCleanup.resolve();

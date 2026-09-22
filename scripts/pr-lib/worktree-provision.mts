@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { constants } from "node:fs";
+import { constants, writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +11,6 @@ import {
 } from "../../src/agents/worktrees/capacity.js";
 import { addManagedWorktree } from "../../src/agents/worktrees/checkout.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "../../src/agents/worktrees/git.js";
-import { resolveStateDir } from "../../src/config/paths.js";
 import {
   executeGitCommand,
   executeGitCommandBuffered,
@@ -122,6 +121,8 @@ async function needsNativeGit(git: GitPolicyReader, env: NodeJS.ProcessEnv): Pro
   }
 }
 
+let advertisedCleanupGrace = false;
+
 async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
   if (
     !/^[1-9][0-9]*$/.test(params.pr) ||
@@ -133,9 +134,11 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
   }
   const env = { ...process.env };
   const root = await fs.realpath(params.root);
+  const stateDir = path.join(root, ".local", "pr-state");
+  // Wrapper leases and template records must never open the operator's Gateway database.
+  const storageEnv = { ...env, OPENCLAW_STATE_DIR: stateDir };
   const lockOwner = fileURLToPath(new URL("./operation-lock.sh", import.meta.url));
   const assertPrAuthority = () => {
-    params.signal?.throwIfAborted();
     // Consume the shell owner's current-ref predicate; do not invent a second lock.
     const checked = spawnSync(
       process.platform === "win32" ? "bash" : "/bin/bash",
@@ -164,7 +167,7 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
   };
   assertPrAuthority();
   await withWorktreeAllocationLease(
-    { env, signal: params.signal, commitGuard: assertPrAuthority },
+    { env: storageEnv, signal: params.signal, commitGuard: assertPrAuthority },
     async (guard) => {
       const assertCurrent = () => {
         guard.signal?.throwIfAborted();
@@ -232,6 +235,26 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
           ? { text: executeGitCommandBytes, buffered: executeGitCommandBuffered }
           : undefined,
       });
+      // Capacity rounds every blob up to 4 KiB. Allow 16 small files/second
+      // on loaded disks, plus startup time, bounded to four hours per checkout.
+      const checkoutBudget = {
+        timeoutMs: Math.min(
+          4 * 60 * 60_000,
+          WORKTREE_CHECKOUT_TIMEOUT_MS + Math.ceil(gitBytes / 65_536) * 1000,
+        ),
+        // Deletion is cheaper than checkout, but Git must finish its signal cleanup
+        // before the process owner escalates. Keep the same measured size input.
+        killGraceMs: Math.min(30 * 60_000, 30_000 + Math.ceil(gitBytes / 1024 ** 2) * 1000),
+      };
+      if (env.OPENCLAW_PR_LOCK_NOTIFY_FD === "3") {
+        // The supervisor must keep this process alive while it joins Git and
+        // removes an owned partial checkout after an external interrupt.
+        writeSync(
+          3,
+          `phase\tcleanup-grace\t${checkoutBudget.timeoutMs + checkoutBudget.killGraceMs}\n`,
+        );
+        advertisedCleanupGrace = true;
+      }
       const requireSpace = (cloneBytes?: number) => {
         assertCurrent();
         requireWorktreeDiskSpace(
@@ -239,7 +262,7 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
             { path: destination, bytes: cloneBytes ?? 2 * gitBytes },
             { path: commonDir, bytes: 0 },
             { path: root, bytes: 0 },
-            { path: resolveStateDir(env), bytes: 0 },
+            { path: stateDir, bytes: 0 },
           ],
           "worktree allocation",
         );
@@ -254,30 +277,107 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
       await assertSeed();
       let templateCloned = false;
       if (native) {
-        // Git, not the adapter, runs hooks. No replay, reset, or cleanup after failure.
+        // Exclusive reservation proves custody; an old damaged checkout is never adopted.
         requireSpace();
+        await fs.mkdir(destination);
+        const reserved = await fs.lstat(destination);
+        const removeReservation = async (recursive: boolean) => {
+          // Git removes registration before the directory. Its forced termination
+          // can interrupt that walk, even after .git itself has been removed.
+          // Reuse the cleanup owner's complete backlink scan; never infer absence
+          // from Git's listing, which silently omits damaged admin entries.
+          const state = spawnSync(
+            process.platform === "win32" ? "bash" : "/bin/bash",
+            [
+              "-c",
+              'set -euo pipefail; source "$1/worktree.sh"; source "$1/common.sh"; canonical_repo_root="$2"; pr_worktree_state "$3" | jq -er \'select(.present and .admin == "") | .path\'',
+              "pr-provision-cleanup",
+              path.dirname(lockOwner),
+              root,
+              destination,
+            ],
+            {
+              cwd: root,
+              env,
+              encoding: "utf8",
+              timeout: 10_000,
+              stdio: ["ignore", "pipe", "pipe"],
+            },
+          );
+          if (state.status === 0 && state.stdout.trimEnd() === destination) {
+            if ((await fs.realpath(worktreeRoot)) !== resolvedWorktreeRoot) {
+              throw new Error("PR worktree parent changed; retain interrupted checkout.");
+            }
+            const retained = await fs.lstat(destination);
+            if (
+              retained.dev !== reserved.dev ||
+              retained.ino !== reserved.ino ||
+              !retained.isDirectory()
+            ) {
+              throw new Error("PR worktree destination changed; retain interrupted checkout.");
+            }
+            guard.rollbackGuard();
+            assertPrAuthority();
+            try {
+              if (recursive) {
+                await fs.rm(destination, { recursive: true });
+              } else {
+                await fs.rmdir(destination);
+              }
+            } catch (error) {
+              if (
+                !recursive &&
+                ["ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")
+              ) {
+                return;
+              }
+              throw error;
+            }
+            console.error("Removed failed PR checkout reservation.");
+          }
+        };
+        let admitted = false;
         const added = await executeGitCommand(
           root,
           ["worktree", "add", "--", destination, branch],
-          { ...gitOptions, timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS },
-        );
+          {
+            ...gitOptions,
+            ...checkoutBudget,
+            beforeRun: () => {
+              assertCurrent();
+              admitted = true;
+            },
+          },
+        ).catch(async (error: unknown) => {
+          if (!admitted) {
+            await removeReservation(false);
+          }
+          throw error;
+        });
+        if (added.code !== 0 && added.cleanup && added.cleanup !== "uncertain") {
+          await removeReservation(
+            added.termination === "timeout" || added.termination === "signal",
+          );
+        }
+        // Git still owns hooks; keep registered checkouts, hook edits and seed refs.
         requireGitCommandOutput("git worktree add", added);
       } else {
         // Native Git does not consume acceleration policy; keep config startup
         // out of that entry path, including hook and sparse-checkout fallbacks.
-        const { getRuntimeConfig } = await import("../../src/config/config.js");
+        const { createConfigIO } = await import("../../src/config/config.js");
         assertCurrent();
         const added = await addManagedWorktree({
           ...guard,
-          env,
+          env: storageEnv,
           now: Date.now,
-          enabled: getRuntimeConfig().worktreeAcceleration !== false,
+          enabled: createConfigIO({ env: storageEnv }).loadConfig().worktreeAcceleration !== false,
           repoRoot: root,
           commonDir,
           worktreeRoot,
           destination,
           base: params.seed,
           branch: { mode: "existing", name: branch },
+          checkoutBudget,
           requireSpace,
           commitGuard: assertCurrent,
         });
@@ -333,6 +433,9 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     process.exitCode = 1;
     console.error("[pr-worktree-provision] FAILED (exit 1)");
   } finally {
+    if (advertisedCleanupGrace) {
+      writeSync(3, "phase\tcleanup-grace\t0\n");
+    }
     for (const signal of signals) {
       process.off(signal, abort);
     }

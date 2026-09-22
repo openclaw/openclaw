@@ -16,10 +16,15 @@ import {
   SESSION_MCP_MAX_LIVE_RUNTIMES,
   SESSION_MCP_RUNTIME_MANAGER_KEY,
 } from "./agent-bundle-mcp-runtime-shared.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 
-const readAuthorization = vi.hoisted(() => vi.fn(async () => ({ state: "unauthenticated" })));
+const readAuthorization = vi.hoisted(() =>
+  vi.fn(async (identities: readonly McpOAuthIdentity[]) =>
+    identities.map(() => ({ state: "unauthenticated" })),
+  ),
+);
 vi.mock("./mcp-oauth.js", () => ({
-  readMcpOAuthCredentialsStatus: readAuthorization,
+  readMcpOAuthCredentialsStatuses: readAuthorization,
   startMcpOAuthAuthorization: async () => ({ status: "authorized" }),
 }));
 
@@ -37,7 +42,11 @@ afterEach(async () => {
   await disposeAllSessionMcpRuntimes();
   Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
   cleanupTempDirs(tempDirs);
-  readAuthorization.mockReset().mockResolvedValue({ state: "unauthenticated" });
+  readAuthorization
+    .mockReset()
+    .mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
+      identities.map(() => ({ state: "unauthenticated" })),
+    );
 });
 
 it("retires excluded discovery servers while retaining prepared session tools", async () => {
@@ -93,12 +102,18 @@ it("releases capacity when every configured server is excluded before connection
   await expect(
     (async () => {
       for (let index = 0; index <= SESSION_MCP_MAX_LIVE_RUNTIMES; index += 1) {
+        const sessionKey = `agent:main:excluded-${index}`;
         const acquired = await acquireSessionMcpRuntime({
           ...params,
           sessionId: `excluded-${index}`,
+          sessionKey,
           cfg,
         });
         await releaseSessionMcpRuntime(acquired, new Set());
+        expect(getSessionMcpRuntimeManagerForTesting().listRuntimeKeys()).toEqual([]);
+        expect(
+          getSessionMcpRuntimeManagerForTesting().resolveSessionId(sessionKey),
+        ).toBeUndefined();
       }
     })(),
   ).resolves.toBeUndefined();
@@ -124,10 +139,10 @@ it.each(["exported acquisition", "harness materialization"])(
     const started = createDeferred();
     const released = createDeferred();
     releases.push(() => released.resolve());
-    readAuthorization.mockImplementationOnce(async () => {
+    readAuthorization.mockImplementationOnce(async (identities) => {
       started.resolve();
       await released.promise;
-      return { state: "unauthenticated" };
+      return identities.map(() => ({ state: "unauthenticated" }));
     });
     const pending =
       surface === "exported acquisition"

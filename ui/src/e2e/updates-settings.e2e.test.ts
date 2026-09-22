@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -17,6 +18,81 @@ const suite = createControlUiE2eSuite({
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
+  it("shows an executing update ahead of a separately queued campaign", async () => {
+    const artifactDir = captureProof ? createControlUiE2eArtifactDir("updates-active-run") : null;
+    await suite.withPage(
+      { colorScheme: "dark", viewport: { height: 1100, width: 1280 } },
+      async ({ page }) => {
+        const config = { update: { auto: { enabled: true }, channel: "dev" } };
+        const now = Date.now();
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["config.get", "update.run", "update.status", "update.hold"],
+          methodResponses: {
+            "config.get": {
+              config,
+              hash: "updates-active-run",
+              issues: [],
+              raw: JSON.stringify(config),
+              runtimeConfig: config,
+              valid: true,
+            },
+            "update.status": {
+              activeRun: createUpdateRunFixture({
+                createdAtMs: now - 60_000,
+                updatedAtMs: now - 2_000,
+                target: { kind: "git", sha: "b".repeat(40) },
+                steps: [{ step: "build", status: "in_progress" }],
+              }),
+              schedule: {
+                channel: "dev",
+                autoEnabled: true,
+                install: { kind: "git" },
+                target: {
+                  kind: "git",
+                  upstreamRef: "origin/main",
+                  upstreamSha: "a".repeat(40),
+                  commitsBehind: 3,
+                },
+                campaign: {
+                  id: "queued-campaign",
+                  state: "waiting-for-idle",
+                  announcedAtMs: now,
+                  forceAtMs: now + 15 * 60_000,
+                  updatedAtMs: now,
+                },
+              },
+            },
+          },
+          operatorScopes: ["operator.read", "operator.admin"],
+        });
+        expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
+        await gateway.waitForRequest("update.status");
+        const updating = page.getByRole("button", { name: "Updating…", exact: true });
+        await updating.waitFor();
+        await updating.scrollIntoViewIfNeeded();
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "active-run.png"),
+            animations: "disabled",
+          });
+        }
+        const status = page
+          .locator(".settings-row")
+          .filter({ has: page.locator(".settings-row__title", { hasText: /^Status$/ }) });
+        expect(await status.textContent()).toContain("Updating · Staging");
+        expect(await status.textContent()).not.toContain("Waiting for active work");
+        expect(await page.getByText("bbbbbbbbbbbb", { exact: true }).count()).toBe(1);
+        const automatic = page
+          .locator(".settings-row")
+          .filter({ has: page.locator(".settings-row__title", { hasText: /^Automatic update$/ }) });
+        expect(await automatic.textContent()).toContain("Waiting for active work");
+        expect(await automatic.textContent()).toContain("aaaaaaaa");
+        expect(await updating.isDisabled()).toBe(true);
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+      },
+    );
+  });
+
   it("locks update policy while an automatic apply runs and shows readable recovery guidance", async () => {
     const artifactDir = captureProof
       ? createControlUiE2eArtifactDir("updates-automatic-lifecycle")
@@ -367,12 +443,14 @@ suite.define(() => {
         const checkStatus = page.getByRole("button", { name: "Check status", exact: true });
         await checkStatus.waitFor();
         await expect.poll(() => checkStatus.isDisabled()).toBe(false);
-        const statusRequestsBeforeCheck = (await gateway.getRequests("update.status")).length;
+        const discoveryRequests = () =>
+          gateway.getRequests("update.status", { refreshCheckout: true });
+        const statusRequestsBeforeCheck = (await discoveryRequests()).length;
 
         await gateway.deferNext("update.status");
         await checkStatus.click();
         await expect
-          .poll(async () => (await gateway.getRequests("update.status")).length)
+          .poll(async () => (await discoveryRequests()).length)
           .toBe(statusRequestsBeforeCheck + 1);
         expect(await checkStatus.isDisabled()).toBe(true);
 
@@ -385,6 +463,109 @@ suite.define(() => {
           .filter({ hasText: "Gateway status is temporarily unavailable" })
           .waitFor();
         expect(await checkStatus.isDisabled()).toBe(false);
+      },
+    );
+  });
+
+  it("lets a named administrator review an update report and receive their browser handoff", async () => {
+    const artifactDir = captureProof
+      ? createControlUiE2eArtifactDir("update-report-named-admin")
+      : null;
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1400 },
+      },
+      async ({ page }) => {
+        const run = createUpdateRunFixture({
+          phase: "finished",
+          status: "failed",
+          reason: "build-failed",
+          finishedAtMs: 500,
+        });
+        const body =
+          "# OpenClaw update failure report\n\nFailed phase: build\nNo private logs are included.";
+        const title = "Update failure: build-failed";
+        const fallbackUrl = `https://github.com/openclaw/openclaw/issues/new?${new URLSearchParams({ body, title })}`;
+        const config = { update: { auto: { enabled: false }, channel: "stable" } };
+        const gateway = await installMockGateway(page, {
+          authMethod: "trusted-proxy",
+          presenceUsers: [
+            {
+              self: true,
+              id: "11111111-2222-4333-8444-555555555555",
+              name: "Example administrator",
+            },
+          ],
+          operatorScopes: ["operator.read", "operator.write", "operator.admin"],
+          methodResponses: {
+            "config.get": {
+              config,
+              runtimeConfig: config,
+              raw: JSON.stringify(config),
+              hash: "report-config",
+              valid: true,
+              issues: [],
+            },
+            "update.status": { activeRun: null, lastRun: run },
+            "update.report": {
+              status: "ready",
+              attemptId: run.runId,
+              body,
+              title,
+              previewDigest: "a".repeat(64),
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/updates`);
+        await gateway.waitForRequest("update.status");
+        const report = page.getByRole("button", { name: "Report update failure", exact: true });
+        await report.waitFor();
+        await report.scrollIntoViewIfNeeded();
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "01-report-eligibility.png"),
+          });
+        }
+        expect(await report.isEnabled()).toBe(true);
+        await report.click();
+        await gateway.waitForRequest("update.report");
+        const dialog = page.locator("openclaw-modal-dialog");
+        await dialog.getByText(body, { exact: true }).waitFor();
+        expect(await gateway.getRequests("update.report")).toHaveLength(1);
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "02-reviewed-consent.png"),
+          });
+        }
+        await gateway.setMethodResponse("update.report", {
+          status: "fallback",
+          fallbackUrl,
+          message:
+            "Review and submit the prefilled issue using your own GitHub account in your browser. No issue has been submitted by the Gateway.",
+        });
+        await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+        await expect.poll(async () => (await gateway.getRequests("update.report")).length).toBe(2);
+        expect((await gateway.getRequests("update.report"))[1]?.params).toEqual({
+          action: "submit",
+          attemptId: run.runId,
+          previewDigest: "a".repeat(64),
+        });
+        const link = page.locator(`a[href="${fallbackUrl}"]`);
+        await link.waitFor();
+        expect(await link.getAttribute("target")).toBe("_blank");
+        await link.scrollIntoViewIfNeeded();
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "03-browser-handoff.png"),
+          });
+        }
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
       },
     );
   });

@@ -22,48 +22,41 @@ export function isDeeplyFrozenPlainData(value: unknown): boolean {
   if (deeplyFrozenPlainData.has(value)) {
     return true;
   }
+  if (!isPlainDataObject(value) || !Object.isFrozen(value)) {
+    return false;
+  }
   const inspected = new Set<object>();
-  const visit = (candidate: unknown): boolean => {
-    if (!candidate || typeof candidate !== "object") {
-      return typeof candidate !== "function";
-    }
-    if (deeplyFrozenPlainData.has(candidate) || inspected.has(candidate)) {
-      return true;
+  const pending = [value];
+  while (pending.length) {
+    const candidate = pending.pop()!;
+    if (inspected.has(candidate)) {
+      continue;
     }
     if (!isPlainDataObject(candidate) || !Object.isFrozen(candidate)) {
       return false;
     }
     inspected.add(candidate);
-    let firstChild: object | undefined;
-    let moreChildren: object[] | undefined;
+    const childStart = pending.length;
+    // Direct members disprove the container before queued child graphs are inspected.
     for (const key of Reflect.ownKeys(candidate)) {
       const descriptor = Object.getOwnPropertyDescriptor(candidate, key)!;
       if (!("value" in descriptor) || typeof descriptor.value === "function") {
         return false;
       }
-      if (descriptor.value && typeof descriptor.value === "object") {
-        if (firstChild === undefined) {
-          firstChild = descriptor.value;
-        } else {
-          (moreChildren ??= []).push(descriptor.value);
-        }
+      if (
+        descriptor.value &&
+        typeof descriptor.value === "object" &&
+        !deeplyFrozenPlainData.has(descriptor.value)
+      ) {
+        pending.push(descriptor.value);
       }
     }
-    // Opaque members disprove the container before any child graph needs inspection.
-    if (firstChild && !visit(firstChild)) {
-      return false;
+    // Keep depth-first child order without retaining a separate list per container.
+    for (let left = childStart, right = pending.length - 1; left < right; left++, right--) {
+      const child = pending[left]!;
+      pending[left] = pending[right]!;
+      pending[right] = child;
     }
-    if (moreChildren) {
-      for (const child of moreChildren) {
-        if (!visit(child)) {
-          return false;
-        }
-      }
-    }
-    return true;
-  };
-  if (!visit(value)) {
-    return false;
   }
   // A cycle is proven only when every reachable member passes, not on a back edge.
   for (const candidate of inspected) {

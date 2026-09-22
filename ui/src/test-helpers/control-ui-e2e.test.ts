@@ -5,9 +5,11 @@ import path from "node:path";
 import { format } from "node:util";
 import type { Page } from "playwright";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import { captureSidebarUiProof } from "../e2e/sidebar-customization.test-support.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
+import { installControlUiE2ePageDiagnosticRing } from "./control-ui-e2e-diagnostics.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   installControlUiRpcDiagnostics,
@@ -19,10 +21,223 @@ import {
 describe("shared proof capture", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
     document.body.replaceChildren();
   });
+
+  it.each([
+    { stage: "evaluation", late: "resolve" },
+    { stage: "evaluation", late: "reject" },
+    { stage: "screenshot", late: "resolve" },
+    { stage: "screenshot", late: "reject" },
+  ])(
+    "preserves the original failure when diagnostic $stage stalls then $late arrives late",
+    async ({ stage, late }) => {
+      vi.useFakeTimers();
+      const parent = tempDirs.make("control-ui-stalled-proof-");
+      vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const pending = createDeferredCore<Buffer>();
+      const screenshot = vi.fn(() =>
+        stage === "screenshot" ? pending.promise : Promise.resolve(Buffer.from("proof")),
+      );
+      // SAFETY: deferred browser replies model an unavailable renderer at the Page boundary.
+      const page = {
+        evaluate: () =>
+          stage === "evaluation"
+            ? pending.promise
+            : new Promise((resolve) => {
+                // A slow read leaves only the remaining capture budget for the screenshot.
+                setTimeout(() => resolve({ failureSummary: { available: true } }), 4_000);
+              }),
+        screenshot,
+        frames: () => [],
+        context: () => ({ browser: () => ({ isConnected: () => true }) }),
+        isClosed: () => false,
+        url: () => "http://fixture.invalid/chat",
+      } as unknown as Page;
+      const original = new Error("original request failure");
+      original.name = "TimeoutError";
+      let observed: unknown;
+      const failedAction = (async () => {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: original,
+          label: "chat.send",
+        });
+        throw original;
+      })().catch((error: unknown) => {
+        observed = error;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(observed).toBe(original);
+        expect(vi.getTimerCount()).toBe(0);
+        const directories = readdirSync(parent);
+        expect(directories).toHaveLength(1);
+        const root = path.join(parent, directories[0]!);
+        const before = readdirSync(root).map((name) => [
+          name,
+          readFileSync(path.join(root, name), "utf8"),
+        ]);
+        const report = JSON.parse(readFileSync(path.join(root, "failure.private.json"), "utf8"));
+        expect(
+          JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8")),
+        ).toMatchObject({
+          hostBeforeRead: { pageClosed: false, browserConnected: true },
+          lifecycle: null,
+          rendererRead: stage === "evaluation" ? "deadline" : "completed",
+        });
+        expect(report.failure).toMatchObject({
+          name: "TimeoutError",
+          message: original.message,
+        });
+        expect(report.screenshot).toBeNull();
+        expect(report.captureErrors).toEqual([expect.stringContaining("timed out")]);
+        if (stage === "evaluation") {
+          expect(screenshot).not.toHaveBeenCalled();
+        }
+        if (late === "resolve") {
+          pending.resolve(Buffer.from("late proof"));
+        } else {
+          pending.reject(new Error("late renderer failure"));
+        }
+        await vi.runAllTimersAsync();
+        await failedAction;
+        expect(
+          readdirSync(root).map((name) => [name, readFileSync(path.join(root, name), "utf8")]),
+        ).toEqual(before);
+      } finally {
+        pending.resolve(Buffer.from("cleanup"));
+        await failedAction;
+      }
+    },
+  );
+
+  it("retains first observed lifecycle facts through close without reattaching listeners", async () => {
+    vi.useFakeTimers();
+    const parent = tempDirs.make("control-ui-lifecycle-proof-");
+    vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
+    const logs = vi.spyOn(console, "error").mockImplementation(() => {});
+    const browserEvents = new EventEmitter();
+    let connected = true;
+    let closed = false;
+    const reads: string[] = [];
+    const browser = Object.assign(browserEvents, {
+      isConnected: () => {
+        reads.push("browser-connected");
+        return connected;
+      },
+    });
+    const registeredAt = new Date().toISOString();
+    const pageEvents = new EventEmitter();
+    // SAFETY: event emitters model the supported Playwright host-side lifecycle boundary.
+    const page = Object.assign(pageEvents, {
+      context: () => ({ browser: () => browser }),
+      isClosed: () => {
+        reads.push("page-closed");
+        return closed;
+      },
+      frames: () => [],
+      url: () => "https://fixture.invalid/chat",
+      evaluate: async () => {
+        reads.push("evaluate");
+        throw new Error("private-renderer-error");
+      },
+      screenshot: async () => Buffer.from("proof"),
+    }) as unknown as Page;
+    const events = installControlUiE2ePageDiagnosticRing(page);
+    expect(installControlUiE2ePageDiagnosticRing(page)).toBe(events);
+    expect(browserEvents.listenerCount("disconnected")).toBe(1);
+    expect(logs).not.toHaveBeenCalled();
+    vi.setSystemTime(Date.now() + 1_000);
+    const firstCrashAt = new Date().toISOString();
+    pageEvents.emit("crash", page);
+    vi.setSystemTime(Date.now() + 1_000);
+    const firstBrowserDisconnectAt = new Date().toISOString();
+    connected = false;
+    browserEvents.emit("disconnected", browser);
+    vi.setSystemTime(Date.now() + 1_000);
+    const firstCloseAt = new Date().toISOString();
+    closed = true;
+    pageEvents.emit("close", page);
+    expect(pageEvents.listenerCount("crash")).toBe(0);
+    expect(pageEvents.listenerCount("console")).toBe(0);
+    expect(browserEvents.listenerCount("disconnected")).toBe(0);
+    installControlUiE2ePageDiagnosticRing(page);
+    expect(browserEvents.listenerCount("disconnected")).toBe(0);
+    vi.setSystemTime(Date.now() + 1_000);
+    pageEvents.emit("crash", page);
+    pageEvents.emit("close", page);
+    browserEvents.emit("disconnected", browser);
+    expect(logs).not.toHaveBeenCalled();
+    reads.length = 0;
+    await captureControlUiE2eFailureDiagnostics(page, {
+      error: new Error("failure"),
+      label: "test",
+    });
+    const root = path.join(parent, readdirSync(parent)[0]!);
+    const report = JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8"));
+    expect(report).toMatchObject({
+      hostBeforeRead: { pageClosed: true, browserConnected: false },
+      lifecycle: { registeredAt, firstCrashAt, firstCloseAt, firstBrowserDisconnectAt },
+      rendererRead: "rejected",
+    });
+    expect(reads.slice(0, 3)).toEqual(["page-closed", "browser-connected", "evaluate"]);
+    expect(JSON.stringify(report)).not.toContain("private-");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    { closed: true, connected: false },
+    { closed: false, connected: false },
+    { closed: false, connected: null },
+    { closed: false, connected: true },
+  ])(
+    "does not invent earlier lifecycle events for $closed/$connected",
+    async ({ closed, connected }) => {
+      const parent = tempDirs.make("control-ui-unobserved-proof-");
+      vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const browser = Object.assign(new EventEmitter(), { isConnected: () => connected });
+      const pageEvents = new EventEmitter();
+      // SAFETY: the missing browser models Playwright's supported null browser context.
+      const page = Object.assign(pageEvents, {
+        context: () => ({ browser: () => (connected === null ? null : browser) }),
+        isClosed: () => closed,
+        frames: () => [],
+        url: () => "https://fixture.invalid/chat",
+        evaluate: async () => ({ failureSummary: { available: true } }),
+        screenshot: async () => Buffer.from("proof"),
+      }) as unknown as Page;
+      installControlUiE2ePageDiagnosticRing(page);
+      installControlUiE2ePageDiagnosticRing(page);
+      expect(browser.listenerCount("disconnected")).toBe(connected ? 1 : 0);
+      if (closed) {
+        expect(pageEvents.eventNames()).toEqual([]);
+      }
+      await captureControlUiE2eFailureDiagnostics(page, {
+        error: new Error("failure"),
+        label: "test",
+      });
+      const root = path.join(parent, readdirSync(parent)[0]!);
+      expect(
+        JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8")),
+      ).toMatchObject({
+        hostBeforeRead: { pageClosed: closed, browserConnected: connected },
+        lifecycle: {
+          registeredAt: expect.any(String),
+          firstCrashAt: null,
+          firstCloseAt: null,
+          firstBrowserDisconnectAt: null,
+        },
+        rendererRead: "completed",
+      });
+      pageEvents.emit("close", page);
+      expect(browser.listenerCount("disconnected")).toBe(0);
+    },
+  );
 
   it.each([
     { shardIndex: "5", shardCount: "6", failure: "none", sendLabel: "Send message" },
@@ -48,6 +263,7 @@ describe("shared proof capture", () => {
   ])(
     "retains safe failure state despite $failure failure ($sendLabel; $shardIndex/$shardCount)",
     async ({ shardIndex, shardCount, failure, sendLabel }) => {
+      vi.useFakeTimers();
       const parent = tempDirs.make("control-ui-failure-proof-");
       const diagnosticParent = failure === "storage" ? path.join(parent, "blocked") : parent;
       if (failure === "storage") {
@@ -209,6 +425,7 @@ describe("shared proof capture", () => {
       const innerFrame = { parentFrame: () => outerFrame };
       const page = {
         on: pageEvents.on.bind(pageEvents),
+        context: () => ({ browser: () => ({ isConnected: () => true }) }),
         frames: () => [rootFrame, outerFrame, innerFrame],
         evaluate: async (read: () => unknown) => {
           if (failure === "evaluation") {
@@ -218,17 +435,18 @@ describe("shared proof capture", () => {
         },
         isClosed: () => false,
         url: () => "http://127.0.0.1/chat",
-        screenshot: async (options: { path: string }) => {
+        screenshot: async () => {
           expect(
             logs.mock.calls.some(([message]) => message === "[control-ui-e2e] failure state"),
           ).toBe(true);
-          expect(existsSync(path.join(path.dirname(options.path), "failure.public.json"))).toBe(
-            true,
-          );
+          expect(
+            readdirSync(diagnosticParent).some((name) =>
+              existsSync(path.join(diagnosticParent, name, "failure.public.json")),
+            ),
+          ).toBe(true);
           if (failure === "screenshot") {
             throw new Error("private-screenshot-error");
           }
-          writeFileSync(options.path, "failure-proof");
           return Buffer.from("failure-proof");
         },
       } as unknown as Page;
@@ -298,6 +516,7 @@ describe("shared proof capture", () => {
           }
         };
         await expect(failedAction()).rejects.toBe(original);
+        expect(vi.getTimerCount()).toBe(0);
       }
       const directories = readdirSync(parent, { withFileTypes: true }).filter((entry) =>
         entry.isDirectory(),
@@ -313,6 +532,9 @@ describe("shared proof capture", () => {
         const summary = JSON.parse(rendered.slice("[control-ui-e2e] failure state ".length));
         publicSummaries.push(summary);
         expect(summary).toMatchObject({
+          hostBeforeRead: { pageClosed: false, browserConnected: true },
+          lifecycle: null,
+          rendererRead: failure === "evaluation" ? "rejected" : "completed",
           gatewayRpc: [
             { method: "agents.files.get", outcome: "sent" },
             { method: "agents.files.get", outcome: "error" },

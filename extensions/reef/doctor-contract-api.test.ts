@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -19,12 +20,8 @@ import {
   normalizeCompatibilityConfig,
   stateMigrations,
 } from "./doctor-contract-api.js";
-import {
-  base64url,
-  generateIdentity,
-  MemoryAuditStore,
-  type ReviewRequest,
-} from "./protocol/index.js";
+import { base64url, generateIdentity, type ReviewRequest } from "./protocol/index.js";
+import { MemoryAuditStore } from "./protocol/memory-stores.test-support.js";
 import { ReefChannelConfigSchema } from "./src/config-schema.js";
 import {
   REEF_REPLAY_MAX_ENTRIES,
@@ -99,7 +96,7 @@ function createRuntime(env: NodeJS.ProcessEnv) {
       ...options,
       env: options.env ?? env,
     });
-  runtime.state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
     createPluginStateKeyedStoreForTests<T>("reef", {
       ...options,
       env: options.env ?? env,

@@ -241,7 +241,7 @@ type LiveSubagentContext = {
 };
 
 export async function runWithLiveSubagentGateway(
-  options: { children?: number; additionalTools?: string[] },
+  options: { children?: number; additionalTools?: string[]; peerSessions?: boolean },
   body: (context: LiveSubagentContext) => Promise<void>,
 ): Promise<void> {
   expect(Boolean(process.env.OPENAI_API_KEY?.trim()), "OpenAI API key is present").toBe(true);
@@ -300,6 +300,9 @@ export async function runWithLiveSubagentGateway(
         plugins: { enabled: false },
         tools: {
           codeMode: false,
+          ...(options.peerSessions
+            ? { sessions: { visibility: "all" as const }, agentToAgent: { enabled: true } }
+            : {}),
           allow: [
             "sessions_spawn",
             "sessions_yield",

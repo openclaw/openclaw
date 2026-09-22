@@ -5,6 +5,7 @@ import {
   isCronSelfRemovalCurrent,
   markCronJobActive,
   noteActiveCronJobMessageActionAuthorityMutation,
+  noteActiveCronJobMessageSourceAuthorityMutation,
   noteActiveCronJobScheduleMutation,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
@@ -29,15 +30,17 @@ import {
   readCronRunReceiptCurrentJob,
   trackCronRunReceiptSettlement,
   type PreparedCronRunReceiptClaim,
-  type CronRunReceiptHandle,
-  type CronRunReceiptStatus,
   type CronRunReceiptSettlementDisposition,
 } from "../store/run-receipt-store.js";
 import { retireCronRunTriggerStateInDatabase } from "../store/run-receipt-trigger-state.js";
+import type { CronRunReceiptHandle, CronRunReceiptStatus } from "../store/run-receipt.types.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronRunStatus, CronStoredJob } from "../types.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
-import { resolveCronJobMessageActionAuthorityInputs } from "./jobs-tool-policy.js";
+import {
+  resolveCronJobMessageActionAuthorityInputs,
+  resolveCronJobMessageToolAuthorityInputs,
+} from "./jobs-tool-policy.js";
 import type { CronServiceState } from "./state.js";
 import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 import { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
@@ -64,21 +67,29 @@ export function markServiceCronJobActive(
     agentId: runReceipt.agentId,
     declarationKey: job.declarationKey,
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
-    isMessageActionAuthorityCurrent: createServiceCronRunMessageActionAuthorityChecker({
+    isMessageActionAuthorityCurrent: createServiceCronRunMessageAuthorityChecker({
       state,
       job,
       handle: runReceipt,
+      resolveInputs: resolveCronJobMessageToolAuthorityInputs,
+    }),
+    isMessageSourceAuthorityCurrent: createServiceCronRunMessageAuthorityChecker({
+      state,
+      job,
+      handle: runReceipt,
+      resolveInputs: resolveCronJobMessageActionAuthorityInputs,
     }),
   });
 }
 
 /** Retains admission's permission facts while consulting the existing canonical receipt owner. */
-function createServiceCronRunMessageActionAuthorityChecker(params: {
+function createServiceCronRunMessageAuthorityChecker(params: {
   state: CronServiceState;
   job: CronStoredJob;
   handle: CronRunReceiptHandle;
+  resolveInputs: (job: CronStoredJob) => unknown;
 }): (() => boolean) | undefined {
-  const expected = resolveCronJobMessageActionAuthorityInputs(params.job);
+  const expected = params.resolveInputs(params.job);
   if (!expected) {
     return undefined;
   }
@@ -102,7 +113,7 @@ function createServiceCronRunMessageActionAuthorityChecker(params: {
     return (
       current !== undefined &&
       (!admittedEnabled || isJobEnabled(current)) &&
-      isDeepStrictEqual(expected, resolveCronJobMessageActionAuthorityInputs(current))
+      isDeepStrictEqual(expected, params.resolveInputs(current))
     );
   };
 }
@@ -177,6 +188,7 @@ export function cronRunReceiptMutationHooks(params: {
   ownerChanged: boolean;
   triggerStateChanged: boolean;
   messageActionAuthorityChanged?: boolean;
+  messageSourceAuthorityChanged?: boolean;
   scheduleChangedJob?: CronJob;
 }): CronStoreTransactionHooks | undefined {
   const ownerHooks = params.ownerChanged ? cronRunReceiptOwnerMutationHooks(params) : undefined;
@@ -184,7 +196,8 @@ export function cronRunReceiptMutationHooks(params: {
     !ownerHooks &&
     !params.triggerStateChanged &&
     !params.scheduleChangedJob &&
-    !params.messageActionAuthorityChanged
+    !params.messageActionAuthorityChanged &&
+    !params.messageSourceAuthorityChanged
   ) {
     return undefined;
   }
@@ -216,6 +229,9 @@ export function cronRunReceiptMutationHooks(params: {
       ownerHooks?.afterCommit?.();
       if (params.messageActionAuthorityChanged) {
         noteActiveCronJobMessageActionAuthorityMutation(params.jobId);
+      }
+      if (params.messageSourceAuthorityChanged) {
+        noteActiveCronJobMessageSourceAuthorityMutation(params.jobId);
       }
       if (params.scheduleChangedJob) {
         // Retire live ownership with the durable edit, never on a failed write.

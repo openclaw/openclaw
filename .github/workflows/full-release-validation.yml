@@ -175,6 +175,7 @@ env:
   FULL_RELEASE_DISPATCH_WITNESS_CONTRACT: "1"
   FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
+  FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"
 
 jobs:
   resolve_target:
@@ -203,6 +204,12 @@ jobs:
       validation_purpose: ${{ steps.publication_request.outputs.validation_purpose }}
       publication_selection_json: ${{ steps.publication_request.outputs.publication_selection_json }}
     steps:
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Retain root dispatch inputs
         id: dispatch_witness
         env:
@@ -682,6 +689,14 @@ jobs:
           }
           NODE
 
+      - name: Restore immutable plan for publication admission
+        if: github.run_attempt != 1
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: full-release-execution-plan
+          key: full-release-execution-plan-v2-${{ github.run_id }}
+
       - name: Admit publication source
         id: publication_admission
         working-directory: workflow
@@ -689,6 +704,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PUBLICATION_TARGET_ROOT: ${{ github.workspace }}/target
           PUBLICATION_REQUIRED: ${{ steps.publication_request.outputs.required }}
+          FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ github.workspace }}/full-release-execution-plan/full-release-execution-plan.json
         run: |
           set -euo pipefail
           umask 077
@@ -703,6 +719,15 @@ jobs:
               "$RUNNER_TEMP/publication-source-request.json" > "$RUNNER_TEMP/publication-source-admission.json"
           fi
           printf 'json=%s\n' "$(jq -ec . "$RUNNER_TEMP/publication-source-admission.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload restored immutable release execution plan
+        if: github.run_attempt != 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: full-release-execution-plan-${{ github.run_id }}
+          path: ${{ github.workspace }}/full-release-execution-plan/full-release-execution-plan.json
+          if-no-files-found: error
+          overwrite: false
 
       - name: Upload publication source admission
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -735,7 +760,6 @@ jobs:
         run: node scripts/full-release-validation-state.mjs finalize-publication
 
       - name: Upload immutable publication admission
-        if: github.run_attempt == 1
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: full-release-publication-admission-${{ github.run_id }}-1
@@ -1655,6 +1679,12 @@ jobs:
           ref: ${{ github.sha }}
           sparse-checkout: scripts
           persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - &artifact_producer_resolution
         name: Recover original artifact producer
         id: producer
@@ -1693,6 +1723,12 @@ jobs:
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
     steps:
       - *artifact_tooling_checkout
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Wait for exact npm qualification
         id: bundle
         run: node scripts/full-release-artifacts.mjs wait
@@ -1724,6 +1760,12 @@ jobs:
         if: github.run_attempt == 1
         run: *full_release_child_dispatch
       - *artifact_tooling_checkout
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *artifact_producer_resolution
       - name: Wait for exact Docker preparation
         id: bundle
@@ -1761,6 +1803,12 @@ jobs:
         if: github.run_attempt == 1
         run: *full_release_child_dispatch
       - *artifact_tooling_checkout
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *artifact_producer_resolution
       - name: Wait for exact validation candidate
         id: bundle
@@ -1801,22 +1849,23 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      # Cache is acceleration only. Parent reruns recover the immutable attempt-one
-      # plan from the workflow artifact before validating its complete provenance.
+      # Reruns lose parent artifacts. The original upload's digest witness
+      # authenticates cached bytes before resolution republishes the same plan.
+      # Relative cache paths keep the version identical across runner classes.
       - name: Cache immutable release execution plan
         id: plan_cache
         continue-on-error: true
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/full-release-execution-plan
-          key: full-release-execution-plan-v1-${{ github.run_id }}
+          path: full-release-execution-plan
+          key: full-release-execution-plan-v2-${{ github.run_id }}
 
       - name: Restore immutable release execution plan artifact
         if: ${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: full-release-execution-plan-${{ github.run_id }}
-          path: ${{ runner.temp }}/full-release-execution-plan
+          path: ${{ github.workspace }}/full-release-execution-plan
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
 
@@ -1828,6 +1877,12 @@ jobs:
           path: ${{ runner.temp }}/full-release-publication-admission
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Seal immutable release execution plan
         id: plan
@@ -1888,7 +1943,7 @@ jobs:
           CANDIDATE_EVIDENCE_JSON: ${{ needs.candidate_acquisition.outputs.binding_json }}
           CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           FULL_RELEASE_RESTORE_PLAN: ${{ github.run_attempt != 1 }}
-          FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
+          FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ github.workspace }}/full-release-execution-plan/full-release-execution-plan.json
           PUBLICATION_ADMISSION_PATH: ${{ runner.temp }}/full-release-publication-admission/publication-admission.json
         run: |
           set -euo pipefail
@@ -1996,15 +2051,34 @@ jobs:
           node scripts/full-release-validation-state.mjs plan
 
       - name: Upload immutable release execution plan
+        id: plan_upload
         # The sealer can write a valid interrupted checkpoint and exit nonzero.
         # Only its attempt-one write signal may publish the immutable alias.
         if: ${{ always() && github.run_attempt == 1 && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: full-release-execution-plan-${{ github.run_id }}
-          path: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
+          path: ${{ github.workspace }}/full-release-execution-plan/full-release-execution-plan.json
           if-no-files-found: error
           overwrite: false
+
+      - name: Record immutable release execution plan digest
+        id: plan_witness
+        if: ${{ always() && github.run_attempt == 1 && steps.plan_upload.outcome == 'success' }}
+        env:
+          EXECUTION_PLAN_SHA256: ${{ steps.plan.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$EXECUTION_PLAN_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          printf 'FRV_EXECUTION_PLAN_SHA256=%s\n' "$EXECUTION_PLAN_SHA256"
+
+      # Explicit saving also retains a valid checkpoint from an interrupted seal.
+      - name: Save immutable release execution plan
+        if: ${{ always() && github.run_attempt == 1 && steps.plan_witness.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: full-release-execution-plan
+          key: full-release-execution-plan-v2-${{ github.run_id }}
 
   release_decision:
     name: Release Decision
@@ -2028,6 +2102,12 @@ jobs:
         with:
           name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-execution-plan
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Evaluate release decision
         id: state
@@ -2094,6 +2174,12 @@ jobs:
         with:
           name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-execution-plan
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Drain child diagnostics
         id: state
@@ -2207,6 +2293,12 @@ jobs:
         with:
           pattern: full-release-diagnostics-${{ github.run_id }}-*
           path: ${{ runner.temp }}/full-release-diagnostic-attempts
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Select newest compatible release state artifacts
         id: selected_state

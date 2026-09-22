@@ -133,7 +133,11 @@ export function spawnBrokerCommand(
       // Result IPC can overtake the last bytes on separately transferred sockets.
       await closed;
       const restored = restoreExecaResult(result);
-      if (restored instanceof Error && options.reject !== false) {
+      // Broker admission refusals remain exceptions even for reject:false.
+      if (
+        restored instanceof Error &&
+        (options.reject !== false || restored.code === "ERR_SPAWN_BROKER_UNAVAILABLE")
+      ) {
         throw restored;
       }
       return restored;

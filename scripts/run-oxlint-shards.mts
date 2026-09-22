@@ -73,6 +73,8 @@ const CORE_SHARD = {
 };
 const CORE_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const CORE_SPLIT_TARGETS = ["ui", "packages"];
+// Combining these targets with neighbors exceeds hosted RAM despite Go's soft heap limit.
+const ISOLATED_CORE_TARGETS = new Set(["src/agents", "src/gateway", "src/infra", "ui"]);
 const EXTENSIONS_SHARD = {
   name: "extensions",
   args: ["--tsconfig", EXTENSION_TS_CONFIG, EXTENSIONS_DIR],
@@ -307,7 +309,9 @@ export async function main(
     splitExtensions,
   });
   const selectedShards = selectExtensionOxlintStripe(
-    selectCoreOxlintStripe(filterOxlintShards(shards, shardArgs.only), shardArgs.coreStripe),
+    selectCoreOxlintStripe(filterOxlintShards(shards, shardArgs.only), shardArgs.coreStripe, {
+      isolateLargeTargets: true,
+    }),
     shardArgs.extensionStripe,
   );
 
@@ -319,6 +323,7 @@ export async function main(
     if (needsArtifacts) {
       const code = await runManagedCommand({
         bin: process.execPath,
+        shell: false,
         args: distArtifactEntryArgs(
           path.resolve("scripts/prepare-extension-package-boundary-artifacts.mts"),
           ["--mode=package-boundary"],
@@ -471,8 +476,12 @@ export function filterOxlintShards<T extends { name: string }>(shards: T[], only
   );
 }
 
-/** Aggregate one deterministic, disjoint stripe into a single core Program. */
-export function selectCoreOxlintStripe(shards: OxlintShard[], stripe: ShardStripe | undefined) {
+/** Keep stripe coverage stable while bounding the largest targets' semantic caches. */
+export function selectCoreOxlintStripe(
+  shards: OxlintShard[],
+  stripe: ShardStripe | undefined,
+  { isolateLargeTargets = false }: { isolateLargeTargets?: boolean } = {},
+) {
   if (!stripe) {
     return shards;
   }
@@ -482,14 +491,25 @@ export function selectCoreOxlintStripe(shards: OxlintShard[], stripe: ShardStrip
   const targets = shards
     .filter((_, index) => index % stripe.total === stripe.index - 1)
     .flatMap((shard) => shard.args.slice(2));
-  if (targets.length === 0) {
-    return [];
-  }
+  // Published Git updaters call full lint under a fixed command deadline. Only
+  // explicit CI stripes may add compiler startups; automatic full lint stays aggregated.
+  const isolatedTargets = isolateLargeTargets
+    ? targets.filter((target) => ISOLATED_CORE_TARGETS.has(target))
+    : [];
+  const sharedTargets = targets.filter((target) => !isolatedTargets.includes(target));
   return [
-    {
-      name: `core:stripe:${stripe.index}`,
-      args: ["--tsconfig", CORE_TS_CONFIG, ...targets],
-    },
+    ...(sharedTargets.length > 0
+      ? [
+          {
+            name: `core:stripe:${stripe.index}`,
+            args: ["--tsconfig", CORE_TS_CONFIG, ...sharedTargets],
+          },
+        ]
+      : []),
+    ...isolatedTargets.map((target) => ({
+      name: `core:stripe:${stripe.index}:${target.replaceAll("/", ":")}`,
+      args: ["--tsconfig", CORE_TS_CONFIG, target],
+    })),
   ];
 }
 

@@ -623,10 +623,17 @@ private struct ChatMessageBody: View {
                 resultText: self.primaryText,
                 state: ChatToolActivity
                     .resultIsError(self.message.isError, text: self.primaryText) ? .failed : .finished,
-                liveDiffStat: nil)]
+                liveDiffStat: nil,
+                activity: self.message.activity?.first,
+                activityPrepared: self.message.activity != nil)]
         }
         guard self.message.role.lowercased() == "assistant" else { return [] }
-        return ChatToolActivity.items(calls: self.toolCalls, results: self.inlineToolResults)
+        return ChatToolActivity.items(calls: self.toolCalls, results: self.inlineToolResults).map { item in
+            var prepared = item
+            prepared.activity = self.message.activity?.first { $0.toolCallId == item.id }
+            prepared.activityPrepared = self.message.activity != nil
+            return prepared
+        }
     }
 
     private var linkPreviewURL: URL? {
@@ -785,6 +792,13 @@ private struct AttachmentRow: View {
     var body: some View {
         if let artifactId = self.fetchableArtifactId, let kind = self.att.mediaKind {
             switch kind {
+            case .file:
+                ChatFileAttachment(
+                    artifactId: artifactId,
+                    label: self.attachmentLabel,
+                    fileName: self.att.fileName ?? self.attachmentLabel,
+                    resolverReady: self.resolverReady,
+                    load: { try await self.loadMedia($0, .file, nil) })
             case .image:
                 ChatMediaImageAttachment(
                     artifactId: artifactId,
@@ -1137,8 +1151,11 @@ struct ChatPendingToolsBubble: View {
                 arguments: call.args,
                 details: nil,
                 resultText: nil,
-                state: .running,
-                liveDiffStat: call.diffStat)
+                state: call.activity == nil && !call.isComplete || call.activity?.status == "running" ? .running :
+                    call.activity?.status == "completed" ? .finished :
+                    call.activity?.status == "failed" || call.activity?.status == "blocked" ? .failed : .unavailable,
+                liveDiffStat: call.diffStat,
+                activity: call.activity)
         }
     }
 }

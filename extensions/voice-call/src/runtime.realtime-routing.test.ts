@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -33,7 +33,7 @@ vi.mock("./realtime-voice.runtime.js", async (importOriginal) => {
 function createStateRuntime(): VoiceCallStateRuntime["state"] {
   return {
     resolveStateDir: () => "",
-    openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+    openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests<T>("voice-call", options),
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by realtime routing tests");

@@ -1173,6 +1173,7 @@ describe("delivery-queue recovery", () => {
       channel: "demo-channel-a",
       cfg: baseCfg,
       allowBootstrap: true,
+      assertCurrent: expect.any(Function),
     });
     const deliverInput = mockCallRecord(deliver);
     expect(deliverInput.channel).toBe("demo-channel-a");
@@ -1331,10 +1332,9 @@ describe("delivery-queue recovery", () => {
       retryCount: 0,
       availableAt: Date.now() - 1,
     });
-    const reconcileUnknownSend = vi
-      .fn()
-      .mockResolvedValue(reconciledSent("reconciled-permanent-message"));
-    installUnknownSendAdapter(reconcileUnknownSend);
+    const reconcileUnknownSend = installUnknownSendResult(
+      reconciledSent("reconciled-permanent-message"),
+    );
     const deliver = vi.fn();
     const { result } = await runRecovery({ deliver });
     expect(result).toMatchObject({ recovered: 1, failed: 0 });

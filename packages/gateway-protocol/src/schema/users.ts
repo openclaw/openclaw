@@ -80,6 +80,31 @@ export const UsersLinkEmailParamsSchema = closedObject({
 });
 export const UsersLinkEmailResultSchema = closedObject({ profile: UserProfileSchema });
 
+const ChannelIdentityPartSchema = Type.String({
+  minLength: 1,
+  maxLength: 512,
+  pattern: "^\\S(?:.*\\S)?$",
+});
+export const UserChannelIdentitySchema = closedObject({
+  channelId: ChannelIdentityPartSchema,
+  accountId: ChannelIdentityPartSchema,
+  senderId: ChannelIdentityPartSchema,
+});
+export const UserChannelIdentityLinkSchema = closedObject({
+  profileId: UserProfileIdSchema,
+  identity: UserChannelIdentitySchema,
+});
+export const UsersLinkChannelIdentityParamsSchema = UserChannelIdentityLinkSchema;
+export const UsersLinkChannelIdentityResultSchema = UserChannelIdentityLinkSchema;
+export const UsersUnlinkChannelIdentityParamsSchema = UserChannelIdentityLinkSchema;
+export const UsersUnlinkChannelIdentityResultSchema = closedObject({ removed: Type.Boolean() });
+export const UsersListChannelIdentitiesParamsSchema = closedObject({
+  profileId: UserProfileIdSchema,
+});
+export const UsersListChannelIdentitiesResultSchema = closedObject({
+  links: Type.Array(UserChannelIdentityLinkSchema),
+});
+
 export const UsersSetDisplayNameParamsSchema = closedObject({
   profileId: UserProfileIdSchema,
   displayName: Type.Union([UserProfileDisplayNameSchema, Type.Null()]),
@@ -233,9 +258,14 @@ export const UsersPrefsGetResultSchema = Type.Union([
   closedObject({ status: Type.Literal("ok"), entries: UserPreferenceEntriesSchema }),
   closedObject({ status: Type.Literal("no_durable_identity") }),
 ]);
-export const UsersPrefsSetParamsSchema = closedObject({ entries: UserPreferenceSetEntriesSchema });
+export const UsersPrefsSetParamsSchema = closedObject({
+  entries: UserPreferenceSetEntriesSchema,
+  // JSON null expects an absent key, matching the null-as-removal write contract.
+  expectedEntries: Type.Optional(UserPreferenceSetEntriesSchema),
+});
 export const UsersPrefsSetResultSchema = Type.Union([
   closedObject({ status: Type.Literal("ok") }),
+  closedObject({ status: Type.Literal("conflict") }),
   closedObject({ status: Type.Literal("no_durable_identity") }),
 ]);
 export const UsersPrefsChangedEventSchema = closedObject({
@@ -254,6 +284,20 @@ export type UsersSelfParams = Static<typeof UsersSelfParamsSchema>;
 export type UsersSelfResult = Static<typeof UsersSelfResultSchema>;
 export type UsersLinkEmailParams = Static<typeof UsersLinkEmailParamsSchema>;
 export type UsersLinkEmailResult = Static<typeof UsersLinkEmailResultSchema>;
+export type UsersLinkChannelIdentityParams = Static<typeof UsersLinkChannelIdentityParamsSchema>;
+export type UsersLinkChannelIdentityResult = Static<typeof UsersLinkChannelIdentityResultSchema>;
+export type UsersUnlinkChannelIdentityParams = Static<
+  typeof UsersUnlinkChannelIdentityParamsSchema
+>;
+export type UsersUnlinkChannelIdentityResult = Static<
+  typeof UsersUnlinkChannelIdentityResultSchema
+>;
+export type UsersListChannelIdentitiesParams = Static<
+  typeof UsersListChannelIdentitiesParamsSchema
+>;
+export type UsersListChannelIdentitiesResult = Static<
+  typeof UsersListChannelIdentitiesResultSchema
+>;
 export type UsersSetDisplayNameParams = Static<typeof UsersSetDisplayNameParamsSchema>;
 export type UsersSetDisplayNameResult = Static<typeof UsersSetDisplayNameResultSchema>;
 export type UsersSetRoleParams = Static<typeof UsersSetRoleParamsSchema>;

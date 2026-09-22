@@ -1,4 +1,3 @@
-// Discord plugin module implements model picker.view behavior.
 import type { APISelectMenuOption } from "discord-api-types/v10";
 import { ButtonStyle } from "discord-api-types/v10";
 import type {

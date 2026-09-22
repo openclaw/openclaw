@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
+import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
@@ -9,17 +9,23 @@ import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-k
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
+import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./server-methods/session-model-selection-policy.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
 import {
+  filterSessionCandidateEntries,
   filterSessionEntries,
+  projectSessionListCandidateOptions,
   type SessionListFilteredEntries,
   type SessionListFilterParams,
 } from "./session-list-filters.js";
 import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
+import { bindSessionListRowRead } from "./session-list-read-result.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
+import type { Query as SessionRowQuery } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { getSessionDefaults } from "./session-utils-model.js";
@@ -154,57 +160,105 @@ function resolveSessionsListDefaultsAgentId(
     : normalizeAgentId(tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID);
 }
 
-type RecordRow = NonNullable<ReturnType<SessionRowProjection["describe"]>>;
+type RecordRow = ReturnType<SessionRowProjection["selectEntries"]>[number];
 const sentinel = (key: string) => key === "global" || key === "unknown";
+
+type SessionRowSelection = {
+  winners: Map<string, RecordRow>;
+  entries: SessionEntryPair[];
+};
+
+// Publications release the token and stale row graphs without waiting for another list.
+// Retain broad selections per topology scope; keyed reads never displace them.
+const sessionRowSelections = new WeakMap<
+  SessionRowProjection["state"]["revision"],
+  WeakMap<ReturnType<SessionRowProjection["state"]["scope"]>, Map<boolean, SessionRowSelection>>
+>();
 
 /** Preserve federation before caller visibility and activity filters. */
 export function prepareSessionRowSelection(
   projection: SessionRowProjection,
   opts: SessionsListParams,
-  prepared?: { now: number; rowContext: SessionListRowContext },
+  prepared?: Pick<SessionRowQuery, "key" | "sessionIdOrKey"> & {
+    now?: number;
+    rowContext?: SessionListRowContext;
+  },
 ) {
-  const { cfg, modelCatalog, scope, rowContext: residentContext } = projection.state;
+  const { cfg, modelCatalog, scope, revision, rowContext: residentContext } = projection.state;
   const selectedScope = scope(opts);
   const now = prepared?.now ?? Date.now();
   const rowContext = prepared?.rowContext ?? {
     ...residentContext,
     subagentRuns: residentContext.subagentRuns.atTime(now),
   };
-  const rows = projection
-    .select({ agentId: selectedScope.agentId, sortBy: opts.sortBy })
-    .filter(
-      (row) =>
-        selectedScope.paths.has(row.storeTarget.storePath) &&
-        (!selectedScope.configuredAgentIds ||
-          isConfiguredGatewaySessionEntry(
-            cfg,
-            selectedScope.configuredAgentIds,
-            row.key,
-            row.entry,
-          )),
-    );
-  const winners = new Map<string, RecordRow>();
-  const keyFor = (row: RecordRow) =>
-    sentinel(row.key) && opts.activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
-  for (const row of rows.toSorted(
-    (a, b) =>
-      selectedScope.paths.get(a.storeTarget.storePath)! -
-      selectedScope.paths.get(b.storeTarget.storePath)!,
-  )) {
-    const key = keyFor(row);
-    if (winners.has(key) && !sentinel(row.key)) {
-      throw canonicalSessionKeyMigrationRequiredError(
-        `duplicate rows resolve to canonical session key ${row.key}`,
+  const keyed = prepared?.key !== undefined || prepared?.sessionIdOrKey !== undefined;
+  const activeOnly = opts.activeOnly === true;
+  let selection = keyed
+    ? undefined
+    : sessionRowSelections.get(revision)?.get(selectedScope)?.get(activeOnly);
+  if (!selection) {
+    const rows = projection
+      .selectEntries({
+        agentId: selectedScope.agentId,
+        key: prepared?.key,
+        sessionIdOrKey: prepared?.sessionIdOrKey,
+        sortBy: null,
+      })
+      .filter(
+        (row) =>
+          selectedScope.paths.has(row.storeTarget.storePath) &&
+          (!selectedScope.configuredAgentIds ||
+            isConfiguredGatewaySessionEntry(
+              cfg,
+              selectedScope.configuredAgentIds,
+              row.key,
+              row.entry,
+            )),
       );
+    const winners = new Map<string, RecordRow>();
+    const keyFor = (row: RecordRow) =>
+      sentinel(row.key) && opts.activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
+    for (const row of rows) {
+      const key = keyFor(row);
+      const previous = winners.get(key);
+      if (previous && !sentinel(row.key)) {
+        throw canonicalSessionKeyMigrationRequiredError(
+          `duplicate rows resolve to canonical session key ${row.key}`,
+        );
+      }
+      // Equal precedence retains the first resident row, as a stable sort would.
+      if (
+        !previous ||
+        selectedScope.paths.get(row.storeTarget.storePath)! <
+          selectedScope.paths.get(previous.storeTarget.storePath)!
+      ) {
+        winners.set(key, row);
+      }
     }
-    if (!winners.has(key)) {
-      winners.set(key, row);
+    const entries: SessionEntryPair[] = [];
+    for (const row of rows) {
+      const key = keyFor(row);
+      if (winners.get(key) === row) {
+        entries.push([key, row.entry]);
+      }
+    }
+    selection = { winners, entries };
+    if (!keyed) {
+      const currentRevision = projection.state.revision;
+      let scopes = sessionRowSelections.get(currentRevision);
+      if (!scopes) {
+        scopes = new WeakMap();
+        sessionRowSelections.set(currentRevision, scopes);
+      }
+      let variants = scopes.get(selectedScope);
+      if (!variants) {
+        variants = new Map();
+        scopes.set(selectedScope, variants);
+      }
+      variants.set(activeOnly, selection);
     }
   }
-  const entries: SessionEntryPair[] = rows.flatMap((row) => {
-    const key = keyFor(row);
-    return winners.get(key) === row ? [[key, row.entry]] : [];
-  });
+  const { winners, entries } = selection;
   return {
     cfg,
     opts,
@@ -212,12 +266,25 @@ export function prepareSessionRowSelection(
     modelCatalog,
     entries,
     storePath: selectedScope.path,
-    configuredAgentIds: new Set(listAgentIds(cfg)),
     userProfileIdentityById: rowContext.userProfileIdentityById,
     getRowContext: () => rowContext,
-    getTarget: (key: string): (RecordRow & { storeKey?: string }) | undefined => {
-      const row = winners.get(key);
-      return row && key !== row.key ? { ...row, storeKey: row.key } : row;
+    getTarget: (
+      key: string,
+    ):
+      | (RecordRow & {
+          storeKey?: string;
+          getModelFacts?: () => ReturnType<SessionRowProjection["modelFacts"]>;
+        })
+      | undefined => {
+      const winner = winners.get(key);
+      if (!winner || (!opts.search && key === winner.key)) {
+        return winner;
+      }
+      return {
+        ...winner,
+        ...(key !== winner.key ? { storeKey: winner.key } : {}),
+        getModelFacts: () => projection.modelFacts(winner),
+      };
     },
   };
 }
@@ -233,130 +300,218 @@ export function filterAndSortSessionEntries(params: SessionListFilterParams): Se
   ).entries;
 }
 
-/** One readiness await, then one synchronous selection/authorization/presentation boundary. */
+// One filter set per resident owner; never retain viewer decisions or time-dependent predicates.
+const sessionListCandidates = new WeakMap<
+  SessionEntryPair[],
+  { key: string; entries: SessionEntryPair[] }
+>();
+
+/** Shared synchronous membership policy for list pages and full-roster transcript search. */
+export function prepareProjectedSessionList(params: {
+  projection: SessionRowProjection;
+  opts: SessionsListParams;
+  key?: string;
+  context?: GatewayRequestContext;
+  client?: GatewayClient | null;
+  now: number;
+}) {
+  const { projection, opts, key: exactKey, context, client, now } = params;
+  const presentation = prepareProjectedSessionPresentation(
+    projection,
+    client,
+    now,
+    context
+      ? createVisibleActiveSessionRunProjector(
+          context,
+          projection.state.rowContext.projectedAgentRuns,
+        )
+      : undefined,
+  );
+  const prepared = prepareSessionRowSelection(projection, opts, {
+    key: exactKey,
+    now,
+    rowContext: presentation.rowContext,
+  });
+  const { getTarget } = prepared;
+  const { active } = presentation;
+  const identity = gatewayClientSessionCreator(client ?? null)?.id;
+  let candidates: SessionEntryPair[] | undefined;
+  // Person references resolve against the full visible roster before candidate filtering.
+  if (!opts.spawnedBy && !opts.involvingProfileId) {
+    const candidateOptions = projectSessionListCandidateOptions(opts);
+    const key = JSON.stringify([exactKey, candidateOptions]);
+    let cached = sessionListCandidates.get(prepared.entries);
+    if (cached?.key !== key) {
+      cached = {
+        key,
+        entries: runSynchronousWork(
+          filterSessionCandidateEntries({ ...prepared, opts: candidateOptions }),
+        ),
+      };
+      sessionListCandidates.set(prepared.entries, cached);
+    }
+    candidates = cached.entries;
+  }
+  const filters: SessionListFilterParams = {
+    ...prepared,
+    ...(candidates ? { entries: candidates, candidatesPrepared: true } : {}),
+    involvingActorId: opts.involvingMe ? identity : undefined,
+    ownerFirstActorId: opts.ownerFirst ? identity : undefined,
+    restrictProfileReferences: client !== undefined,
+    projectActiveRun: context
+      ? (key, entry, agentId) => active(getTarget(key)?.key ?? key, entry, agentId)!
+      : undefined,
+    entryFilter: (key, entry) => {
+      const row = getTarget(key);
+      const visible = Boolean(
+        row &&
+        (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
+      );
+      return (
+        visible &&
+        (opts.hasBoard === undefined || row?.hasBoard === opts.hasBoard) &&
+        (!opts.activeOnly || Boolean(row && active(row.key, entry, row.agentId)?.active))
+      );
+    },
+  };
+  return { prepared, presentation, filters };
+}
+
+/** Prepare selected rows, then authorize and present them in one synchronous boundary. */
 export async function listProjectedSessions(params: {
   projection: SessionRowProjection;
   opts: SessionsListParams;
+  key?: string;
   context?: GatewayRequestContext;
   client?: GatewayClient | null;
   diagnostics?: SessionListDiagnostics;
   onResult?: (result: SessionsListResult) => void;
 }): Promise<SessionsListResult> {
-  const { projection, opts, context, client, diagnostics } = params;
+  const { projection, opts, key: exactKey, context, client, diagnostics } = params;
   const dirtyRowCount = projection.dirtyRowCount;
   const materializedBefore = projection.materializedCount;
-  diagnostics?.mark("modelCatalog");
+  diagnostics?.mark("materialize");
   const waitStarted = performance.now();
   let yieldCount = 0;
   do {
     yieldCount++;
     await projection.ensureMaterialized();
   } while (projection.needsMaterialization);
-  const resumed = performance.now();
-  const now = Date.now();
-  let cpuPhase: "prepareThreadCpuMs" | "rowThreadCpuMs" = "prepareThreadCpuMs";
-  let syncCpu = diagnostics?.startSyncCpu();
-  try {
-    diagnostics?.mark("storeLoad");
-    const presentation = prepareProjectedSessionPresentation(projection, client, now, context);
-    const prepared = prepareSessionRowSelection(projection, opts, {
-      now,
-      rowContext: presentation.rowContext,
-    });
-    const { cfg, getTarget } = prepared;
-    diagnostics?.mark("filterSetup");
-    const { active } = presentation;
-    const identity = gatewayClientSessionCreator(client ?? null)?.id;
-    const selection = withAgentRosterFactsBatch(cfg, () =>
-      runSynchronousWork(
-        selectSessionEntries({
-          ...prepared,
-          defaultLimit: 100,
-          involvingActorId: opts.involvingMe ? identity : undefined,
-          ownerFirstActorId: opts.ownerFirst ? identity : undefined,
-          restrictProfileReferences: client !== undefined,
-          projectActiveRun: context
-            ? (key, entry, agentId) => active(getTarget(key)?.key ?? key, entry, agentId)!
-            : undefined,
-          entryFilter: (key, entry) => {
-            const row = getTarget(key);
-            const visible = Boolean(
-              row &&
-              (client === undefined ||
-                (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
-            );
-            return (
-              visible &&
-              (opts.hasBoard === undefined || row?.facts?.hasBoard === opts.hasBoard) &&
-              (!opts.activeOnly || Boolean(row && active(row.key, entry, row.agentId)?.active))
-            );
-          },
-        }),
-      ),
-    );
-    diagnostics?.mark("sharing");
-    diagnostics?.mark("rows");
-    const rowsStarted = performance.now();
-    diagnostics?.finishSyncCpu(cpuPhase, syncCpu);
-    syncCpu = undefined;
-    cpuPhase = "rowThreadCpuMs";
-    syncCpu = diagnostics?.startSyncCpu();
-    let materializedRowCount = 0;
-    const sessions = selection.entries.flatMap(([key], index) => {
-      const record = getTarget(key);
-      if (!record) {
-        return [];
-      }
-      const includeTranscriptFields = index < 100 + selection.ownerCount;
-      const row = presentation.present(record, {
-        includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
-        includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
+  let prepareSyncMs = 0;
+  const selectPage = () => {
+    const started = performance.now();
+    const syncCpu = diagnostics?.startSyncCpu();
+    try {
+      diagnostics?.mark("storeLoad");
+      const now = Date.now();
+      const { presentation, prepared, filters } = prepareProjectedSessionList({
+        projection,
+        opts,
+        key: exactKey,
+        context,
+        client,
+        now,
       });
-      if (!row) {
-        return [];
+      diagnostics?.mark("filterSetup");
+      const selection = withAgentRosterFactsBatch(prepared.cfg, () =>
+        runSynchronousWork(selectSessionEntries({ ...filters, defaultLimit: 100 })),
+      );
+      return { now, presentation, prepared, selection };
+    } finally {
+      diagnostics?.finishSyncCpu("prepareThreadCpuMs", syncCpu);
+      prepareSyncMs += performance.now() - started;
+      if (diagnostics) {
+        diagnostics.projection.prepareSyncMs = prepareSyncMs;
       }
-      if (!opts.includeActivitySummary) {
-        delete row.activitySummary;
-      }
-      if ((record.materializedSequence ?? 0) > materializedBefore) {
-        materializedRowCount++;
-      }
-      if (opts.activeOnly && sentinel(record.key)) {
-        delete row.childSessions;
-        delete row.hasActiveSubagentRun;
-      }
-      return [row];
-    });
-    diagnostics?.mark("decoration");
-    const result = buildSessionsListResult(
-      prepared,
-      { ...selection, now, storePath: prepared.storePath },
-      sessions,
-    );
-    if (client !== undefined) {
-      result.defaults.modelSelectionTarget = resolveGatewayModelSelectionPolicy({
-        callerScopes: client?.connect?.scopes ?? [],
-        cfg,
-      }).target;
+      diagnostics?.mark("materialize");
     }
-    diagnostics?.mark("visibilityRepair");
-    if (diagnostics) {
-      Object.assign(diagnostics.projection, {
-        prepareSyncMs: rowsStarted - resumed,
-        rowSyncMs: performance.now() - rowsStarted,
-        yieldWaitMs: resumed - waitStarted,
-        yieldCount,
-        selectedRowCount: sessions.length,
-        dirtyRowCount,
-        materializedRowCount,
-        reusedRowCount: sessions.length - materializedRowCount,
+  };
+  let page: ReturnType<typeof selectPage>;
+  return withReadySessionRows(
+    projection,
+    () => {
+      page = selectPage();
+      return page.selection.entries.flatMap(([key]) => {
+        const target = page.prepared.getTarget(key);
+        return target
+          ? [{ agentId: target.agentId, key: target.key, storePath: target.storeTarget.storePath }]
+          : [];
       });
-    }
-    diagnostics?.finishSyncCpu(cpuPhase, syncCpu);
-    syncCpu = undefined;
-    params.onResult?.(result);
-    return result;
-  } finally {
-    diagnostics?.finishSyncCpu(cpuPhase, syncCpu);
-  }
+    },
+    () => {
+      const resumed = performance.now();
+      const { now, presentation, prepared, selection } = page;
+      const { cfg, getTarget } = prepared;
+      diagnostics?.mark("sharing");
+      diagnostics?.mark("rows");
+      const rowsStarted = performance.now();
+      let syncCpu = diagnostics?.startSyncCpu();
+      try {
+        let materializedRowCount = 0;
+        projection.setArchivePageSize(selection.entries.length);
+        const sessions = selection.entries.flatMap(([key], index) => {
+          const target = getTarget(key);
+          const record =
+            target &&
+            projection.describe({
+              agentId: target.agentId,
+              key: target.key,
+              storePath: target.storeTarget.storePath,
+            });
+          if (!record) {
+            return [];
+          }
+          const includeTranscriptFields = index < 100 + selection.ownerCount;
+          const row = presentation.present(record, {
+            includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
+            includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
+            includeActivitySummary: opts.includeActivitySummary === true,
+          });
+          if (!row) {
+            return [];
+          }
+          bindSessionListRowRead(row, { projection, record, client });
+          if ((record.materializedSequence ?? 0) > materializedBefore) {
+            materializedRowCount++;
+          }
+          if (opts.activeOnly && sentinel(record.key)) {
+            row.childSessions = undefined;
+            row.hasActiveSubagentRun = undefined;
+          }
+          return [row];
+        });
+        diagnostics?.mark("decoration");
+        const result = buildSessionsListResult(
+          prepared,
+          { ...selection, now, storePath: prepared.storePath },
+          sessions,
+        );
+        if (client !== undefined) {
+          result.defaults.modelSelectionTarget = resolveGatewayModelSelectionPolicy({
+            callerScopes: client?.connect?.scopes ?? [],
+            cfg,
+          }).target;
+        }
+        diagnostics?.mark("visibilityRepair");
+        if (diagnostics) {
+          Object.assign(diagnostics.projection, {
+            prepareSyncMs,
+            rowSyncMs: performance.now() - rowsStarted,
+            yieldWaitMs: resumed - waitStarted - prepareSyncMs,
+            yieldCount,
+            selectedRowCount: sessions.length,
+            dirtyRowCount,
+            materializedRowCount,
+            reusedRowCount: sessions.length - materializedRowCount,
+          });
+        }
+        diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
+        syncCpu = undefined;
+        params.onResult?.(result);
+        return result;
+      } finally {
+        diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
+      }
+    },
+  );
 }

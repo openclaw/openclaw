@@ -13,9 +13,13 @@ import {
 
 type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
 
-const { createdWatchers, watchMock, watchForSkillRoot } = createSkillsWatcherMock();
+const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
+  createSkillsWatcherMock();
 
 vi.mock("chokidar", () => ({ default: { watch: watchMock } }));
+vi.mock("./refresh-ancestor-native.js", () => ({
+  createNativeSkillsAncestorWatcher: nativeWatchMock,
+}));
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
   resolvePluginSkillRootsFromMetadata: () => [],
@@ -70,14 +74,21 @@ describe("ensureSkillsWatcher", () => {
         reason: "watch",
         changedPath: undefined,
       };
-      expect(seen).toEqual([reconciliation]);
+      const unavailable = { ...reconciliation, reason: "watch-unavailable" };
+      const failedEvents = order === "before" ? [unavailable, reconciliation] : [unavailable];
+      expect(seen).toEqual(failedEvents);
       fail();
       await vi.advanceTimersByTimeAsync(250);
-      expect(seen).toEqual([reconciliation]);
-      // Errors can also be recoverable: a later completed scan must catch up.
+      expect(seen).toEqual(failedEvents);
+      // A recovered scan first observes a verification; the failed scan alone
+      // cannot establish native coverage or publish initial readiness.
       failed.emit("ready");
+      expect(seen).toEqual(failedEvents);
+      watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills")).watcher.emit("ready");
+      expect(seen).toEqual(failedEvents);
+      watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills")).watcher.emit("ready");
       await vi.advanceTimersByTimeAsync(250);
-      expect(seen).toEqual([reconciliation, reconciliation]);
+      expect(seen).toEqual([...failedEvents, reconciliation]);
     },
   );
 

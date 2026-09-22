@@ -1,11 +1,16 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { Bot } from "grammy";
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
+import type { TelegramDraftStream } from "./draft-stream.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
   clearTelegramRuntimeForTest,
@@ -26,6 +31,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
   const sockets = new Set<Socket>();
   const calls: RecordedBotApiCall[] = [];
   const visibleMessages = new Map<number, string>();
+  let rejectNextQuote = false;
 
   beforeAll(async () => {
     server = createServer((request, response) => {
@@ -40,6 +46,23 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
         const method = request.url?.split("/").at(-1) ?? "";
         calls.push({ method, fields });
         response.setHeader("content-type", "application/json");
+        if (
+          method === "sendMessage" &&
+          rejectNextQuote &&
+          fields.reply_parameters &&
+          typeof fields.reply_parameters === "object" &&
+          "quote" in fields.reply_parameters
+        ) {
+          rejectNextQuote = false;
+          response.writeHead(400).end(
+            JSON.stringify({
+              ok: false,
+              error_code: 400,
+              description: "Bad Request: quote not found",
+            }),
+          );
+          return;
+        }
         if (method === "sendMessage" || method === "editMessageText") {
           const messageId =
             typeof fields.message_id === "number" ? fields.message_id : ++nextMessageId;
@@ -76,10 +99,15 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
   beforeEach(() => {
     calls.length = 0;
     visibleMessages.clear();
+    rejectNextQuote = false;
     nextMessageId = 0;
     resetPluginStateStoreForTests({ closeDatabase: false });
     resetTelegramReplyFenceForTest();
     setTelegramPluginStateRuntimeForTests();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   async function waitForBotApiCall(predicate: (call: RecordedBotApiCall) => boolean) {
@@ -125,7 +153,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
         Timestamp: 1_700_000_000_000,
       },
       primaryCtx: { message: { chat: { id: CHAT_ID, type: "private" } } },
-      msg: { chat: { id: CHAT_ID, type: "private" }, message_id: inboundMessageId },
+      msg: { chat: { id: CHAT_ID, type: "private" }, message_id: inboundMessageId, text },
       chatId: CHAT_ID,
       isGroup: false,
       isForum: false,
@@ -135,7 +163,6 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
       threadSpec: { id: undefined, scope: "none" },
       historyKey: undefined,
       historyLimit: 0,
-      groupHistories: new Map(),
       route: {
         agentId: "default",
         accountId: "default",
@@ -160,12 +187,28 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
 
   type ReplyResolverOptions = Parameters<ReplyResolver>[1];
 
+  async function emitToolStart(
+    options: ReplyResolverOptions,
+    payload: {
+      toolCallId: string;
+      name: string;
+      phase: "start" | "update";
+      args?: Record<string, unknown>;
+    },
+  ) {
+    await options?.onItemEvent?.(projectAgentToolActivity(payload));
+    await options?.onToolStart?.(payload);
+  }
+
   async function dispatchProgressTurn(
     emitEvents: (options: ReplyResolverOptions) => Promise<void>,
     scenario?: {
-      mode: "partial";
+      mode: "partial" | "progress";
       toolProgress: boolean;
-      finalReply: { text: string; isError?: boolean };
+      finalReply: ReplyPayload;
+      replyToMode?: "all" | "first";
+      accountId?: string;
+      telegramDeps?: TelegramBotDeps;
     },
   ) {
     const replyResolver: ReplyResolver = async (_ctx, options) => {
@@ -178,7 +221,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
       if (!scenario) {
         await waitForBotApiCall(
           (call) =>
-            call.method === "editMessageText" && String(call.fields.text).includes("exit 2"),
+            call.method === "editMessageText" && String(call.fields.text).includes("failed"),
         );
       }
       return scenario?.finalReply ?? { text: "The command failed." };
@@ -192,11 +235,34 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
         progress: { toolProgress: true, commandText: "raw" },
       },
     } as const;
-    const cfg = { channels: { telegram: telegramCfg } };
+    const cfg = {
+      channels: {
+        telegram: scenario?.accountId
+          ? {
+              enabled: true,
+              defaultAccount: scenario.accountId,
+              accounts: {
+                [scenario.accountId]: {
+                  ...telegramCfg,
+                  replyToMode: scenario.replyToMode,
+                  richMessages: false,
+                  streaming: { ...telegramCfg.streaming, block: { enabled: false } },
+                },
+              },
+            }
+          : telegramCfg,
+      },
+    };
     const errors: string[] = [];
+    const context = createContext();
+    if (scenario?.accountId) {
+      context.accountId = scenario.accountId;
+      context.route.accountId = scenario.accountId;
+      context.ctxPayload.AccountId = scenario.accountId;
+    }
 
     const result = await dispatchTelegramMessage({
-      context: createContext(),
+      context,
       bot: new Bot(BOT_TOKEN, { client: { apiRoot } }),
       cfg,
       runtime: {
@@ -208,10 +274,11 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
           throw new Error("exit");
         },
       },
-      replyToMode: "off",
+      replyToMode: scenario?.replyToMode ?? "off",
       streamMode: scenario?.mode ?? "progress",
       textLimit: 4096,
       telegramCfg,
+      telegramDeps: scenario?.telegramDeps,
       opts: {
         token: BOT_TOKEN,
         dispatchReplyFromConfig: async (params) =>
@@ -233,6 +300,246 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
       .map((call) => [call.method, call.fields.message_id ?? null, call.fields.text] as const);
   }
 
+  it("flushes a pending parent progress surface before adopting a fast yield", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const commentary = "The delegated check is still running.";
+    let receipt: unknown;
+    const waitingPayload = setReplyPayloadMetadata(
+      { text: "Waiting for delegated work." },
+      {
+        progressContinuation: {
+          adopt: async (candidate) => {
+            receipt = candidate;
+            return true;
+          },
+          close: () => undefined,
+        },
+      },
+    );
+    await dispatchProgressTurn(
+      async (options) => {
+        await options?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "parent-commentary",
+          phase: "end",
+          progressText: commentary,
+        });
+        expect(calls.filter((call) => call.method === "sendMessage")).toEqual([]);
+      },
+      { mode: "progress", toolProgress: true, finalReply: waitingPayload },
+    );
+
+    expect(receipt).toMatchObject({
+      messageId: String([...visibleMessages.keys()][0]),
+      text: expect.stringContaining(commentary),
+      snapshot: { statusHeadline: commentary },
+    });
+    expect([...visibleMessages.values()]).toEqual([expect.stringContaining(commentary)]);
+    expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
+    expect(calls.some((call) => call.fields.text === waitingPayload.text)).toBe(false);
+  });
+
+  it.each([true, false])(
+    "retains the existing progress card only when continuation custody is accepted (%s)",
+    async (accept) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const waitingText = "Waiting for delegated work.";
+      const commentary = "Parent commentary remains visible.";
+      const plan = [
+        { step: "Inspect the request", status: "completed" as const },
+        { step: "Finish delegated work", status: "in_progress" as const },
+      ];
+      let receipt: unknown;
+      let progressMessageId: number | undefined;
+      let parentCallbacks: ReplyResolverOptions | undefined;
+      const waitingPayload = setReplyPayloadMetadata(
+        { text: waitingText },
+        {
+          progressContinuation: {
+            adopt: async (candidate) => {
+              receipt = candidate;
+              return accept;
+            },
+            close: () => undefined,
+          },
+        },
+      );
+      await dispatchProgressTurn(
+        async (options) => {
+          parentCallbacks = options;
+          await options?.onPlanUpdate?.({
+            phase: "update",
+            explanation: "Delegating the remaining work",
+            steps: plan,
+          });
+          await options?.onItemEvent?.({
+            kind: "preamble",
+            itemId: "parent-commentary",
+            phase: "end",
+            progressText: commentary,
+          });
+          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
+          await waitForBotApiCall((call) => call.method === "sendMessage");
+          progressMessageId = [...visibleMessages.keys()][0];
+        },
+        { mode: "progress", toolProgress: true, finalReply: waitingPayload },
+      );
+
+      expect(receipt).toMatchObject({
+        channel: "telegram",
+        accountId: "default",
+        to: String(CHAT_ID),
+        messageId: String(progressMessageId),
+        text: expect.stringContaining(commentary),
+        snapshot: { statusHeadline: commentary, plan },
+      });
+      if (accept) {
+        await parentCallbacks?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "parent-commentary",
+          phase: "end",
+          progressText: "A retired parent must not replace the retained card.",
+        });
+        await parentCallbacks?.onPlanUpdate?.({ phase: "update", steps: [] });
+        await parentCallbacks?.onQueuedFollowupSettled?.();
+      }
+      // Advance detached preview cleanup beyond its four-second dwell.
+      await vi.advanceTimersByTimeAsync(4_100);
+      if (!accept) {
+        await expect
+          .poll(() => [...visibleMessages.values()], { timeout: 5_000 })
+          .toEqual([waitingText]);
+        expect(
+          calls
+            .filter((call) => call.method === "deleteMessage")
+            .map((call) => Number(call.fields.message_id)),
+        ).toEqual([progressMessageId]);
+        return;
+      }
+      expect([...visibleMessages.entries()]).toEqual([
+        [progressMessageId, expect.stringContaining(commentary)],
+      ]);
+      expect([...visibleMessages.values()][0]).toContain("Finish delegated work");
+      expect(calls.filter((call) => call.method === "deleteMessage")).toEqual([]);
+      expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
+      expect(calls.some((call) => call.fields.text === waitingText)).toBe(false);
+    },
+  );
+
+  it.each([false, true])(
+    "finalizes a current-message quote in place (quote rejected: %s)",
+    async (quoteRejected) => {
+      const intro =
+        "The complete explanation retains the original delivery context and all literal examples.";
+      const fenced = "  [[reply_to_current]]\n  MEDIA:./fenced-example.txt";
+      const preview = `${intro}\n\n\`\`\`text\n${fenced}`;
+      const text = `${preview}\n\`\`\`\n\n    [[reply_to_current]]\n    MEDIA:./indented-example.txt\n\nDone.`;
+      rejectNextQuote = quoteRejected;
+      await dispatchProgressTurn(
+        async (options) => {
+          await options?.onPartialReply?.({ text: preview, delta: preview });
+          await waitForBotApiCall((call) => call.method === "sendMessage");
+          await options?.onPartialReply?.({ text, replace: true });
+        },
+        {
+          mode: "partial",
+          toolProgress: false,
+          replyToMode: "all",
+          accountId: "sut",
+          finalReply: { text, replyToCurrent: true },
+        },
+      );
+      expect(visibleMessages.size).toBe(1);
+      expect([...visibleMessages.values()]).toEqual([
+        `${intro}\n\n<pre><code class="language-text">${fenced}\n</code></pre>\n<pre><code>[[reply_to_current]]\nMEDIA:./indented-example.txt\n</code></pre>\nDone.`,
+      ]);
+      const sends = calls.filter((call) => call.method === "sendMessage");
+      expect(sends).toHaveLength(quoteRejected ? 2 : 1);
+      expect(sends[0]?.fields.reply_parameters).toMatchObject({
+        quote: "Run the failing command.",
+        quote_position: 0,
+      });
+      if (quoteRejected) {
+        expect(sends[1]?.fields).toMatchObject({
+          reply_to_message_id: expect.any(Number),
+          allow_sending_without_reply: true,
+        });
+        expect(sends[0]?.fields.reply_parameters).toMatchObject({
+          message_id: sends[1]?.fields.reply_to_message_id,
+        });
+        expect(sends[1]?.fields).not.toHaveProperty("reply_parameters");
+      }
+      const edits = calls.filter((call) => call.method === "editMessageText");
+      expect(edits.length).toBeGreaterThan(0);
+      expect(edits.every((call) => call.fields.message_id === 1)).toBe(true);
+      expect(calls.some((call) => call.method === "deleteMessage")).toBe(false);
+    },
+  );
+
+  it("replies to the inbound message after a first-mode preview releases its target", async () => {
+    const { defaultTelegramBotDeps } = await import("./bot-deps.js");
+    const { createTelegramDraftStream } = await import("./draft-stream.js");
+    const draftStreams: TelegramDraftStream[] = [];
+    const inboundId = 456 + inboundSequence;
+    const preview = "The requested result is ready, and I am completing the final explanation.";
+    const finalText = `${preview} Done.`;
+    await dispatchProgressTurn(
+      async (options) => {
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "first" });
+        await waitForBotApiCall(
+          (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
+        );
+        await options?.onAssistantMessageStart?.();
+        await options?.onPartialReply?.({ text: preview, delta: preview });
+        await waitForBotApiCall(
+          (call) => call.method === "sendMessage" && call.fields.text === preview,
+        );
+        const sends = calls.filter((call) => call.method === "sendMessage");
+        expect(sends).toHaveLength(2);
+        expect(sends[0]?.fields.reply_parameters).toMatchObject({ message_id: inboundId });
+        expect(sends[1]?.fields).not.toHaveProperty("reply_parameters");
+        expect(sends[1]?.fields).not.toHaveProperty("reply_to_message_id");
+        await expect
+          .poll(
+            () => draftStreams.find((stream) => stream.messageId() === 2)?.hasConsumedReplyTarget(),
+            { timeout: 5_000 },
+          )
+          .toBe(false);
+        expect(
+          calls.some((call) => call.method === "deleteMessage" && call.fields.message_id === 1),
+        ).toBe(true);
+      },
+      {
+        mode: "partial",
+        toolProgress: true,
+        replyToMode: "first",
+        accountId: "sut",
+        finalReply: { text: finalText, replyToCurrent: true },
+        telegramDeps: {
+          ...defaultTelegramBotDeps,
+          createTelegramDraftStream: (params) => {
+            const stream = createTelegramDraftStream(params);
+            draftStreams.push(stream);
+            return stream;
+          },
+        },
+      },
+    );
+    await expect.poll(() => [...visibleMessages.values()], { timeout: 5_000 }).toEqual([finalText]);
+    const finalSend = calls.find(
+      (call) => call.method === "sendMessage" && call.fields.text === finalText,
+    );
+    expect(
+      finalSend?.fields.reply_parameters,
+      JSON.stringify({ calls, visibleMessages: [...visibleMessages] }),
+    ).toMatchObject({
+      message_id: inboundId,
+      quote: "Run the failing command.",
+      quote_position: 0,
+    });
+    expect([...visibleMessages.keys()]).toEqual([3]);
+  });
+
   it.each([false, true])(
     "keeps tool progress until the final answer replaces it (assistant boundary: %s)",
     async (assistantBoundary) => {
@@ -240,7 +547,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
       let progressMessageId: number | undefined;
       await dispatchProgressTurn(
         async (options) => {
-          await options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "first" });
+          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "first" });
           await waitForBotApiCall(
             (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
           );
@@ -279,14 +586,14 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
         await waitForBotApiCall(
           (call) => call.method === "sendMessage" && call.fields.text === preamble,
         );
-        await options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "first" });
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "first" });
         await waitForBotApiCall(
           (call) => call.method === "sendMessage" && String(call.fields.text).includes("🛠️ Exec"),
         );
         // An unphased provider can continue with a tool-only assistant message.
         // Its start clears progress suppression without replacing the old preview.
         await options?.onAssistantMessageStart?.();
-        await options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "second" });
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "second" });
         await options?.onAssistantMessageStart?.();
       },
       { mode: "partial", toolProgress: true, finalReply: { text: finalText } },
@@ -307,7 +614,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
           await waitForBotApiCall(
             (call) => call.method === "sendMessage" && call.fields.text === preamble,
           );
-          await options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "first" });
+          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "first" });
         },
         { mode: "partial", toolProgress, finalReply: { text: finalText, isError: true } },
       );
@@ -326,7 +633,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
         // Core preserves callback start order, not completion order. The partial
         // is still queued when the tool callback starts and must retire first.
         const partial = options?.onPartialReply?.({ text: preamble, delta: preamble });
-        const tool = options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "first" });
+        const tool = emitToolStart(options, { name: "exec", phase: "start", toolCallId: "first" });
         await Promise.all([partial, tool]);
       },
       { mode: "partial", toolProgress: false, finalReply: { text: finalText, isError: true } },
@@ -339,13 +646,13 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
     const failure = "The provider failed. Please try again.";
     await dispatchProgressTurn(
       async (options) => {
-        await options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "first" });
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "first" });
         await options?.onAssistantMessageStart?.();
         await options?.onPartialReply?.({ text: answer, delta: answer });
         await waitForBotApiCall(
           (call) => call.method === "sendMessage" && call.fields.text === answer,
         );
-        await options?.onToolStart?.({ name: "exec", phase: "update", toolCallId: "first" });
+        await emitToolStart(options, { name: "exec", phase: "update", toolCallId: "first" });
       },
       { mode: "partial", toolProgress: false, finalReply: { text: failure, isError: true } },
     );
@@ -357,12 +664,15 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
     // command "false", then its output event restates the command as its item
     // title ("command false") and reports a nonzero exit.
     const revisions = await dispatchProgressTurn(async (options) => {
-      await options?.onToolStart?.({
+      await emitToolStart(options, {
         name: "exec",
         phase: "start",
         toolCallId: "exec-1",
         args: { command: "false" },
       });
+      await waitForBotApiCall(
+        (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
+      );
       await options?.onCommandOutput?.({
         phase: "end",
         title: "command false",
@@ -371,13 +681,22 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
         output: "No such file or directory",
         exitCode: 2,
       });
+      await options?.onItemEvent?.(
+        projectAgentToolActivity({
+          toolCallId: "exec-1",
+          name: "exec",
+          phase: "result",
+          args: { command: "false" },
+          isError: true,
+        }),
+      );
     });
 
     // One progress message: sent with the running command line, edited in place
     // with the finished line, then the final answer arrives as its own message.
     expect(revisions).toEqual([
-      ["sendMessage", null, "<b>Working</b>\n<b>🛠️ Exec</b> false"],
-      ["editMessageText", 1, "<b>Working</b>\n<b>🛠️ Exec</b> false <i>exit 2</i>"],
+      ["sendMessage", null, "<b>Working</b>\n<b>🛠️ Exec</b> false <i>running</i>"],
+      ["editMessageText", 1, "<b>Working</b>\n<b>🛠️ Exec</b> false <i>failed</i>"],
       ["sendMessage", null, "The command failed."],
     ]);
     for (const call of calls) {
@@ -391,13 +710,15 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
     // projected from the tool result, the tool and command items ending with a
     // terminal status, then the command_output event titled "command false".
     const revisions = await dispatchProgressTurn(async (options) => {
-      await options?.onToolStart?.({
-        itemId: "tool:exec-1",
+      await emitToolStart(options, {
         name: "exec",
         phase: "start",
         toolCallId: "exec-1",
         args: { command: "false" },
       });
+      await waitForBotApiCall(
+        (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
+      );
       await options?.onItemEvent?.({
         itemId: "tool:exec-1",
         kind: "tool",
@@ -412,6 +733,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
       await options?.onItemEvent?.({
         itemId: "command:exec-1",
         kind: "command",
+        suppressChannelProgress: true,
         title: "command false",
         phase: "start",
         status: "running",
@@ -441,6 +763,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
       await options?.onItemEvent?.({
         itemId: "command:exec-1",
         kind: "command",
+        suppressChannelProgress: true,
         title: "command false",
         phase: "end",
         status: "failed",
@@ -465,7 +788,11 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
     // sequence is checked by shape: the progress message opens with the running
     // command line, every edit targets that message and keeps the command text,
     // the last edit carries the exit status, and the final answer is separate.
-    expect(revisions[0]).toEqual(["sendMessage", null, "<b>Working</b>\n<b>🛠️ Exec</b> false"]);
+    expect(revisions[0]).toEqual([
+      "sendMessage",
+      null,
+      "<b>Working</b>\n<b>🛠️ Exec</b> false <i>running</i>",
+    ]);
     expect(revisions.at(-1)).toEqual(["sendMessage", null, "The command failed."]);
     const edits = revisions.filter(([method]) => method === "editMessageText");
     expect(edits.length).toBeGreaterThan(0);
@@ -473,7 +800,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
       expect(messageId).toBe(1);
       expect(text).toContain("<b>🛠️ Exec</b> false");
     }
-    expect(edits.at(-1)?.[2]).toBe("<b>Working</b>\n<b>🛠️ Exec</b> false <i>exit 2</i>");
+    expect(edits.at(-1)?.[2]).toBe("<b>Working</b>\n<b>🛠️ Exec</b> false <i>failed</i>");
     for (const call of calls) {
       expect(call.fields.text ?? "").not.toContain("command false");
     }

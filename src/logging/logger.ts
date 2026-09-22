@@ -35,18 +35,18 @@ import { fileLogTransport } from "./logger-file-transport.js";
 import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
 import {
-  redactLogRecordForTransport,
   redactSecrets,
   redactSensitiveText,
   resolveFileLogRedactOptions,
+  serializeRedactedFileLogRecord,
 } from "./redact.js";
 import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
 export type { LoggerSettings } from "./types.js";
 
-export const DEFAULT_LOG_DIR = DEFAULT_POSIX_TMP_ROOT;
-export const DEFAULT_LOG_FILE = `${DEFAULT_LOG_DIR}/openclaw.log`; // legacy single-file path
+const DEFAULT_LOG_DIR = DEFAULT_POSIX_TMP_ROOT;
+const DEFAULT_LOG_FILE = `${DEFAULT_LOG_DIR}/openclaw.log`; // legacy single-file path
 
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
@@ -607,7 +607,7 @@ function buildLogger(): TsLogger<LogObj> {
         }
         const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
         const { fields, messageParts } = prepareFileLogRecord(logObj as TsLogRecord);
-        const record = redactLogRecordForTransport(
+        const line = serializeRedactedFileLogRecord(
           {
             ...logObj,
             _meta: withResolvedLogMetaHostname(
@@ -622,7 +622,6 @@ function buildLogger(): TsLogger<LogObj> {
             decodedOptions: resolveFileLogRedactOptions(),
           },
         );
-        const line = JSON.stringify(record);
         fileLogTransport.enqueue({
           file: activeFile,
           hostname: expectDefined(fields.hostname, "structured log hostname"),

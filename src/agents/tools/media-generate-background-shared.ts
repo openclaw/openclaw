@@ -1,4 +1,3 @@
-import { AsyncResource } from "node:async_hooks";
 /**
  * Shared detached-task lifecycle for media generation tools.
  *
@@ -13,6 +12,10 @@ import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
+import {
+  runInDetachedAsyncContext,
+  runOutsideAsyncWorkScope,
+} from "../../shared/async-work-scope.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import {
   completeTaskRunByRunId,
@@ -46,9 +49,6 @@ const log = createSubsystemLogger("agents/tools/media-generate-background-shared
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
 const MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
 const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
-const detachedMediaGenerationAsyncRoot = new AsyncResource(
-  "openclaw.media-generation.detached-root",
-);
 
 /** Schedules detached media generation work. */
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
@@ -379,10 +379,12 @@ export function createDefaultMediaGenerateBackgroundScheduler(params: {
   onCrash: (message: string, meta?: Record<string, unknown>) => void;
 }): MediaGenerateBackgroundScheduler {
   return (work) => {
-    detachedMediaGenerationAsyncRoot.runInAsyncScope(() => {
-      queueMicrotask(() => {
-        void work().catch((error: unknown) => {
-          params.onCrash(`Detached ${params.toolName} job crashed`, { error });
+    runInDetachedAsyncContext(() => {
+      runOutsideAsyncWorkScope(() => {
+        queueMicrotask(() => {
+          void work().catch((error: unknown) => {
+            params.onCrash(`Detached ${params.toolName} job crashed`, { error });
+          });
         });
       });
     });

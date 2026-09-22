@@ -135,29 +135,23 @@ extension NodesStoreTests {
     {
         try await self.withFixture { fixture in
             let store = fixture.makeStore()
-            let refresh = Task { await store.refresh() }
-            do {
-                let request = try await fixture.waitForNodeRequest()
-                if replaceGateway { fixture.revision.setValue(2) }
+            fixture.onHeldNodeRequest.setValue { [revision = fixture.revision] request in
+                if replaceGateway { revision.setValue(2) }
                 NodesGatewayFixture.respond(request, failure: failResponse)
-                await refresh.value
+            }
+            await store.refresh()
 
-                #expect(!store.isLoading)
-                if replaceGateway {
-                    #expect(store.nodes.isEmpty)
-                    #expect(store.lastError == nil)
-                } else if failResponse {
-                    #expect(store.nodes.isEmpty)
-                    #expect(store.lastError?.contains("Gateway A failure") == true)
-                } else {
-                    #expect(store.nodes.map(\.nodeId) == ["node-A"])
-                    #expect(store.lastError == nil)
-                }
-            } catch {
-                refresh.cancel()
-                await fixture.gateway.shutdown()
-                await refresh.value
-                throw error
+            try #require(fixture.requests.value.contains { $0.method == "node.list" })
+            #expect(!store.isLoading)
+            if replaceGateway {
+                #expect(store.nodes.isEmpty)
+                #expect(store.lastError == nil)
+            } else if failResponse {
+                #expect(store.nodes.isEmpty)
+                #expect(store.lastError?.contains("Gateway A failure") == true)
+            } else {
+                #expect(store.nodes.map(\.nodeId) == ["node-A"])
+                #expect(store.lastError == nil)
             }
             await fixture.gateway.shutdown()
         }
@@ -340,6 +334,7 @@ private final class NodesGatewayFixture {
     let revision = LockIsolated<UInt64>(1)
     let requests = LockIsolated<[Request]>([])
     let holdNodes = LockIsolated(true)
+    let onHeldNodeRequest = LockIsolated<(@Sendable (Request) -> Void)?>(nil)
     let endpointEntered = LockIsolated(false)
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
@@ -350,6 +345,7 @@ private final class NodesGatewayFixture {
         let revision = self.revision
         let requests = self.requests
         let holdNodes = self.holdNodes
+        let onHeldNodeRequest = self.onHeldNodeRequest
         let endpointEntered = self.endpointEntered
         self.session = GatewayTestWebSocketSession(taskFactory: {
             let owner = revision.value == 1 ? "A" : "B"
@@ -366,7 +362,11 @@ private final class NodesGatewayFixture {
                       let method = frame["method"] as? String else { return }
                 let request = Request(owner: owner, id: id, method: method, socket: socket)
                 requests.withValue { $0.append(request) }
-                if method != "node.list" || !holdNodes.value { Self.respond(request) }
+                if method == "node.list", holdNodes.value {
+                    onHeldNodeRequest.value?(request)
+                } else {
+                    Self.respond(request)
+                }
             })
         })
         self.gateway = GatewayConnection(

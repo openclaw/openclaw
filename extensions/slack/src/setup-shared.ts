@@ -1,4 +1,3 @@
-// Slack plugin module implements setup shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { patchChannelConfigForAccount } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";

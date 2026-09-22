@@ -14,10 +14,16 @@ import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
-import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import {
+  isSessionTranscriptIndexReconcileRunning,
+  reconcileSessionTranscriptIndexes,
+  waitForSessionTranscriptIndexReconcile,
+} from "../../config/sessions/session-transcript-reconcile.js";
+import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -35,6 +41,7 @@ import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-prof
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
+import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import {
@@ -144,7 +151,15 @@ describe("resident sessions.list", () => {
       const context = requestContext(config);
       const client = identifiedClient("owner@example.com");
 
+      const enriched = observeSessionRowBackfill([
+        "agent:main:active",
+        "agent:main:draft",
+        "agent:main:archived",
+        "agent:work:active",
+      ]);
       await initializeSessionReadContext(context);
+      await listSessions({ client, context, request: { archived: "all", limit: 100 } });
+      await enriched;
       const statements = vi.spyOn(DatabaseSync.prototype, "prepare");
       const results = await Promise.all(
         Array.from({ length: 16 }, () =>
@@ -421,6 +436,14 @@ describe("resident sessions.list", () => {
       emitSessionTranscriptUpdate({
         target: { agentId: "main", sessionId: "main-active", sessionKey: "agent:main:active" },
       });
+      await vi.waitFor(() =>
+        expect(
+          getSessionRowProjection(context)?.snapshot(
+            { agentId: "main", key: "agent:main:active" },
+            { includeLastMessage: true },
+          ).row?.lastMessagePreview,
+        ).toBe("Fresh committed preview"),
+      );
       const refreshed = await listSessions({ client, context, request });
       expect(
         first.sessions.find((row) => row.key === "agent:main:active")?.lastMessagePreview,
@@ -431,7 +454,7 @@ describe("resident sessions.list", () => {
     });
   });
 
-  it("refreshes degraded title facts after transcript reconciliation", async () => {
+  it("refreshes reconciled previews without repairing legacy titles", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const config = await seedSessions();
       const sessionKey = "agent:main:active";
@@ -446,10 +469,13 @@ describe("resident sessions.list", () => {
           touchSessionEntry: false,
         },
       );
+      await waitForSessionTranscriptIndexReconcile({ agentId: "main", env: state.env });
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       database.db
         .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
         .run(sessionId);
+      const storedEntry = loadSessionEntry({ agentId: "main", sessionKey });
+      expect(storedEntry?.displayName).toBeUndefined();
       const context = requestContext(config);
       const client = identifiedClient("owner@example.com");
       const request = {
@@ -460,19 +486,38 @@ describe("resident sessions.list", () => {
         limit: 100,
       };
 
+      const backfilled = observeSessionRowBackfill([sessionKey]);
       const degraded = await listSessions({ client, context, request });
       const degradedRow = degraded.sessions.find((session) => session.key === sessionKey);
-      expect(degradedRow?.derivedTitle).not.toBe("Active prompt");
+      expect(degradedRow?.derivedTitle).toBeUndefined();
       expect(degradedRow?.lastMessagePreview).toBeUndefined();
 
-      await waitForSessionTranscriptIndexReconcile({ agentId: "main", env: state.env });
+      await backfilled;
+      const reconcileTarget = { agentId: database.agentId, path: database.path, env: state.env };
+      expect(isSessionTranscriptIndexReconcileRunning(reconcileTarget)).toBe(false);
+      expect(
+        database.db
+          .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
+          .get(sessionId),
+      ).toMatchObject({ needs_rebuild: 1 });
+      await expect(reconcileSessionTranscriptIndexes(reconcileTarget)).resolves.toEqual({
+        reconciledSessions: 1,
+      });
+      await vi.waitFor(async () =>
+        expect(
+          (await listSessions({ client, context, request })).sessions.find(
+            (row) => row.key === sessionKey,
+          )?.lastMessagePreview,
+        ).toBe("active reply"),
+      );
       const healed = await listSessions({ client, context, request });
       expect(healed.sessions.find((session) => session.key === sessionKey)).toMatchObject({
-        derivedTitle: "Active prompt",
+        derivedTitle: undefined,
         lastMessagePreview: "active reply",
       });
 
       expect((await listSessions({ client, context, request })).sessions).toEqual(healed.sessions);
+      expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(storedEntry);
     });
   });
 
@@ -696,9 +741,9 @@ describe("resident sessions.list", () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const parentSessionKey = "agent:main:active";
       const childSessionKey = "agent:main:child";
-      await upsertSessionEntryCore(
+      replaceSessionEntrySync(
         { agentId: "main", sessionKey: childSessionKey },
-        {
+        mergeSessionEntry(undefined, {
           sessionId: "completed-child",
           endedAt: 400,
           parentSessionKey,
@@ -706,7 +751,7 @@ describe("resident sessions.list", () => {
           status: "done",
           updatedAt: 400,
           visibility: "shared",
-        },
+        }),
       );
       const context = requestContext(config);
       const client = identifiedClient("owner@example.com");

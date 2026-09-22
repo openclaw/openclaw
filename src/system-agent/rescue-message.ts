@@ -179,8 +179,9 @@ function parsePendingOperation(value: unknown): SystemAgentOperation | null {
       break;
     case "create-agent":
       if (
-        !hasExactKeys(operation, ["kind", "agentId"], ["workspace", "model", "role"]) ||
+        !hasExactKeys(operation, ["kind", "agentId"], ["name", "workspace", "model", "role"]) ||
         !isNonEmptyString(operation.agentId) ||
+        !hasOptionalString(operation, "name") ||
         (operation.role !== undefined &&
           !listAgentRoles().some((role) => role === operation.role)) ||
         !hasOptionalString(operation, "workspace") ||

@@ -219,7 +219,6 @@ describe("message action threading helpers", () => {
       channel: "forum",
       target: "forum:123",
       message: "hi",
-      threadId: "root-42",
       replyTo: "child-777",
     };
 
@@ -228,6 +227,7 @@ describe("message action threading helpers", () => {
       to: "forum:123",
       toolContext: defaultForumToolContext,
       replyToIsExplicit: false,
+      resolveAutoThreadId: ({ replyToId }) => (replyToId ? undefined : "root-42"),
       resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => ({
         replyToId: replyToIsExplicit || threadId == null ? replyToId : String(threadId),
         threadId: threadId ?? null,

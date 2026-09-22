@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { statSync } from "node:fs";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  sameFileMutationFingerprint,
+  type FileMutationFingerprint,
+} from "../infra/file-descriptor.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -13,7 +18,9 @@ import {
   type AgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
 import { readAgentDeletionJournal } from "./agent-deletion-journal.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 type PendingInspection = {
   target: { agentId?: string; path: string };
@@ -30,6 +37,38 @@ type Activation = {
   isCurrent: () => boolean;
   prepareAgent: (input: PreparationInput) => Promise<void>;
 };
+type SchemaSourceWitness = Array<FileMutationFingerprint | undefined>;
+type PreparedSchemaHeaders = {
+  statePath: string;
+  headers: Map<
+    string,
+    { version: typeof OPENCLAW_AGENT_SCHEMA_VERSION; witness: SchemaSourceWitness }
+  >;
+};
+
+function readSchemaSourceWitness(pathname: string): SchemaSourceWitness | undefined {
+  try {
+    const files = ["", "-wal", "-journal"].map((suffix) =>
+      statSync(`${pathname}${suffix}`, { bigint: true, throwIfNoEntry: false }),
+    );
+    return files[0] && files.every((file) => !file || file.isFile()) ? files : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function matchesSchemaSourceWitness(
+  before: SchemaSourceWitness,
+  after: SchemaSourceWitness | undefined,
+): boolean {
+  return Boolean(
+    after &&
+    before.every((file, index) => {
+      const current = after[index];
+      return file ? current && sameFileMutationFingerprint(file, current) : !current;
+    }),
+  );
+}
 
 const log = createSubsystemLogger("state/agent-admission");
 const startupAdmission = new AsyncLocalStorage<AgentDatabaseStartupAdmission>();
@@ -45,6 +84,7 @@ class AgentDatabaseStartupAdmission {
   private stopped = false;
   private stopping?: Promise<void>;
   private preparation: Promise<void> = Promise.resolve();
+  private preparedSchemaHeaders?: PreparedSchemaHeaders;
 
   get signal(): AbortSignal {
     return this.controller.signal;
@@ -52,6 +92,43 @@ class AgentDatabaseStartupAdmission {
 
   get isStopped(): boolean {
     return this.stopped;
+  }
+
+  /** Full readiness stays fresh; only unchanged compatibility headers cross into bootstrap. */
+  prepareSchemaHeaders(env: NodeJS.ProcessEnv) {
+    const prepared: PreparedSchemaHeaders = {
+      statePath: resolveOpenClawStateSqlitePath(env),
+      headers: new Map(),
+    };
+    this.preparedSchemaHeaders = prepared;
+    return (pathname: string) => {
+      const before = readSchemaSourceWitness(pathname);
+      return (version: number) => {
+        if (
+          !this.stopped &&
+          this.preparedSchemaHeaders === prepared &&
+          before &&
+          version === OPENCLAW_AGENT_SCHEMA_VERSION &&
+          matchesSchemaSourceWitness(before, readSchemaSourceWitness(pathname))
+        ) {
+          prepared.headers.set(pathname, { version, witness: before });
+        }
+      };
+    };
+  }
+
+  takePreparedSchemaHeaders(env: NodeJS.ProcessEnv) {
+    const prepared = this.preparedSchemaHeaders;
+    this.preparedSchemaHeaders = undefined;
+    return (pathname: string, supportedVersion: number) => {
+      const header = prepared?.headers.get(pathname);
+      return !this.stopped &&
+        prepared?.statePath === resolveOpenClawStateSqlitePath(env) &&
+        header?.version === supportedVersion &&
+        matchesSchemaSourceWitness(header.witness, readSchemaSourceWitness(pathname))
+        ? { version: header.version }
+        : undefined;
+    };
   }
 
   track(work: Promise<unknown>): void {
@@ -257,6 +334,7 @@ class AgentDatabaseStartupAdmission {
   stop(): Promise<void> {
     return (this.stopping ??= (async () => {
       this.stopped = true;
+      this.preparedSchemaHeaders = undefined;
       this.controller.abort(new Error("Gateway stopped during agent database inspection"));
       this.activation.resolve(undefined);
       while (this.work.size > 0) {

@@ -1,9 +1,10 @@
 // Telegram plugin module implements bot.create telegram bot harness behavior.
-import { existsSync, readdirSync, rmSync } from "node:fs";
-import path from "node:path";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  useBundledProviderPolicyArtifactsForTest,
+  type MockFn,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -11,6 +12,13 @@ import {
   runTelegramChannelInboundEventWithHarness,
   type TelegramTestMiddleware,
 } from "./bot.test-helpers.js";
+import {
+  clearTelegramSessionStateFilesForTests,
+  setTelegramPluginStateRuntimeForTests,
+} from "./runtime-state.test-support.js";
+import { resetTelegramMessageCacheForTest } from "./runtime.test-support.js";
+
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic", "amazon-bedrock"]);
 
 type AnyMock = ReturnType<typeof vi.fn>;
 type AnyAsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
@@ -288,9 +296,9 @@ function createModelsProviderDataFromConfig(
 }
 
 const systemEventsHoisted = vi.hoisted(() => ({
-  enqueueSystemEventSpy: vi.fn<TelegramBotDeps["enqueueSystemEvent"]>(() => false),
+  enqueueSystemEventSpy: vi.fn<TelegramBotDeps["enqueueRoutedSystemEvent"]>(() => false),
 }));
-export const enqueueSystemEventSpy: MockFn<TelegramBotDeps["enqueueSystemEvent"]> =
+export const enqueueSystemEventSpy: MockFn<TelegramBotDeps["enqueueRoutedSystemEvent"]> =
   systemEventsHoisted.enqueueSystemEventSpy;
 const execApprovalHoisted = vi.hoisted(
   (): { resolveExecApprovalSpy: MockFn<ResolveTelegramApprovalForTest> } => ({
@@ -530,7 +538,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
     upsertChannelPairingRequest as TelegramBotDeps["upsertChannelPairingRequest"],
-  enqueueSystemEvent: enqueueSystemEventSpy as TelegramBotDeps["enqueueSystemEvent"],
+  enqueueRoutedSystemEvent: enqueueSystemEventSpy as TelegramBotDeps["enqueueRoutedSystemEvent"],
   dispatchReplyWithBufferedBlockDispatcher,
   loadWebMedia: loadWebMedia as TelegramBotDeps["loadWebMedia"],
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
@@ -552,6 +560,7 @@ export const getOnHandler = (event: string) => {
 };
 
 const DEFAULT_TELEGRAM_TEST_CONFIG: OpenClawConfig = {
+  messages: { inbound: { debounceMs: 0 } },
   agents: {
     defaults: {
       userTimezone: "UTC",
@@ -612,25 +621,13 @@ export function makeForumGroupMessageCtx(params?: {
   });
 }
 
-function clearTelegramDispatchDedupeFilesForTest(): void {
-  const dir = path.dirname(sessionStorePath);
-  if (!existsSync(dir)) {
-    return;
-  }
-  const prefix = `${path.basename(sessionStorePath)}.telegram-message-dispatch-`;
-  for (const entry of readdirSync(dir)) {
-    if (entry.startsWith(prefix)) {
-      rmSync(path.join(dir, entry), { force: true });
-    }
-  }
-}
-
 beforeEach(() => {
+  resetTelegramMessageCacheForTest();
+  setTelegramPluginStateRuntimeForTests();
   getRuntimeConfig.mockReset();
   getRuntimeConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   sessionStoreEntries.value = {};
-  rmSync(`${sessionStorePath}.telegram-messages.json`, { force: true });
-  clearTelegramDispatchDedupeFilesForTest();
+  clearTelegramSessionStateFilesForTests(sessionStorePath);
   loadSessionStoreMock.mockReset();
   loadSessionStoreMock.mockImplementation(() => sessionStoreEntries.value);
   resolveStorePathMock.mockReset();

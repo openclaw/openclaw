@@ -206,7 +206,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
 
   const registerTool = (
     record: PluginRecord,
-    tool: AnyAgentTool | OpenClawPluginToolFactory,
+    tool: AnyAgentTool | OpenClawPluginToolFactory | OpenClawPluginToolFactory<2>,
     opts?: OpenClawPluginToolOptions,
   ) => {
     if (pluginsWithChannelRegistrationConflict.has(record.id)) {
@@ -222,9 +222,29 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     }
     const names = [...(opts?.names ?? []), ...(opts?.name ? [opts.name] : [])];
     const optional = opts?.optional === true;
+    const versioned = typeof tool !== "function" && "contextVersion" in tool;
+    if (versioned && (tool.contextVersion !== 2 || typeof tool.create !== "function")) {
+      reportRegistrationError(record, "unsupported plugin tool context version");
+      return;
+    }
     const factory: OpenClawPluginToolFactory =
-      typeof tool === "function" ? tool : (_ctx: OpenClawPluginToolContext) => tool;
-    if (typeof tool !== "function") {
+      typeof tool === "function"
+        ? tool
+        : versioned
+          ? (ctx) => {
+              if (!ctx.assertInvocationCurrent) {
+                throw new Error("Version 2 tool factories require host invocation authority");
+              }
+              return tool.create({
+                ...ctx,
+                get senderIsOwner() {
+                  return ctx.senderIsOwner;
+                },
+                assertInvocationCurrent: ctx.assertInvocationCurrent,
+              });
+            }
+          : (_ctx: OpenClawPluginToolContext) => tool;
+    if (typeof tool !== "function" && !versioned) {
       names.push(tool.name);
     }
     const normalized = normalizePluginToolNames(names);
@@ -242,6 +262,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     registry.tools.push(
       createRegistration(record, {
         factory,
+        ...(versioned ? { contextVersion: 2 as const } : {}),
         names: normalized,
         declaredNames,
         optional,

@@ -45,6 +45,11 @@ characters. String length, `email`, `uri`, `date`, and
 accepted response is returned. Optional fields, required fields, and valid
 defaults retain their schema meaning.
 
+Forms with no fields show the original request message with **Allow** and
+**Decline** choices. OpenClaw returns an empty content object only after an
+explicit Allow answer. Declining or cancelling the prompt never confirms the
+request, and late answers cannot confirm a request whose turn has ended.
+
 `openai/form` also supports a single-select `openai/imagePicker` field with up
 to four bounded item IDs and titles. OpenClaw uses only those IDs and titles; it
 does not fetch or render item images. An unknown extended field type produces a
@@ -84,6 +89,9 @@ the answer so Codex can identify which question it addresses. Async questions
 do not create a waiting tool call or use the blocking question queue above.
 They follow the same tool and message-delivery restrictions as other native
 async messages. Silence and preselected answers never grant approval.
+
+Scrolling away from a question and back preserves its draft and any in-progress
+submission. The card shows the result when that submission finishes.
 
 Channels receive Codex's readable question text and choices and accept normal
 replies. The Control UI supports up to 12 questions per message and four choices

@@ -84,6 +84,8 @@ describe("block reply pipeline multi-assistant-message suppression", () => {
 
       pipeline.enqueue(blockFor("Same answer", 0));
       await pipeline.flush({ force: true });
+      expect(pipeline.didStreamTerminalReply?.(0)).toBe(true);
+      expect(pipeline.didStreamTerminalReply?.(1)).toBe(false);
       const finalPayload = blockFor("Same answer", 1);
       const { replyPayloads } = await buildReplyPayloads({
         payloads: [finalPayload],

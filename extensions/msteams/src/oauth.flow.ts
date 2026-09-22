@@ -1,4 +1,3 @@
-// Msteams plugin module implements oauth.flow behavior.
 import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,

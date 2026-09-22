@@ -102,6 +102,8 @@ function withPackedPackage(
     }
     for (const relativePath of [
       "scripts/postinstall-bundled-plugins.mjs",
+      "scripts/lib/fs-safe-prebuild.mjs",
+      "scripts/windows-cmd-helpers.mjs",
       "scripts/lib/guard-inventory-utils.mjs",
       "scripts/lib/package-dist-imports.mjs",
       "scripts/lib/package-lifecycle-marker.mjs",

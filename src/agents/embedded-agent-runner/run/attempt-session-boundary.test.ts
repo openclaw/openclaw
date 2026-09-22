@@ -59,6 +59,7 @@ function createSessionManager(
     getHeader: () => ({ version: 3 }),
     getLeafEntry: () => undefined,
     getSessionTarget: () => undefined,
+    getSessionId: () => "session-boundary",
     ...overrides,
   } as unknown as ReturnType<typeof guardSessionManager>;
 }
@@ -90,7 +91,7 @@ async function withPersistedOrphanBoundary(
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const seed = SessionManager.open(target, state.workspaceDir);
     if (options.parent) {
-      seed.appendModelChange("openai", "gpt-5.5");
+      await seed.appendModelChange("openai", "gpt-5.5");
     }
     const orphanId = seed.appendMessage({
       role: "user",
@@ -103,8 +104,8 @@ async function withPersistedOrphanBoundary(
         : {}),
     });
     if (options.metadata) {
-      seed.appendThinkingLevelChange("low");
-      seed.appendModelChange("openai", "gpt-5.5");
+      await seed.appendThinkingLevelChange("low");
+      await seed.appendModelChange("openai", "gpt-5.5");
     }
     const manager = guardSessionManager(
       SessionManager.openBounded(target, {

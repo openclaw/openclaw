@@ -139,28 +139,65 @@ describe("incognito transcript reconciliation", () => {
     30_000,
   );
 
-  it("transfers exact UTF-8 in bounded frames without retaining a transaction", async () => {
+  it.each([false, true])(
+    "transfers exact UTF-8 in bounded frames without retaining a transaction (ranged=%s)",
+    async (ranged) => {
+      const { scope, options } = target(explicit.env);
+      const event = message("large", "🦞".repeat(131_073));
+      await replaceTranscriptEvents(
+        scope,
+        ranged ? [message("excluded-before"), event, message("excluded-after")] : [event],
+      );
+      const database = openOpenClawAgentDatabase(options);
+      const source = createMemoryTranscriptProjectionSource(
+        database,
+        options,
+        ranged ? { afterSeq: 0, throughSeq: 1 } : undefined,
+      );
+      const bytes: Uint8Array[] = [];
+      while (true) {
+        const frame = source.read(sessionId);
+        expect(database.db.isTransaction).toBe(false);
+        if (frame.type === "source-end") {
+          expect(frame.snapshot.maxSeq).toBe(ranged ? 1 : 0);
+          break;
+        }
+        expect(frame.type).toBe("source-frame");
+        if (frame.type !== "source-frame") {
+          throw new Error("source unexpectedly unavailable");
+        }
+        expect(frame.seq).toBe(ranged ? 1 : 0);
+        expect(frame.bytes.byteLength).toBeLessThanOrEqual(256 * 1024);
+        bytes.push(frame.bytes);
+        if (ranged && bytes.length === 1) {
+          await appendTranscriptEvent(scope, { type: "metadata", id: "later-append" });
+        }
+      }
+      expect(bytes.length).toBeGreaterThan(1);
+      expect(JSON.parse(Buffer.concat(bytes).toString("utf8"))).toEqual(event);
+      source.clear();
+      expectNoDiskState();
+    },
+  );
+
+  it("returns an empty captured range without reading later appends or a future prefix", async () => {
     const { scope, options } = target(explicit.env);
-    const event = message("large", "🦞".repeat(131_073));
-    await replaceTranscriptEvents(scope, [event]);
+    await replaceTranscriptEvents(scope, [message("prefix")]);
     const database = openOpenClawAgentDatabase(options);
-    const source = createMemoryTranscriptProjectionSource(database, options);
-    const bytes: Uint8Array[] = [];
-    while (true) {
-      const frame = source.read(sessionId);
-      expect(database.db.isTransaction).toBe(false);
-      if (frame.type === "source-end") {
-        break;
-      }
-      expect(frame.type).toBe("source-frame");
-      if (frame.type !== "source-frame") {
-        throw new Error("source unexpectedly unavailable");
-      }
-      expect(frame.bytes.byteLength).toBeLessThanOrEqual(256 * 1024);
-      bytes.push(frame.bytes);
-    }
-    expect(bytes.length).toBeGreaterThan(1);
-    expect(JSON.parse(Buffer.concat(bytes).toString("utf8"))).toEqual(event);
+    const source = createMemoryTranscriptProjectionSource(database, options, {
+      afterSeq: 0,
+      throughSeq: 0,
+    });
+    expect(source.read(sessionId)).toMatchObject({ type: "source-end", snapshot: { maxSeq: 0 } });
+    await appendTranscriptEvent(scope, { type: "metadata", id: "later-append" });
+    expect(source.read(sessionId)).toMatchObject({ type: "source-end", snapshot: { maxSeq: 0 } });
+    source.clear();
+    const future = createMemoryTranscriptProjectionSource(database, options, {
+      afterSeq: 1,
+      throughSeq: 2,
+    });
+    expect(future.read(sessionId)).toEqual({ type: "source-unavailable" });
+    future.clear();
     expectNoDiskState();
   });
 
@@ -196,13 +233,21 @@ describe("incognito transcript reconciliation", () => {
     expectNoDiskState();
   });
 
-  it.each(["append", "replace", "delete-recreate", "dispose", "reopen"] as const)(
-    "revokes a captured source after %s before another frame or plan is accepted",
-    async (mutation) => {
+  it.each(
+    (["append", "replace", "delete-recreate", "dispose", "reopen"] as const).flatMap((mutation) =>
+      (mutation === "append" ? [false] : [false, true]).map((ranged) => ({ mutation, ranged })),
+    ),
+  )(
+    "revokes a captured source after $mutation before another frame or plan is accepted (ranged=$ranged)",
+    async ({ mutation, ranged }) => {
       const { scope, options } = target(explicit.env);
       await replaceTranscriptEvents(scope, [message("original", "x".repeat(300_000))]);
       const database = openOpenClawAgentDatabase(options);
-      const source = createMemoryTranscriptProjectionSource(database, options);
+      const source = createMemoryTranscriptProjectionSource(
+        database,
+        options,
+        ranged ? { afterSeq: -1, throughSeq: 0 } : undefined,
+      );
       const plan = prepareSessionTranscriptProjection(database.db, sessionId)!;
       expect(source.read(sessionId)).toMatchObject({ type: "source-frame", final: false });
       expect(source.isCurrentPlan(plan)).toBe(true);

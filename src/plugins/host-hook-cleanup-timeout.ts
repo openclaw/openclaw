@@ -9,6 +9,7 @@ export class PluginHostCleanupTimeoutError extends Error {}
 export async function withPluginHostCleanupTimeout<T>(
   hookId: string,
   cleanup: () => T | Promise<T>,
+  timeoutMs = PLUGIN_HOST_CLEANUP_TIMEOUT_MS,
 ): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
   try {
@@ -17,7 +18,7 @@ export async function withPluginHostCleanupTimeout<T>(
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           reject(new PluginHostCleanupTimeoutError(`plugin host cleanup timed out: ${hookId}`));
-        }, PLUGIN_HOST_CLEANUP_TIMEOUT_MS);
+        }, timeoutMs);
         timeout.unref?.();
       }),
     ]);

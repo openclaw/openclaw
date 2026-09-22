@@ -57,6 +57,8 @@ export async function runClaudeCliNodeCommand(params: {
   let promptDir: string | undefined;
   let skillSession: Awaited<ReturnType<typeof prepareNodeClaudeSkillSession>> | undefined;
   let cleanupSkillArtifacts: (() => Promise<void>) | undefined;
+  let artifactCleanup: Promise<void> | undefined;
+  let artifactCleanupStarted = false;
   let argv = params.argv;
   try {
     if (params.request.skillRuntime) {
@@ -194,9 +196,13 @@ export async function runClaudeCliNodeCommand(params: {
         promptDir = undefined;
         cleanupSkillArtifacts = undefined;
         // Descendants may still own this file after their root result is already visible.
-        void run
+        artifactCleanup = run
           .waitForExtinction()
-          .then(async () => {
+          .then(async (outcome) => {
+            if (outcome && outcome.status === "uncertain") {
+              throw new Error(`Retaining Claude artifacts: ${outcome.reason}`, { cause: outcome });
+            }
+            artifactCleanupStarted = true;
             if (ownedPromptDir) {
               await fs.rm(ownedPromptDir, { recursive: true, force: true });
             }
@@ -270,6 +276,10 @@ export async function runClaudeCliNodeCommand(params: {
       } finally {
         if (promptDir) {
           await fs.rm(promptDir, { recursive: true, force: true });
+        }
+        // Join admitted removal without waiting for descendants that are still running.
+        if (artifactCleanupStarted) {
+          await artifactCleanup;
         }
       }
     }

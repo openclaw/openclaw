@@ -1,4 +1,3 @@
-// Discord plugin module implements approval shared behavior.
 import { doesApprovalRequestSelectChannelAccount } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,

@@ -1,4 +1,3 @@
-// Discord plugin module implements runtime.guild behavior.
 import { PermissionFlagsBits } from "discord-api-types/v10";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";

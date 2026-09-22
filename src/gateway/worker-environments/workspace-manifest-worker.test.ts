@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import {
   captureWorkspaceSnapshot,
@@ -14,6 +15,77 @@ import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("settles private Git-input staging before a cancelled tree read returns", async () => {
+  const root = tempDirs.make("workspace-tree-input-cancel-");
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const controller = new AbortController();
+  const content = Buffer.from("snapshot");
+  const payload = new TextEncoder().encode(
+    JSON.stringify({
+      inputPath: path.join(root, "input"),
+      ref: "refs/heads/snapshot",
+      entries: [
+        {
+          path: "file.txt",
+          type: "file",
+          mode: 0o644,
+          size: content.length,
+          sha256: createHash("sha256").update(content).digest("hex"),
+        },
+      ],
+      source: { root, tree: "a".repeat(40) },
+    }),
+  );
+  const outcome = runGitWorkerOperation(
+    { type: "workspace.manifest.tree-input", input: { payload } },
+    {
+      inputBytes: payload.byteLength,
+      signal: controller.signal,
+      git: {
+        text: async () => {
+          throw new Error("Unexpected text Git request");
+        },
+        buffered: async (_cwd, args) => {
+          const listing = args.includes("ls-tree");
+          if (!listing) {
+            expect(args[0]).toBe("cat-file");
+            entered.resolve();
+            await release.promise;
+          }
+          return {
+            stdout: listing ? Buffer.from(`100644 blob ${"b".repeat(40)}\tfile.txt\0`) : content,
+            stderr: Buffer.alloc(0),
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+          };
+        },
+      },
+    },
+  ).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    await Promise.race([
+      entered.promise,
+      outcome.then(() => {
+        throw new Error("Tree read ended before its blob request");
+      }),
+    ]);
+    controller.abort(new Error("cancel tree input"));
+    release.resolve();
+    expect(await outcome).toBeInstanceOf(Error);
+    expect(await fs.readdir(root)).toEqual([]);
+  } finally {
+    controller.abort();
+    release.resolve();
+    await outcome;
+  }
+});
 
 it("does not create or return an implicit hash memo for an uncached capture", async () => {
   const root = await fs.realpath(tempDirs.make("workspace-uncached-capture-"));
@@ -106,6 +178,39 @@ it("authenticates both manifests before selecting changed transfer payloads", as
   await expect(
     parseWorkspaceManifestPair({ ...input, currentRaw: current.raw + " " }),
   ).rejects.toThrow("digest");
+});
+
+it("admits a large rebase against its original synchronization manifest", async () => {
+  const entries = (prefix: string, count: number, hash: string) =>
+    Array.from({ length: count }, (_, index) => ({
+      path: `${prefix}-${index}.ts`,
+      type: "file" as const,
+      mode: 0o644,
+      size: 16 * 1024,
+      sha256: hash.repeat(64),
+    }));
+  const encode = (values: ReturnType<typeof entries>) => {
+    const raw = JSON.stringify({
+      version: 1,
+      baseCommit: "a".repeat(40),
+      entries: values.toSorted((left, right) => (left.path < right.path ? -1 : 1)),
+    });
+    return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
+  };
+  // A rebase can leave Git clean while changing the full dispatched workspace.
+  const base = encode([...entries("modified", 18_407, "a"), ...entries("deleted", 3_103, "a")]);
+  const current = encode([...entries("modified", 18_407, "b"), ...entries("added", 17_395, "b")]);
+  const result = await parseWorkspaceManifestPair({
+    baseRaw: base.raw,
+    baseRef: base.ref,
+    currentRaw: current.raw,
+    currentRef: current.ref,
+  });
+  expect(result.changed).toBe(true);
+  expect(result.paths).toHaveLength(35_802);
+  expect(
+    result.entries.reduce((bytes, entry) => bytes + (entry.type === "file" ? entry.size : 0), 0),
+  ).toBe(586_579_968);
 });
 
 it("admits a pair of manifests at the exact supported byte limit", async () => {

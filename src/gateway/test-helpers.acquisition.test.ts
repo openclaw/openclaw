@@ -24,13 +24,41 @@ const { WebSocket, WebSocketServer }: typeof import("ws") = require(
 );
 type WebSocket = WebSocketClient;
 
+const acquisitionFixture = vi.hoisted(() => ({
+  start: vi.fn(),
+  port: 0,
+  observeClient: undefined as ((client: WebSocket) => void) | undefined,
+}));
+
+async function observeWebSocket() {
+  const actual = await vi.importActual<
+    typeof import("../../packages/gateway-client/src/websocket.js")
+  >("../../packages/gateway-client/src/websocket.js");
+  class ObservedWebSocket extends actual.WebSocket {
+    constructor(...args: ConstructorParameters<typeof WebSocket>) {
+      super(...args);
+      acquisitionFixture.observeClient?.(this);
+    }
+  }
+  return { ...actual, default: ObservedWebSocket, WebSocket: ObservedWebSocket };
+}
+
+vi.mock("ws", () => observeWebSocket());
+vi.mock("../../packages/gateway-client/src/websocket.js", () => observeWebSocket());
+vi.mock("./server.js", () => ({ startGatewayServer: acquisitionFixture.start }));
+vi.mock("../agents/prepared-model-runtime.test-support.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-runtime.test-support.js")>()),
+  resetPreparedGatewayModelCatalogForTest: vi.fn(),
+}));
+vi.mock("../test-utils/ports.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../test-utils/ports.js")>()),
+  getDeterministicFreePortBlock: async () => acquisitionFixture.port,
+}));
+
 afterEach(() => {
-  vi.doUnmock("ws");
-  vi.doUnmock("../../packages/gateway-client/src/websocket.js");
-  vi.doUnmock("./server.js");
-  vi.doUnmock("../test-utils/ports.js");
-  vi.doUnmock("../infra/device-pairing.js");
-  vi.resetModules();
+  acquisitionFixture.start.mockReset();
+  acquisitionFixture.observeClient = undefined;
+  vi.restoreAllMocks();
 });
 
 type PeerBehavior =
@@ -73,33 +101,17 @@ async function withAcquisitionPeer(
   const rejectAuth = behavior === "reject auth" || behavior === "reject auth without close";
   // Observe the real dependency; keep otherwise-unhandled errors local to this case.
   // Counting the remaining listeners makes a removed owner handler observable.
-  const observeWebSocket = async () => {
-    const actual = await vi.importActual<
-      typeof import("../../packages/gateway-client/src/websocket.js")
-    >("../../packages/gateway-client/src/websocket.js");
-    class ObservedWebSocket extends actual.WebSocket {
-      constructor(...args: ConstructorParameters<typeof WebSocket>) {
-        super(...args);
-        clients.push(this);
-        this.once("close", () => closed.add(this));
-        this.on("error", (error) => {
-          errors.push(error);
-          transportFailure.resolve(error);
-          if (this.listenerCount("error") === 1) {
-            unownedErrors.push(error);
-          }
-        });
+  acquisitionFixture.observeClient = (client) => {
+    clients.push(client);
+    client.once("close", () => closed.add(client));
+    client.on("error", (error) => {
+      errors.push(error);
+      transportFailure.resolve(error);
+      if (client.listenerCount("error") === 1) {
+        unownedErrors.push(error);
       }
-    }
-    return {
-      ...actual,
-      default: ObservedWebSocket,
-      WebSocket: ObservedWebSocket,
-      WebSocketServer,
-    };
+    });
   };
-  vi.doMock("ws", observeWebSocket);
-  vi.doMock("../../packages/gateway-client/src/websocket.js", observeWebSocket);
   const sockets = new Set<Socket>();
   const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
   const connectReceived = createDeferred();
@@ -252,19 +264,12 @@ function mockPeerGateway(peer: AcquisitionPeer, close = peer.close) {
     startupSettled: Promise.resolve(),
     getTailscaleIngressEndpoint: () => undefined,
   } satisfies import("./server.js").GatewayServer;
-  const start = vi.fn(async () => {
+  acquisitionFixture.port = peer.port;
+  const start = acquisitionFixture.start.mockImplementation(async () => {
     // Mirror the real startup-owned selector for close-order assertions.
     process.env.OPENCLAW_GATEWAY_PORT = String(peer.port);
     return server;
   });
-  vi.doMock("./server.js", () => ({
-    startGatewayServer: start,
-    resetPreparedModelCatalogForTest: vi.fn(),
-  }));
-  vi.doMock("../test-utils/ports.js", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("../test-utils/ports.js")>()),
-    getDeterministicFreePortBlock: async () => peer.port,
-  }));
   return start;
 }
 
@@ -379,6 +384,7 @@ export async function verifyCompositeAcquisition({
         const started =
           helper === "GatewayClient"
             ? startGatewayWithClient({
+                port: peer.port,
                 cfg: {},
                 configPath: state.statePath("client-config.json"),
                 token: "synthetic-token",
@@ -565,15 +571,13 @@ describe("raw Gateway helper acquisition ownership", () => {
         const release = createDeferred();
         const preparationError = new Error("synthetic preparation failure");
         let preparationFinished = false;
-        vi.doMock("../infra/device-pairing.js", async (importOriginal) => ({
-          ...(await importOriginal<typeof import("../infra/device-pairing.js")>()),
-          getPairedDevice: async () => {
-            preparing.resolve();
-            await release.promise;
-            preparationFinished = true;
-            throw preparationError;
-          },
-        }));
+        const devicePairing = await import("../infra/device-pairing.js");
+        vi.spyOn(devicePairing, "getPairedDevice").mockImplementation(async () => {
+          preparing.resolve();
+          await release.promise;
+          preparationFinished = true;
+          throw preparationError;
+        });
         const { connectWebchatClient } = await import("./test-helpers.server.js");
         let settled = false;
         const acquisition = connectWebchatClient({ port: peer.port })
@@ -684,6 +688,7 @@ it("retains a failed acquisition owner", async () => {
             const previousConfig = process.env.OPENCLAW_CONFIG_PATH;
             const previousPort = process.env.OPENCLAW_GATEWAY_PORT;
             const started = await startGatewayWithClient({
+              port: peer.port,
               cfg: {},
               configPath,
               token: "synthetic-token",

@@ -96,6 +96,7 @@ describe("agent-events sequencing", () => {
       expect(changed).toHaveBeenCalledExactlyOnceWith({
         sessionKey: "agent:main:projected",
         agentId: undefined,
+        scope: "runtime",
       });
       changed.mockClear();
       registerAgentRunContext("projected-run", update);
@@ -1032,7 +1033,8 @@ describe("agent-events sequencing", () => {
     expect(secondLease).toBeTypeOf("function");
     expect(retainQueuedAgentRunContext("missing-run", lifecycleGeneration)).toBeUndefined();
     expect(retainQueuedAgentRunContext("queued-run", "stale-generation")).toBeUndefined();
-    expect(changed).not.toHaveBeenCalled();
+    expect(changed).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "agent-runs" });
+    changed.mockClear();
 
     clock.mockReturnValue(1_000);
     expect(sweepStaleRunContexts(500)).toBe(2);
@@ -1051,7 +1053,8 @@ describe("agent-events sequencing", () => {
     expect(sweepStaleRunContexts(500)).toBe(0);
     expect(changed).not.toHaveBeenCalled();
     secondLease?.("abandoned");
-    expect(changed).not.toHaveBeenCalled();
+    expect(changed).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "agent-runs" });
+    changed.mockClear();
     expect(sweepStaleRunContexts(500)).toBe(1);
     expect(changed).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "agent-runs" });
     expect(getAgentRunContext("queued-run")).toBeUndefined();

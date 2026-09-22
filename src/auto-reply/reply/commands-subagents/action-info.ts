@@ -1,6 +1,5 @@
 // Formats detailed subagent run information for the info action.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { countPendingDescendantRuns } from "../../../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSubagentDisplayStatus } from "../../../agents/subagents/registry/subagent-session-metrics.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
@@ -40,13 +39,13 @@ function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], chi
 }
 
 export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): CommandHandlerResult {
-  const { params, requesterKey, runs, restTokens } = ctx;
+  const { params, requesterKey, readContext, restTokens } = ctx;
   const target = restTokens[0];
   if (!target) {
     return commandReply("ℹ️ Usage: /subagents info <id|#>");
   }
 
-  const targetResolution = resolveSubagentEntryForToken(runs, target);
+  const targetResolution = resolveSubagentEntryForToken(readContext.list.view, target);
   if ("reply" in targetResolution) {
     return targetResolution.reply;
   }
@@ -77,7 +76,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
 
   const lines = [
     "ℹ️ Subagent info",
-    `Status: ${resolveSubagentDisplayStatus(run, countPendingDescendantRuns(run.childSessionKey))}`,
+    `Status: ${resolveSubagentDisplayStatus(run, readContext.list.pendingDescendants.get(run.childSessionKey) ?? 0)}`,
     `Label: ${formatRunLabel(run)}`,
     `Task: ${taskText}`,
     `Run: ${run.runId}`,

@@ -1,9 +1,13 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { resolveExecutablePath } from "../../src/infra/executable-path.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 /** Resolve explicit Node tools instead of substituting the test runner's runtime. */
 export function requireNodeTool(command: "node" | "npm"): string {
+  if (command === "node") {
+    return resolveTestNodeExecPath();
+  }
   const executable = resolveExecutablePath(command);
   if (!executable) {
     throw new Error(`Node tool fixture requires ${command} on PATH.`);

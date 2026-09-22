@@ -160,7 +160,9 @@ describeLive("embedded Responses output-limit recovery live", () => {
         expect(receipt).toMatch(/^RECEIPT_[0-9a-f-]{36}$/);
         await expect(fs.stat(unfinishedPath)).rejects.toMatchObject({ code: "ENOENT" });
         expect(requests).toHaveLength(3);
-        expect(requests[2]?.previous_response_id).toBeTypeOf("string");
+        // Recovery may continue from provider state or replay the committed durable transcript.
+        // The latter deliberately omits previous_response_id, so prove the receipt survived instead.
+        expect(JSON.stringify(requests[2]?.input)).toContain(receipt);
         expect(result.payloads?.map((payload) => payload.text ?? "").join("\n")).toContain(receipt);
         expect(result.payloads?.some((payload) => payload.isError)).toBe(false);
         expect(

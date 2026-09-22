@@ -4,11 +4,17 @@ import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runne
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
+  isInternalDiagnosticEventInterested,
   resetInternalDiagnosticEventListenerPresence,
   setInternalDiagnosticEventListenerCounts,
   type InternalDiagnosticEventInterest,
   updateInternalDiagnosticEventInterest,
 } from "./diagnostic-event-listener-presence.js";
+import {
+  cloneDiagnosticValueForListener,
+  createDiagnosticMetadataForListener,
+  deepFreezeDiagnosticValue,
+} from "./diagnostic-event-snapshot.js";
 import {
   consumeCoreModelRequestLifecycleDiagnosticEvent,
   CORE_MODEL_REQUEST_LIFECYCLE_METADATA_KEY,
@@ -16,6 +22,10 @@ import {
 } from "./diagnostic-model-request-provenance.js";
 import { isTrustedOtelDiagnosticListener } from "./diagnostic-otel-listener-provenance.js";
 import { consumeHostPluginUsageDiagnosticEvent } from "./diagnostic-plugin-usage-provenance.js";
+import type {
+  DiagnosticMemoryUsage,
+  DiagnosticChildProcessSpawnFields,
+} from "./diagnostic-process-types.js";
 import {
   consumeCoreSemanticRunProgressDiagnosticEvent,
   CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY,
@@ -27,6 +37,7 @@ import {
 } from "./diagnostic-tool-execution-liveness.js";
 import {
   getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 import {
@@ -35,6 +46,8 @@ import {
   shouldPrepareDiagnosticTracePropagation,
 } from "./diagnostic-trace-propagation.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
+
+export type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
@@ -765,14 +778,6 @@ export type DiagnosticContextAssembledEvent = DiagnosticBaseEvent & {
   reserveTokens?: number;
 };
 
-export type DiagnosticMemoryUsage = {
-  rssBytes: number;
-  heapTotalBytes: number;
-  heapUsedBytes: number;
-  externalBytes: number;
-  arrayBuffersBytes: number;
-};
-
 export type DiagnosticMemorySampleEvent = DiagnosticBaseEvent & {
   type: "diagnostic.memory.sample";
   memory: DiagnosticMemoryUsage;
@@ -892,6 +897,7 @@ export type DiagnosticEventPayload =
   | DiagnosticContextAssembledEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
+  | (DiagnosticBaseEvent & DiagnosticChildProcessSpawnFields)
   | DiagnosticPayloadLargeEvent
   | DiagnosticLogRecordEvent
   | DiagnosticSecurityEvent
@@ -972,11 +978,6 @@ type TrustedDiagnosticEventInterest = InternalDiagnosticEventInterest<
   TrustedDiagnosticEventListenerOptions;
 
 const EMPTY_DIAGNOSTIC_PRIVATE_DATA: DiagnosticEventPrivateData = Object.freeze({});
-
-type TrustedOtelDiagnosticEventPrivateData = DiagnosticEventPrivateData &
-  Readonly<{
-    hostPluginId?: string;
-  }>;
 
 export type TrustedToolExecutionEvent = Extract<
   DiagnosticEventPayload,
@@ -1134,15 +1135,6 @@ export function areDiagnosticsEnabledForProcess(): boolean {
   return getDiagnosticEventsState().enabled;
 }
 
-function isDiagnosticEventListenerInterested(
-  interest: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]> | undefined,
-  type: DiagnosticEventPayload["type"],
-): boolean {
-  return (
-    (!interest?.include || interest.include.includes(type)) && !interest?.exclude?.includes(type)
-  );
-}
-
 function dispatchDiagnosticEvent(
   state: DiagnosticEventsGlobalState,
   enriched: DiagnosticEventPayload,
@@ -1161,12 +1153,12 @@ function dispatchDiagnosticEvent(
   try {
     if (!options.trustedListenersOnly) {
       for (const [listener, interest] of state.listeners) {
-        if (!isDiagnosticEventListenerInterested(interest, enriched.type)) {
+        if (!isInternalDiagnosticEventInterested(interest, enriched.type, metadata.trusted)) {
           continue;
         }
         try {
           listener(
-            cloneDiagnosticEventForListener(enriched),
+            cloneDiagnosticValueForListener(enriched),
             createDiagnosticMetadataForListener(metadata),
           );
         } catch (err) {
@@ -1184,25 +1176,32 @@ function dispatchDiagnosticEvent(
       }
     }
     for (const [listener, interest] of state.trustedListeners) {
-      if (!isDiagnosticEventListenerInterested(interest, enriched.type)) {
+      if (!isInternalDiagnosticEventInterested(interest, enriched.type, metadata.trusted)) {
         continue;
       }
       try {
-        const eventForListener = cloneDiagnosticEventForListener(enriched);
+        const eventForListener = cloneDiagnosticValueForListener(enriched);
         const metadataForListener = createDiagnosticMetadataForListener(metadata);
         if (interest?.includePrivateData === false) {
           listener(eventForListener, metadataForListener, EMPTY_DIAGNOSTIC_PRIVATE_DATA);
         } else if (isTrustedOtelDiagnosticListener(listener)) {
+          // Retain the host-owned transport for independently updated OTel installs.
+          const cloned = structuredClone(privateData ?? {});
+          Reflect.deleteProperty(cloned, "hostPluginId");
           listener(
             eventForListener,
             metadataForListener,
-            cloneDiagnosticPrivateDataForOtelListener(privateData, options.hostPluginId),
+            deepFreezeDiagnosticValue(
+              options.hostPluginId
+                ? Object.assign(cloned, { hostPluginId: options.hostPluginId })
+                : cloned,
+            ),
           );
         } else {
           listener(
             eventForListener,
             metadataForListener,
-            cloneDiagnosticPrivateDataForListener(privateData),
+            privateData ? cloneDiagnosticValueForListener(privateData) : Object.freeze({}),
           );
         }
       } catch (err) {
@@ -1221,39 +1220,6 @@ function dispatchDiagnosticEvent(
   } finally {
     state.dispatchDepth -= 1;
   }
-}
-
-function createDiagnosticMetadataForListener(
-  metadata: DiagnosticEventMetadata,
-): DiagnosticEventMetadata {
-  return Object.freeze({ ...metadata });
-}
-
-function cloneDiagnosticEventForListener(event: DiagnosticEventPayload): DiagnosticEventPayload {
-  return deepFreezeDiagnosticValue(structuredClone(event)) as DiagnosticEventPayload;
-}
-
-function cloneDiagnosticPrivateDataForListener(
-  privateData: DiagnosticEventPrivateData | undefined,
-): DiagnosticEventPrivateData {
-  if (!privateData) {
-    return Object.freeze({});
-  }
-  return deepFreezeDiagnosticValue(structuredClone(privateData)) as DiagnosticEventPrivateData;
-}
-
-function cloneDiagnosticPrivateDataForOtelListener(
-  privateData: DiagnosticEventPrivateData | undefined,
-  hostPluginId: string | undefined,
-): TrustedOtelDiagnosticEventPrivateData {
-  // Keep the third-argument transport for independently updated official OTel installs.
-  // Only the marked OTel listener receives this host-owned field.
-  const cloned = structuredClone(privateData ?? {}) as Record<string, unknown>;
-  delete cloned.hostPluginId;
-  if (hostPluginId) {
-    cloned.hostPluginId = hostPluginId;
-  }
-  return deepFreezeDiagnosticValue(cloned) as TrustedOtelDiagnosticEventPrivateData;
 }
 
 function isPriorityAsyncDiagnosticEvent(entry: QueuedDiagnosticEvent): boolean {
@@ -1285,26 +1251,6 @@ function makeRoomForPriorityAsyncDiagnosticEvent(
     return state.asyncQueue.splice(nonPriorityIndex, 1)[0];
   }
   return state.asyncQueue.shift();
-}
-
-function deepFreezeDiagnosticValue(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  if (seen.has(value)) {
-    return value;
-  }
-  seen.add(value);
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      deepFreezeDiagnosticValue(item, seen);
-    }
-    return Object.freeze(value);
-  }
-  for (const nested of Object.values(value as Record<string, unknown>)) {
-    deepFreezeDiagnosticValue(nested, seen);
-  }
-  return Object.freeze(value);
 }
 
 function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void {
@@ -1400,6 +1346,7 @@ type EmitDiagnosticEventOptions = {
   internal?: boolean;
   privateData?: DiagnosticEventPrivateData;
   trustedTraceContext?: boolean;
+  queuedPhase?: true;
 };
 
 function emitDiagnosticEventWithTrust(
@@ -1434,9 +1381,10 @@ function emitDiagnosticEventWithTrust(
       : {}),
     ...(trustedTraceContext ? { trustedTraceContext } : {}),
   };
-  const prepareTracePropagation = trusted && shouldPrepareDiagnosticTracePropagation(enriched);
+  const prepareTracePropagation =
+    trusted && !options.queuedPhase && shouldPrepareDiagnosticTracePropagation(enriched);
 
-  if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
+  if (options.queuedPhase || ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
       if (!trusted || !PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
         noteAsyncDiagnosticDrop(state, { event: enriched, metadata, privateData, hostPluginId });
@@ -1450,7 +1398,7 @@ function emitDiagnosticEventWithTrust(
     state.asyncQueue.push({ event: enriched, metadata, privateData, hostPluginId });
     if (prepareTracePropagation) {
       prepareDiagnosticTracePropagation(
-        cloneDiagnosticEventForListener(enriched),
+        cloneDiagnosticValueForListener(enriched),
         createDiagnosticMetadataForListener(metadata),
       );
     }
@@ -1460,7 +1408,7 @@ function emitDiagnosticEventWithTrust(
 
   if (prepareTracePropagation) {
     prepareDiagnosticTracePropagation(
-      cloneDiagnosticEventForListener(enriched),
+      cloneDiagnosticValueForListener(enriched),
       createDiagnosticMetadataForListener(metadata),
     );
   }
@@ -1535,6 +1483,44 @@ export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
     ...(hostPluginId ? { hostPluginId, internal: true } : {}),
     ...(coreSemanticRunProgress ? { coreSemanticRunProgress: true } : {}),
   });
+}
+
+/** Queues runtime phase observations without changing synchronous startup phases. */
+export function createQueuedDiagnosticPhaseEmitter() {
+  const state = getDiagnosticEventsState();
+  const interested = () => {
+    if (!state.enabled) {
+      return false;
+    }
+    for (const interest of state.trustedListeners.values()) {
+      if (isInternalDiagnosticEventInterested(interest, "diagnostic.phase.completed", true)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (!interested()) {
+    return undefined;
+  }
+  const trace = getActiveDiagnosticTraceContext();
+  return (phase: DiagnosticPhaseSnapshot) => {
+    if (!interested()) {
+      return;
+    }
+    runWithDiagnosticTraceContext(trace, () =>
+      emitDiagnosticEventWithTrust(
+        {
+          ...phase,
+          type: "diagnostic.phase.completed",
+          trace,
+          details: phase.details ? { ...phase.details } : undefined,
+        },
+        true,
+        // Measurements do not establish outbound trace state before dispatch.
+        { queuedPhase: true },
+      ),
+    );
+  };
 }
 
 /** Keeps trusted internal skill accounting alive when optional diagnostics are disabled. */
@@ -1669,7 +1655,7 @@ export function hasPendingInternalDiagnosticEvent(
   for (const entry of state.asyncQueue) {
     let event: DiagnosticEventPayload;
     try {
-      event = cloneDiagnosticEventForListener(entry.event);
+      event = cloneDiagnosticValueForListener(entry.event);
     } catch {
       continue;
     }

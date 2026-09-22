@@ -33,7 +33,8 @@ is configured, connected, or authorized in the current session.
 | `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `gateway` (update only), `ask_user` |
 | `full`      | No core profile filtering; selects optional plugin tools too                                                                                                                                                                                                                     |
 
-`coding` and `messaging` also implicitly allow `bundle-mcp` (configured MCP servers).
+`coding` and `messaging` also include the [theme tool](/tools/theme) and implicitly
+allow `bundle-mcp` (configured MCP servers).
 
 An unset profile also leaves core tools unfiltered, but does not itself opt into
 optional plugin tools. Explicit `full` contributes a wildcard to plugin tool
@@ -63,7 +64,7 @@ whether the tool is available. Subagent and non-owner restrictions still apply.
 | `group:sessions`   | `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `suggest_task`, `dismiss_task` |
 | `group:memory`     | `memory_search`, `memory_get`                                                                                                                                                                                                                            |
 | `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                                                                                                                    |
-| `group:ui`         | `browser`, `screen`, `dashboard`, `terminal`, `portal`, `canvas`, `show_widget`                                                                                                                                                                          |
+| `group:ui`         | `browser`, `screen`, `theme`, `dashboard`, `terminal`, `portal`, `canvas`, `show_widget`                                                                                                                                                                 |
 | `group:automation` | `heartbeat_respond`, `automations` (`cron` alias), `gateway`, `plugins`, `openclaw`                                                                                                                                                                      |
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
@@ -121,7 +122,7 @@ Without that sandbox-layer entry, the MCP server can still load successfully whi
 ## `tools.codeMode`
 
 `tools.codeMode` gates the generic OpenClaw code-mode surface. When engaged
-for a run with tools, normal OpenClaw tools move behind the in-sandbox `tools.*`
+for a run with tools, normal OpenClaw tools move behind the guest
 catalog bridge, and MCP tools are available through the generated `MCP`
 namespace. The model normally sees `exec` and `wait`; tools such as `computer`
 whose structured results cannot cross the JSON-only bridge stay direct.
@@ -131,11 +132,18 @@ options. To engage code mode only for models whose catalog entry flags
 `compat.codeMode: "preferred"`, enable `"auto"` explicitly. See
 [Code Mode - automatic per-model activation](/tools/code-mode/configuration#automatic-per-model-activation).
 
+`executor` defaults to `"node"`, which uses `node:vm` for trusted host
+execution, not security isolation. Set `"quickjs"` for the bundled hardened
+guest executor. Agent-level settings override the global choice. See
+[Code Mode executors](/tools/code-mode/executors) for the trust boundary and
+continuation behavior.
+
 ```json5
 {
   tools: {
     codeMode: {
       enabled: "auto",
+      executor: "node",
     },
   },
 }

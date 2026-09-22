@@ -19,6 +19,7 @@ import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   consumeCronCreatorAuthorityGrant,
   getCronManagementAuthority,
+  getCronManagementCallerOrigin,
   getCronManagementChannelRequester,
   resolveCronCreatorAuthorityGrantProvenance,
 } from "../cron-creator-authority-grant.js";
@@ -148,7 +149,7 @@ export function readCronCallerScope(
       : undefined;
   const sourceChannel = identity.turnSourceChannel?.trim().toLowerCase();
   const manageAll = getCronManagementAuthority(identity);
-  const callerOrigin = sourceChannel
+  const fallbackCallerOrigin = sourceChannel
     ? ({ kind: "external", channel: sourceChannel } as const)
     : identity.turnSourceLocal === true
       ? ({ kind: "local" } as const)
@@ -162,6 +163,10 @@ export function readCronCallerScope(
   const requester = manageAll
     ? getCronManagementChannelRequester(identity)
     : grantProvenance?.channelRequester;
+  const authenticatedCallerOrigin = manageAll
+    ? getCronManagementCallerOrigin(identity)
+    : grantProvenance?.callerOrigin;
+  const callerOrigin = authenticatedCallerOrigin ?? fallbackCallerOrigin;
   const channelRequester =
     requester &&
     requester.channel === sourceChannel &&
@@ -172,11 +177,26 @@ export function readCronCallerScope(
     !manageAll && identity.cronToolsAllowCapture === "final-executable-surface"
       ? { version: 1, source: "final-executable-surface", callerOrigin }
       : undefined;
-  const toolsAllowProvenance = channelRequester
-    ? surfaceProvenance
-      ? { ...surfaceProvenance, channelRequester }
-      : ({ version: 1, source: "authenticated-requester", channelRequester } as const)
-    : surfaceProvenance;
+  const authenticatedRequesterProvenance = authenticatedCallerOrigin
+    ? ({
+        version: 1,
+        source: "authenticated-requester",
+        callerOrigin: authenticatedCallerOrigin,
+        ...(channelRequester ? { channelRequester } : {}),
+      } satisfies CronToolsAllowProvenance)
+    : channelRequester
+      ? ({
+          version: 1,
+          source: "authenticated-requester",
+          channelRequester,
+        } satisfies CronToolsAllowProvenance)
+      : undefined;
+  const toolsAllowProvenance = surfaceProvenance
+    ? {
+        ...surfaceProvenance,
+        ...(channelRequester ? { channelRequester } : {}),
+      }
+    : authenticatedRequesterProvenance;
   return {
     kind: "agentTool",
     agentId: normalizeAgentId(identity.agentId),
@@ -199,7 +219,7 @@ export function readCronCallerScope(
   };
 }
 
-/** Management access does not let another session lend this job a native identity. */
+/** Management access can reauthorize origin, but cannot lend another account native identity. */
 export function resolveCronRequesterProvenanceForJob(
   job: Pick<CronJob, "owner">,
   callerScope: CronCallerScope | undefined,
@@ -218,7 +238,9 @@ export function resolveCronRequesterProvenanceForJob(
     const { channelRequester: _requester, ...surfaceProvenance } = provenance;
     return surfaceProvenance;
   }
-  return undefined;
+  return provenance.callerOrigin
+    ? { version: 1, source: "authenticated-requester", callerOrigin: provenance.callerOrigin }
+    : undefined;
 }
 
 /** Converts the authenticated gateway caller into server-only scheduled authority provenance. */

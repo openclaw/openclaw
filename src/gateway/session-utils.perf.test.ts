@@ -13,6 +13,7 @@ import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -20,6 +21,8 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import * as usageFormat from "../utils/usage-format.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import * as sessionOrder from "./session-list-order.js";
+import { readSessionListSelectionFacts } from "./session-list-target.js";
 import * as projectionWork from "./session-projection-work.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -46,6 +49,46 @@ import { writeResidentEntries } from "./session-utils.perf.test-support.js";
  * are the actual scaling failure mode we care about.
  */
 describe("session list resolver cache", () => {
+  test("bounds first-page comparisons while preserving the latest-row order", async () => {
+    await withStateDirEnv("openclaw-list-order-work-", async () => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} }, defaults: { thinkingDefault: "off" } },
+      };
+      resetConfigRuntimeState();
+      setRuntimeConfigSnapshot(cfg);
+      const count = 256;
+      const store = Object.fromEntries(
+        Array.from({ length: count }, (_, index) => [
+          `agent:main:ordered-${index}`,
+          { sessionId: `ordered-${index}`, updatedAt: ((index * 71) % count) + 1 },
+        ]),
+      );
+      writeResidentEntries(store);
+      const projection = await createSessionRowProjection({ cfg });
+      try {
+        await projection.ensureMaterialized();
+        const compare = vi.spyOn(sessionOrder, "compareSessionEntryPairs");
+        try {
+          const result = await listProjectedSessions({ projection, opts: { limit: 5 } });
+          expect(result.sessions.map((row) => row.key)).toEqual(
+            Object.entries(store)
+              .toSorted((a, b) => b[1].updatedAt - a[1].updatedAt)
+              .slice(0, 5)
+              .map(([key]) => key),
+          );
+          expect(result.totalCount).toBe(count);
+          expect(compare.mock.calls.length).toBeLessThanOrEqual(count * 4);
+        } finally {
+          compare.mockRestore();
+        }
+      } finally {
+        projection.dispose();
+      }
+    });
+  });
+
   test.each(["entries", "list"] as const)(
     "bounds owner roster traversal for %s and observes the next request's roster",
     (kind) => {
@@ -84,7 +127,10 @@ describe("session list resolver cache", () => {
         filterAndSortSessionEntries({
           cfg,
           entries: Object.entries(store),
-          getTarget: () => undefined,
+          getTarget: (key) => ({
+            agentId: "agent-29",
+            selection: readSessionListSelectionFacts(key, store[key]),
+          }),
           getRowContext: () => buildSessionListRowMetadataContext({ now: 100 }),
           now: 100,
           opts: { ownerId: "agent-29", limit: 10 },
@@ -147,85 +193,98 @@ describe("session list resolver cache", () => {
         );
         writeResidentEntries(store);
         let projection: SessionRowProjection | undefined;
-        if (phase === "dirty refresh") {
-          projection = await createSessionRowProjection({ cfg });
-        }
-        let projectedRows = 0;
-        let rowsBeforePause = 0;
-        let identityDuringPause: string | undefined;
-        let control: Promise<void> | undefined;
-        let completedYields = 0;
-        const rowChunks = new Set<number>();
-        const yieldWork = projectionWork.yieldSessionListWork;
-        const yields = vi
-          .spyOn(projectionWork, "yieldSessionListWork")
-          .mockImplementation(async () => {
-            await yieldWork();
-            completedYields++;
-          });
-        const buildRow = rowProjection.readSessionRowInputs;
-        const rows = vi
-          .spyOn(rowProjection, "readSessionRowInputs")
-          .mockImplementation((params) => {
-            rowChunks.add(completedYields);
-            insideRow = true;
-            try {
-              return buildRow(params);
-            } finally {
-              insideRow = false;
-              projectedRows++;
-              if (projectedRows === 1) {
-                control = new Promise<void>((resolve) => {
-                  setImmediate(() => {
-                    rowsBeforePause = projectedRows;
-                    entries[ownerId] = {
-                      identity: { name: "Refreshed owner" },
-                      fastModeDefault: true,
-                    };
-                    sessionChanges.emit({ all: true, scope: "config" });
-                    identityDuringPause = resolveAgentIdentity(cfg, ownerId)?.name;
-                    resolve();
-                  });
-                });
-              }
-            }
-          });
+        let refreshBatch = 0;
+        const createDrain = projectionWork.createSessionProjectionDrain;
+        const drains = vi
+          .spyOn(projectionWork, "createSessionProjectionDrain")
+          .mockImplementation((params) =>
+            createDrain({
+              ...params,
+              refresh() {
+                refreshBatch++;
+                return params.refresh();
+              },
+            }),
+          );
         try {
-          if (projection) {
-            writeResidentEntries(store, 1);
-            await projection.ensureMaterialized();
-          } else {
+          if (phase === "dirty refresh") {
             projection = await createSessionRowProjection({ cfg });
           }
-          const result = await listProjectedSessions({ projection, opts: { limit: rowCount } });
-          expect(result.count).toBe(rowCount);
-          expect(result.totalCount).toBe(rowCount);
-          expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
-          expect(rowsBeforePause).toBeGreaterThan(0);
-          expect(rowsBeforePause).toBeLessThan(rowCount);
-          expect(identityDuringPause).toBe("Refreshed owner");
-          expect(result.sessions.every((row) => row.effectiveFastMode === true)).toBe(true);
-          expect(result.owners?.find((owner) => owner.id === ownerId)?.label).toBe(
-            "Refreshed owner",
-          );
-          expect(rowChunks.size).toBeGreaterThan(1);
-          expect(rowReads).toBeLessThanOrEqual(rosterSize * rowChunks.size * 3);
-          rows.mockClear();
-          await listProjectedSessions({ projection, opts: { limit: rowCount } });
-          expect(rows).not.toHaveBeenCalled();
+          let projectedRows = 0;
+          let rowsBeforePause = 0;
+          let identityDuringPause: string | undefined;
+          let control: Promise<void> | undefined;
+          const rowBatches = new Set<number>();
+          const buildRow = rowProjection.readSessionRowInputs;
+          const rows = vi
+            .spyOn(rowProjection, "readSessionRowInputs")
+            .mockImplementation((params) => {
+              rowBatches.add(refreshBatch);
+              insideRow = true;
+              try {
+                return buildRow(params);
+              } finally {
+                insideRow = false;
+                projectedRows++;
+                if (projectedRows === 1) {
+                  control = new Promise<void>((resolve) => {
+                    setImmediate(() => {
+                      rowsBeforePause = projectedRows;
+                      entries[ownerId] = {
+                        identity: { name: "Refreshed owner" },
+                        fastModeDefault: true,
+                      };
+                      sessionChanges.emit({ all: true, scope: "config" });
+                      identityDuringPause = resolveAgentIdentity(cfg, ownerId)?.name;
+                      resolve();
+                    });
+                  });
+                }
+              }
+            });
+          try {
+            if (projection) {
+              writeResidentEntries(store, 1);
+              await projection.ensureMaterialized();
+            } else {
+              projection = await createSessionRowProjection({ cfg });
+            }
+            const result = await listProjectedSessions({ projection, opts: { limit: rowCount } });
+            expect(result.count).toBe(rowCount);
+            expect(result.totalCount).toBe(rowCount);
+            expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
+            expect(rowsBeforePause).toBeGreaterThan(0);
+            expect(rowsBeforePause).toBeLessThan(rowCount);
+            expect(identityDuringPause).toBe("Refreshed owner");
+            expect(result.sessions.every((row) => row.effectiveFastMode === true)).toBe(true);
+            expect(result.owners?.find((owner) => owner.id === ownerId)?.label).toBe(
+              "Refreshed owner",
+            );
+            expect(rowBatches.size).toBeGreaterThan(1);
+            expect(rowReads).toBeLessThanOrEqual(rosterSize * rowBatches.size * 3);
+            rows.mockClear();
+            await listProjectedSessions({ projection, opts: { limit: rowCount } });
+            expect(rows).not.toHaveBeenCalled();
+          } finally {
+            rows.mockRestore();
+            await control;
+          }
         } finally {
-          rows.mockRestore();
-          yields.mockRestore();
-          await control;
+          drains.mockRestore();
           projection?.dispose();
         }
       });
     },
   );
 
-  test.each(["startup", "dirty refresh"])(
-    "yields during expensive %s materialization",
-    async (phase) => {
+  test.each([
+    { phase: "startup", cost: "acquisition" },
+    { phase: "startup", cost: "materialization" },
+    { phase: "dirty refresh", cost: "acquisition" },
+    { phase: "dirty refresh", cost: "materialization" },
+  ])(
+    "yields during expensive $phase $cost without reacquiring unchanged rows",
+    async ({ phase, cost }) => {
       await withStateDirEnv("openclaw-row-work-budget-", async () => {
         resetPluginRuntimeStateForTest();
         setActivePluginRegistry(createEmptyPluginRegistry());
@@ -234,8 +293,9 @@ describe("session list resolver cache", () => {
         };
         resetConfigRuntimeState();
         setRuntimeConfigSnapshot(cfg);
+        const rowCount = 96;
         const store = Object.fromEntries(
-          Array.from({ length: 32 }, (_, index) => [
+          Array.from({ length: rowCount }, (_, index) => [
             `agent:main:budget-${index}`,
             { sessionId: `budget-${index}`, updatedAt: index + 1 },
           ]),
@@ -247,15 +307,28 @@ describe("session list resolver cache", () => {
         }
         let workMs = 0;
         let projectedRows = 0;
+        let acquiredRows = 0;
         let rowsAtControl = 0;
         let control: Promise<void> | undefined;
         const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
+        const readEntryCache = entryCache.readCommittedSessionEntryCache;
+        const acquisitions = vi
+          .spyOn(entryCache, "readCommittedSessionEntryCache")
+          .mockImplementation((...args) => {
+            acquiredRows++;
+            if (cost === "acquisition") {
+              workMs += 20;
+            }
+            return readEntryCache(...args);
+          });
         const readInputs = rowProjection.readSessionRowInputs;
         const rows = vi
           .spyOn(rowProjection, "readSessionRowInputs")
           .mockImplementation((params) => {
             const result = readInputs(params);
-            workMs += 20;
+            if (cost === "materialization") {
+              workMs += 20;
+            }
             projectedRows++;
             if (projectedRows === 1) {
               control = new Promise<void>((resolve) => {
@@ -275,15 +348,18 @@ describe("session list resolver cache", () => {
             projection = await createSessionRowProjection({ cfg });
           }
           await control;
+          await projection.ensureMaterialized();
           expect(rowsAtControl).toBeGreaterThan(0);
-          expect(rowsAtControl).toBeLessThan(32);
-          expect(projectedRows).toBe(32);
+          expect(rowsAtControl).toBeLessThan(rowCount);
+          expect(projectedRows).toBe(rowCount);
+          expect(acquiredRows).toBeLessThanOrEqual(rowCount * 2);
           rows.mockClear();
-          const result = await listProjectedSessions({ projection, opts: { limit: 32 } });
+          const result = await listProjectedSessions({ projection, opts: { limit: rowCount } });
           expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
           expect(rows).not.toHaveBeenCalled();
         } finally {
           rows.mockRestore();
+          acquisitions.mockRestore();
           clock.mockRestore();
           await control;
           projection?.dispose();
@@ -322,7 +398,10 @@ describe("session list resolver cache", () => {
           filterAndSortSessionEntries({
             cfg: selectionConfig,
             entries: Object.entries(store),
-            getTarget: () => undefined,
+            getTarget: (key) => ({
+              agentId: "owner",
+              selection: readSessionListSelectionFacts(key),
+            }),
             getRowContext: () => buildSessionListRowMetadataContext({ now: 2 }),
             now: 2,
             opts: {},
@@ -332,7 +411,10 @@ describe("session list resolver cache", () => {
           filterAndSortSessionEntries({
             cfg: selectionConfig,
             entries: Object.entries(store),
-            getTarget: () => undefined,
+            getTarget: (key) => ({
+              agentId: "owner",
+              selection: readSessionListSelectionFacts(key),
+            }),
             getRowContext: () => buildSessionListRowMetadataContext({ now: 2 }),
             now: 2,
             opts: {},
@@ -389,6 +471,7 @@ describe("session list resolver cache", () => {
         let projection: SessionRowProjection | undefined;
         try {
           projection = await createSessionRowProjection({ cfg });
+          await projection.ensureMaterialized();
           expect(resolver).toHaveBeenCalledTimes(2);
           resolver.mockClear();
           for (let request = 0; request < 2; request++) {

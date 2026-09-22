@@ -39,10 +39,6 @@ type InlineSessionHistoryAppend = {
   shouldRefresh?: boolean;
 };
 
-function isMessageToolMirrorMessage(message: SessionHistoryMessage): boolean {
-  return message.openclawMessageToolMirror !== undefined;
-}
-
 export async function readSessionHistorySnapshotAsync(
   params: SessionHistoryReadParams,
 ): Promise<SessionHistorySnapshot> {
@@ -160,7 +156,7 @@ export class SessionHistorySseState {
       this.target.storePath &&
       !this.target.sessionEntry?.incognito &&
       !isIncognitoSessionKey(this.target.sessionKey)
-        ? createSessionHistorySubagentProjection(this.target)
+        ? createSessionHistorySubagentProjection(this.target, { deferSources: true })
         : undefined;
     nextMessage = createSubagentCoordinationHistoryProjection(subagentCoordination)([
       nextMessage,
@@ -223,7 +219,6 @@ export class SessionHistorySseState {
       }
       const projectedMessage = expectDefined(addedMessages[0], "projected inline message");
       const emittedMessage: SessionHistoryMessage =
-        isMessageToolMirrorMessage(projectedMessage) ||
         resolveMessageSeq(projectedMessage) === undefined
           ? (attachOpenClawTranscriptMeta(projectedMessage, {
               seq: this.rawTranscriptSeq,

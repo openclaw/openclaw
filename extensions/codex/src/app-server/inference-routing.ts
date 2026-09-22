@@ -139,7 +139,7 @@ async function prepareCodexInferenceRoute(params: {
     },
   );
   assertCurrent();
-  const type = isJsonObject(account.account) ? account.account.type : undefined;
+  const type = account.account?.type;
   if (type !== "apiKey" && type !== "chatgpt") {
     return undefined;
   }

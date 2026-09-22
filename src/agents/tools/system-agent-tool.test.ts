@@ -419,34 +419,41 @@ describe("openclaw tool", () => {
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
-  it("refuses an armed call that differs from the proposed operation", async () => {
-    const proposalRef: { current?: string } = {};
-    const proposingTool = createSystemAgentTool({ surface: "cli", proposalRef });
-    await proposingTool.execute("t3c", {
-      action: "set_default_model",
-      model: "openai/gpt-5.5",
-      approved: true,
-    });
-    const armedTool = createSystemAgentTool({ surface: "cli", approvalArmed: true, proposalRef });
-    const result = await armedTool.execute("t3d", {
-      action: "config_set",
-      path: "gateway.port",
-      value: "1",
-      approved: true,
-    });
-    // A different operation than the approved one voids the approval entirely;
-    // even an identical retry in the same armed turn stays locked.
-    expect(toolText(result)).toContain("approval-mismatch");
-    expect(proposalRef.current).toBeUndefined();
-    const retry = await armedTool.execute("t3e", {
-      action: "config_set",
-      path: "gateway.port",
-      value: "1",
-      approved: true,
-    });
-    expect(toolText(retry)).toContain("approval-mismatch");
-    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
-  });
+  it.each([
+    {
+      proposed: { action: "set_default_model", model: "openai/gpt-5.5" },
+      changed: { action: "config_set", path: "gateway.port", value: "1" },
+    },
+    {
+      proposed: { action: "create_agent", agentId: "qa-writer", name: "QA Writer" },
+      changed: { action: "create_agent", agentId: "qa-writer", name: "Other Writer" },
+    },
+  ])(
+    "refuses an armed call that differs from the proposed operation: $proposed",
+    async ({ proposed, changed }) => {
+      const proposalRef: { current?: string } = {};
+      const proposingTool = createSystemAgentTool({ surface: "cli", proposalRef });
+      await proposingTool.execute("t3c", {
+        ...proposed,
+        approved: true,
+      });
+      const armedTool = createSystemAgentTool({ surface: "cli", approvalArmed: true, proposalRef });
+      const result = await armedTool.execute("t3d", {
+        ...changed,
+        approved: true,
+      });
+      // A different operation than the approved one voids the approval entirely;
+      // even an identical retry in the same armed turn stays locked.
+      expect(toolText(result)).toContain("approval-mismatch");
+      expect(proposalRef.current).toBeUndefined();
+      const retry = await armedTool.execute("t3e", {
+        ...changed,
+        approved: true,
+      });
+      expect(toolText(retry)).toContain("approval-mismatch");
+      expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    },
+  );
 
   it("never performs an approved write inside the model tool process", async () => {
     const proposalRef: { current?: string } = {};

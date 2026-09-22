@@ -60,12 +60,22 @@ Docker seed CI resolves an exact published stable predecessor of the selected so
 
 The `published-upgrade-survivor` Docker lane validates one published package baseline per scenario. In Package Acceptance, the resolved `package-under-test` tarball is always the candidate and `published_upgrade_survivor_baseline` selects the fallback published baseline, defaulting to `openclaw@latest`; failed-lane rerun commands preserve that baseline. Current source release checks set `published_upgrade_survivor_baselines=supported-lines` for `legacy-operator-state`: npm's current `latest`, the preceding stable version, `extended-stable` when that tag exists, and the documented oldest supported baseline `2026.6.34`. The resolver reads `npm view openclaw versions` and `npm view openclaw dist-tags` at run time, pins exact versions before fanout, and deduplicates overlapping lines. Normal current-source release checks retain `base` and add `legacy-operator-state` and `custom-plugin-siblings`; release soak selects `reported-issues`, including these and the existing issue-shaped fixtures. The sibling-source scenario uses baselines from 2026.9.4 onward and requires actual custom-plugin Doctor contract execution from the private update canary, plus intact source files and plugin loading after the update.
 
+Before targeted Docker fanout, the trusted group planner installs each distinct published baseline in a throwaway npm prefix and checks `openclaw --version` plus `openclaw config set gateway.mode local` against synthetic isolated state. The config write loads the CLI setup path because version/help and config reads can use fast paths. An installed CLI that exits unsuccessfully is recorded as an **unusable published baseline**, with its skipped scenarios and captured error in the job summary and `upgrade-baseline-checks-*` artifact. Skipped scenarios are never counted as successful upgrades. Install errors, probe timeouts, and process-launch failures fail planning. Candidate installs and upgrades retain their existing failure gates.
+
 When a prerelease registry is mounted, the baseline package install and the
 initial manual baseline Gateway start use the configured published upstream.
 Published and candidate packages can share an exact version while containing
 different bytes; preserving published dist-tags alone does not isolate them.
 After those baseline commands, candidate installs keep using the verified
 candidate registry, including its exact-version dependencies.
+
+The `legacy-operator-state` and `msteams-polls` companion fixtures preserve the
+published archive for its package name/version across both registry phases.
+When the candidate companion has that same version, installation assertions
+require the retained published bytes. A different version selects and verifies
+the prepared candidate archive. This keeps same-version core update proof from
+simulating an npm republish; testing changed companion bytes requires a distinct
+companion version.
 
 Expanded release qualification requires the candidate's `YYYY.M.PATCH` base version
 to be at least the trusted workflow package's base version, ignoring prerelease
@@ -109,6 +119,15 @@ All supported baseline rows require successful updates. Existing synthetic
 `base` and reported-issue fixtures retain their success assertions and run once
 on the candidate-relative predecessor. The lane does not run an extra Doctor or
 omit those fixtures to turn a failed schema upgrade into a pass.
+
+Current cross-OS tooling runs packaged fresh-install and upgrade checks on both
+Node 24.19.0 and the Node 26.1.0 support floor across Linux, Windows, and macOS.
+Windows packaged fresh-install retains Node 24.16.0 for its Node 24 cell because
+of the later libuv file-watcher regression. Both runtime variants consume the
+same prepared candidate tarball. A focused `suite_filter` selects both Node
+variants; the Node 26 jobs and artifacts have distinct names. Installer and
+source-update lanes keep their existing Node 24 coverage. Explicitly selecting
+older `workflow_ref` tooling retains that revision's historical matrix.
 
 The Windows packaged and installer fresh lanes also verify that an installed package can import a browser-control override from a raw absolute Windows path. The OpenAI cross-OS agent-turn smoke defaults to `OPENCLAW_CROSS_OS_OPENAI_MODEL` when set, otherwise `openai/gpt-5.6-luna`, so the install and gateway proof uses the lower-cost GPT-5.6 test tier.
 

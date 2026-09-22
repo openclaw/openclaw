@@ -2,6 +2,7 @@ import { constants as bufferConstants } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import zlib from "node:zlib";
@@ -9,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isVisibleSubagentResultEventForRun } from "../../agents/subagents/announce/subagent-announce-result.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { assertOpenClawAgentCurrentRuntimeSchema } from "../../state/openclaw-agent-db-schema-helpers.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -23,7 +25,10 @@ import {
 import { deleteSessionEntryLifecycle, findTranscriptEvent } from "./session-accessor.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { findSessionTranscriptArchiveEventReadOnly } from "./session-history.js";
+import {
+  findSessionTranscriptArchiveEventReadOnly,
+  listSessionTranscriptArchivesReadOnly,
+} from "./session-history.js";
 
 const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -33,6 +38,45 @@ afterEach(() => {
 });
 
 describe("SQLite transcript archive reads", () => {
+  it("reads a pre-archive store without creating its optional archive table", async () => {
+    await withOpenClawTestState({ label: "optional-archive-read" }, async (state) => {
+      const options = { agentId: "main", env: state.env };
+      const database = openOpenClawAgentDatabase(options);
+      database.db.exec("DROP TABLE session_transcript_archives");
+      assertOpenClawAgentCurrentRuntimeSchema(database.db, {
+        agentId: database.agentId,
+        pathname: database.path,
+      });
+      const storePath = database.path;
+      closeOpenClawAgentDatabasesForTest();
+      const before = fs.readFileSync(storePath);
+      const scope = {
+        ...options,
+        storePath,
+        sessionKey: "agent:main:pre-archive",
+        sessionId: "pre-archive",
+      };
+
+      expect(
+        listSessionTranscriptArchivesReadOnly({ ...scope, sessionIds: [scope.sessionId] }),
+      ).toEqual([]);
+      await expect(
+        findSessionTranscriptArchiveEventReadOnly(scope, "absent-run"),
+      ).resolves.toBeUndefined();
+      const persisted = new DatabaseSync(storePath, { readOnly: true });
+      try {
+        expect(
+          persisted
+            .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'session_transcript_archives'")
+            .get(),
+        ).toBeUndefined();
+      } finally {
+        persisted.close();
+      }
+      expect(fs.readFileSync(storePath)).toEqual(before);
+    });
+  });
+
   it.each([false, true])(
     "reads committed archive blobs before file publication (compressed=%s)",
     async (compressed) => {

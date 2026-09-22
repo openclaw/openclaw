@@ -2,8 +2,9 @@
 import fs, { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
 import { loadSessionStore, saveSessionStore } from "./library.js";
 
 const libraryPath = new URL("./library.ts", import.meta.url);
@@ -15,23 +16,38 @@ const lazyRuntimeSpecifiers = [
   "./plugins/runtime/runtime-web-channel-plugin.js",
 ] as const;
 
-function readLibraryModuleImports() {
-  const sourceText = readFileSync(libraryPath, "utf8");
+function readLibraryModuleImports(sourceText = readFileSync(libraryPath, "utf8")) {
+  const { outputText } = ts.transpileModule(sourceText, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, verbatimModuleSyntax: true },
+  });
   const staticImports = new Set<string>();
   const dynamicImports = new Set<string>();
-  const staticImportPattern = /(?:^|\n)\s*import\s+(?!type\b)[\s\S]*?\s+from\s+["']([^"']+)["']/g;
-  const dynamicImportPattern = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
-
-  for (const match of sourceText.matchAll(staticImportPattern)) {
-    staticImports.add(expectDefined(match[1], "match[1] test invariant"));
-  }
-  for (const match of sourceText.matchAll(dynamicImportPattern)) {
-    dynamicImports.add(expectDefined(match[1], "match[1] test invariant"));
+  for (const { kind, specifier } of collectModuleReferencesFromSource(outputText, { ts })) {
+    if (kind === "import" || kind === "export") {
+      staticImports.add(specifier);
+    } else if (kind === "dynamic-import") {
+      dynamicImports.add(specifier);
+    }
   }
   return { dynamicImports, staticImports };
 }
 
 describe("library module imports", () => {
+  it("distinguishes runtime module edges from erased types", () => {
+    const { dynamicImports, staticImports } = readLibraryModuleImports(`
+      import "./side-effect.js";
+      import type { TypeOnly } from "./type-only.js";
+      import { value } from "./value.js";
+      export { reexported } from "./reexported.js";
+      export type { ExportType } from "./export-type.js";
+      type Query = import("./type-query.js").Query;
+      const lazy = () => import("./dynamic.js");
+    `);
+
+    expect([...staticImports]).toEqual(["./side-effect.js", "./value.js", "./reexported.js"]);
+    expect([...dynamicImports]).toEqual(["./dynamic.js"]);
+  });
+
   it("keeps lazy runtime boundaries on dynamic imports", () => {
     const { dynamicImports, staticImports } = readLibraryModuleImports();
 

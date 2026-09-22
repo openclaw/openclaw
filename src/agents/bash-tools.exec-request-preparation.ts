@@ -371,7 +371,6 @@ export function resolvePreparedExecEnvironment(params: {
   pluginEnv?: Record<string, string>;
   storeEnv?: Record<string, string>;
   storeSecretEnv?: Record<string, string>;
-  secretEgressEnv?: Record<string, string>;
   credentialScrubEnv?: Readonly<Record<string, string>>;
   localIdentityEnv?: Readonly<Record<string, string>>;
   managedLocalIdentity?: boolean;
@@ -382,9 +381,6 @@ export function resolvePreparedExecEnvironment(params: {
     throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
   }
   const inheritedBaseEnv = coerceEnv(process.env);
-  if (params.secretEgressEnv) {
-    Object.assign(inheritedBaseEnv, params.secretEgressEnv);
-  }
   const channelContextEnv = buildChannelContextEnv(params.channelContext);
   const explicitEnv: Record<string, string> | undefined =
     params.execParams.env !== undefined ||
@@ -521,9 +517,6 @@ export function resolvePreparedExecEnvironment(params: {
         env[key] = value;
       }
     }
-  }
-  if (params.secretEgressEnv) {
-    Object.assign(env, params.secretEgressEnv);
   }
   const preparedEnv = {
     ...params.localProcessEnv,

@@ -9,8 +9,11 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { compareSessionEntryPairs } from "./session-list-order.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import {
+  create as createSessionRow,
+  sort as sortSessionRows,
+} from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -39,6 +42,7 @@ export function createSessionRowProjectionFixture(params: {
   const rows = new Map<string, Row>();
   const store = { ...params.store };
   let revision = 0;
+  let revisionToken = {};
   const id = (row: Pick<Row, "agentId" | "key" | "storeTarget">) =>
     `${row.agentId}\0${row.storeTarget.storePath}\0${row.key}`;
   const describe: SessionRowProjection["describe"] = (
@@ -75,6 +79,7 @@ export function createSessionRowProjectionFixture(params: {
     const previous = rows.get(id(fields));
     delete store[key];
     revision++;
+    revisionToken = {};
     if (!entry || entry.incognito || isIncognitoSessionKey(key)) {
       rows.delete(id(fields));
       return;
@@ -95,7 +100,7 @@ export function createSessionRowProjectionFixture(params: {
       modelSource: { entry, readSourceEntry: (parentKey) => store[parentKey] },
     });
     rows.set(id(fields), {
-      ...fields,
+      ...createSessionRow(fields, entry),
       entry,
       storedEntry: entry,
       materialized: materializeSessionRow(inputs),
@@ -118,7 +123,30 @@ export function createSessionRowProjectionFixture(params: {
   for (const [key, entry] of Object.entries(store)) {
     setEntry(key, entry);
   }
+  const selectEntries = (options?: Parameters<SessionRowProjection["selectEntries"]>[0]) => {
+    const query = options ?? {};
+    const matchingKeys =
+      query.sessionIdOrKey &&
+      new Set(
+        [...rows.values()]
+          .filter(
+            (row) =>
+              row.key === query.sessionIdOrKey || row.entry.sessionId === query.sessionIdOrKey,
+          )
+          .map((row) => row.key),
+      );
+    const selected = [...rows.values()].filter(
+      (row) =>
+        (!query.agentId || row.agentId === query.agentId) &&
+        (!query.storePath || row.storeTarget.storePath === query.storePath) &&
+        (!query.key || row.key === query.key) &&
+        (!matchingKeys || matchingKeys.has(row.key)) &&
+        (!query.parentSessionKey || row.parents.has(query.parentSessionKey)),
+    );
+    return sortSessionRows(selected, query.sortBy);
+  };
   const projection: SessionRowProjection = {
+    readPreparedRowContext: () => rowContext,
     capture: describe,
     findBySessionId: (query) =>
       [...rows.values()].filter(
@@ -130,11 +158,22 @@ export function createSessionRowProjectionFixture(params: {
           (!query.storePath || row.storeTarget.storePath === query.storePath),
       ),
     describe,
+    // This row-only fixture cannot certify the resident owner's complete ancestry graph.
+    ancestorRows: () => undefined,
+    setArchivePageSize: () => {},
+    modelFacts: (row) => {
+      const source = describe(row)!.materialized.source;
+      return { ...source, catalogEntry: source.thinkingProjection.catalogEntry };
+    },
+    withPreparedExactRows: async (queries, consume) => {
+      queries(cfg);
+      return { kind: "complete", value: consume(projection) };
+    },
     present: (record, options) => {
       const now = options?.now ?? Date.now();
       const row = presentSessionRow(record.materialized, {
         now,
-        subagentRuns: rowContext.subagentRuns.atTime(now),
+        subagentRuns: options?.subagentRuns ?? rowContext.subagentRuns.atTime(now),
         activeModel: record.fallbackModel,
         excludedChildKeys: options?.excludedChildKeys,
       });
@@ -148,12 +187,47 @@ export function createSessionRowProjectionFixture(params: {
       return row;
     },
     ensureMaterialized: () => Promise.resolve(),
+    prepareMembership: () => Promise.resolve(),
+    needsMembershipPreparation: () => false,
+    sessionGroupTargets: () => {
+      const groups = new Map<string, { agentId: string; sessionKey: string }[]>();
+      for (const row of rows.values()) {
+        const name = row.entry.category?.trim();
+        if (name) {
+          const targets = groups.get(name) ?? [];
+          targets.push({ agentId: row.agentId, sessionKey: row.key });
+          groups.set(name, targets);
+        }
+      }
+      return groups;
+    },
+    sharingTarget(query) {
+      const row = describe(query);
+      return row
+        ? {
+            agentId: row.agentId,
+            canonicalKey: row.key,
+            entry: row.entry,
+            storeKey: row.key,
+            storeKeys: [row.key],
+            storePath: row.storeTarget.storePath,
+          }
+        : null;
+    },
+    hasMembership: (path, key, identity) =>
+      [...rows.values()].some(
+        (row) =>
+          row.storeTarget.storePath === path && row.key === key && row.membership.has(identity),
+      ),
     get materializedCount() {
       return revision;
     },
     dirtyRowCount: 0,
     needsMaterialization: false,
     state: {
+      get revision() {
+        return revisionToken;
+      },
       cfg,
       modelCatalog,
       rowContext,
@@ -165,27 +239,22 @@ export function createSessionRowProjectionFixture(params: {
       }),
     },
     isCurrent: (row) => rows.get(id(row))?.generation === row.generation,
-    select: (options?: Parameters<SessionRowProjection["select"]>[0]) => {
-      const query = options ?? {};
-      return [...rows.values()]
-        .filter(
-          (row) =>
-            (!query.agentId || row.agentId === query.agentId) &&
-            (!query.storePath || row.storeTarget.storePath === query.storePath) &&
-            (!query.key || row.key === query.key) &&
-            (!query.parentSessionKey || row.parents.has(query.parentSessionKey)),
-        )
-        .toSorted((a, b) =>
-          compareSessionEntryPairs([a.key, a.entry], [b.key, b.entry], query.sortBy),
-        );
-    },
+    selectEntries,
+    listCreatedActors: () =>
+      selectEntries({ sortBy: null }).flatMap((row) =>
+        row.entry.createdActor ? [row.entry.createdActor] : [],
+      ),
     snapshot: (query, options) => {
       const record = describe(query);
       return record
         ? { row: projection.present(record, options), lifecycleRunId: record.entry.lifecycleRunId }
         : { row: null };
     },
-    dispose: () => rows.clear(),
+    dispose: () => {
+      revision++;
+      revisionToken = {};
+      rows.clear();
+    },
   };
   return Object.assign(projection, { setEntry });
 }

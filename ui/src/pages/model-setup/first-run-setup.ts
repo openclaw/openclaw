@@ -5,6 +5,7 @@ import type {
   SystemAgentSetupVerifyResult,
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
 import {
@@ -41,10 +42,14 @@ export function captureModelSetupConnection(
   previousRecoveryScope: string | null = null,
 ) {
   const snapshot = context.gateway.snapshot;
+  const selection = modelSetupAgentSelection(context, firstRun);
   return {
     client: snapshot.client,
     hello: snapshot.hello,
-    agentId: modelSetupAgentSelection(context, firstRun).state.selectedId,
+    agentId: selection.state.selectedId,
+    selectionIntentRevision: firstRun ? 0 : selection.intentRevision,
+    selectionPending:
+      !firstRun && selection.state.selectedId === null && context.agents.state.agentsList === null,
     connected: snapshot.phase === "connected",
     firstRun,
     connectionRevision: context.gateway.connectionRevision,
@@ -54,6 +59,44 @@ export function captureModelSetupConnection(
         ? (snapshot.hello?.auth?.recoveryScope ?? null)
         : previousRecoveryScope,
   };
+}
+
+type ConnectionSnapshot = ReturnType<typeof captureModelSetupConnection>;
+
+export function reconcileModelSetupConnection(
+  previous: ConnectionSnapshot | null,
+  connection: ConnectionSnapshot,
+): { kind: "unchanged" | "pending" | "changed"; connection: ConnectionSnapshot } {
+  // An unloaded roster with unchanged intent is not a different wizard owner.
+  // Keep the admitted owner blocked until selection is validated again.
+  if (
+    previous &&
+    connection.selectionPending &&
+    connection.selectionIntentRevision === previous.selectionIntentRevision &&
+    connection.firstRun === previous.firstRun &&
+    connection.connectionRevision === previous.connectionRevision &&
+    (!connection.connected ||
+      (connection.recoveryScope &&
+        connection.recoveryScope === previous.recoveryScope &&
+        hasOperatorAdminAccess(connection.hello?.auth ?? null)))
+  ) {
+    return {
+      kind: previous.selectionPending ? "unchanged" : "pending",
+      connection: { ...previous, selectionPending: true },
+    };
+  }
+  const unchanged =
+    previous &&
+    connection.client === previous.client &&
+    connection.hello === previous.hello &&
+    connection.agentId === previous.agentId &&
+    connection.connected === previous.connected &&
+    connection.firstRun === previous.firstRun &&
+    connection.connectionRevision === previous.connectionRevision &&
+    connection.recoveryScope === previous.recoveryScope &&
+    connection.selectionIntentRevision === previous.selectionIntentRevision &&
+    connection.selectionPending === previous.selectionPending;
+  return { kind: unchanged ? "unchanged" : "changed", connection };
 }
 
 export type ModelSetupRouteData = { firstRun: boolean };

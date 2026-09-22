@@ -25,6 +25,7 @@ import {
   installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
   readQueuedEntry,
+  setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
 vi.mock("../../agents/runtime-plan/build.js", () => ({
@@ -302,7 +303,7 @@ describe("retired caller delivery settlement", () => {
             : { error: { message: expect.stringContaining("message caller retired") } },
         );
         expect(compaction).toHaveBeenCalledOnce();
-        expect(queueStorage.findDeliveryIntentOwner(queueId, stateDir)).toMatchObject({
+        expect(await queueStorage.findDeliveryIntentOwner(queueId, stateDir)).toMatchObject({
           status: "failed",
           settlementPending: true,
         });
@@ -414,8 +415,7 @@ describe("retired caller delivery settlement", () => {
   );
 
   it("does not project rejection or alter a replacement producer after caller retirement", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-09-15T12:00:00.000Z"));
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const stateDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const completion = await import("./delivery-completion.js");
@@ -451,7 +451,7 @@ describe("retired caller delivery settlement", () => {
       await adapter.prepared;
       const originalClaim = readQueuedEntry(stateDir, queueId).producerClaimId;
       // Expire the lease without running its heartbeat so the queue CAS owns the rejection.
-      vi.setSystemTime(Date.now() + 60_001);
+      setQueuedEntryState(stateDir, queueId, { retryCount: 0, availableAt: Date.now() - 1 });
       const replacementClaim = await queueStorage.claimDeliveryPlatformSendAttempt(
         queueId,
         stateDir,
@@ -474,4 +474,138 @@ describe("retired caller delivery settlement", () => {
       await outcome;
     }
   });
+});
+
+describe("post-delivery pin authority", () => {
+  const fixtures = installDeliveryQueueTmpDirHooks();
+  let sendDurableMessageBatch: typeof import("../../plugin-sdk/channel-outbound.js").sendDurableMessageBatch;
+
+  beforeAll(async () => {
+    ({ sendDurableMessageBatch } = await import("../../plugin-sdk/channel-outbound.js"));
+    ({ deliverOutboundPayloads } = await import("./deliver.js"));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it.each([
+    { required: false, revokeDuring: "after-send" },
+    { required: true, revokeDuring: "after-send" },
+    { required: false, revokeDuring: "pin-preparation" },
+    { required: true, revokeDuring: "pin-preparation" },
+  ] as const)(
+    "preserves accepted delivery after $revokeDuring revocation (required pin: $required)",
+    async ({ required, revokeDuring }) => {
+      const stateDir = fixtures.tmpDir();
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const pinPreparing = createDeferred();
+      const releasePin = createDeferred();
+      const pinRequest = vi.fn();
+      const legacySend = vi.fn();
+      const onPlatformSendDispatch = vi.fn(async () => {});
+      let dispatchesBeforePin = 0;
+      const revoked = new Error("delivery owner closed before pin request");
+      let current = true;
+      const send = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
+        await ctx.onPlatformSendDispatch?.();
+        return {
+          messageId: "accepted-message",
+          receipt: createMessageReceiptFromOutboundResults({
+            results: [{ channel: "matrix", messageId: "accepted-message" }],
+            kind: "text",
+          }),
+        };
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "matrix",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({
+                id: "matrix",
+                config: { listAccountIds: () => [] },
+              }),
+              message: {
+                id: "matrix",
+                durableFinal: { capabilities: { text: true } },
+                send: { text: send },
+              },
+              outbound: {
+                deliveryMode: "direct",
+                sendText: legacySend,
+                pinDeliveredMessage: async (ctx) => {
+                  pinPreparing.resolve();
+                  if (revokeDuring === "pin-preparation") {
+                    await releasePin.promise;
+                  }
+                  ctx.assertDirectAdapterHandoff?.();
+                  pinRequest();
+                },
+              },
+            } satisfies ChannelPlugin,
+          },
+        ]),
+      );
+      const outcome = sendDurableMessageBatch({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "accepted message", delivery: { pin: { enabled: true, required } } }],
+        durability: "required",
+        onPlatformSendDispatch,
+        assertDirectAdapterHandoff: () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+        onDeliveredPayload: () => {
+          dispatchesBeforePin = onPlatformSendDispatch.mock.calls.length;
+          if (revokeDuring === "after-send") {
+            current = false;
+          }
+        },
+      });
+      try {
+        if (revokeDuring === "pin-preparation") {
+          await Promise.race([
+            pinPreparing.promise,
+            outcome.then(() => {
+              throw new Error("delivery settled before pin preparation");
+            }),
+          ]);
+          current = false;
+          releasePin.resolve();
+        }
+        expect(await outcome).toMatchObject({
+          status: required ? "partial_failed" : "sent",
+          results: [{ channel: "matrix", messageId: "accepted-message" }],
+          receipt: { primaryPlatformMessageId: "accepted-message" },
+          ...(required ? { sentBeforeError: true, error: { message: revoked.message } } : {}),
+        });
+        expect(send).toHaveBeenCalledOnce();
+        expect(legacySend).not.toHaveBeenCalled();
+        expect(pinRequest).not.toHaveBeenCalled();
+        expect(dispatchesBeforePin).toBeGreaterThan(0);
+        expect(onPlatformSendDispatch).toHaveBeenCalledTimes(dispatchesBeforePin);
+        const pending = await loadPendingDeliveries(stateDir);
+        expect(pending).toMatchObject(
+          required ? [{ recoveryState: "unknown_after_send", lastError: revoked.message }] : [],
+        );
+        // A required-pin failure retains post-send evidence. Recovery must
+        // terminalize that custody without replaying the accepted message.
+        await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
+        expect(await loadPendingDeliveries(stateDir)).toEqual([]);
+        expect(send).toHaveBeenCalledOnce();
+        expect(legacySend).not.toHaveBeenCalled();
+        expect(pinRequest).not.toHaveBeenCalled();
+      } finally {
+        releasePin.resolve();
+        await outcome;
+      }
+    },
+  );
 });

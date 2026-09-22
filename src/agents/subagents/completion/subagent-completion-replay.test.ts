@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
@@ -10,10 +10,13 @@ import {
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { ensureTaskRegistryReady, getTaskById } from "../../../tasks/runtime-internal.js";
+import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
 import { publishTaskRecordAfterAtomicStore } from "../../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
+import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -27,11 +30,19 @@ import {
 
 const resumeSubagentRun = vi.hoisted(() => vi.fn());
 vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun }));
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 describe("completed requester delivery replay fence", () => {
+  const env = captureEnv(["OPENCLAW_STATE_DIR"]);
+  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
+  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
   beforeEach(() => {
-    vi.stubEnv(
+    // Failed resource cleanup retains the capture; retired directories only need removal retry.
+    if (deliveries) {
+      throw new Error("Previous completion replay fixture cleanup is incomplete");
+    }
+    deliveries = captureTaskDeliveryWork();
+    setTestEnvValue(
       "OPENCLAW_STATE_DIR",
       tempDirs.make("openclaw-completion-replay-", resolvePreferredOpenClawTmpDir()),
     );
@@ -39,17 +50,45 @@ describe("completed requester delivery replay fence", () => {
   });
 
   afterEach(async () => {
-    for (const dir of tempDirs.dirs) {
-      await closeOpenClawAgentDatabasesAsync(dir);
+    const failures: unknown[] = [];
+    try {
+      await settle();
+    } catch (error) {
+      failures.push(error);
     }
-    await closeOpenClawStateDatabaseAsync();
-    subagentRuns.clear();
-    resetTaskRegistryForTests({ persist: false });
-    closeOpenClawStateDatabaseForTest();
-    vi.unstubAllEnvs();
+    // Preserve stores and their environment while detached delivery still owns them.
+    if (getActiveGatewayRootWorkCount() === 0) {
+      try {
+        for (const dir of tempDirs.dirs) {
+          await closeOpenClawAgentDatabasesAsync(dir);
+        }
+        await closeOpenClawStateDatabaseAsync();
+        subagentRuns.clear();
+        resetTaskRegistryForTests({ persist: false });
+        closeOpenClawStateDatabaseForTest();
+        // Keep failed removals tracked without retaining the retired fixture's environment.
+        try {
+          tempDirs.cleanup();
+        } catch (error) {
+          failures.push(error);
+        }
+        env.restore();
+        deliveries?.[Symbol.dispose]();
+        deliveries = undefined;
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Subagent completion replay cleanup failed");
+    }
   });
 
   async function reopenOwners() {
+    await settle();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     subagentRuns.clear();
@@ -131,8 +170,8 @@ describe("completed requester delivery replay fence", () => {
       expect(driver.wake).not.toHaveBeenCalled();
     } finally {
       tail.resolve(undefined);
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       driver.controller.clearScheduledResumeTimers();
+      await settle();
     }
     await reopenOwners();
     input.subagent = subagentRuns.get(input.subagent.runId)!;
@@ -140,7 +179,7 @@ describe("completed requester delivery replay fence", () => {
     const restored = requesterWakeDriver([input]);
     try {
       restored.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await settle();
       expect(restored.wake).not.toHaveBeenCalled();
       expect(input.subagent).toEqual(retained);
 
@@ -150,7 +189,7 @@ describe("completed requester delivery replay fence", () => {
       await reopenOwners();
       input.subagent = subagentRuns.get(input.subagent.runId)!;
       restored.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await settle();
       expect(restored.wake).not.toHaveBeenCalled();
 
       // A separately admitted yield batch still owns real pending work.
@@ -167,6 +206,7 @@ describe("completed requester delivery replay fence", () => {
       expect(restored.wake).toHaveBeenCalledTimes(1);
     } finally {
       restored.controller.clearScheduledResumeTimers();
+      await settle();
     }
   });
 
@@ -204,6 +244,9 @@ describe("completed requester delivery replay fence", () => {
         terminalReply: { disposition: "visible", text: "canonical result" },
         triggerCleanup: false,
       });
+      // Admission must start from a real pending obligation, not a marker-less row.
+      input.subagent.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      saveSubagentRegistryToSqlite(subagentRuns);
       driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
       await admitted.promise;
       expect(
@@ -214,12 +257,12 @@ describe("completed requester delivery replay fence", () => {
         "suspended",
       );
       release.resolve(undefined);
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await settle();
       expect(driver.wake).not.toHaveBeenCalled();
     } finally {
       release.resolve(undefined);
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       driver.controller.clearScheduledResumeTimers();
+      await settle();
     }
   });
 
@@ -231,8 +274,8 @@ describe("completed requester delivery replay fence", () => {
         await reported.promise;
       } finally {
         tail.resolve(undefined);
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
         driver.controller.clearScheduledResumeTimers();
+        await settle();
       }
       await reopenOwners();
       const before = subagentRuns.get(input.subagent.runId)!;

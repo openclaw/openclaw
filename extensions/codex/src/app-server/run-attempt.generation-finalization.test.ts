@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -6,6 +7,7 @@ import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/sessi
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { readMirroredSessionHistoryMessages } from "./attempt-context.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
   createParams,
@@ -21,8 +23,38 @@ import {
   resolveCodexSessionBinding,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
+import { getSharedCodexAppServerClient } from "./shared-client.js";
 
 setupRunAttemptTestHooks();
+
+async function prepareGenerationAttempt(params: ReturnType<typeof createParams>) {
+  await resolveBootstrapFilesForPreparation({
+    workspaceDir: params.workspaceDir,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: "main",
+  });
+  await readMirroredSessionHistoryMessages({
+    agentId: "main",
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionTarget: params.sessionTarget,
+    contextTokenBudget: params.contextTokenBudget,
+  });
+  await getSharedCodexAppServerClient({
+    startOptions: {
+      transport: "stdio",
+      command: process.execPath,
+      args: ["app-server"],
+      headers: {},
+    },
+    agentDir: path.join(tempDir, "wire-agent"),
+    authProfileId: null,
+    config: {},
+  });
+}
 
 describe("Codex finalization generation ownership", () => {
   it.each([false, true])(
@@ -90,6 +122,7 @@ describe("Codex finalization generation ownership", () => {
         ]),
       );
       const harness = createResumeHarness();
+      await prepareGenerationAttempt(params);
       const run = runCodexAppServerAttempt(params, { bindingStore });
       const settledRun = run.then(
         (result) => ({ result }),
@@ -112,7 +145,10 @@ describe("Codex finalization generation ownership", () => {
               throw outcome.error;
             }
             throw new Error("Codex turn settled before agent_end held finalization", {
-              cause: readAttemptTerminal(outcome.result),
+              cause: {
+                terminal: readAttemptTerminal(outcome.result),
+                codexAppServerFailure: outcome.result.codexAppServerFailure,
+              },
             });
           }),
         ]);
@@ -147,6 +183,7 @@ describe("Codex finalization generation ownership", () => {
           prompt: "continue after compaction",
         });
         nextParams.sessionTarget = { ...scope, sessionId: successor.sessionId };
+        await prepareGenerationAttempt(nextParams);
         const nextRun = runCodexAppServerAttempt(nextParams, { bindingStore: baseStore });
         await nextHarness.waitForMethod("turn/start");
         await nextHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
@@ -238,7 +275,7 @@ describe("Codex finalization generation ownership", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-existing",
-          turn: { id: "turn-1", status: "interrupted" },
+          turn: { id: "turn-1", status: "interrupted", items: [] },
         },
       });
       await expect(outcome).resolves.toMatchObject({

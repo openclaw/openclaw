@@ -12,6 +12,7 @@ import {
   type ManagedImageRecordDatabase,
 } from "../gateway/managed-image-record-store.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -91,6 +92,7 @@ describe("legacy managed outgoing image migration", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fsp.rm(stateDir, { recursive: true, force: true });
   });
@@ -106,7 +108,7 @@ describe("legacy managed outgoing image migration", () => {
     );
     await expect(fsp.access(legacy.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
     await fsp.access(legacy.originalPath);
-    expect(readManagedImageRecord(legacy.record.attachmentId, stateDir)).toEqual({
+    expect(await readManagedImageRecord(legacy.record.attachmentId, stateDir)).toEqual({
       ...legacy.record,
       original: {
         ...legacy.record.original,
@@ -143,7 +145,7 @@ describe("legacy managed outgoing image migration", () => {
 
     expect(detected.hasLegacy).toBe(true);
     expect(result.warnings).toEqual([]);
-    expect(readManagedImageRecord(legacy.record.attachmentId, stateDir)).not.toBeNull();
+    expect(await readManagedImageRecord(legacy.record.attachmentId, stateDir)).not.toBeNull();
     await expect(fsp.access(legacy.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fsp.access(claimPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -162,7 +164,7 @@ describe("legacy managed outgoing image migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes.join("\n")).toContain("Discarded 1 expired managed outgoing image");
-    expect(readManagedImageRecord(legacy.record.attachmentId, stateDir)).toBeNull();
+    expect(await readManagedImageRecord(legacy.record.attachmentId, stateDir)).toBeNull();
     await expect(fsp.access(legacy.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fsp.access(legacy.originalPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -190,7 +192,7 @@ describe("legacy managed outgoing image migration", () => {
     expect(result.warnings.join("\n")).toContain("synthetic attachment remove failure");
     await fsp.access(legacy.sourcePath);
     await fsp.access(legacy.originalPath);
-    expect(readManagedImageRecord(legacy.record.attachmentId, stateDir)).toBeNull();
+    expect(await readManagedImageRecord(legacy.record.attachmentId, stateDir)).toBeNull();
   });
 
   it("fails atomically on a conflicting SQLite row and retains every source", async () => {
@@ -221,7 +223,7 @@ describe("legacy managed outgoing image migration", () => {
     const result = migrate(stateDir);
 
     expect(result.warnings.join("\n")).toContain("conflicts with shared SQLite state");
-    expect(readManagedImageRecord(first.record.attachmentId, stateDir)).toBeNull();
+    expect(await readManagedImageRecord(first.record.attachmentId, stateDir)).toBeNull();
     await fsp.access(first.sourcePath);
     await fsp.access(second.sourcePath);
   });
@@ -263,7 +265,7 @@ describe("legacy managed outgoing image migration", () => {
     expect(fs.readdirSync(path.dirname(legacy.sourcePath))).toEqual([
       path.basename(legacy.sourcePath),
     ]);
-    expect(readManagedImageRecord(legacy.record.attachmentId, stateDir)).toBeNull();
+    expect(await readManagedImageRecord(legacy.record.attachmentId, stateDir)).toBeNull();
   });
 
   it("keeps JSON when the source changes before cleanup", async () => {
@@ -277,7 +279,7 @@ describe("legacy managed outgoing image migration", () => {
 
     expect(result.warnings.join("\n")).toContain("Failed claiming legacy managed outgoing");
     await fsp.access(legacy.sourcePath);
-    expect(readManagedImageRecord(legacy.record.attachmentId, stateDir)).toBeNull();
+    expect(await readManagedImageRecord(legacy.record.attachmentId, stateDir)).toBeNull();
   });
 
   it("restores JSON when cleanup fails and succeeds on retry", async () => {

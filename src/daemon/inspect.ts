@@ -11,8 +11,7 @@ import {
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
-import { parseLaunchdPlistLabel } from "./launchd-plist.js";
-import { readLaunchDaemonPlistLabel } from "./launchd-system.js";
+import { decodeLaunchdPlistMetadata } from "./launchd-plist.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import { parseSystemdExecStart, splitSystemdLogicalLines } from "./systemd-unit.js";
@@ -138,64 +137,19 @@ function hasGatewayServiceMarker(content: string): boolean {
   );
 }
 
-function extractPlistKeyBlock(
-  contents: string,
-  key: string,
-  tag: "array" | "string",
-): string | null {
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(
-    `<key>${escapedKey}<\\/key>\\s*<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`,
-    "i",
-  );
-  const match = contents.match(pattern);
-  return match?.[1]?.trim() || null;
-}
-
-function extractPlistStringValues(
-  contents: string,
-  key: string,
-  tag: "array" | "string",
-): string[] {
-  const block = extractPlistKeyBlock(contents, key, tag);
-  if (!block) {
-    return [];
-  }
-  if (tag === "string") {
-    return [block];
-  }
-  return Array.from(block.matchAll(/<string>([\s\S]*?)<\/string>/gi))
-    .map((match) => match[1]?.trim() ?? "")
-    .filter(Boolean);
-}
-
-function detectLaunchdGatewayExecutionMarker(contents: string): Marker | null {
-  const program = extractPlistStringValues(contents, "Program", "string");
-  const programArguments = extractPlistStringValues(contents, "ProgramArguments", "array");
+function detectLaunchdGatewayExecutionMarker(plist: Record<string, unknown>): Marker | null {
+  const programArguments = Array.isArray(plist.ProgramArguments)
+    ? plist.ProgramArguments.filter((arg): arg is string => typeof arg === "string")
+    : [];
   if (!hasGatewaySubcommandArg(programArguments)) {
     return null;
   }
   // Only execution command fields identify gateway jobs; labels alone catch too
   // many unrelated helper jobs.
   const launchCommand = normalizeLowercaseStringOrEmpty(
-    [...program, ...programArguments].filter(Boolean).join("\n"),
+    [typeof plist.Program === "string" ? plist.Program : "", ...programArguments].join("\n"),
   );
-  for (const marker of EXTRA_MARKERS) {
-    if (launchCommand.includes(marker)) {
-      return marker;
-    }
-  }
-  return null;
-}
-
-function isOpenClawGatewayLaunchdService(label: string, contents: string): boolean {
-  if (hasGatewayServiceMarker(contents)) {
-    return true;
-  }
-  if (detectLaunchdGatewayExecutionMarker(contents) !== "openclaw") {
-    return false;
-  }
-  return label.startsWith("ai.openclaw.");
+  return EXTRA_MARKERS.find((marker) => launchCommand.includes(marker)) ?? null;
 }
 
 function isOpenClawGatewaySystemdService(name: string, contents: string): boolean {
@@ -243,9 +197,9 @@ async function readDirEntries(dir: string): Promise<string[]> {
   }
 }
 
-async function readUtf8File(filePath: string): Promise<string | null> {
+async function readServiceFile(filePath: string): Promise<Buffer | null> {
   try {
-    return await fs.readFile(filePath, "utf8");
+    return await fs.readFile(filePath);
   } catch {
     return null;
   }
@@ -255,7 +209,7 @@ type ServiceFileEntry = {
   entry: string;
   name: string;
   fullPath: string;
-  contents: string;
+  contents: Buffer;
 };
 
 async function collectServiceFiles(params: {
@@ -274,7 +228,7 @@ async function collectServiceFiles(params: {
       continue;
     }
     const fullPath = path.join(params.dir, entry);
-    const contents = await readUtf8File(fullPath);
+    const contents = await readServiceFile(fullPath);
     if (contents === null) {
       continue;
     }
@@ -297,23 +251,18 @@ async function scanLaunchdDir(params: {
   });
 
   for (const { name: labelFromName, fullPath, contents } of candidates) {
-    const nativeLabel = params.includeManagedOpenClaw
-      ? await readLaunchDaemonPlistLabel(fullPath)
-      : null;
-    const label =
-      nativeLabel?.status === "ok"
-        ? nativeLabel.label
-        : (parseLaunchdPlistLabel(contents) ?? labelFromName);
+    const plist = await decodeLaunchdPlistMetadata(contents).catch(() => undefined);
+    if (!plist) {
+      continue;
+    }
+    const label = typeof plist.Label === "string" && plist.Label ? plist.Label : labelFromName;
+    const executionMarker = detectLaunchdGatewayExecutionMarker(plist);
+    const serviceMarker = hasGatewayServiceMarker(JSON.stringify(plist.EnvironmentVariables) ?? "");
     const legacyLabel = isLegacyLabel(labelFromName) || isLegacyLabel(label);
-    const executionMarker = detectLaunchdGatewayExecutionMarker(contents);
     const marker =
-      label === params.managedLabel ||
-      hasGatewayServiceMarker(contents) ||
-      executionMarker === "openclaw"
+      label === params.managedLabel || serviceMarker
         ? "openclaw"
-        : executionMarker === "clawdbot" || legacyLabel
-          ? "clawdbot"
-          : null;
+        : (executionMarker ?? (legacyLabel ? "clawdbot" : null));
     if (!marker) {
       continue;
     }
@@ -325,7 +274,7 @@ async function scanLaunchdDir(params: {
     if (
       !params.includeManagedOpenClaw &&
       marker === "openclaw" &&
-      isOpenClawGatewayLaunchdService(label, contents)
+      (serviceMarker || (executionMarker === "openclaw" && label.startsWith("ai.openclaw.")))
     ) {
       continue;
     }
@@ -354,7 +303,8 @@ async function scanSystemdDir(params: {
     isIgnoredName: params.includeManagedOpenClaw ? () => false : isIgnoredSystemdName,
   });
 
-  for (const { entry, name, fullPath, contents } of candidates) {
+  for (const { entry, name, fullPath, contents: bytes } of candidates) {
+    const contents = bytes.toString("utf8");
     const marker = hasGatewayServiceMarker(contents)
       ? "openclaw"
       : detectMarkerLineWithGateway(contents);
@@ -518,7 +468,7 @@ export async function findExtraGatewayServices(
           continue;
         }
         const backupPath = path.join(userDir, `${name}.service.bak`);
-        if ((await readUtf8File(backupPath)) !== null) {
+        if ((await readServiceFile(backupPath)) !== null) {
           push({
             platform: "linux",
             label,

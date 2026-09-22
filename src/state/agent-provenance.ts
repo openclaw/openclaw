@@ -66,18 +66,30 @@ export function readAgentProvenance(
 }
 
 type AgentProvenanceReadOptions = Pick<OpenClawStateDatabaseOptions, "env" | "path">;
+const DISPLAY_PROVENANCE_BATCH_SIZE = 256;
 
 /** Presentation reads may wait; incarnation checks retain the synchronous reader above. */
 export async function readAgentProvenanceForDisplay(
-  agentId: string,
+  agentIds: readonly string[],
   options: AgentProvenanceReadOptions = {},
-): Promise<AgentProvenance | undefined> {
+): Promise<AgentProvenance[]> {
+  if (agentIds.length === 0) {
+    return [];
+  }
   const context = captureOpenClawStateWorkerContext(options);
+  const requestedIds = agentIds.map(normalizeAgentId);
   const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
-  return executeOpenClawStateWorker(context, {
-    type: "agentProvenance.read",
-    input: { agentId },
-  });
+  const records: AgentProvenance[] = [];
+  // Canonical IDs are bounded; chunking keeps roster growth below broker input
+  // admission limits while preserving caller order and the first read error.
+  for (let offset = 0; offset < requestedIds.length; offset += DISPLAY_PROVENANCE_BATCH_SIZE) {
+    const batch = await executeOpenClawStateWorker(context, {
+      type: "agentProvenance.readBatch",
+      input: { agentIds: requestedIds.slice(offset, offset + DISPLAY_PROVENANCE_BATCH_SIZE) },
+    });
+    records.push(...batch);
+  }
+  return records;
 }
 
 export async function listAgentProvenance(

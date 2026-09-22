@@ -247,7 +247,7 @@ export function createGatewayActionPlugin(params: {
   messaging?: ChannelPlugin["messaging"];
   threading?: ChannelPlugin["threading"];
   handleAction: ChannelActionHandler;
-}): ChannelPlugin {
+}): ChannelPlugin & { actions: NonNullable<ChannelPlugin["actions"]> } {
   const actions = new Set(params.actions);
   const gatewayActions = new Set(params.gatewayActions ?? params.actions);
   return {

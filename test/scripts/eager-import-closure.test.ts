@@ -3,9 +3,9 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
-  globSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -13,16 +13,85 @@ import {
 } from "node:fs";
 import { join, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { collectEagerRuntimeImportClosure } from "./eager-import-closure.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itPosix = process.platform === "win32" ? it.skip : it;
 
+it("acquires and releases wrapper leases without the application command runtime", () => {
+  const root = tempDirs.make("openclaw-pr-lease-bootstrap-");
+  copyPrWrapperSources(root);
+  linkPrWrapperDependencies(root);
+  expect(existsSync(join(root, "src/state/openclaw-state-worker-runtime.ts"))).toBe(false);
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      join(root, "scripts/tsx.mjs"),
+      "--input-type=module",
+      "-e",
+      `
+        import assert from "node:assert/strict";
+        import { withOpenClawStateLease } from "./src/state/openclaw-state-lease.ts";
+        import {
+          closeOpenClawStateDatabaseAsync,
+          openOpenClawStateDatabase,
+        } from "./src/state/openclaw-state-db.ts";
+        const options = {
+          scope: "core:wrapper-bootstrap",
+          key: "lease",
+          database: { scope: "shared", options: { env: process.env } },
+          leaseMs: 60_000,
+          waitMs: 0,
+        };
+        for (let grant = 0; grant < 2; grant += 1) {
+          await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
+        }
+        const database = openOpenClawStateDatabase({ env: process.env });
+        const row = database.db.prepare(
+          "SELECT COUNT(*) AS count FROM state_leases WHERE scope = ? AND lease_key = ?",
+        ).get(options.scope, options.key);
+        assert.equal(Number(row.count), 0);
+        await closeOpenClawStateDatabaseAsync();
+        console.log("LEASE_BOOTSTRAP_OK");
+      `,
+    ],
+    {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        OPENCLAW_STATE_DIR: join(root, "state"),
+        TSX_TSCONFIG_PATH: join(root, "tsconfig.json"),
+        NODE_OPTIONS: "",
+        NODE_PATH: "",
+      },
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain("LEASE_BOOTSTRAP_OK");
+});
+
 it("resolves wrapper package exports and workspace aliases from the extracted dependency context", () => {
   const root = tempDirs.make("openclaw-pr-package-closure-");
-  copyPrWrapperSources(root);
+  const components = copyPrWrapperSources(root);
+  expect(components.filter((component, index) => components.indexOf(component) !== index)).toEqual(
+    [],
+  );
+  const files = readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => relative(root, join(entry.parentPath, entry.name)));
+  for (const entrypoint of [
+    "src/state/openclaw-state.worker.ts",
+    "src/state/openclaw-state-lease-worker.ts",
+    "src/infra/sqlite-store.worker.ts",
+  ]) {
+    expect(files).toContain(join(entrypoint));
+  }
   const pinned = spawnSync(
     process.execPath,
     [
@@ -33,11 +102,7 @@ it("resolves wrapper package exports and workspace aliases from the extracted de
     { encoding: "utf8" },
   );
   expect(pinned.status, pinned.stderr).toBe(0);
-  const files = globSync("**/*.{js,mjs,cjs,ts,mts,cts,tsx}", {
-    cwd: root,
-    exclude: ["node_modules/**"],
-  });
-  const closure = collectEagerRuntimeImportClosure(files, { root, validatePackages: true });
+  const closure = collectRuntimeImportClosure(root, files, { validatePackages: true });
   expect(closure.filter((file) => file.startsWith("..") || !existsSync(join(root, file)))).toEqual(
     [],
   );
@@ -61,10 +126,12 @@ it.each([
   const input = relative(process.cwd(), entry).replaceAll("\\", "/");
   if (loadsModule) {
     expect(result.stderr).toContain("Cannot find module");
-    expect(() => collectEagerRuntimeImportClosure([input])).toThrow("unresolved ./missing.mts");
+    expect(() => collectRuntimeImportClosure(process.cwd(), [input])).toThrow(
+      "unresolved ./missing.mts",
+    );
   } else {
     expect(result.stdout.trim()).toBe("entry executed");
-    expect(collectEagerRuntimeImportClosure([input])).toEqual([input]);
+    expect(collectRuntimeImportClosure(process.cwd(), [input])).toEqual([input]);
   }
 });
 
@@ -241,4 +308,49 @@ itPosix.each([false, true])("launches a pre-helper anchor (manifest=%s)", (manif
   expect(result.stderr).toContain("running wrapper code materialized from");
   expect(result.stdout).toBe("legacy anchor loaded\n");
   expect(git(canonical, "for-each-ref", "refs/openclaw")).toBe("");
+});
+
+it("captures lazy platform modules and their runtime dependencies without loading them", () => {
+  const directory = tempDirs.make("openclaw-runtime-import-closure-");
+  writeFileSync(
+    join(directory, "entry.mts"),
+    'export const load = () => import("./platform.mts");',
+  );
+  writeFileSync(
+    join(directory, "platform.mts"),
+    'import "./native.js"; throw new Error("must not load");',
+  );
+  writeFileSync(join(directory, "native.ts"), 'import type { Missing } from "./erased.ts";');
+  const entry = relative(process.cwd(), join(directory, "entry.mts")).replaceAll("\\", "/");
+  expect(collectRuntimeImportClosure(process.cwd(), [entry])).toEqual([entry]);
+  expect(
+    collectRuntimeImportClosure(process.cwd(), [entry], { includeDynamicImports: true }),
+  ).toEqual(
+    ["entry.mts", "platform.mts", "native.ts"]
+      .map((file) => relative(process.cwd(), join(directory, file)).replaceAll("\\", "/"))
+      .toSorted(),
+  );
+});
+
+it("keeps native update authority free of eager recovery reporting and handoff staging", () => {
+  const closure = collectRuntimeImportClosure(process.cwd(), [
+    "src/cli/update-cli/update-command-executor.ts",
+    "src/cli/update-cli/update-command-retained-service.ts",
+    "src/cli/daemon-cli/update-executor.ts",
+    "src/daemon/exec-file.ts",
+  ]);
+  const deferredOwners = new Set([
+    "src/cli/update-cli/update-command-recovery.ts",
+    "src/cli/update-cli/update-command-result.ts",
+    "src/infra/update-managed-service-handoff.ts",
+  ]);
+  expect(closure.filter((file) => deferredOwners.has(file))).toEqual([]);
+});
+
+it("keeps migrated finalization free of eager CLI registration", () => {
+  const closure = collectRuntimeImportClosure(process.cwd(), [
+    "src/infra/update-migrated-finalize.worker.ts",
+  ]);
+  const validationOnly = new Set(["src/cli/daemon-cli.ts", "src/cli/daemon-cli/register.ts"]);
+  expect(closure.filter((file) => validationOnly.has(file))).toEqual([]);
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { attachToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/lifecycle.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
@@ -94,8 +95,19 @@ describe("resolveStrandedReplyRecovery", () => {
     },
   );
 
-  it("creates one priority retry for a substantive private final", () => {
-    const base = createMockFollowupRun({ prompt: "question" });
+  it.each([
+    { label: "uncapped", toolsAllow: undefined, expected: ["message"] },
+    { label: "wildcard", toolsAllow: ["*"], expected: ["message"] },
+    { label: "messaging group", toolsAllow: ["group:messaging", "exec"], expected: ["message"] },
+    { label: "empty cap", toolsAllow: [], expected: [] },
+    { label: "non-messaging cap", toolsAllow: ["exec"], expected: [] },
+    {
+      label: "intersected denial",
+      toolsAllow: attachToolAllowlistIntersection(["message"], [["*"], ["exec"]]),
+      expected: [],
+    },
+  ])("restricts the priority retry to authorized messaging: $label", ({ toolsAllow, expected }) => {
+    const base = createMockFollowupRun({ prompt: "question", toolsAllow });
 
     const recovery = resolveStrandedReplyRecovery({
       base,
@@ -112,13 +124,7 @@ describe("resolveStrandedReplyRecovery", () => {
     if (recovery.kind === "retry") {
       expect(recovery.run.strandedReplyRetry).toBe(true);
       expect(recovery.run.disableCollectBatching).toBe(true);
-      expect(recovery.run.prompt).toBe(
-        `[System] Your previous reply was not delivered to the conversation because ` +
-          `you did not call message(action=send). Your reply text was:\n\n` +
-          `"${substantiveFinal}"\n\n` +
-          `Please deliver this reply now by calling message(action=send). ` +
-          `Do not add any extra commentary; just deliver the original reply.`,
-      );
+      expect(recovery.run.toolsAllow).toEqual(expected);
     }
   });
 

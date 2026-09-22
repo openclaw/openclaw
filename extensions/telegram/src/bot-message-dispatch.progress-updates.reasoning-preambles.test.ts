@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   describeTelegramDispatch,
+  emitToolStart,
   createContext,
   createReasoningStreamContext,
   createSequencedDraftStream,
@@ -19,7 +20,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       await replyOptions?.onReasoningStream?.({ text: "<think>Checking files</think>" });
       return { queuedFinal: false };
     });
@@ -36,7 +37,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview(
         "Shelling\n\n🛠️ Exec\n🧠 Checking files",
-        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n🧠 <i>Checking files</i>",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b> <i>running</i>\n🧠 <i>Checking files</i>",
       ),
     );
   });
@@ -80,7 +81,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
       await replyOptions?.onReasoningStream?.({ text: "<think>Running `sleep 4`</think>" });
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       await replyOptions?.onItemEvent?.({
         kind: "preamble",
         itemId: "c1",
@@ -117,7 +118,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       await replyOptions?.onReasoningStream?.({ text: `<think>${longThought}</think>` });
       return { queuedFinal: false };
     });
@@ -152,7 +153,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
       await replyOptions?.onReasoningStream?.({ text: "<think>Planning the steps</think>" });
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       await replyOptions?.onItemEvent?.({
         kind: "preamble",
         itemId: "c1",
@@ -303,7 +304,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
         progressText: "Checking recent context",
       });
       expect(draftStream.updatePreview).not.toHaveBeenCalled();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       return { queuedFinal: false };
     });
 
@@ -321,7 +322,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview(
         "Shelling\n\nChecking recent context\n🛠️ Exec",
-        "<b>Shelling</b>\nChecking recent context\n<b>🛠️ Exec</b>",
+        "<b>Shelling</b>\nChecking recent context\n<b>🛠️ Exec</b> <i>running</i>",
       ),
     );
   });
@@ -456,7 +457,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
         itemId: "preamble-1",
         progressText: "Checking recent context",
       });
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       await replyOptions?.onItemEvent?.({
         kind: "preamble",
         itemId: "preamble-1",
@@ -488,7 +489,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
         itemId: "preamble-1",
         progressText: "[[reply_to_current]] _NO_REPLY_ [[audio_as_voice]]",
       });
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
       return { queuedFinal: false };
     });
 
@@ -501,7 +502,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
     });
 
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
+      telegramProgressPreview(
+        "Shelling\n\n🛠️ Exec",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b> <i>running</i>",
+      ),
     );
   });
 });

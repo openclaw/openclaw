@@ -411,7 +411,7 @@ function runSurvivorDiagnostics(
   env: NodeJS.ProcessEnv = {},
 ) {
   return spawnSync(
-    process.execPath,
+    testNodeExecPath,
     [
       ...(mode === "publish" ? ["--import", "./scripts/tsx.mjs"] : []),
       mode === "publish"
@@ -637,77 +637,76 @@ setInterval(() => {}, 1_000);
 async function forEachUpgradeSurvivorSystemctlShim(
   callback: (fixture: {
     pid: number;
-    run: (command: "is-active" | "stop", procStat?: string) => number | null;
+    pidPath: string;
+    run: (procStat?: string) => number | null;
+    readLog: () => string[];
     scriptPath: string;
   }) => void | Promise<void>,
-  targetPid?: number,
 ): Promise<void> {
   for (const scriptPath of [UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH]) {
     const workDir = tempDirs.make("openclaw-systemctl-shim-");
     const binDir = join(workDir, "bin");
     const pidPath = join(workDir, "gateway.pid");
     const childPidPath = join(workDir, "child.pid");
-    const child =
-      targetPid === undefined
-        ? spawn(process.execPath, [writeTermIgnoringDescendant(workDir)], {
-            env: { ...process.env, DESCENDANT_PID_FILE: childPidPath },
-            stdio: "ignore",
-          })
-        : undefined;
-    if (child) {
+    const child = spawn(process.execPath, [writeTermIgnoringDescendant(workDir)], {
+      env: { ...process.env, DESCENDANT_PID_FILE: childPidPath },
+      stdio: "ignore",
+    });
+    try {
       for (let attempt = 0; attempt < 100 && !existsSync(childPidPath); attempt += 1) {
         await delay(10);
       }
-    }
-    const pid = targetPid ?? Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
-    writeFileSync(pidPath, `${pid}\n`);
-    const fixtureEnv = {
-      OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(workDir, "systemctl.log"),
-      OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: pidPath,
-    };
-    const shimPath = installUpgradeSurvivorSystemctlShim(
-      workDir,
-      { HOME: workDir, ...fixtureEnv },
-      scriptPath,
-    );
-    writeExecutables(binDir, {
-      awk: `#!/usr/bin/env bash
-[ "$FAKE_PROC_STAT_MODE" != "unreadable" ] || exit 1
-set -- $FAKE_PROC_STAT
-printf '%s\\n' "\${3:-}"
-`,
-      cat: `#!/usr/bin/env bash
+      const pid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+      writeFileSync(pidPath, `${pid}\n`);
+      const fixtureEnv = {
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(workDir, "systemctl.log"),
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: pidPath,
+      };
+      const shimPath = installUpgradeSurvivorSystemctlShim(
+        workDir,
+        { HOME: workDir, ...fixtureEnv },
+        scriptPath,
+      );
+      writeExecutables(binDir, {
+        cat: `#!/usr/bin/env bash
 case "\${1:-}" in
   /proc/*/stat)
+    printf 'proc-stat-read\\n' >>"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG"
     [ "$FAKE_PROC_STAT_MODE" != "unreadable" ] || exit 1
     printf '%s\\n' "$FAKE_PROC_STAT"
     ;;
   *) exec /bin/cat "$@" ;;
 esac
 `,
-      sleep: "#!/usr/bin/env bash\nexit 97\n",
-    });
-    const run = (command: "is-active" | "stop", procStat?: string) =>
-      spawnSync("bash", [shimPath, "--user", command, "openclaw-gateway.service"], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          FAKE_PROC_STAT: procStat ?? "",
-          FAKE_PROC_STAT_MODE: procStat === undefined ? "unreadable" : "readable",
-          ...fixtureEnv,
-          PATH: `${binDir}:${process.env.PATH ?? ""}`,
-        },
-      }).status;
+        sleep: `#!/usr/bin/env bash
+printf 'wait\\n' >>"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG"
+exit 97
+`,
+      });
+      const run = (procStat?: string) => {
+        writeFileSync(fixtureEnv.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG, "");
+        return spawnSync("bash", [shimPath, "--user", "stop", "openclaw-gateway.service"], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            FAKE_PROC_STAT: procStat ?? "",
+            FAKE_PROC_STAT_MODE: procStat === undefined ? "unreadable" : "readable",
+            ...fixtureEnv,
+            PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          },
+        }).status;
+      };
+      const readLog = () =>
+        readFileSync(fixtureEnv.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG, "utf8")
+          .trim()
+          .split("\n");
 
-    try {
-      await callback({ pid, run, scriptPath });
+      await callback({ pid, pidPath, run, readLog, scriptPath });
     } finally {
-      if (child) {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGKILL");
-        }
-        await waitForProcessExit(child).catch(() => undefined);
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
       }
+      await waitForProcessExit(child).catch(() => undefined);
     }
   }
 }
@@ -3112,9 +3111,11 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).toContain(
       [
         'if [ "$SCENARIO" = "watchos-direct-node" ] || [ "$SCENARIO" = "mobile-pairing-reconnect" ] || [ "$WORKER_CELL" = "1" ]; then',
-        "  unset OPENAI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN",
+        "  unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN",
         "else",
         '  export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"',
+        '  export ANTHROPIC_API_KEY="sk-ant-openclaw-upgrade-survivor"',
+        '  export GEMINI_API_KEY="upgrade-survivor-gemini-key"',
         '  export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"',
         '  export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"',
         "fi",
@@ -4231,21 +4232,30 @@ printf '%s\n' "$status" >"$TMPDIR/status"
   it.skipIf(process.platform === "win32")(
     "stops promptly when the systemctl target is a zombie with spaces and parentheses in comm",
     async () => {
-      await forEachUpgradeSurvivorSystemctlShim(({ pid, run, scriptPath }) => {
+      await forEachUpgradeSurvivorSystemctlShim(({ pid, run, readLog, scriptPath }) => {
         const procTail = Array.from({ length: 49 }, (_, field) => field + 1).join(" ");
-        expect(run("stop", `${pid} (gateway (old) worker) Z ${procTail}`), scriptPath).toBe(0);
+        expect(run(`${pid} (gateway (old) worker) Z ${procTail}`), scriptPath).toBe(0);
+        expect(readLog()).toEqual(["--user stop openclaw-gateway.service", "proc-stat-read"]);
       });
     },
   );
 
   it.skipIf(process.platform === "win32")(
-    "keeps a killable systemctl target active when proc stat is unreadable or malformed",
+    "waits for a killable systemctl target when proc stat is unreadable or malformed",
     async () => {
-      await forEachUpgradeSurvivorSystemctlShim(({ pid, run, scriptPath }) => {
+      await forEachUpgradeSurvivorSystemctlShim(({ pid, pidPath, run, readLog, scriptPath }) => {
         for (const procStat of [undefined, `${pid} (gateway) Z`]) {
-          expect(run("is-active", procStat), `${scriptPath}: ${procStat ?? "unreadable"}`).toBe(0);
+          // Reaching the wait sentinel proves the shell did not mistake missing stat data for exit.
+          expect(run(procStat), `${scriptPath}: ${procStat ?? "unreadable"}`).toBe(97);
+          expect(readLog()).toEqual([
+            "--user stop openclaw-gateway.service",
+            "proc-stat-read",
+            "wait",
+          ]);
+          expect(isProcessRunning(pid)).toBe(true);
+          expect(readFileSync(pidPath, "utf8")).toBe(`${pid}\n`);
         }
-      }, process.pid);
+      });
     },
   );
 
@@ -6920,11 +6930,6 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(packageRunner.match(/verify-fs-safe-native\.mjs[^\n]+--mode require/gu)).toHaveLength(3);
     expect(packageRunner).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
     expect(packageRunner.match(/-e OPENCLAW_FS_SAFE_NATIVE_CONTRACT/g)).toHaveLength(4);
-    expectTextToIncludeAll(packageRunner, [
-      'MUSL_FS_SAFE_NATIVE_OUTCOME="passed"',
-      'MUSL_FS_SAFE_NATIVE_OUTCOME="not-applicable"',
-      '--detail "musl:fsSafeNative=$MUSL_FS_SAFE_NATIVE_OUTCOME"',
-    ]);
     expect(updateRunner).toContain('mv "$platform_package" "$platform_package.omitted"');
     expect(updateRunner).toContain("--mode fallback");
     expect(updateRunner).toContain("-e OPENCLAW_FS_SAFE_NATIVE_CONTRACT");
@@ -7966,11 +7971,10 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
       'DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d',
     );
     expect(packageRunner).not.toMatch(/(^|\n)docker run -d/u);
-    for (const runner of [composeRunner, packageRunner]) {
-      expect(runner).toContain(
-        'node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts"',
-      );
-    }
+    expect(composeRunner).toContain(
+      'node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts"',
+    );
+    expect(packageRunner).toContain('bash "$ROOT_DIR/scripts/e2e/lib/docker-package-identity.sh"');
   });
 
   it("copies the complete bun harness closure into the package-install lane", () => {
@@ -8035,7 +8039,6 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
       'corepack prepare "$1" --activate',
       "pnpm list --global --json",
       'test -f "$package_root/package.json"',
-      'test "$PNPM_PACKAGE_VERSION" = "$PACKAGE_VERSION"',
       "pnpm add --global openclaw@file:/tmp/openclaw-current.tgz",
       'pnpm approve-builds --global "$artifact_build"',
       "bun@1.4.0",
@@ -8045,9 +8048,9 @@ fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, sta
       'PACKAGE_HARNESS_DIR="$(mktemp -d',
       "chmod -R a+rX",
       '-v "$PACKAGE_HARNESS_DIR:/repo:ro"',
-      '--container "npm=$NPM_PROOF_CONTAINER"',
-      '--container "pnpm=$PNPM_PROOF_CONTAINER"',
-      '--container "bun=$BUN_PROOF_CONTAINER"',
+      '"$PACKAGE_TGZ" \\',
+      '"$IDENTITY_PATH" \\',
+      '"$MUSL_PROOF_CONTAINER"',
     ]);
     expect(packageRunner).not.toContain('-v "$ROOT_DIR:/repo:ro"');
     expectTextToIncludeAll(installerRunner, [

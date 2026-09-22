@@ -12,11 +12,14 @@ import {
   resolveGatewayCredentialsForUrlEdit,
   type UiSettings,
 } from "../../app/settings.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { GatewayStatusSample } from "../../components/gateway-vitals.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import type { SparklineSample } from "../../components/sparkline-tile.ts";
+import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -297,6 +300,29 @@ export class ConnectionPage extends OpenClawLightDomElement {
     this.sessionSaved = true;
   }
 
+  private async forgetDevice() {
+    const gateway = this.context.gateway;
+    const gatewayUrl = gateway.connection.gatewayUrl;
+    const confirmed = await showConfirmDialog({
+      title: t("connection.browser.confirmTitle"),
+      message: t("connection.browser.confirmMessage", {
+        gateway: formatGatewayHost(gatewayUrl),
+      }),
+      confirmLabel: t("connection.browser.confirmLabel"),
+      danger: true,
+    });
+    // A confirmation for one Gateway must never reset a newly selected Gateway.
+    if (
+      confirmed &&
+      this.isConnected &&
+      this.context.gateway === gateway &&
+      gateway.connection.gatewayUrl === gatewayUrl
+    ) {
+      gateway.forgetDeviceToken?.();
+      this.requestUpdate();
+    }
+  }
+
   private connect() {
     this.context.gateway.connect({
       gatewayUrl: this.settings.gatewayUrl,
@@ -345,6 +371,8 @@ export class ConnectionPage extends OpenClawLightDomElement {
       sessionDirty: this.settings.sessionKey.trim() !== gateway.sessionKey,
       sessionSaved: this.sessionSaved,
       showGatewaySecret: this.gatewaySecretVisible,
+      canForgetDevice: this.context.gateway.hasStoredDeviceToken?.() ?? false,
+      onForgetDevice: () => void this.forgetDevice(),
       onConnectionChange: (patch) => this.updateConnection(patch),
       onSecretChange: (token) => {
         this.password = "";

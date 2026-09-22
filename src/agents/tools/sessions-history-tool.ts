@@ -6,7 +6,12 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import type { ChatPendingInputsPage } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  ChatHistoryParamsSchema,
+  ChatPendingInputsPageSchema,
+  type ChatHistoryDeltaResult,
+  type ChatPendingInputsPage,
+} from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
@@ -15,7 +20,6 @@ import { redactToolPayloadText } from "../../logging/redact.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
-import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
   describeSessionLinkRule,
   describeSessionsHistoryTool,
@@ -49,29 +53,20 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({
-  sessionKey: Type.String(),
-  limit: optionalPositiveIntegerSchema(),
-  offset: Type.Optional(
-    Type.Integer({
-      minimum: 0,
-      description:
-        "Plain-pagination offset. Ignored when messageId is set (anchored reads window history around messageId instead).",
-    }),
-  ),
-  pendingBefore: optionalPositiveIntegerSchema(),
-  messageId: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description:
-        "Return history around this message id. Ignores offset; limit still bounds the window.",
-    }),
-  ),
-  sessionId: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description: "Transcript session id that owns messageId. Requires messageId.",
-    }),
-  ),
+  sessionKey: ChatHistoryParamsSchema.properties.sessionKey,
+  limit: ChatHistoryParamsSchema.properties.limit,
+  offset: Type.With(ChatHistoryParamsSchema.properties.offset, {
+    description:
+      "Plain-pagination offset. Ignored when messageId is set; limit still bounds anchored history.",
+  }),
+  pendingBefore: ChatHistoryParamsSchema.properties.pendingBefore,
+  messageId: Type.With(ChatHistoryParamsSchema.properties.messageId, {
+    description: "Return history around this message id. Ignores offset; limit bounds the window.",
+  }),
+  sessionId: Type.With(ChatHistoryParamsSchema.properties.sessionId, {
+    description:
+      "Transcript session id that owns messageId. Requires messageId; omit for the latest tail.",
+  }),
   includeTools: Type.Optional(Type.Boolean()),
 });
 
@@ -94,26 +89,7 @@ const SessionsHistoryOutputSchema = Type.Union([
       nextOffset: Type.Optional(Type.Number()),
       hasMore: Type.Optional(Type.Boolean()),
       totalMessages: Type.Optional(Type.Number()),
-      pendingInputs: Type.Optional(
-        Type.Object(
-          {
-            items: Type.Array(
-              Type.Object(
-                {
-                  id: Type.String(),
-                  acceptedAt: Type.Number(),
-                  state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
-                  message: Type.Unknown(),
-                },
-                { additionalProperties: false },
-              ),
-            ),
-            total: Type.Number(),
-            nextBefore: Type.Optional(Type.Number()),
-          },
-          { additionalProperties: false },
-        ),
-      ),
+      pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
     },
     { additionalProperties: false },
   ),
@@ -129,23 +105,9 @@ const SessionsHistoryOutputSchema = Type.Union([
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 const SESSIONS_HISTORY_PENDING_MAX_BYTES = 4096;
-type GatewayCaller = AgentToolGatewayRequestCaller;
-type ChatHistoryPaginationMetadata = {
-  offset?: number;
-  nextOffset?: number;
-  hasMore?: boolean;
-  totalMessages?: number;
-};
-
-function readOffsetParam(params: Record<string, unknown>): number | undefined {
-  const offset = readNonNegativeIntegerParam(params, "offset");
-  if (params.offset !== undefined && offset === undefined) {
-    throw new ToolInputError("offset must be a non-negative integer");
-  }
-  return offset;
-}
-
-// sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
+type ChatHistoryPaginationMetadata = Partial<
+  Record<"offset" | "nextOffset" | "totalMessages", number> & { hasMore: boolean }
+>;
 
 function truncateHistoryText(
   text: string,
@@ -338,17 +300,16 @@ function capSessionsHistoryAroundMessage(
 
   let start = anchorIndex;
   let end = anchorIndex + 1;
-  let cappedItems = items.slice(start, end);
-  let bytes = jsonUtf8Bytes(cappedItems);
+  let bytes = jsonUtf8Bytes([items[anchorIndex]]);
   let canGrowOlder = start > 0;
   let canGrowNewer = end < items.length;
   while (canGrowOlder || canGrowNewer) {
     if (canGrowOlder) {
-      const candidate = items.slice(start - 1, end);
-      const candidateBytes = jsonUtf8Bytes(candidate);
+      // Singleton arrays preserve JSON's array-element encoding; replacing one
+      // bracket with a comma gives the exact growth of this nonempty window.
+      const candidateBytes = bytes + jsonUtf8Bytes([items[start - 1]]) - 1;
       if (candidateBytes <= maxBytes) {
         start -= 1;
-        cappedItems = candidate;
         bytes = candidateBytes;
       } else {
         canGrowOlder = false;
@@ -357,11 +318,9 @@ function capSessionsHistoryAroundMessage(
     canGrowOlder &&= start > 0;
 
     if (canGrowNewer) {
-      const candidate = items.slice(start, end + 1);
-      const candidateBytes = jsonUtf8Bytes(candidate);
+      const candidateBytes = bytes + jsonUtf8Bytes([items[end]]) - 1;
       if (candidateBytes <= maxBytes) {
         end += 1;
-        cappedItems = candidate;
         bytes = candidateBytes;
       } else {
         canGrowNewer = false;
@@ -369,7 +328,7 @@ function capSessionsHistoryAroundMessage(
     }
     canGrowNewer &&= end < items.length;
   }
-  return { items: cappedItems, bytes };
+  return { items: items.slice(start, end), bytes };
 }
 
 function buildSessionsHistoryOmittedPlaceholder(source: unknown): Record<string, unknown> {
@@ -448,7 +407,7 @@ export function createSessionsHistoryTool(opts?: {
   requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
-  callGateway?: GatewayCaller;
+  callGateway?: AgentToolGatewayRequestCaller;
   sessionLinkBase?: string;
 }): AnyAgentTool {
   return {
@@ -465,7 +424,7 @@ export function createSessionsHistoryTool(opts?: {
         required: true,
       });
       const limit = readPositiveIntegerParam(params, "limit");
-      const offset = readOffsetParam(params);
+      const offset = readNonNegativeIntegerParam(params, "offset");
       const pendingBefore = readPositiveIntegerParam(params, "pendingBefore");
       const messageId = readToolStringParam(params, "messageId");
       const sessionId = readToolStringParam(params, "sessionId");
@@ -590,14 +549,10 @@ export function createSessionsHistoryTool(opts?: {
         expectedSessionId: access.expectedSessionId,
         targetSessionKey: resolvedKey,
         run: async () =>
-          await gatewayCall<{
-            messages: Array<unknown>;
-            offset?: number;
-            nextOffset?: number;
-            hasMore?: boolean;
-            totalMessages?: number;
-            pendingInputs?: ChatPendingInputsPage;
-          }>({
+          await gatewayCall<
+            Pick<ChatHistoryDeltaResult, "messages" | "pendingInputs"> &
+              ChatHistoryPaginationMetadata
+          >({
             method: "chat.history",
             params: {
               sessionKey: resolvedKey,

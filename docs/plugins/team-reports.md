@@ -123,6 +123,37 @@ page includes **Open in a new window** with that page's own URL. If the browser
 blocks that action too, copy the link into a new tab. Gateway authentication
 still applies there.
 
+### Work sessions
+
+The overview shows recent **Work sessions** on this Gateway. Open **All work
+sessions** (or **Work sessions** in the report navigation) to page through the
+current session list. Each entry links to the conversation and shows its current
+owner, run status, and project when present. Sessions are ordered by recent activity.
+
+Each person’s history page and each member section in daily, weekly, and monthly
+reports also shows **Current work / owned sessions**, including when filtering a
+report by person. These direct conversation links reflect current ownership, not
+the historical report window. **All owned sessions** opens a paginated directory
+filtered to that member before pagination.
+
+Members are matched case-insensitively using their configured and report GitHub
+aliases against linked GitHub identities on Gateway profiles. Merged profiles
+resolve to their canonical owner. Unlinked or ambiguous identities are labeled
+separately from a linked member with no sessions visible to you. Display names
+are never used to infer ownership.
+
+The list is read when you open or refresh the page, using your existing session
+permissions. Archived, incognito, automation, system, and hidden subagent sessions
+are excluded. Session owners are not guessed from GitHub handles or display names.
+This is a current-work view, not a historical contribution count: it does not
+change daily totals, model summaries, Markdown or JSON exports, or stored report
+history. Session transcripts are not copied into the reports database.
+
+Inside the Control UI, selecting a session opens its chat through the host
+navigation. Outside the embedded tab, session links are ordinary Control UI
+links. If session discovery fails, the page shows **Work sessions unavailable**
+while stored reports remain usable.
+
 Pages mirror the maintainer report site layout: a banner and activity dateline,
 latest-period quick cards, day/week/month history, people timelines, and a
 per-person calendar. The generation panel shows scheduler and source health.
@@ -379,6 +410,7 @@ With the default `basePath`, authenticated readers can use:
 | `/plugins/team-reports/day/<key>/`          | Daily HTML report; replace `day` with `week` or `month` for aggregates. |
 | `/plugins/team-reports/day/<key>/report.md` | Markdown export; also available for weeks and months.                   |
 | `/plugins/team-reports/day/<key>/data.json` | Structured report; also available for weeks and months.                 |
+| `/plugins/team-reports/sessions/`           | Current work sessions, with links to their conversations.               |
 | `/plugins/team-reports/people/`             | Roster index.                                                           |
 | `/plugins/team-reports/people/<login>/`     | Per-person history, calendar, and 30-day trend.                         |
 | `/plugins/team-reports/index.json`          | Latest keys and stored-period index.                                    |

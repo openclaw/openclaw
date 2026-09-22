@@ -68,15 +68,19 @@ const {
   createTranscriptUpdateBroadcastHandler: createTranscriptHandler,
 } = await import("./server-session-events.js");
 const { createGatewayBroadcaster } = await import("./server-broadcast.js");
-const { subscribePluginSessionsChanged } = await import("../plugins/gateway-events.js");
+const { subscribePluginSessionsChanged } = await import("../plugins/services.test-support.js");
 
 const projection = {
   get state() {
     return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
   },
   ensureMaterialized: async () => {},
+  withPreparedExactRows: (async (queries, consume) => {
+    queries(runtimeConfigState.value);
+    return { kind: "complete", value: consume(projection) };
+  }) satisfies SessionRowProjection["withPreparedExactRows"],
   isCurrent: () => true,
-  select(query: { key?: string; agentId?: string; storePath?: string }) {
+  selectEntries(query: { key?: string; agentId?: string; storePath?: string }) {
     if (!query.key) {
       return (
         listAccessorSessionEntriesReadOnlyMock({
@@ -112,11 +116,11 @@ const projection = {
       : [];
   },
   capture(query: { key: string; agentId: string; storePath?: string }) {
-    return projection.select(query)[0];
+    return projection.selectEntries(query)[0];
   },
   findBySessionId(query: { sessionId: string; agentId?: string; storePath?: string }) {
     return projection
-      .select({ agentId: query.agentId, storePath: query.storePath })
+      .selectEntries({ agentId: query.agentId, storePath: query.storePath })
       .filter(({ entry }) => entry.sessionId === query.sessionId);
   },
   snapshot(query: { key: string; agentId: string }) {

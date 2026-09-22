@@ -76,6 +76,7 @@ function createOwner(): PreparedModelRuntimeSnapshot {
     allowGatewaySubagentBinding: false,
     modelCatalog: markPreparedModelCatalogFull({ entries: [entry], routeVariants: [entry] }),
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores() {
       throw new Error("Inventory must not start model execution");

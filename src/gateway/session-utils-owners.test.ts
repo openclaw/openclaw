@@ -48,9 +48,17 @@ it.each([true, false, undefined])(
   "filters subagent sessions before pagination and people facets when excludeSubagents is %s",
   async (excludeSubagents) => {
     const store: Record<string, SessionEntry> = {
+      "agent:main:dashboard:grouped": {
+        sessionId: "grouped-conversation",
+        updatedAt: 7,
+        spawnedBy: "agent:main:discussion",
+        category: "Research",
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      },
       "agent:main:subagent:recent": {
         sessionId: "subagent-recent",
         updatedAt: 6,
+        category: "Research",
         createdActor: { type: "human", source: "profile", id: "profile-bob" },
       },
       "Subagent:legacy": {
@@ -91,20 +99,20 @@ it.each([true, false, undefined])(
 
     expect(result.sessions.map((row) => row.key)).toEqual(
       excludeSubagents
-        ? ["agent:main:discussion", "agent:main:fork"]
-        : ["agent:main:subagent:recent", "Subagent:legacy"],
+        ? ["agent:main:dashboard:grouped", "agent:main:discussion"]
+        : ["agent:main:dashboard:grouped", "agent:main:subagent:recent"],
     );
     expect(result).toMatchObject({
-      totalCount: excludeSubagents ? 3 : 6,
-      peopleSessionCount: excludeSubagents ? 3 : 6,
+      totalCount: excludeSubagents ? 4 : 7,
+      peopleSessionCount: excludeSubagents ? 4 : 7,
       nextOffset: 2,
       hasMore: true,
     });
     expect(result.people?.map((person) => [person.identity.id, person.sessionCount])).toEqual(
       excludeSubagents
-        ? [["profile-ada", 3]]
+        ? [["profile-ada", 4]]
         : [
-            ["profile-ada", 3],
+            ["profile-ada", 4],
             ["profile-bob", 3],
           ],
     );

@@ -27,11 +27,10 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
-import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.test-support.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   deleteTaskFlowRecordById,
-  reloadTaskFlowRegistryFromStore,
+  reloadTaskFlowRegistryFromStoreAsync,
 } from "../tasks/task-flow-runtime-internal.js";
 import { getTaskById } from "../tasks/task-registry.js";
 import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
@@ -100,7 +99,7 @@ afterEach(async () => {
 
 describe("registered tasks.async runtime", () => {
   it.each(["valid", "invalid"] as const)(
-    "prepares cold %s config for a bare-owner SDK read after registry readiness",
+    "prepares a cold bare-owner SDK read with %s config without main-thread SQLite",
     async (shape) => {
       await state.writeConfig(
         shape === "valid"
@@ -117,7 +116,6 @@ describe("registered tasks.async runtime", () => {
           parentFlowId: undefined,
         }),
       });
-      expect(getTaskById("bare")?.taskId).toBe("bare");
       closeOpenClawStateDatabase();
       expect(getRuntimeConfigSnapshot()).toBeNull();
       const native = requireNodeSqlite();
@@ -341,15 +339,12 @@ describe("registered tasks.async runtime", () => {
     db.exec(
       "CREATE TRIGGER reject_flow_update BEFORE UPDATE ON flow_runs BEGIN SELECT RAISE(ABORT, 'synthetic flow write failure'); END",
     );
-    const onEvent = vi.fn();
-    configureTaskFlowRegistryRuntime({ observers: { onEvent } });
     try {
       expect(await managed.finish({ flowId: created.flowId, expectedRevision: 0 })).toMatchObject({
         applied: false,
         code: "persist_failed",
         current: { revision: 0, status: "queued" },
       });
-      expect(onEvent).not.toHaveBeenCalled();
       expect(await managed.get(created.flowId)).toMatchObject({ revision: 0, status: "queued" });
     } finally {
       db.exec("DROP TRIGGER reject_flow_update");
@@ -358,56 +353,6 @@ describe("registered tasks.async runtime", () => {
       await managed.finish({ flowId: created.flowId, expectedRevision: 0, endedAt: 200 }),
     ).toMatchObject({ applied: true, flow: { revision: 1, status: "succeeded", endedAt: 200 } });
   });
-
-  it.each(["shutdown", "update"] as const)(
-    "retains a committed result when its observer initiates a synchronous %s",
-    async (action) => {
-      const runtime = createPluginRuntime();
-      const managed = runtime.tasks.async.managedFlows.bindSession({
-        sessionKey: ownerKey,
-      });
-      const legacy = runtime.tasks.managedFlows.bindSession({ sessionKey: ownerKey });
-      await managed.list();
-      let closing: Promise<void> | undefined;
-      const observedRevisions: number[] = [];
-      configureTaskFlowRegistryRuntime({
-        observers: {
-          onEvent: (event) => {
-            if (event.kind === "upserted") {
-              observedRevisions.push(event.flow.revision);
-              if (action === "shutdown") {
-                closing = drainGlobalSingletonLifecycleState("restart");
-              } else if (event.flow.revision === 0) {
-                legacy.resume({
-                  flowId: event.flow.flowId,
-                  expectedRevision: 0,
-                  status: "running",
-                });
-              }
-            }
-          },
-        },
-      });
-      const created = await managed.createManaged({
-        controllerId: "tests/close",
-        goal: "Committed before close",
-      });
-      expect(created.revision).toBe(0);
-      expect(observedRevisions).toEqual(action === "shutdown" ? [0] : [0, 1]);
-      if (action === "shutdown") {
-        expect(closing).toBeDefined();
-      } else {
-        expect(legacy.get(created.flowId)).toMatchObject({ revision: 1, status: "running" });
-      }
-      await closing;
-      configureTaskFlowRegistryRuntime({ observers: null });
-      expect(await managed.get(created.flowId)).toMatchObject({
-        flowId: created.flowId,
-        goal: "Committed before close",
-        revision: action === "shutdown" ? 0 : 1,
-      });
-    },
-  );
 
   it("preserves canonical schema error identity when a large managed command reaches staged EOF", async () => {
     const managed = createPluginRuntime().tasks.async.managedFlows.bindSession({
@@ -587,7 +532,7 @@ describe("registered tasks.async runtime", () => {
     }
     expect((await managed.list()).map((record) => record.flowId)).toEqual([flowId]);
     await closeOpenClawStateDatabaseAsync();
-    reloadTaskFlowRegistryFromStore();
+    await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     {
       const reopened = await managed.get(flowId);
       if (!reopened) {
@@ -629,7 +574,7 @@ describe("registered tasks.async runtime", () => {
       expect(resumed.flow.waitJson).toBeNull();
     }
     await closeOpenClawStateDatabaseAsync();
-    reloadTaskFlowRegistryFromStore();
+    await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     {
       const restored = await managed.get(flowId);
       expect(restored).toMatchObject({ revision: 2, status: "running" });
@@ -854,13 +799,13 @@ describe("registered tasks.async runtime", () => {
     expect((await asyncRuns.resolve(ownerKey))?.id).toBe("owned-latest");
   });
 
-  it("retains cold admission and observes later persisted changes without replacing the sync cache", async () => {
+  it("keeps cold reads off-thread and observes later persisted changes without replacing the sync cache", async () => {
     const native = requireNodeSqlite();
     const prepare = vi.spyOn(native.DatabaseSync.prototype, "prepare");
     const runtime = createPluginRuntime();
     const runs = runtime.tasks.async.runs.bindSession({ sessionKey: ownerKey });
     expect(await runs.list()).toEqual([]);
-    expect(prepare).toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
     upsertTaskWithDeliveryStateToSqlite({ task: task("fresh") });
     expect(getTaskById("fresh")).toBeUndefined();
     prepare.mockClear();

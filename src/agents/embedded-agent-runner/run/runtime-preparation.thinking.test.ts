@@ -131,6 +131,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
       allowGatewaySubagentBinding: false,
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [],
+      findConfiguredRuntimeModel: () => undefined,
       inlineProviderModels: [],
       createStores: createEmptyAgentDiscoveryStores,
     };
@@ -198,6 +199,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
             .modelThinkingCapability;
     const runId = `effort-${route}-${capability}`;
     const runtime = await prepareEmbeddedRunRuntime({
+      assertCurrent: () => {},
       runParams: {
         runId,
         admittedRunContext: createTestAdmittedRunContext(runId),

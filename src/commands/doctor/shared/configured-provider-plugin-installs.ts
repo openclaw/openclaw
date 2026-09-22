@@ -11,17 +11,19 @@ export function collectConfiguredProviderPluginIds(params: {
 }): string[] {
   const selectedProviderIds = collectConfiguredProviderSelectionIds(params.cfg);
   const pluginIds = new Set(collectConfiguredOfficialProviderPluginIds(params));
-  for (const entry of resolveProviderInstallCatalogEntries({
-    config: params.cfg,
-    env: params.env,
-    includeUntrustedWorkspacePlugins: false,
-  })) {
-    if (
-      [entry.providerId, ...(entry.providerAliases ?? [])].some((providerId) =>
-        selectedProviderIds.has(providerId.toLowerCase()),
-      )
-    ) {
-      pluginIds.add(entry.pluginId);
+  if (selectedProviderIds.size > 0) {
+    for (const entry of resolveProviderInstallCatalogEntries({
+      config: params.cfg,
+      env: params.env,
+      includeUntrustedWorkspacePlugins: false,
+    })) {
+      if (
+        [entry.providerId, ...(entry.providerAliases ?? [])].some((providerId) =>
+          selectedProviderIds.has(providerId.toLowerCase()),
+        )
+      ) {
+        pluginIds.add(entry.pluginId);
+      }
     }
   }
   return [...pluginIds].toSorted((left, right) => left.localeCompare(right));

@@ -122,6 +122,10 @@ function coerceSchedule(schedule: UnknownRecord) {
   const staggerMs = normalizeCronStaggerMs(next.staggerMs);
   if (staggerMs !== undefined) {
     next.staggerMs = staggerMs;
+  } else if (next.kind === "cron" && next.staggerMs !== undefined) {
+    // Dropping an authored invalid value would silently apply a default on create
+    // or retain the previous stagger on update before request validation runs.
+    throw new TypeError("schedule.staggerMs must be a valid number or non-negative integer string");
   } else if ("staggerMs" in next) {
     delete next.staggerMs;
   }

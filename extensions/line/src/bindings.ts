@@ -1,4 +1,3 @@
-// Line plugin module implements bindings behavior.
 function normalizeLineConversationId(raw?: string | null): string | null {
   const trimmed = raw?.trim() ?? "";
   if (!trimmed) {

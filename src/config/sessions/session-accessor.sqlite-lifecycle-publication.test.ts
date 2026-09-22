@@ -12,7 +12,6 @@ import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-pr
 
 const failures = vi.hoisted(() => ({
   publication: undefined as Error | undefined,
-  writerReturn: undefined as Error | undefined,
 }));
 
 vi.mock("./session-accessor.sqlite-identity.js", async (importOriginal) => {
@@ -33,22 +32,6 @@ vi.mock("./session-accessor.sqlite-identity.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./session-accessor.sqlite-deletion.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-accessor.sqlite-deletion.js")>();
-  return {
-    ...actual,
-    runPreparedSqliteSessionWrite: async (
-      ...args: Parameters<typeof actual.runPreparedSqliteSessionWrite>
-    ) => {
-      const result = await actual.runPreparedSqliteSessionWrite(...args);
-      if (failures.writerReturn) {
-        throw failures.writerReturn;
-      }
-      return result;
-    },
-  };
-});
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
@@ -59,7 +42,6 @@ beforeEach(() => {
 
 afterEach(async () => {
   failures.publication = undefined;
-  failures.writerReturn = undefined;
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
@@ -80,7 +62,6 @@ it.each(["success", "publication", "writer return", "rollback"] as const)(
     const entry = { sessionId: "committed-session", updatedAt: 1, label: "Committed row" };
     const failure = new Error(`synthetic ${outcome} failure`);
     failures.publication = outcome === "publication" ? failure : undefined;
-    failures.writerReturn = outcome === "writer return" ? failure : undefined;
     const events: string[] = [];
     const committed = vi.fn(() => {
       expect(database.db.isTransaction).toBe(false);
@@ -99,6 +80,14 @@ it.each(["success", "publication", "writer return", "rollback"] as const)(
         upserts: [{ sessionKey: scope.sessionKey, entry }],
         skipMaintenance: true,
         onLifecycleCommitted: committed,
+        withCommit:
+          outcome === "writer return"
+            ? async (run) => {
+                // Fail after the real commit, publication, and writer release have settled.
+                await run(() => {});
+                throw failure;
+              }
+            : undefined,
         ...(outcome === "rollback"
           ? {
               afterUpsertsInTransaction: () => {

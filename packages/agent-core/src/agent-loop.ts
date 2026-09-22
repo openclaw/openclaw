@@ -1,12 +1,4 @@
-// Keep the runtime class on the public package specifier so OpenClaw and
-// external consumers share one constructor identity.
-import { EventStream as LlmEventStream } from "@openclaw/ai/event-stream";
-import type {
-  AssistantMessage,
-  EventStream,
-  ToolResultMessage,
-  EventStream as SourceEventStream,
-} from "@openclaw/llm-core";
+import type { AssistantMessage, ToolResultMessage } from "@openclaw/llm-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -34,13 +26,11 @@ import {
 import {
   appendInterruptedTurnMessage,
   createFailureMessage,
-  createInterruptedTurnMessage,
   isTurnHandoffAbort,
 } from "./turn-interruption.js";
 import type {
   ToolResultContentSource,
   AgentContext,
-  AgentEvent,
   AgentLoopConfig,
   AgentMessage,
   AgentTool,
@@ -54,8 +44,6 @@ import { validateToolArguments } from "./validation.js";
 
 /** Callback used by synchronous loop runners to publish agent lifecycle events. */
 export type { AgentEventSink } from "./agent-stream-response.js";
-
-const EventStreamConstructor: typeof SourceEventStream = LlmEventStream;
 
 const TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE =
   "OpenClaw stopped this run because tool-loop recovery encountered another critical loop. No blocked tool action was executed.";
@@ -74,48 +62,6 @@ function getSteeringAtCheckpoint(
     return [];
   }
   return getInternalSyncSteeringGetter(callback)?.() ?? callback.call(config);
-}
-
-/**
- * Start an agent loop with a new prompt message.
- * The prompt is added to the context and events are emitted for it.
- */
-export function agentLoop(
-  prompts: AgentMessage[],
-  context: AgentContext,
-  config: AgentLoopConfig,
-  signal?: AbortSignal,
-  streamFn?: StreamFn,
-  runtime?: AgentCoreStreamRuntimeDeps,
-): EventStream<AgentEvent, AgentMessage[]> {
-  return streamAgentRun(
-    (emit) => runAgentLoop(prompts, context, config, emit, signal, streamFn, runtime),
-    config,
-    signal,
-  );
-}
-
-/**
- * Continue an agent loop from the current context without adding a new message.
- * Used for retries - context already has user message or tool results.
- *
- * **Important:** The last message in context must convert to a `user` or `toolResult` message
- * via `convertToLlm`. If it doesn't, the LLM provider will reject the request.
- * This cannot be validated here since `convertToLlm` is only called once per turn.
- */
-export function agentLoopContinue(
-  context: AgentContext,
-  config: AgentLoopConfig,
-  signal?: AbortSignal,
-  streamFn?: StreamFn,
-  runtime?: AgentCoreStreamRuntimeDeps,
-): EventStream<AgentEvent, AgentMessage[]> {
-  assertContinuableContext(context);
-  return streamAgentRun(
-    (emit) => runAgentLoopContinue(context, config, emit, signal, streamFn, runtime),
-    config,
-    signal,
-  );
 }
 
 /** Run a prompt-started loop and emit events through a caller-owned sink. */
@@ -154,18 +100,6 @@ function assertContinuableContext(context: AgentContext): void {
   }
 }
 
-function streamAgentRun(
-  run: (emit: AgentEventSink) => Promise<AgentMessage[]>,
-  config: AgentLoopConfig,
-  signal?: AbortSignal,
-): EventStream<AgentEvent, AgentMessage[]> {
-  const stream = createAgentStream();
-  void run((event) => stream.push(event))
-    .then((messages) => stream.end(messages))
-    .catch((error: unknown) => pushLoopFailure(stream, config, error, signal));
-  return stream;
-}
-
 async function runAgentLoopCore(
   prompts: AgentMessage[],
   context: AgentContext,
@@ -198,34 +132,6 @@ async function runAgentLoopCore(
     return [];
   }
   return runLoop(state, newMessages, config, signal, emit, streamFn, runtime);
-}
-
-function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
-  return new EventStreamConstructor<AgentEvent, AgentMessage[]>(
-    (event: AgentEvent) => event.type === "agent_end",
-    (event: AgentEvent) => (event.type === "agent_end" ? event.messages : []),
-  );
-}
-
-function pushLoopFailure(
-  stream: EventStream<AgentEvent, AgentMessage[]>,
-  config: AgentLoopConfig,
-  error: unknown,
-  signal: AbortSignal | undefined,
-): void {
-  const aborted = signal?.aborted === true;
-  const failureMessage = createFailureMessage(config.model, error, aborted);
-  stream.push({ type: "message_start", message: failureMessage });
-  stream.push({ type: "message_end", message: failureMessage });
-  stream.push({ type: "turn_end", message: failureMessage, toolResults: [] });
-  const messages: AgentMessage[] = [failureMessage];
-  if (aborted && !isTurnHandoffAbort(signal)) {
-    const interruption = createInterruptedTurnMessage();
-    messages.push(interruption);
-    stream.push({ type: "message_start", message: interruption });
-    stream.push({ type: "message_end", message: interruption });
-  }
-  stream.push({ type: "agent_end", messages });
 }
 
 /**

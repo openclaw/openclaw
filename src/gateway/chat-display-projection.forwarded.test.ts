@@ -89,6 +89,27 @@ describe("automation transcript attribution", () => {
     sourcePromptPrefix: `[cron:${jobId} Old report]`,
   };
 
+  it("keeps injected name resolution ordered and memoized through its first failure", () => {
+    const messages = [jobId, jobId, "blocked", "later"].map((id) => ({
+      role: "user",
+      content: "A report.",
+      provenance: { ...provenance, jobId: id },
+    }));
+    const resolved: string[] = [];
+    const failure = new Error("name lookup refused");
+    expect(() =>
+      projectForwardedMessages(messages, (id) => {
+        resolved.push(id);
+        if (id === "blocked") {
+          throw failure;
+        }
+        return "Report";
+      }),
+    ).toThrow(failure);
+    expect(resolved).toEqual([jobId, "blocked"]);
+    expect(messages.map((message) => message.role)).toEqual(["user", "user", "user", "user"]);
+  });
+
   it.each(["Daily\nreport", "Daily] report"])(
     "strips the producer envelope for the valid job name %s after a rename",
     (name) => {

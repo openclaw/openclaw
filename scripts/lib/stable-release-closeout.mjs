@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { escapeRegExp } from "./regexp.mjs";
+import { evaluateStableRollbackDrill } from "./release-publish-gates.mts";
 import {
   classifyReleaseTrain,
   compareReleaseVersions,
@@ -10,7 +11,7 @@ const STABLE_RELEASE_TAG_RE = /^v(?<version>\d{4}\.\d{1,2}\.\d{1,2})(?:-[1-9]\d*
 const STABLE_PACKAGE_VERSION_RE =
   /^(?<year>\d{4})\.(?<month>\d{1,2})\.(?<patch>\d{1,2})(?:-(?<correction>[1-9]\d*))?$/u;
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
-const MAX_ROLLBACK_DRILL_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+const THIN_MAC_RELEASE_MINIMUM = "2026.9.6";
 
 function parseStableReleaseTagDetails(tag) {
   const match = STABLE_RELEASE_TAG_RE.exec(tag);
@@ -36,6 +37,11 @@ export function verifyReleaseEvidenceChecksum({ assetName, assetBytes, checksum 
 
 export function parseStableReleaseTag(tag) {
   return parseStableReleaseTagDetails(tag).baseVersion;
+}
+
+export function requiresThinMacArtifacts(tag) {
+  const { tagVersion } = parseStableReleaseTagDetails(tag);
+  return compareReleaseVersions(tagVersion, THIN_MAC_RELEASE_MINIMUM) >= 0;
 }
 
 function parseStablePackageVersion(version) {
@@ -150,38 +156,6 @@ function isCloseoutEvidenceAsset(assetName, tag) {
   );
 }
 
-function parseRollbackDrillDate(value) {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
-    return null;
-  }
-
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
-    ? parsed.getTime()
-    : null;
-}
-
-function verifyRollbackDrill(params, errors) {
-  if (!params.rollbackDrillId?.trim()) {
-    errors.push("rollback drill id is required.");
-  }
-
-  const drillDateMs = parseRollbackDrillDate(params.rollbackDrillDate);
-  if (drillDateMs === null) {
-    errors.push(`rollback drill date is invalid: ${params.rollbackDrillDate ?? "<missing>"}.`);
-    return;
-  }
-
-  const ageMs = params.nowMs - drillDateMs;
-  if (ageMs < 0) {
-    errors.push(`rollback drill date is in the future: ${params.rollbackDrillDate}.`);
-  } else if (!params.allowStaleRollbackDrill && ageMs > MAX_ROLLBACK_DRILL_AGE_MS) {
-    errors.push(
-      `rollback drill is older than 90 days: ${params.rollbackDrillDate}. Run the private rollback drill before stable closeout.`,
-    );
-  }
-}
-
 export function verifyStableMainCloseout(params) {
   const { baseVersion, tagVersion } = parseStableReleaseTagDetails(params.tag);
   const errors = [];
@@ -250,10 +224,19 @@ export function verifyStableMainCloseout(params) {
   }
 
   const macAssetVersion = version;
-  const expectedMacAssets = [
+  const universalMacAssets = [
     `OpenClaw-${macAssetVersion}.zip`,
     `OpenClaw-${macAssetVersion}.dmg`,
     `OpenClaw-${macAssetVersion}.dSYM.zip`,
+  ];
+  const thinMacVariants = requiresThinMacArtifacts(params.tag) ? ["arm64", "x86_64"] : [];
+  const expectedMacAssets = [
+    ...universalMacAssets,
+    ...thinMacVariants.flatMap((arch) => [
+      `OpenClaw-${macAssetVersion}-${arch}.zip`,
+      `OpenClaw-${macAssetVersion}-${arch}.dmg`,
+      `OpenClaw-${macAssetVersion}-${arch}.dSYM.zip`,
+    ]),
   ];
   const platformAssets = {
     macos: expectedMacAssets,
@@ -370,12 +353,24 @@ export function verifyStableMainCloseout(params) {
     existingManifest && !appcastVerifiedAtCloseout
       ? (params.publishedAppcast ?? params.mainAppcast)
       : params.mainAppcast;
-  if (
-    macPublished &&
-    (!existingManifest || !appcastVerifiedAtCloseout) &&
-    !appcast.includes(`/releases/download/${params.tag}/${expectedMacAssets[0]}`)
-  ) {
-    errors.push(`main appcast.xml does not point at ${expectedMacAssets[0]} from ${params.tag}.`);
+  const appcastContracts = [
+    { name: "main appcast.xml", content: appcast, asset: universalMacAssets[0] },
+    ...thinMacVariants.map((arch) => ({
+      name: `main appcast-${arch}.xml`,
+      content:
+        existingManifest && !appcastVerifiedAtCloseout
+          ? (params[`published${arch === "arm64" ? "Arm64" : "X86_64"}Appcast`] ??
+            params[`main${arch === "arm64" ? "Arm64" : "X86_64"}Appcast`])
+          : params[`main${arch === "arm64" ? "Arm64" : "X86_64"}Appcast`],
+      asset: `OpenClaw-${macAssetVersion}-${arch}.zip`,
+    })),
+  ];
+  if (macPublished && (!existingManifest || !appcastVerifiedAtCloseout)) {
+    for (const contract of appcastContracts) {
+      if (!contract.content?.includes(`/releases/download/${params.tag}/${contract.asset}`)) {
+        errors.push(`${contract.name} does not point at ${contract.asset} from ${params.tag}.`);
+      }
+    }
   }
   const appPlatforms = Object.fromEntries(
     Object.entries(platformAssets).map(([platform, assets]) => [
@@ -435,7 +430,11 @@ export function verifyStableMainCloseout(params) {
       "Recorded split publication recovery must be independently reverified without changes.",
     );
   }
-  verifyRollbackDrill(params, errors);
+  errors.push(
+    ...evaluateStableRollbackDrill(params)
+      .filter((gate) => gate.status === "FAIL")
+      .map((gate) => gate.message),
+  );
 
   if (errors.length > 0) {
     return { errors, manifest: null };

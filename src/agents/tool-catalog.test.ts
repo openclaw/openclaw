@@ -85,6 +85,7 @@ describe("tool-catalog", () => {
   it("includes code execution, web tools, and progress_card in the coding profile policy", () => {
     const policy = requireCoreToolProfilePolicy("coding");
     expect(policy.allow).toEqual([
+      "decision_evaluate",
       "ls",
       "read",
       "write",
@@ -117,6 +118,7 @@ describe("tool-catalog", () => {
       "suggest_task",
       "dismiss_task",
       "screen",
+      "theme",
       "dashboard",
       "terminal",
       "portal",
@@ -140,6 +142,7 @@ describe("tool-catalog", () => {
   it("includes bundle MCP tools in coding and messaging profile policies", () => {
     expect(requirePolicyAllow("coding").at(-1)).toBe("bundle-mcp");
     expect(requirePolicyAllow("messaging")).toEqual([
+      "decision_evaluate",
       "secrets",
       "sessions",
       "sessions_list",
@@ -153,6 +156,7 @@ describe("tool-catalog", () => {
       "sessions_yield",
       "subagents",
       "session_status",
+      "theme",
       "message",
       "gateway",
       "ask_user",

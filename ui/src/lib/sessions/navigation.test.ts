@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { isSystemCreatedSessionRow } from "../../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   compareSessionRowsByUpdatedAt,
-  isSystemCreatedSessionRow,
   resolveSessionNavigation,
   visibleSessionMatches,
 } from "./navigation.ts";
@@ -19,6 +19,37 @@ function sessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
 }
 
 describe("resolveSessionNavigation", () => {
+  it("keeps a categorized spawned conversation discoverable without selecting or loading its parent", () => {
+    const parentKey = "agent:main:discord:channel:parent";
+    const office = {
+      key: "agent:main:dashboard:office-ha",
+      sessionId: "office-ha",
+      kind: "direct" as const,
+      label: "OFFICE HA",
+      category: "HOME ASSISTANT",
+      archived: false,
+      spawnedBy: parentKey,
+      parentSessionKey: parentKey,
+      createdVia: "spawn" as const,
+      createdActor: { type: "agent" as const },
+      updatedAt: 30,
+    };
+    const wake = { key: "agent:main:dashboard:wake-word", kind: "direct" as const, updatedAt: 20 };
+    const result = sessionsResult([
+      office,
+      wake,
+      { ...office, key: "agent:main:subagent:worker" },
+      { ...office, key: "agent:main:dashboard:uncategorized", category: " " },
+      { ...office, key: "agent:main:dashboard:archived", archived: true },
+    ]);
+    const navigation = resolveSessionNavigation({
+      result,
+      resultAgentId: "main",
+      sessionKey: wake.key,
+    });
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([office.key, wake.key]);
+  });
+
   it("keeps the selected session in its sorted slot instead of hoisting it", () => {
     const rows = Array.from({ length: 5 }, (_, index) => ({
       key: `agent:main:recent-${index}`,

@@ -8,7 +8,7 @@ function fixture(error: GatewayRequestError) {
     throw error;
   });
   const callbacks = {
-    onApprovedListing: vi.fn(),
+    onApprovedRootsChange: vi.fn(),
     onVerified: vi.fn(),
     onMissing: vi.fn(),
     onFailed: vi.fn(),
@@ -37,6 +37,32 @@ function fixture(error: GatewayRequestError) {
 }
 
 describe("restored new-session folder validation", () => {
+  it("retains approved roots on cancellation and clears them at a draft boundary", () => {
+    let isAdmin = false;
+    const onApprovedRootsChange = vi.fn();
+    const validation = new DraftRestoredFolderValidation(
+      () => ({ gateway: undefined, folder: "/workspace", selectedByUser: false, isAdmin }),
+      { onApprovedRootsChange, onVerified: vi.fn(), onMissing: vi.fn(), onFailed: vi.fn() },
+    );
+    const listing = { path: "/approved/project", parent: "/approved", home: "/home", entries: [] };
+    validation.recordApprovedListing(listing);
+    validation.recordApprovedListing(listing);
+    expect(onApprovedRootsChange).toHaveBeenCalledOnce();
+    expect(validation.knownWorkspaceRoots("/workspace")).toEqual([
+      "/workspace",
+      "/approved/project",
+      "/approved",
+    ]);
+    validation.cancel();
+    expect(validation.knownWorkspaceRoots("")).toEqual(["/approved/project", "/approved"]);
+    isAdmin = true;
+    validation.recordApprovedListing({ ...listing, path: "/admin-only", parent: undefined });
+    expect(onApprovedRootsChange).toHaveBeenCalledOnce();
+    expect(validation.knownWorkspaceRoots("")).not.toContain("/admin-only");
+    validation.reset();
+    expect(validation.knownWorkspaceRoots("/workspace")).toEqual(["/workspace"]);
+  });
+
   it.each(["ENOENT: no such file or directory", "Error: ENOTDIR: not a directory"])(
     "restores a missing folder and unblocks submission after %s",
     async (message) => {

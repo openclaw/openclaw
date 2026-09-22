@@ -2,23 +2,31 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  getAgentWorkspaceAccess,
+  WorkspaceAccessUnavailableError,
+} from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveBrewExecutable } from "../../infra/brew.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  evaluateSkillInstallPolicy,
-  type SkillInstallSpecMetadata,
-} from "../../plugins/install-security-scan.js";
+import { evaluateSkillInstallPolicy } from "../../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
 import { hasBinary, resolveSkillsInstallPreferences } from "../loading/config.js";
+import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillSource } from "../loading/source.js";
-import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
-import type { SkillEntry, SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
+import { prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import type { SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
 import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
+import {
+  findInstallSpec,
+  normalizeSkillInstallSpec,
+  withSkillInstallPolicySource,
+} from "./install-policy-source.js";
 import type { SkillInstallResult, SkillInstallSkipReason } from "./install-types.js";
+import type { WorkspaceSkillLifecycle } from "./workspace-types.js";
 
 type SkillInstallRequest = {
   workspaceDir: string;
@@ -37,39 +45,6 @@ function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInst
   return {
     ...result,
     warnings: warnings.slice(),
-  };
-}
-
-function resolveInstallId(spec: SkillInstallSpec, index: number): string {
-  return (spec.id ?? `${spec.kind}-${index}`).trim();
-}
-
-function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec | undefined {
-  const specs = entry.metadata?.install ?? [];
-  for (const [index, spec] of specs.entries()) {
-    if (resolveInstallId(spec, index) === installId) {
-      return spec;
-    }
-  }
-  return undefined;
-}
-
-function normalizeSkillInstallSpec(spec: SkillInstallSpec): SkillInstallSpecMetadata {
-  return {
-    ...(spec.id ? { id: spec.id } : {}),
-    kind: spec.kind,
-    ...(spec.label ? { label: spec.label } : {}),
-    ...(spec.bins ? { bins: spec.bins.slice() } : {}),
-    ...(spec.os ? { os: spec.os.slice() } : {}),
-    ...(spec.formula ? { formula: spec.formula } : {}),
-    ...(spec.package ? { package: spec.package } : {}),
-    ...(spec.module ? { module: spec.module } : {}),
-    ...(spec.url ? { url: spec.url } : {}),
-    ...(spec.sha256 ? { sha256: spec.sha256 } : {}),
-    ...(spec.archive ? { archive: spec.archive } : {}),
-    ...(spec.extract !== undefined ? { extract: spec.extract } : {}),
-    ...(spec.stripComponents !== undefined ? { stripComponents: spec.stripComponents } : {}),
-    ...(spec.targetDir ? { targetDir: spec.targetDir } : {}),
   };
 }
 
@@ -653,48 +628,51 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
   const workspaceDir = resolveUserPath(params.workspaceDir);
   // Match status inventory: operators can install dependencies for hidden skills.
-  const entries = loadWorkspaceSkills(workspaceDir, {
+  const entries = await prepareWorkspaceSkills(workspaceDir, {
     config: params.config,
     agentId: params.agentId,
     agentSkillFilter: "ignore",
   });
   const entry = entries.find((item) => item.skill.name === params.skillName);
   if (!entry) {
-    return {
-      ok: false,
-      message: `Skill not found: ${params.skillName}`,
-      stdout: "",
-      stderr: "",
-      code: null,
-    };
+    return createInstallFailure({ message: `Skill not found: ${params.skillName}` });
   }
 
   const spec = findInstallSpec(entry, params.installId);
   const warnings: string[] = [];
   const skillSource = resolveSkillSource(entry.skill);
   const normalizedSpec = spec ? normalizeSkillInstallSpec(spec) : undefined;
-  const scanResult = await evaluateSkillInstallPolicy({
-    config: params.config,
-    installId: params.installId,
-    ...(normalizedSpec ? { installSpec: normalizedSpec } : {}),
-    logger: {
-      warn: (message) => warnings.push(message),
-    },
-    origin: {
-      type: skillSource,
-      skillName: params.skillName,
+  const workspaceAccess = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
+  const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+  if (access && !access.installSkillDependencies) {
+    throw new WorkspaceAccessUnavailableError(
+      "Remote skill dependency installation is unavailable",
+    );
+  }
+  const scanResult = await withSkillInstallPolicySource(entry.skill, access, (sourceDir) =>
+    evaluateSkillInstallPolicy({
+      config: params.config,
       installId: params.installId,
-    },
-    source:
-      skillSource === "openclaw-bundled"
-        ? { kind: "bundled", authority: "openclaw", mutable: false, network: false }
-        : skillSource === "openclaw-managed" || skillSource === "openclaw-extra"
-          ? { kind: "managed", authority: "openclaw", mutable: false, network: false }
-          : { kind: "workspace", authority: "user", mutable: true, network: false },
-    requestedSpecifier: `${params.skillName}:${params.installId}`,
-    skillName: params.skillName,
-    sourceDir: path.resolve(entry.skill.baseDir),
-  });
+      ...(normalizedSpec ? { installSpec: normalizedSpec } : {}),
+      logger: {
+        warn: (message) => warnings.push(message),
+      },
+      origin: {
+        type: skillSource,
+        skillName: params.skillName,
+        installId: params.installId,
+      },
+      source:
+        skillSource === "openclaw-bundled"
+          ? { kind: "bundled", authority: "openclaw", mutable: false, network: false }
+          : skillSource === "openclaw-managed" || skillSource === "openclaw-extra"
+            ? { kind: "managed", authority: "openclaw", mutable: false, network: false }
+            : { kind: "workspace", authority: "user", mutable: true, network: false },
+      requestedSpecifier: `${params.skillName}:${params.installId}`,
+      skillName: params.skillName,
+      sourceDir,
+    }),
+  );
   if (scanResult?.blocked) {
     return withWarnings(
       {
@@ -727,40 +705,48 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
       warnings,
     );
   }
+  const request = {
+    skillKey: resolveSkillKey(entry.skill, entry),
+    spec,
+    preferences: resolveSkillsInstallPreferences(params.config),
+    timeoutMs,
+  };
+  const result = access
+    ? await access.installSkillDependencies!(request)
+    : await installSkillDependencies(request);
+  return withWarnings(result, warnings);
+}
+
+/** Runs only the approved recipe on the host that owns the Harness tools directory. */
+export async function installSkillDependencies(
+  params: Parameters<WorkspaceSkillLifecycle["installSkillDependencies"]>[0],
+): Promise<SkillInstallResult> {
+  const { skillKey, spec, preferences: prefs } = params;
+  const timeoutMs = Math.min(Math.max(params.timeoutMs, 1_000), 900_000);
   if (spec.kind === "download") {
-    const downloadResult = await installDownloadSpec({ entry, spec, timeoutMs });
-    return withWarnings(downloadResult, warnings);
+    const downloadResult = await installDownloadSpec({ skillKey, spec, timeoutMs });
+    return downloadResult;
   }
 
-  const prefs = resolveSkillsInstallPreferences(params.config);
   const command = buildInstallCommand(spec, prefs);
   if (command.error) {
-    return withWarnings(
-      {
-        ok: false,
-        message: command.error,
-        stdout: "",
-        stderr: "",
-        code: null,
-      },
-      warnings,
-    );
+    return { ok: false, message: command.error, stdout: "", stderr: "", code: null };
   }
 
   const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
-    return withWarnings(resolveBrewMissingFailure(spec), warnings);
+    return resolveBrewMissingFailure(spec);
   }
 
   const uvInstallFailure = await ensureUvInstalled({ spec, brewExe, timeoutMs });
   if (uvInstallFailure) {
-    return withWarnings(uvInstallFailure, warnings);
+    return uvInstallFailure;
   }
 
   const goWasAlreadyInstalled = spec.kind === "go" && hasBinary("go");
   const goInstallFailure = await ensureGoInstalled({ spec, brewExe, timeoutMs });
   if (goInstallFailure) {
-    return withWarnings(goInstallFailure, warnings);
+    return goInstallFailure;
   }
 
   const argv = command.argv ? [...command.argv] : null;
@@ -793,6 +779,5 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     spec.kind === "go" && !installResult.ok && isGoToolchainPrerequisiteFailure(installResult)
       ? { ...installResult, skipReason: "go" as const }
       : installResult;
-  return withWarnings(normalizedResult, warnings);
+  return normalizedResult;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

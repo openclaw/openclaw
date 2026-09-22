@@ -14,6 +14,7 @@ import {
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
+import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
 
 const dynamicCallContext = { threadId: "thread-1", turnId: "turn-1", namespace: null };
@@ -25,6 +26,34 @@ const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
 describe("dynamic tool execution helpers", () => {
+  it("releases an ordinary successful tool operation before returning its result", async () => {
+    const runController = new AbortController();
+    let operationSignal: AbortSignal | undefined;
+    const remove = vi.spyOn(runController.signal, "removeEventListener");
+    const response = await handleDynamicToolCallWithTimeout({
+      call: {
+        ...dynamicCallContext,
+        callId: "ordinary-cleanup",
+        tool: "session_status",
+        arguments: {},
+      },
+      toolBridge: {
+        consumeToolExecutionSnapshot: () => undefined,
+        handleToolCall: async (_call, options) => {
+          operationSignal = options?.signal;
+          return { success: true, contentItems: [{ type: "inputText", text: "done" }] };
+        },
+      },
+      signal: runController.signal,
+      timeoutMs: 1_000,
+    });
+    expect(response.success).toBe(true);
+    expect(operationSignal?.aborted).toBe(true);
+    expect(String(operationSignal?.reason)).toContain("OpenClaw dynamic tool call finished.");
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(runController.signal.aborted).toBe(false);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -381,7 +410,7 @@ describe("dynamic tool execution helpers", () => {
 
     await vi.advanceTimersByTimeAsync(1);
 
-    await expect(response).resolves.toEqual({
+    expect(toCodexDynamicToolProtocolResponse(await response)).toEqual({
       success: false,
       contentItems: [
         {
@@ -637,7 +666,7 @@ describe("dynamic tool execution helpers", () => {
       onAgentToolResult,
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [
         { type: "inputText", text: "OpenClaw dynamic tool call aborted before execution." },
@@ -886,27 +915,19 @@ describe("dynamic tool execution helpers", () => {
   });
 
   it("keeps async-start metadata on internal dynamic tool progress only", () => {
-    const response: CodexDynamicToolCallResponse = {
+    const mcpAppPreview = { resourceUri: "ui://fixture/preview", title: "Preview" };
+    const response: CodexDynamicToolRuntimeResponse = {
       contentItems: [{ type: "inputText", text: "Background task started." }],
       success: true,
+      asyncStarted: true,
+      executedArguments: { action: "send", to: "channel:123" },
+      executionStarted: true,
+      replaySafe: false,
+      sideEffectEvidence: true,
+      terminate: true,
+      diagnosticTerminalType: "completed",
+      transcriptDetails: { mcpAppPreview, privateModelPayload: "host only" },
     };
-    Object.defineProperty(response, "asyncStarted", {
-      configurable: true,
-      enumerable: false,
-      value: true,
-    });
-    Object.defineProperties(response, {
-      executedArguments: {
-        configurable: true,
-        enumerable: false,
-        value: { action: "send", to: "channel:123" },
-      },
-      executionStarted: {
-        configurable: true,
-        enumerable: false,
-        value: true,
-      },
-    });
 
     const protocolResponse = toCodexDynamicToolProtocolResponse(response);
     const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
@@ -915,12 +936,9 @@ describe("dynamic tool execution helpers", () => {
       contentItems: [{ type: "inputText", text: "Background task started." }],
       success: true,
     });
-    expect(Object.keys(protocolResponse)).not.toContain("asyncStarted");
-    expect("executionStarted" in protocolResponse).toBe(false);
-    expect("executedArguments" in protocolResponse).toBe(false);
     expect(progressResponse).toEqual({
       contentItems: [{ type: "inputText", text: "Background task started." }],
-      details: { async: true, status: "started" },
+      details: { mcpAppPreview, async: true, status: "started" },
       success: true,
     });
   });
@@ -1006,12 +1024,8 @@ describe("dynamic tool execution helpers", () => {
     const asyncStartedResponse = {
       contentItems: [{ type: "inputText" as const, text: "Background task started." }],
       success: true,
+      asyncStarted: true,
     };
-    Object.defineProperty(asyncStartedResponse, "asyncStarted", {
-      configurable: true,
-      enumerable: false,
-      value: true,
-    });
 
     expect(shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(asyncStartedResponse)).toBe(
       false,

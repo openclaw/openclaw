@@ -116,6 +116,12 @@ jobs:
             scripts/lib/release-version.mjs
           sparse-checkout-cone-mode: false
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Verify trusted release tooling identity
         env:
           GH_TOKEN: ${{ github.token }}
@@ -844,7 +850,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       actions: read
-      contents: write
+      contents: read
     steps:
       - name: Checkout trusted Linux updater publication tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -942,9 +948,29 @@ jobs:
             cat dist/release/latest-desktop-test.json
           fi
 
+      # The control tag can target release-branch workflows. Its existing
+      # release owner needs workflows:write; GITHUB_TOKEN cannot grant it.
+      - name: Create Linux publication token
+        id: publication_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: Iv23liOECG0slfuhz093
+          private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: openclaw
+          permission-actions: read
+          permission-contents: write
+          permission-workflows: write
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Publish immutable bundles, canonical Linux channel, and legacy mirror
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.publication_token.outputs.token }}
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
           DESKTOP_TEST_BUNDLES: ${{ needs.validate_release.outputs.desktop_test_bundles }}
           TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
@@ -983,7 +1009,7 @@ jobs:
             --request-run-id "$REQUEST_RUN_ID" --request-run-attempt "$REQUEST_RUN_ATTEMPT" \
             "${input_args[@]}" --public-key-config apps/linux/src-tauri/tauri.conf.json \
             --desktop-test "$DESKTOP_TEST_BUNDLES" \
-            2> "$RUNNER_TEMP/linux-publication.log" | tee "$RUNNER_TEMP/linux-publication.json"
+            2> >(tee "$RUNNER_TEMP/linux-publication.log" >&2) | tee "$RUNNER_TEMP/linux-publication.json"
 
       - name: Record incomplete Linux publication
         if: ${{ failure() }}
@@ -1029,6 +1055,12 @@ jobs:
             scripts/lib/record-shared.mjs
             scripts/release-tooling-identity.mjs
           sparse-checkout-cone-mode: false
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
 
       - name: Verify detached mirror dispatch identity
         env:

@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -597,3 +598,5 @@ export class GitHubIdentityController {
     );
   }
 }
+
+registerGitHubEnglish();

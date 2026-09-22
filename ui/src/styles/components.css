@@ -303,7 +303,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   justify-content: center;
   width: 16px;
   height: 16px;
-  transition: transform var(--duration-fast) ease;
 }
 
 .channel-avatar {
@@ -335,20 +334,11 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   color: inherit;
 }
 
-/* The ring is a circle, so square artwork (page icons, thumbnails, arbitrary
-   SVGs) must shrink to keep its corners inside it. A 16px square scaled below
-   0.75 clears its 21px inner circle; 20px circular avatars fill their lead. */
-.session-glyph--running .session-glyph__content {
-  transform: scale(0.72);
-}
-
-.session-glyph--circular.session-glyph--running .session-glyph__content {
-  transform: none;
-}
-
+/* Keep artwork at its resting size inside a consistent 25px circular ring.
+   Owner pairs retain their fitted trace below rather than shrinking their faces. */
 .session-glyph__ring {
   position: absolute;
-  inset: -2px;
+  inset: -2.5px;
   box-sizing: border-box;
   border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
   border-top-color: var(--accent);
@@ -1090,8 +1080,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .plugin-official-badge svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
 }
 
 /* ===========================================
@@ -1313,14 +1304,24 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   z-index: var(--z-toast);
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  max-width: min(520px, calc(100vw - 32px));
-  padding: 10px 12px 10px 16px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
+  gap: 8px;
+  width: max-content;
+  max-width: min(370px, calc(100vw - 32px));
+  padding: 7px 7px 7px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
   background: var(--popover);
   color: var(--popover-foreground);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.shell--chat {
+  --app-toast-shell-top: calc(var(--safe-area-top) + var(--rail-header-height) + 12px);
+}
+
+openclaw-toast-host[data-toast-placement="shell"]
+  .app-toast:not(.app-toast--anchored, .app-toast--bottom) {
+  top: var(--app-toast-shell-top, calc(20px + var(--safe-area-top)));
 }
 
 /* Settings outcomes can use the lower corner without covering chat controls.
@@ -1328,9 +1329,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .app-toast--bottom {
   top: auto;
   bottom: calc(20px + var(--safe-area-bottom));
-  width: min(380px, calc(100vw - 32px));
-  padding: 8px 8px 8px 16px;
-  border-radius: var(--radius-lg);
   transition:
     opacity 180ms ease-out,
     translate 180ms ease-out;
@@ -1348,12 +1346,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   left: var(--app-toast-anchor-center);
   top: var(--app-toast-anchor-top);
   transform: translateX(-50%);
-  gap: var(--space-2);
-  max-width: min(520px, calc(var(--app-toast-anchor-width) - 24px));
-  padding: 8px 12px;
-  border-color: color-mix(in srgb, var(--info) 12%, transparent);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--info) 12%, var(--popover));
+  max-width: min(370px, calc(var(--app-toast-anchor-width) - 24px));
   transition-property: translate, scale, opacity;
 }
 
@@ -1396,8 +1389,62 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   height: 16px;
 }
 
-/* A corner toast degenerates at phone widths, where it would span nearly the
- * whole viewport anyway. Use the full-width top idiom instead. */
+/* Recovery copy and rich links remain readable at narrow widths and enlarged
+ * text sizes. Do not clamp away the instruction the operator needs next. */
+.app-toast__message {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: min(240px, 40dvh);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: 1.5;
+}
+
+.app-toast__action,
+.app-toast__dismiss {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 8px;
+}
+
+.app-toast__action {
+  min-height: 32px;
+  max-width: 35%;
+  padding: 5px 10px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.app-toast__dismiss {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  background: transparent;
+  color: var(--muted);
+}
+
+.app-toast__dismiss svg {
+  width: 14px;
+  height: 14px;
+}
+
+.app-toast__action:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.app-toast__dismiss:hover {
+  background: var(--bg-muted);
+}
+
+/* A corner toast spans nearly the whole phone viewport. Keep the owning shell's
+ * chrome offset and safe areas, with full-size touch targets in every variant. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .shell--chat {
     --app-toast-shell-top: calc(
@@ -1406,117 +1453,29 @@ openclaw-session-owner-chip .viewer-avatar__initials {
     );
   }
 
-  /* The unanchored chat toast shares the viewport with shell and pane chrome.
-     Anchored permission toasts already carry a measured pane-header offset. */
-  openclaw-toast-host[data-toast-placement="shell"]
-    .app-toast:not(.app-toast--anchored, .app-toast--bottom) {
-    top: var(--app-toast-shell-top, calc(20px + var(--safe-area-top)));
-  }
-
   .app-toast {
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
-    max-width: none;
-  }
-
-  .app-toast--bottom {
     width: auto;
+    max-width: none;
   }
 
   .app-toast--anchored {
     left: var(--app-toast-anchor-center);
     right: auto;
+    width: max-content;
     max-width: calc(var(--app-toast-anchor-width) - 24px);
   }
 
-  .app-toast:not(.app-toast--anchored) .app-toast__message {
-    flex: 1 1 auto;
+  .app-toast__action {
+    min-height: 44px;
+    min-width: 44px;
   }
-}
 
-/* Toasts carry recovery instructions ("Undo", where to re-enable), so a message
- * that outgrows one line wraps instead of ellipsing the instruction away, with
- * even line lengths because the wrapped text is a sentence to read rather than a
- * label to scan. The clamp still bounds a pathological string. */
-.app-toast__message {
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--control-ui-text-md);
-  text-wrap: balance;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  -webkit-box-orient: vertical;
-}
-
-.app-toast--anchored .app-toast__message {
-  display: block;
-  white-space: nowrap;
-  font-size: var(--control-ui-text-sm);
-}
-
-.app-toast--anchored .app-toast__dismiss {
-  width: 24px;
-  height: 24px;
-  margin-left: 2px;
-  border-radius: var(--radius-full);
-  color: var(--muted);
-}
-
-.app-toast--anchored .app-toast__dismiss svg {
-  width: 16px;
-  height: 16px;
-}
-
-.app-toast__action,
-.app-toast__dismiss {
-  flex: 0 0 auto;
-  border: 0;
-  background: transparent;
-  color: inherit;
-}
-
-.app-toast__action {
-  color: var(--accent);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 700;
-}
-
-.app-toast__dismiss {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  place-items: center;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  font-size: 20px;
-  line-height: 1;
-}
-
-.app-toast--bottom .app-toast__icon {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-full);
-  background: var(--bg-muted);
-  color: var(--text-strong);
-}
-
-.app-toast--bottom .app-toast__message {
-  flex: 1 1 auto;
-  line-height: 1.5;
-  text-wrap: pretty;
-}
-
-.app-toast--bottom .app-toast__dismiss {
-  width: 44px;
-  height: 44px;
-}
-
-.app-toast--bottom .app-toast__dismiss svg {
-  width: 16px;
-  height: 16px;
+  .app-toast__dismiss {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1559,7 +1518,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   stroke-linejoin: round;
 }
 
-openclaw-github-link-hovercard-provider {
+openclaw-link-reader-hovercard-provider {
   display: contents;
 }
 
@@ -2596,6 +2555,115 @@ select.input {
   user-select: none;
 }
 
+.code-block-json-modes {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.code-block-json-mode {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+
+.code-block-json-mode[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+
+.code-block-json-mode:focus-visible,
+.code-block-json-node > summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.code-block-json-tree {
+  max-height: 360px;
+  padding: 6px 14px 16px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+
+.code-block-json-children {
+  padding-inline-start: 20px;
+}
+
+.code-block-json-tree .code-block-json-node {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.code-block-json-node > summary {
+  display: block;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  list-style: none;
+}
+
+.code-block-json-node > summary::-webkit-details-marker {
+  display: none;
+}
+
+.code-block-json-node > summary::before {
+  position: static;
+  content: "▸";
+  display: inline-block;
+  inline-size: 14px;
+  block-size: auto;
+  margin-inline-start: -14px;
+  background: none;
+  transform: none;
+}
+
+.code-block-json-node[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.code-block-json-node-summary {
+  font-style: italic;
+}
+
+.code-block-json-node-opening,
+.code-block-json-node[open] > summary > .code-block-json-node-summary {
+  display: none;
+}
+
+.code-block-json-node[open] > summary > .code-block-json-node-opening {
+  display: inline;
+}
+
+.code-block-json-key,
+.code-block-json-value--string {
+  color: var(--hljs-string);
+}
+
+.code-block-json-value--literal {
+  color: var(--hljs-number);
+}
+
+/* Raw keeps the shared seven-line preview, reveal, wrap, and original copy payload. */
+.code-block-wrapper--json:not(.is-json-raw) > :is(.code-block-viewport, .code-block-expand),
+.code-block-wrapper--json:not(.is-json-raw) .code-block-wrap,
+.code-block-wrapper--json.is-json-raw > .code-block-json-tree {
+  display: none;
+}
+
 .code-block-copy {
   appearance: none;
   border: none;
@@ -2702,7 +2770,7 @@ select.input {
     transform var(--duration-fast) var(--ease-out);
 }
 
-.chip:hover {
+.chip:is(button, a, label):hover {
   border-color: var(--border-strong);
   transform: translateY(-1px);
 }
@@ -2987,75 +3055,6 @@ td.data-table-key-col {
 
 .shell--chat .chat {
   flex: 1;
-}
-
-/* Chat lines */
-.chat-line {
-  display: flex;
-}
-
-.chat-line.user {
-  justify-content: flex-end;
-}
-
-.chat-line.assistant,
-.chat-line.other {
-  justify-content: flex-start;
-}
-
-.chat-msg {
-  display: grid;
-  gap: 6px;
-  max-width: min(700px, 82%);
-}
-
-.chat-line.user .chat-msg {
-  justify-items: end;
-}
-
-/* Chat bubbles: canonical styles live in chat/grouped.css; the .chat-line
-   variants below only skin the loading-skeleton preview bubbles. */
-.chat-line.user .chat-bubble {
-  border-color: transparent;
-  background: var(--accent-subtle);
-}
-
-:root[data-theme-mode="light"] .chat-line.user .chat-bubble {
-  border-color: transparent;
-  background: var(--accent-subtle);
-  box-shadow: none;
-}
-
-.chat-line.assistant .chat-bubble {
-  border-color: transparent;
-  background: var(--secondary);
-}
-
-:root[data-theme-mode="light"] .chat-line.assistant .chat-bubble {
-  border-color: var(--border);
-  background: var(--bg-muted);
-}
-
-@keyframes chatStreamPulse {
-  0%,
-  100% {
-    border-color: var(--border);
-  }
-
-  50% {
-    border-color: var(--accent);
-  }
-}
-
-.chat-bubble.streaming {
-  animation: chatStreamPulse 1.5s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-bubble.streaming {
-    animation: none;
-    border-color: var(--accent);
-  }
 }
 
 /* Reading indicator bubble sizing; dot styles live in chat/tool-cards.css. */
@@ -3465,15 +3464,6 @@ td.data-table-key-col {
   min-width: 0;
 }
 
-.agent-scope-control__label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
 .agent-scope-control openclaw-agent-select {
   min-width: 150px;
   max-width: min(240px, 40vw);
@@ -3489,10 +3479,6 @@ td.data-table-key-col {
 }
 
 @media (max-width: 640px) {
-  .agent-scope-control__label {
-    display: none;
-  }
-
   .agent-scope-control openclaw-agent-select {
     min-width: 128px;
     max-width: 44vw;
@@ -4921,13 +4907,6 @@ td.data-table-key-col {
   gap: 18px;
 }
 
-.agent-skill-row .list-meta {
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  min-width: auto;
-}
-
 .skills-grid {
   grid-template-columns: 1fr;
 }
@@ -4958,7 +4937,10 @@ td.data-table-key-col {
 }
 
 .cmd-palette {
+  display: flex;
+  flex-direction: column;
   width: 100%;
+  max-height: calc(100dvh - min(20dvh, 160px) - 24px);
   overflow: hidden;
   background: var(--card);
   border: 1px solid var(--border);
@@ -4966,27 +4948,53 @@ td.data-table-key-col {
   box-shadow: var(--shadow-lg);
 }
 
-.cmd-palette__label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
+.cmd-palette__attachments {
+  --chat-composer-editor-inset-inline: 14px;
+  --chat-composer-editor-inset-block: 6px;
+  --chat-attachment-hit-slop: 12px;
+  --chat-box-inset: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+  margin: 0 12px 6px 4px;
+}
+
+.cmd-palette__entry {
+  --cmd-palette-actions-width: 170px;
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 14px 5px 14px 18px;
+}
+
+.cmd-palette__input-scroll {
+  position: relative;
+  min-width: 0;
   overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  white-space: nowrap;
 }
 
 .cmd-palette__input {
+  display: block;
+  box-sizing: border-box;
   width: 100%;
-  padding: 14px 18px;
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--border);
-  color: var(--text);
+  min-width: 0;
+  height: 22px;
+  min-height: 22px;
+  max-height: 66px;
+  margin: 0;
+  padding: 0 calc(var(--cmd-palette-actions-width) + 20px) 0 0;
+  resize: none;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+  font-family: inherit;
   font-size: 15px;
+  line-height: 22px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--text);
   outline: none;
 }
 
@@ -4994,26 +5002,157 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
+/* Keep the overflow indicator visible instead of using an auto-hidden overlay. */
+@supports selector(::-webkit-scrollbar) {
+  .cmd-palette__input {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  .cmd-palette__input::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .cmd-palette__input::-webkit-scrollbar-thumb {
+    border-radius: var(--radius-sm);
+    background: var(--muted);
+  }
+
+  .cmd-palette__input::-webkit-scrollbar-track {
+    background: var(--bg-muted);
+  }
+}
+
+/* Fades cover only text, never the native far-right scrollbar or actions. */
+.cmd-palette__input-scroll::before,
+.cmd-palette__input-scroll::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: calc(var(--cmd-palette-actions-width) + 30px);
+  z-index: 1;
+  height: 10px;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.cmd-palette__input-scroll::before {
+  top: 0;
+  background: linear-gradient(to bottom, var(--card), transparent);
+}
+
+.cmd-palette__input-scroll::after {
+  bottom: 0;
+  background: linear-gradient(to top, var(--card), transparent);
+}
+
+.cmd-palette__entry[data-scroll-fade-top] .cmd-palette__input-scroll::before,
+.cmd-palette__entry[data-scroll-fade-bottom] .cmd-palette__input-scroll::after {
+  opacity: 1;
+}
+
+.cmd-palette__input-actions {
+  position: absolute;
+  top: 10px;
+  right: 18px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cmd-palette__search {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-height: 0;
+  opacity: 1;
+  transition:
+    grid-template-rows var(--duration-normal) var(--ease-out),
+    opacity var(--duration-normal) ease;
+}
+
+.cmd-palette__search-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cmd-palette__search-content::before {
+  content: "";
+  flex: 0 0 1px;
+  background: var(--border);
+}
+
+.cmd-palette--prompt .cmd-palette__search {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.cmd-palette__filters {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cmd-palette__filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+}
+
+.cmd-palette__filter[aria-pressed="true"] {
+  background: var(--bg-hover);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.cmd-palette__filter span,
+.cmd-palette__group-count {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .cmd-palette__results {
-  max-height: 320px;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(440px, 50dvh);
   overflow-y: auto;
-  padding: 6px 0;
+  overscroll-behavior: contain;
+  padding: 6px 8px;
 }
 
 .cmd-palette__group-label {
-  padding: 8px 18px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 6px;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
 }
 
 .cmd-palette__item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 18px;
+  gap: 12px;
+  margin: 2px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
   font-size: 14px;
   transition: background var(--duration-fast) ease;
 }
@@ -5023,10 +5162,16 @@ td.data-table-key-col {
   background: var(--bg-hover);
 }
 
+.cmd-palette__item--session {
+  align-items: flex-start;
+  padding-block: 12px;
+}
+
 .cmd-palette__item .nav-item__icon {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
+  color: var(--muted);
 }
 
 .cmd-palette__item .nav-item__icon svg {
@@ -5034,22 +5179,214 @@ td.data-table-key-col {
   height: 100%;
 }
 
+.cmd-palette__avatar {
+  position: relative;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  margin: 2px 3px 3px 0;
+  border-radius: var(--radius-full);
+}
+
+.cmd-palette__avatar .identity-avatar__text {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.cmd-palette__item-meta > span {
+  padding-inline: 3px;
+}
+
+.cmd-palette__owner {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 21px;
+  height: 21px;
+  border: 2px solid var(--card);
+  border-radius: var(--radius-full);
+  background: var(--card);
+  overflow: hidden;
+}
+
+.cmd-palette__item--active .cmd-palette__owner {
+  border-color: var(--bg-hover);
+}
+
+.cmd-palette__owner .viewer-avatar {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  font-size: 9px;
+}
+
+.cmd-palette__item-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.cmd-palette__item-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.cmd-palette__item-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.cmd-palette__item-time {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.cmd-palette__item-meta,
 .cmd-palette__item-desc {
-  margin-left: auto;
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
   font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.cmd-palette__item-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.cmd-palette__item--session .cmd-palette__item-desc {
+  margin-top: 6px;
+}
+
+.cmd-palette mark {
+  border-radius: 3px;
+  background: var(--accent-subtle);
+  color: inherit;
 }
 
 .cmd-palette__empty {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 16px 18px;
+  flex: 0 0 auto;
+  padding: 8px 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cmd-palette__create {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  margin: 0;
+  padding: 5px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.cmd-palette__create:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.cmd-palette__create:disabled {
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+.cmd-palette__create kbd {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: inherit;
+}
+
+.cmd-palette__no-results {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 30px 20px 34px;
+  text-align: center;
+}
+
+.cmd-palette__no-results-icon {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  flex-shrink: 0;
+  margin-bottom: 10px;
+  color: var(--muted);
+}
+
+.cmd-palette__no-results-icon svg {
+  width: 48px;
+  height: 48px;
+}
+
+.cmd-palette__no-results h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 26px;
+  letter-spacing: -0.02em;
+}
+
+.cmd-palette__no-results p {
+  max-width: 320px;
+  margin: 8px 0 0;
   color: var(--muted);
   font-size: 13px;
+  line-height: 20px;
+}
+
+.cmd-palette__source-error {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding: 10px 20px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cmd-palette__creation-error {
+  flex: 0 0 auto;
+  padding: 8px 18px;
+  color: var(--danger);
+  font-size: 12px;
 }
 
 .cmd-palette__footer {
   display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
@@ -5070,6 +5407,26 @@ td.data-table-key-col {
   font-family: var(--mono);
   font-size: 12px; /* was 10px */
   line-height: 1.4;
+}
+
+@media (max-width: 560px) {
+  .cmd-palette__filters {
+    padding-inline: 8px;
+  }
+
+  .cmd-palette__item {
+    gap: 10px;
+    padding-inline: 8px;
+  }
+
+  .cmd-palette__item-heading {
+    flex-wrap: wrap;
+    gap: 2px 8px;
+  }
+
+  .cmd-palette__item-title {
+    flex-basis: 100%;
+  }
 }
 
 @media (max-width: 768px) {
@@ -5738,6 +6095,10 @@ td.data-table-key-col {
   stroke-linejoin: round;
 }
 
+.session-action--touch-menu {
+  display: none;
+}
+
 .session-action:hover:not(:disabled) {
   background: color-mix(in srgb, var(--bg-hover) 92%, transparent);
   color: var(--text);
@@ -5761,8 +6122,7 @@ td.data-table-key-col {
   pointer-events: auto;
 }
 
-/* Sidebar rows are now the direct management surface after removing the
-   duplicate picker; touch users need pin/menu controls without hover. */
+/* Touch devices need tappable actions, including a menu without right-click. */
 @media (hover: none), (pointer: coarse) {
   .sidebar-recent-session.session-row-host {
     --session-row-actions-reserve: 92px;
@@ -5770,6 +6130,14 @@ td.data-table-key-col {
 
   .sidebar-recent-session.session-row-host[data-session-row-action-count="1"] {
     --session-row-actions-reserve: 48px;
+  }
+
+  .sidebar-recent-session:has(.session-action--touch-menu):has([data-sidebar-session-pin]) {
+    --session-row-actions-reserve: 136px;
+  }
+
+  .session-action--touch-menu {
+    display: inline-flex;
   }
 
   .sidebar-recent-session .session-action {
@@ -5888,7 +6256,76 @@ td.data-table-key-col {
   transition-timing-function: linear;
 }
 
+.hover-marquee--loop {
+  --hover-marquee-fade-width: 20px;
+}
+
+.hover-marquee--loop > .hover-marquee__text {
+  transition: none;
+}
+
+.hover-marquee--loop.hover-marquee--scrolling {
+  animation: hover-marquee-loop-fade var(--hover-marquee-duration) linear infinite;
+}
+
+.hover-marquee--loop.hover-marquee--scrolling > .hover-marquee__text {
+  animation: hover-marquee-loop var(--hover-marquee-duration) linear infinite;
+}
+
+@keyframes hover-marquee-loop {
+  0%,
+  90%,
+  100% {
+    transform: translateX(0);
+  }
+
+  40%,
+  50% {
+    transform: translateX(var(--hover-marquee-shift));
+  }
+}
+
+/* Fade only the clipped edge during endpoint pauses, including RTL names. */
+@keyframes hover-marquee-loop-fade {
+  0%,
+  90%,
+  100% {
+    mask-image: linear-gradient(
+      var(--hover-marquee-fade-direction),
+      black calc(100% - var(--hover-marquee-fade-width)),
+      transparent
+    );
+  }
+
+  1%,
+  39%,
+  51%,
+  89% {
+    mask-image: linear-gradient(
+      var(--hover-marquee-fade-direction),
+      transparent,
+      black var(--hover-marquee-fade-width),
+      black calc(100% - var(--hover-marquee-fade-width)),
+      transparent
+    );
+  }
+
+  40%,
+  50% {
+    mask-image: linear-gradient(
+      var(--hover-marquee-fade-direction),
+      transparent,
+      black var(--hover-marquee-fade-width)
+    );
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .hover-marquee--loop.hover-marquee--scrolling,
+  .hover-marquee--loop.hover-marquee--scrolling > .hover-marquee__text {
+    animation: none;
+  }
+
   .hover-marquee > .hover-marquee__text {
     transform: none;
     transition: none;
@@ -5925,6 +6362,21 @@ td.data-table-key-col {
   background: currentColor;
   mask: var(--provider-icon-url) center / contain no-repeat;
   -webkit-mask: var(--provider-icon-url) center / contain no-repeat;
+}
+
+.cloud-profile-icon,
+.cloud-profile-icon > svg,
+.cloud-profile-icon > .cloud-provider-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: inherit;
+}
+
+.cloud-provider-icon[data-provider-icon="hetzner"] {
+  mask-size: 88%;
+  -webkit-mask-size: 88%;
 }
 
 .provider-brand-icon--fallback {

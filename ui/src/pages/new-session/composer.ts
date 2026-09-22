@@ -16,11 +16,9 @@ import {
   renderChatAttachmentInputs,
 } from "../chat/components/chat-attachments.ts";
 import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
-import {
-  renderSelectedHumanMentions,
-  type HumanMentionMenuHost,
-} from "../chat/components/chat-composer-mention-menu.ts";
+import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu.ts";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
+import { renderSelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.ts";
 import {
   handleSkillMenuKeydown,
   renderSkillMenu,
@@ -35,7 +33,6 @@ import {
   type SlashMenuHost,
   updateSlashMenu,
 } from "../chat/components/chat-composer-slash-menu.ts";
-import { ensureChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import {
   renderNewSessionDraftVisibility,
   renderNewSessionPlusMenu,
@@ -236,10 +233,13 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       mentionMenu.close();
     } else {
       mentionMenu.update(
-        target.value,
-        target.selectionStart,
+        target,
         options.requestUpdate,
-        event?.inputType === "insertText" && event.data?.includes("@") === true,
+        !event
+          ? "selection"
+          : event.inputType === "insertText" && event.data?.includes("@") === true
+            ? "trigger"
+            : "input",
       );
     }
     updateEmojiMenu(target);
@@ -248,6 +248,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     const target = event.currentTarget;
     if (target instanceof HTMLTextAreaElement) {
       if (event.type === "keyup") {
+        mentionMenu.update(target, options.requestUpdate);
         updateEmojiMenu(target);
       } else {
         updateMenus(target);
@@ -258,9 +259,14 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     emojiMenu.close();
   }
   const attachmentProps = {
+    attachmentReads: options.attachmentReads,
     attachmentLimits: options.attachmentLimits,
     attachments: options.attachments,
-    disabled: composerLocked,
+    get disabled() {
+      return (
+        options.submitting || options.messageLocked === true || options.dictationActive === true
+      );
+    },
     getAttachments: options.getAttachments,
     draft: options.message,
     getDraft: () => options.message,
@@ -268,6 +274,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     onDraftChange: options.onInput,
     onPendingReadsChange: options.onPendingReadsChange,
     onOpenImage: options.onOpenImage,
+    onOpenSidebar: options.onOpenSidebar,
     readSignal: options.readSignal,
   };
   const attachmentDropHandlers = createChatAttachmentDropHandlers({
@@ -301,9 +308,6 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     mentionMenu,
     emojiMenu,
   );
-  if (mentionMenu.open || emojiMenu.open) {
-    ensureChatComposerPickerDismissal();
-  }
   const menuAnnouncementId = paneDomId(skillMenuHost.paneId, "active-menu-announcement");
   const ordinaryShortcut = options.requiresModifier ? "Control+Enter Meta+Enter" : "Enter";
   const backgroundShortcut = options.requiresModifier
@@ -348,11 +352,14 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         ${mentionMenu.render(mentionMenuHost, options.requestUpdate)}
         ${emojiMenu.render("new-session", options.textareaController.getTextarea(), options.requestUpdate)}
         ${options.nativeTerminal ? nothing : renderChatAttachmentInputs(attachmentProps)}
+        ${renderSelectedHumanMentions(
+          options.message,
+          options.mentions,
+          () => options.onInput(options.message, []),
+          mentionMenu.selectedAvatarUrls,
+        )}
         ${renderAttachmentPreview(attachmentProps)}
         ${renderAttachmentReadStatus(options.pendingAttachmentReads)}
-        ${renderSelectedHumanMentions(options.message, options.mentions, () =>
-          options.onInput(options.message, []),
-        )}
         <div class="agent-chat__composer-lede">${options.dictationStatus ?? nothing}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
@@ -472,6 +479,9 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 }
               }}
             ></textarea>
+            <span class="agent-chat__composer-placeholder" aria-hidden="true"
+              >${animatedPlaceholder}</span
+            >
             <span
               id=${menuAnnouncementId}
               class="sr-only"
@@ -512,7 +522,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       ${
         options.blockedSubmitNotice
           ? html`<div
-              class="new-session-page__blocked-submit agent-chat__composer-underlaps"
+              class="new-session-page__blocked-submit agent-chat__composer-status"
               data-tone="info"
               role="status"
             >

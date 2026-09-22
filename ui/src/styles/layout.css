@@ -5,6 +5,13 @@
    =========================================== */
 
 .shell {
+  /* One fixed canvas shared by routes; panels keep their own reading surfaces. */
+  background-color: var(--bg-content, var(--bg));
+  background-image: var(--app-background-image);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+
   --shell-pad: 16px;
   --shell-gap: 16px;
   --shell-nav-expanded-width: 258px;
@@ -23,6 +30,10 @@
   /* Desktop has no topbar row — the sidebar owns navigation. Narrow viewports
      (layout.mobile.css) and the chat split toolbar restore the row height. */
   --shell-topbar-height: 0px;
+  --shell-dock-reserve-bottom: calc(
+    var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px) +
+      var(--oc-link-reader-reserve-bottom, 0px) + var(--oc-assistant-reserve-bottom, 0px)
+  );
   --shell-focus-duration: 200ms;
   --shell-focus-ease: var(--ease-out);
   height: 100vh;
@@ -33,7 +44,6 @@
     "nav topbar"
     "nav content";
   gap: 0;
-  animation: dashboard-enter 0.3s var(--ease-out);
   transition:
     grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease),
     grid-template-rows var(--shell-focus-duration) var(--shell-focus-ease);
@@ -1255,6 +1265,11 @@ openclaw-settings-save-indicator:empty {
   padding: 0;
 }
 
+/* Inset highlight surfaces without narrowing the header or agent roster. */
+.shell:not(.shell--mobile-nav) .sidebar-nav {
+  margin-inline: 2px;
+}
+
 /* Keep the live session tree mounted while a route owns the lower region. */
 .sidebar-session-content {
   display: contents;
@@ -1462,12 +1477,15 @@ openclaw-settings-save-indicator:empty {
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-group-gap);
-  /* Left-only on purpose (#124879): the right 8px of .sidebar-sessions padding is
-     clearance so a classic (non-overlay) scrollbar cannot clip the selection pill.
-     Reclaim space inside the row instead of widening it, or that fix regresses. */
-  margin-inline: -8px 0;
+  /* The scroll body already keeps rows clear of a classic scrollbar. Reclaim
+     both section insets so overlay scrollbars do not leave a trailing gap. */
+  margin-inline: -8px;
   /* Sessions are stateful app chrome, not navigation links. */
   cursor: var(--cursor-action);
+}
+
+.shell:not(.shell--mobile-nav) .sidebar-recent-sessions {
+  margin-inline: -6px;
 }
 
 .sidebar-shell__body--scroll-top {
@@ -1734,7 +1752,8 @@ openclaw-settings-save-indicator:empty {
   color: var(--text);
 }
 
-.sidebar-session-catalog-load-more:disabled {
+.sidebar-session-catalog-load-more:disabled,
+.sidebar-session-pagination__button:disabled {
   cursor: wait;
   opacity: 0.55;
 }
@@ -1945,11 +1964,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-session-tree__children {
   margin-left: var(--sidebar-lead);
-  background: linear-gradient(
-      color-mix(in srgb, var(--border-strong) 52%, transparent),
-      color-mix(in srgb, var(--border-strong) 52%, transparent)
-    )
-    calc(var(--sidebar-inset) + 10px) 0 / 1px 100% no-repeat;
 }
 
 .sidebar-session-tree__loading {
@@ -2113,10 +2127,6 @@ openclaw-settings-save-indicator:empty {
 .sidebar-session-pagination__button:hover:not(:disabled),
 .sidebar-session-pagination__button:focus-visible {
   color: var(--text);
-}
-
-.sidebar-session-pagination__button:disabled {
-  opacity: 0.55;
 }
 
 .sidebar-session-empty-hint {
@@ -3496,14 +3506,7 @@ a:is(
   min-width: 0;
   overflow: hidden;
   padding-inline-end: 8px;
-  -webkit-mask-image: linear-gradient(to right, black 0, black calc(100% - 8px), transparent 100%);
-  mask-image: linear-gradient(to right, black 0, black calc(100% - 8px), transparent 100%);
   white-space: nowrap;
-}
-
-:root[dir="rtl"] .sidebar-agent-card__name-text {
-  -webkit-mask-image: linear-gradient(to left, black 0, black calc(100% - 8px), transparent 100%);
-  mask-image: linear-gradient(to left, black 0, black calc(100% - 8px), transparent 100%);
 }
 
 .sidebar-agent-card__chevron {
@@ -3768,11 +3771,9 @@ openclaw-sidebar-attention {
 }
 
 .sidebar-identity-card__name {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  display: block;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
   color: var(--text-strong);
   font-size: calc(13.5px * var(--control-ui-text-scale));
@@ -3944,67 +3945,99 @@ openclaw-tooltip.sidebar-hover-tooltip {
   background: var(--ok);
 }
 
-.sidebar-footer-bar__status {
+/* One lifecycle label is shared by the identity subtitle, Settings, and collapsed navigation. */
+.gateway-status-tooltip {
   display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.gateway-status {
+  display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
-  flex: none;
-  padding: 3px 7px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-  color: var(--danger);
-  cursor: var(--cursor-action);
+  gap: 2px 7px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
   font-family: inherit;
   font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  line-height: 1;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: start;
 }
 
-.sidebar-footer-bar__status:hover {
-  background: color-mix(in srgb, var(--danger) 18%, transparent);
+button.gateway-status {
+  cursor: var(--cursor-action);
 }
 
-.sidebar-footer-bar__status--restarting,
-.sidebar-footer-bar__status--restarting:hover,
-.sidebar-footer-bar__status--suspending,
-.sidebar-footer-bar__status--suspending:hover,
-.sidebar-footer-bar__status--suspended,
-.sidebar-footer-bar__status--suspended:hover {
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-  color: var(--warn);
-  cursor: default;
+button.gateway-status:hover {
+  color: var(--text);
 }
 
-.sidebar-footer-bar__status:focus-visible {
-  outline: none;
+button.gateway-status:focus-visible {
+  border-radius: var(--radius-sm);
   box-shadow: var(--focus-ring);
 }
 
-.sidebar-footer-bar__status-detail {
-  font-size: calc(10px * var(--control-ui-text-scale));
-  font-weight: 500;
-  opacity: 0.72;
+.gateway-status__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
 }
 
-.sidebar-footer-bar__status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--danger);
+.gateway-status__icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--warn);
 }
 
-.sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot,
-.sidebar-footer-bar__status--suspending .sidebar-footer-bar__status-dot,
-.sidebar-footer-bar__status--suspended .sidebar-footer-bar__status-dot {
-  background: var(--warn);
+.gateway-status__icon svg {
+  width: 12px;
+  height: 12px;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot,
-  .sidebar-footer-bar__status--suspending .sidebar-footer-bar__status-dot {
-    animation: pulse-subtle 1.2s ease-in-out infinite;
-  }
+.gateway-status__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-status--offline .gateway-status__icon {
+  color: var(--danger);
+}
+
+.gateway-status--connecting .gateway-status__icon,
+.gateway-status--starting .gateway-status__icon,
+.gateway-status--restoring .gateway-status__icon {
+  color: var(--muted);
+}
+
+.shell-connection-status {
+  grid-area: connection;
+  justify-self: start;
+  margin: 6px 12px;
+  max-width: calc(100% - 24px);
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.shell:not(.shell--mobile-nav):has(> .shell-connection-status) {
+  grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr) auto;
+  grid-template-areas:
+    "nav topbar"
+    "nav content"
+    "nav connection";
+}
+
+.shell:not(.shell--mobile-nav) > .shell-connection-status {
+  margin-bottom: calc(6px + var(--shell-dock-reserve-bottom));
 }
 
 .sidebar-session-group-running {
@@ -4427,17 +4460,19 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   /* Reserve space for the docked operator terminal and browser panels so they
      reshape the content area (shrink it) instead of overlaying the chat. The
      panels set these vars; they are 0 when closed. */
-  margin-bottom: calc(
-    var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px) +
-      var(--oc-assistant-reserve-bottom, 0px)
-  );
+  margin-bottom: var(--shell-dock-reserve-bottom);
   margin-right: calc(
     var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px) +
-      var(--oc-assistant-reserve-right, 0px)
+      var(--oc-link-reader-reserve-right, 0px) + var(--oc-assistant-reserve-right, 0px)
   );
   transition:
     margin-bottom 0.16s ease,
     margin-right 0.16s ease;
+}
+
+/* The separate status row owns bottom-dock clearance while navigation is hidden. */
+.shell:not(.shell--mobile-nav):has(> .shell-connection-status) > .content {
+  margin-bottom: 0;
 }
 
 /* Programmatic focus anchor (tabindex="-1") used when collapsing the sidebar
@@ -4573,8 +4608,10 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   min-height: 0;
 }
 
-:root[data-theme-mode="light"] .content {
-  background: var(--bg-content);
+@media (forced-colors: active), (prefers-contrast: more) {
+  .shell {
+    background-image: none;
+  }
 }
 
 /* Content header */
@@ -4594,9 +4631,9 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   max-height: 80px;
 }
 
-/* Page toolbar row. Outside chat, settings, and mobile drawers every page
-   header is one row: the title (or a hub's tabs) centered like a window title,
-   the trailing cell (actions, counts) at the right edge, intro text below. The
+/* Page toolbar row. Outside chat, settings, and mobile drawers, headers
+   without a stacked layout use one row: title (or hub tabs) centered like a
+   window title, trailing actions at the right edge, intro text below. The
    row matches the Mac app titlebar (52px injected by DashboardWindowController;
    50px mirrors .macos-titlebar-controls for older builds) so the traffic lights
    and hosted buttons share its centerline; the collapsed-sidebar web cluster in
@@ -4611,11 +4648,11 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   --page-toolbar-clearance: 0px;
   --page-toolbar-reserve: 0px;
 
-  &:has(.content-header):not(:has(> .connection-action-block)) {
+  &:has(.content-header:not(.content-header--stacked)):not(:has(> .connection-action-block)) {
     padding-top: 0;
   }
 
-  .content-header {
+  .content-header:not(.content-header--stacked) {
     position: relative;
     display: grid;
     /* Equal side columns center the middle cell; the leading one cannot
@@ -4629,51 +4666,51 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
     margin-top: 0;
     padding-top: 0;
     max-height: none;
-  }
 
-  /* The title block only wraps title and intro; its children become row cells. */
-  .content-header > :first-child:not(.page-title) {
-    display: contents;
-  }
+    /* The title block only wraps title and intro; its children become row cells. */
+    > :first-child:not(.page-title) {
+      display: contents;
+    }
 
-  .content-header .page-title,
-  .content-header .hub-page-header__tabs {
-    grid-area: 1 / 2;
-    justify-self: center;
-  }
+    .page-title,
+    .hub-page-header__tabs {
+      grid-area: 1 / 2;
+      justify-self: center;
+    }
 
-  .content-header .page-title {
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    line-height: 1;
-    color: var(--text);
-    white-space: nowrap;
-  }
+    .page-title {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      line-height: 1;
+      color: var(--text);
+      white-space: nowrap;
+    }
 
-  /* Hub tabs are the page identity in the row; the heading stays for
-     assistive tech (same recipe as .sr-only). */
-  .content-header.hub-page-header .page-title {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    clip-path: inset(50%);
-  }
+    /* Hub tabs are the page identity in the row; the heading stays for
+       assistive tech (same recipe as .sr-only). */
+    &.hub-page-header .page-title {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      clip-path: inset(50%);
+    }
 
-  .content-header :is(.page-subtitle, .page-sub) {
-    grid-area: 3 / 1 / 4 / -1;
-    margin-top: 8px;
-  }
+    :is(.page-subtitle, .page-sub) {
+      grid-area: 3 / 1 / 4 / -1;
+      margin-top: 8px;
+    }
 
-  .content-header > :last-child:not(:first-child) {
-    grid-area: 1 / 3;
-    justify-self: end;
-    display: flex;
-    flex-wrap: nowrap;
-    align-items: center;
-    gap: 10px;
+    > :last-child:not(:first-child) {
+      grid-area: 1 / 3;
+      justify-self: end;
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 10px;
+    }
   }
 }
 
@@ -4689,7 +4726,7 @@ html.openclaw-native-macos
 html[dir="rtl"]
   .shell:not(.shell--mobile-nav):not(.shell--settings)
   .content:not(.content--chat)
-  .content-header {
+  .content-header:not(.content-header--stacked) {
   grid-template-columns: minmax(max-content, 1fr) auto minmax(var(--page-toolbar-reserve), 1fr);
 
   > :last-child:not(:first-child) {
@@ -4702,7 +4739,7 @@ html[dir="rtl"]
 html.openclaw-native-desktop
   .shell:not(.shell--mobile-nav):not(.shell--settings)
   .content:not(.content--chat)
-  .content-header {
+  .content-header:not(.content-header--stacked) {
   padding-right: calc(var(--openclaw-native-window-controls-width, 0px) + 8px);
 }
 
@@ -4718,8 +4755,8 @@ html.openclaw-native-desktop
     margin-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance));
   }
 
-  /* Pages without a header (plugin panels) clear the chrome with padding. */
-  &:not(:has(.content-header, > .connection-action-block)) {
+  /* Stacked headers and pages without a toolbar clear floating chrome with padding. */
+  &:not(:has(.content-header:not(.content-header--stacked), > .connection-action-block)) {
     padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 }
@@ -4970,6 +5007,18 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
   font-size: var(--control-ui-text-xs);
   line-height: 18px;
   color: var(--muted);
+}
+
+.sidebar-recent-session__channel {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 120px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-recent-session__details-endcap {

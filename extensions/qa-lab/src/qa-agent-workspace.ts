@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements qa agent workspace behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildQaScenarioPlanMarkdown, readQaAgentIdentityMarkdown } from "./qa-agent-bootstrap.js";

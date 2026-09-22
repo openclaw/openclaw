@@ -141,7 +141,10 @@ export class CodexAssistantProjection {
     }
   }
 
-  recordItemStarted(item: CodexThreadItem | undefined, itemId: string | undefined): void {
+  async recordItemStarted(
+    item: CodexThreadItem | undefined,
+    itemId: string | undefined,
+  ): Promise<void> {
     this.noteNativeWorkBarrier(item);
     this.rememberAssistantPhase(item);
     if (
@@ -166,6 +169,15 @@ export class CodexAssistantProjection {
       if (this.latestTerminalAssistantCandidateSuperseded) {
         this.pendingRawTerminalAssistantEchoItemId = undefined;
       }
+    }
+    if (
+      item?.type === "agentMessage" &&
+      itemId &&
+      item.text &&
+      !this.assistantTextByItem.has(itemId)
+    ) {
+      // Codex may seed visible text in item/started before sending further deltas.
+      await this.handleAssistantDelta({ itemId, delta: item.text });
     }
   }
 
@@ -201,7 +213,7 @@ export class CodexAssistantProjection {
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
-      if (item.text && this.isCommentaryAssistantItem(item.id)) {
+      if (this.isCommentaryAssistantItem(item.id)) {
         this.emitCommentaryProgress({ itemId: item.id, text: item.text, phase: "end" });
         this.pendingRawCommentaryEchoes += 1;
       } else if (
@@ -255,18 +267,12 @@ export class CodexAssistantProjection {
       this.pendingRawCommentaryEchoes -= 1;
       return;
     }
-    const text = extractRawAssistantText(item);
     if (isPendingTerminalAssistantEcho) {
-      const typedItemId = pendingTerminalAssistantEchoItemId;
       this.pendingRawTerminalAssistantEchoItemId = undefined;
-      // Contributors may rewrite the typed completion without rewriting its raw echo.
-      if (this.assistantTextByItem.get(typedItemId)?.trim() || !text) {
-        return;
-      }
-      this.rememberAssistantItem(typedItemId);
-      this.assistantTextByItem.set(typedItemId, text);
+      // Contributors may rewrite or erase typed text without changing its raw echo.
       return;
     }
+    const text = extractRawAssistantText(item);
     if (
       text === undefined ||
       (!text &&

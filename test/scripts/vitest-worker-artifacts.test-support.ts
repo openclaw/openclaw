@@ -5,7 +5,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { convertPathToPattern } from "tinyglobby";
 import { expect, it, vi, type TestContext } from "vitest";
 import type { VitestWorkerManifest } from "../../scripts/lib/vitest-worker-artifacts.mts";
-import type { VitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
+import {
+  createVitestWorkerRun,
+  type VitestWorkerRun,
+} from "../../scripts/lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
@@ -15,6 +18,8 @@ import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 const root = process.cwd();
 const artifacts = path.join(root, ".artifacts");
 const artifactsModule = "scripts/lib/vitest-worker-artifacts.mts";
+type CompilerEnv = (env: NodeJS.ProcessEnv, runtime: "node" | "bun") => NodeJS.ProcessEnv;
+const currentRuntime = process.versions.bun ? "bun" : "node";
 export const preparationClient = `
   import {requestVitestWorkerArtifacts} from ${JSON.stringify(pathToFileURL(path.join(root, artifactsModule)).href)};
   try {await requestVitestWorkerArtifacts();}
@@ -22,10 +27,10 @@ export const preparationClient = `
   finally {process.disconnect();}
 `;
 
-function createWorkerArtifactFixtures({
-  signal,
-  onTestFinished,
-}: Pick<TestContext, "signal" | "onTestFinished">) {
+function createWorkerArtifactFixtures(
+  { signal, onTestFinished }: Pick<TestContext, "signal" | "onTestFinished">,
+  compilerEnv: CompilerEnv,
+) {
   const fixtureLifetime = createFixtureLifetime();
   function fixtureDirectory() {
     fs.mkdirSync(artifacts, { recursive: true });
@@ -60,7 +65,7 @@ function createWorkerArtifactFixtures({
 
     function node(args: string[], cwd = root, env = process.env) {
       const completion = fixtureLifetime.track(
-        runNodeScript(args, env, undefined, {
+        runNodeScript(args, compilerEnv(env, "node"), undefined, {
           cwd,
           signal: commandSignal,
           maxBuffer: 2 * 1024 * 1024,
@@ -73,7 +78,7 @@ function createWorkerArtifactFixtures({
 
     function runtime(args: string[], cwd = root, env = process.env) {
       const completion = fixtureLifetime.track(
-        runNodeScript(args, env, undefined, {
+        runNodeScript(args, compilerEnv(env, currentRuntime), undefined, {
           cwd,
           signal: commandSignal,
           maxBuffer: 2 * 1024 * 1024,
@@ -150,13 +155,18 @@ function createWorkerArtifactFixtures({
     return { node, runtime, startBorrower, prepareWorkers, observeChild };
   }
 
-  return { fixtureLifetime, fixtureDirectory, createFixtureCommands };
+  return {
+    fixtureLifetime,
+    fixtureDirectory,
+    createFixtureCommands,
+    createWorkerRun: () => createVitestWorkerRun(compilerEnv(process.env, currentRuntime)),
+  };
 }
 
-export function createWorkerArtifactTest() {
+export function createWorkerArtifactTest(compilerEnv: CompilerEnv = (env) => env) {
   const test = it.extend<{ workerArtifacts: ReturnType<typeof createWorkerArtifactFixtures> }>({
     workerArtifacts: async ({ signal, onTestFinished }, use) => {
-      await use(createWorkerArtifactFixtures({ signal, onTestFinished }));
+      await use(createWorkerArtifactFixtures({ signal, onTestFinished }, compilerEnv));
     },
   });
   // Resolve the case's lifetime before runTest so cleanup follows onTestFinished.
@@ -188,13 +198,11 @@ export function createControlledWorkerCompiler(
     directory,
     "compiler-preload.mjs",
     `
-    import cp from 'node:child_process';
-    import {syncFixtureBuiltinExports} from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
-    const spawn = cp.spawn;
-    cp.spawn = (bin, args, options) => args[0] === ${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-compiler.mts"))}
-      ? spawn(bin, [${JSON.stringify(compiler)}, args[1], ${JSON.stringify(input)}, ${JSON.stringify(receipt)}], options)
-      : spawn(bin, args, options);
-    syncFixtureBuiltinExports(["node:child_process"]);
+    if (process.argv[1] === ${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-compiler.mts"))}) {
+      const {runWorkerFixtureCompiler} = await import(${JSON.stringify(pathToFileURL(compiler).href)});
+      await runWorkerFixtureCompiler(process.argv[2], ${JSON.stringify(input)}, ${JSON.stringify(receipt)});
+      process.exit(0);
+    }
   `,
   );
   const preloadEnv = Object.fromEntries(
@@ -209,7 +217,14 @@ export function createControlledWorkerCompiler(
       ...env,
       ...preloadEnv,
     },
-    read: (): Array<{ pid: number; directory: string; inputs: number; outputs: number }> =>
+    read: (): Array<{
+      pid: number;
+      processStartTime: number;
+      isMainThread: boolean;
+      directory: string;
+      inputs: number;
+      outputs: number;
+    }> =>
       fs
         .readFileSync(receipt, "utf8")
         .trim()
@@ -276,24 +291,25 @@ export function workerProbe(
     import fs from 'node:fs';
     import path from 'node:path';
     import { fileURLToPath } from 'node:url';
-    import { DatabaseSync } from 'node:sqlite';
     import { Worker } from 'node:worker_threads';
     import { it, expect, vi, inject } from 'vitest';
     import {value} from '#fixture-value';
     import { runtimeProcessEntrypoints } from ${JSON.stringify(path.join(root, "src/infra/runtime-process-entrypoints.ts"))};
     import { vectorKnnProcessEntrypoint } from ${JSON.stringify(path.join(root, "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts"))};
-    import { runtimeProcessBuildEntries } from ${JSON.stringify(path.join(root, "scripts/lib/runtime-process-build-entries.mts"))};
+    import { runtimeProcessBuildEntries, runtimeProcessBuildEntrypoints } from ${JSON.stringify(path.join(root, "scripts/lib/runtime-process-build-entries.mts"))};
     import { vitestWorkerBuildEntries } from ${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-build-entries.mts"))};
     import { tuiPtyRuntimeEntrypoints } from ${JSON.stringify(path.join(root, "src/tui/tui-pty-runtime-test-support.ts"))};
     import { cliCompactionBackendEntrypoints } from ${JSON.stringify(path.join(root, "src/agents/command/cli-compaction-runtime.test-support.ts"))};
+    import { pluginRuntimeRetentionEntrypoint } from ${JSON.stringify(path.join(root, "src/plugins/runtime-retention-entrypoint.test-support.ts"))};
     import { resolveRuntimeWorkerUrl } from ${JSON.stringify(path.join(root, "src/infra/runtime-worker-url.ts"))};
     import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(path.join(root, "src/infra/sqlite-snapshot-source.ts"))};
     import { openNodeSqliteDatabase } from ${JSON.stringify(path.join(root, "src/infra/node-sqlite.ts"))};
     import { runSqliteTranscriptArchivePublishWorker } from ${JSON.stringify(path.join(root, "src/config/sessions/session-accessor.sqlite-archive.ts"))};
     const tuiUrls = Object.values(tuiPtyRuntimeEntrypoints).map(entry => resolveRuntimeWorkerUrl(entry).href);
     const setupUrls = cliCompactionBackendEntrypoints.map(entry => resolveRuntimeWorkerUrl(entry).href);
+    const retentionUrl = resolveRuntimeWorkerUrl(pluginRuntimeRetentionEntrypoint).href;
     // Import acquisition must finish during collection, before any fixture hook starts.
-    const entriesPresentAtCollection = [...tuiUrls,...setupUrls].every(url => fs.existsSync(new URL(url)));
+    const entriesPresentAtCollection = [...tuiUrls,...setupUrls,retentionUrl].every(url => fs.existsSync(new URL(url)));
     vi.mock('node:child_process', async (original) => {
       const actual = await original();
       return {...actual, execFile: vi.fn(actual.execFile)};
@@ -306,14 +322,14 @@ export function workerProbe(
       const launcherArgv = inject('launcherArgv');
       expect(path.isAbsolute(launcherArgv[1])).toBe(true);
       expect(path.basename(launcherArgv[1])).toBe('vitest.mjs');
-      expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(Object.keys(runtimeProcessEntrypoints).length + 5);
+      expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(runtimeProcessBuildEntrypoints.length);
       for (const source of Object.values(runtimeProcessBuildEntries)) {
         expect(source).not.toContain('/dist/');
-        expect(source).toMatch(/\\.ts$/);
+        expect(source).toMatch(/\\.m?ts$/);
         expect(fs.existsSync(source)).toBe(true);
       }
       expect(entriesPresentAtCollection).toBe(true);
-      for (const entry of [...Object.values(tuiPtyRuntimeEntrypoints),...cliCompactionBackendEntrypoints]) {
+      for (const entry of [...Object.values(tuiPtyRuntimeEntrypoints),...cliCompactionBackendEntrypoints,pluginRuntimeRetentionEntrypoint]) {
         const source = vitestWorkerBuildEntries[entry.distWorkerPath.replace(/\\.js$/, '')];
         expect(source).not.toContain('/dist/');
         expect(source).toMatch(/\\.ts$/);
@@ -321,7 +337,7 @@ export function workerProbe(
       }
       const dir = fs.mkdtempSync(${JSON.stringify(path.join(directory, "database-"))});
       const file = path.join(dir, 'probe.sqlite');
-      const db = new DatabaseSync(file);
+      const db = openNodeSqliteDatabase(file);
       db.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES ('current source');");
       db.close();
       try {
@@ -340,7 +356,7 @@ export function workerProbe(
           if (!sourceMode) expect(fileURLToPath(archiveUrl).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
           expect(tuiUrls).toHaveLength(4);
           expect(setupUrls).toHaveLength(2);
-          for (const url of [...tuiUrls,...setupUrls]) {
+          for (const url of [...tuiUrls,...setupUrls,retentionUrl]) {
             expect(url.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
             if (!sourceMode) expect(fileURLToPath(url).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
           }
@@ -348,7 +364,7 @@ export function workerProbe(
           expect(args.includes('--import')).toBe(sourceLoader);
           if (sourceLoader) expect(args[1].startsWith('file:')).toBe(true);
           expect(args[sourceLoader ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
-          fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
+          fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, retentionUrl, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
           const release = inject('releaseFile');
           if (release) await new Promise(resolve => {

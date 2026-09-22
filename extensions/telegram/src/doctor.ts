@@ -1,4 +1,3 @@
-// Telegram plugin module implements doctor behavior.
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorEmptyAllowlistAccountContext,

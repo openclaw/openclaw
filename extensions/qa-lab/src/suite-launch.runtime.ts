@@ -1,4 +1,3 @@
-// QA Lab plugin module implements suite launch behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -691,7 +690,7 @@ async function resolveSuiteExecutionPlan(
   }
   const selectedScenarios = resolveRequestedScenarios({
     scenarioIds,
-    scenarios: readQaBootstrapScenarioCatalog().scenarios,
+    scenarios: params?.scenarioDefinitions ?? readQaBootstrapScenarioCatalog().scenarios,
   });
   const flowScenarios = selectedScenarios.filter((scenario) => !isQaTestFileScenario(scenario));
   const testFileScenariosByKind = new Map<QaTestFileExecutionKind, QaTestFileScenario[]>();

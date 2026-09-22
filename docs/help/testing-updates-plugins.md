@@ -19,6 +19,7 @@ keys and network-touching suites, see [Testing live](/help/testing-live).
 
 - [What we protect](#what-we-protect) - the guarantees these lanes exist to defend.
 - [Local proof during development](#local-proof-during-development) - the commands to run while you iterate.
+- [Headless node auto-update proof](#headless-node-auto-update-proof) - installed-node activation and shared-Gateway safeguards.
 - [Docker lanes](#docker-lanes) - lane reference: what each lane runs and when.
 - [Package Acceptance](#package-acceptance) - lane reference: the acceptance matrix and its gates.
 - [Release default](#release-default) - which lanes a release candidate must clear.
@@ -87,6 +88,44 @@ Release npm preflight uses the same readable diff against the prior published
 dist-tag and prints the 8-character acknowledgement digest required when that
 release changes the Plugin SDK API.
 
+## Headless node auto-update proof
+
+`pnpm test:e2e:node-auto-update <built-openclaw.tgz> [new-artifact-directory]`
+runs a real installed-package scenario on Linux. Run it in a task-owned Testbox
+or Crabbox with Node, npm, and registry access. It needs no provider credentials
+and is opt-in; the default `pnpm test:e2e` aggregate does not run it.
+
+Build and pack the candidate on the test host, then pass that exact tarball:
+
+```bash
+pnpm build
+node scripts/package-openclaw-for-docker.mjs --skip-build \
+  --output-dir /tmp/openclaw-node-update-package \
+  --output-name openclaw-node-update.tgz
+pnpm test:e2e:node-auto-update \
+  /tmp/openclaw-node-update-package/openclaw-node-update.tgz \
+  /tmp/openclaw-node-update-proof
+```
+
+The proof starts isolated Gateway, paired-node, supervisor, and fixture-registry
+processes. It verifies busy-work deferral, idle activation, preserved pairing
+and launch options, activation cooldown, all three public opt-outs, and retention
+of the working node when a candidate is malformed. A same-state Gateway/node
+case confirms that the Gateway process, configuration, and global installation
+stay unchanged while the node activates its private runtime. A separate cell
+runs the published `openclaw@2026.9.4` updater against the candidate.
+
+A legacy-plugin case returns from its command while a child keeps running,
+then proves that a missing idle-work callback blocks activation both during
+that work and after the child finishes.
+
+Use a new artifact directory outside the source checkout for every run, or omit
+it to create a fresh temporary directory. The scenario retains `observations.json`
+and per-process logs there and stops its child processes on completion or failure.
+Collect the proof before stopping the remote lease. This scenario proves Linux
+behavior; it does not establish Windows or macOS activation coverage. See
+[Node auto-updates](/cli/node#automatic-updates) for the operator contract.
+
 ## Docker lanes
 
 The Docker lanes are the product-level proof. They install or update a real
@@ -127,7 +166,9 @@ Important lanes:
 - `test:docker:published-upgrade-survivor` first installs the latest stable release,
   configures it through a baked `openclaw config set` recipe, updates it to the
   candidate tarball, runs doctor, checks legacy cleanup, starts the Gateway, and
-  probes `/healthz`, `/readyz`, and RPC status.
+  probes `/healthz`, `/readyz`, and RPC status. The baseline recipe configures
+  Anthropic, Google Gemini, and OpenAI through env-referenced API keys, keeping
+  OpenAI as the agents' primary model.
 - `test:docker:update-restart-auth` installs the candidate package, starts a
   managed token-auth Gateway, unsets caller gateway auth env for
   `openclaw update --yes --json`, and requires the candidate update command to
@@ -138,6 +179,34 @@ Important lanes:
   and shared runtime sentinels, and updates to the candidate tarball. Package
   postinstall must remove package-local debris while update and Doctor preserve
   the shared runtime roots.
+
+Set `OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS` to a whitespace-separated list of
+model refs to run one `openclaw agent --local` marker turn per model after the
+update. Anthropic uses `ANTHROPIC_API_KEY`, Google uses `GEMINI_API_KEY`, and
+OpenAI uses `OPENAI_API_KEY`; missing selected keys fail the lane. Docker forwards
+only selected provider keys. Each turn has its own session and
+`live-<provider>.json` / `.err` artifacts (additional models from the same provider
+use `-2`, `-3`, etc.). `summary.json` records `liveModels.models` entries with
+`model`, `ok`, and `latencyMs`.
+
+The legacy `OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1` form still selects
+`openai/gpt-5.5`, or `OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL` when supplied.
+An explicit model list takes precedence over that flag; the summary records
+`liveModels.source` and `overridesLiveOpenai`. The existing
+`OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS` budget (default 180 seconds)
+applies separately to each turn. Live turns use the recipe's configured thinking
+default so each model can apply its supported reasoning levels. Scenarios that
+prohibit live providers retain that restriction.
+
+Frozen extended-stable candidate targets use their historical runner and reject
+both live-selection variables before Docker starts, with exit code 2.
+
+```bash
+# Export the three provider keys before invoking the lane.
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.5 \
+OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS="openai/gpt-5.5 anthropic/claude-opus-5 google/gemini-3.1-pro-preview" \
+pnpm test:docker:published-upgrade-survivor
+```
 
 Useful published-upgrade survivor variants:
 
@@ -238,6 +307,13 @@ the lane checks approvals and legacy-file retirement, effective cron owners,
 the candidate plugin artifact, the candidate state schema, an idempotent update,
 and Gateway health. Assertions run before a standalone Doctor can conceal an
 incomplete update migration.
+
+Published companion package versions retain identical archive bytes throughout
+the fixture. If a source candidate still uses the published companion's version,
+the registry and installation assertions preserve that published archive. A new
+companion version instead uses the prepared candidate artifact. The npm integrity
+guard remains enabled in both cases; the fixture never replaces a published
+version's bytes to make an update pass.
 
 The ownerless cron job is created before adding the second agent because newer
 baselines reject ambiguous new jobs. Approval snapshots are written back through

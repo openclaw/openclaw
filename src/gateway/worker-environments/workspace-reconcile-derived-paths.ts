@@ -6,6 +6,7 @@ import {
   isStagedInputPath,
   stagedInputDirectoriesFromEntries,
 } from "../../media/staged-inputs.js";
+import { isManagedSandboxSkillsPath } from "../../shared/sandbox-workspace-paths.js";
 import type { WorkerWorkspaceManifestEntry } from "./workspace-manifest.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
@@ -40,6 +41,9 @@ async function removeDerivedWorkspaceDescendants(
 ): Promise<void> {
   for (const entry of await root.list(relativeDirectory, { withFileTypes: true })) {
     const child = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+    if (isManagedSandboxSkillsPath(child)) {
+      continue;
+    }
     if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
       await removeDerivedWorkspaceEntry(root, child, entry.isDirectory);
       continue;

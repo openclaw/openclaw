@@ -43,6 +43,7 @@ function computationInputBytes(command: WorkspaceManifestComputationCommand): nu
     case "workspace.manifest.capture":
     case "workspace.manifest.snapshot":
     case "workspace.manifest.file":
+    case "workspace.manifest.nodes":
       return bytes + command.input.payload.byteLength;
     case "workspace.manifest.parse":
       return bytes + command.input.raw.byteLength;
@@ -57,6 +58,7 @@ function computationInputBytes(command: WorkspaceManifestComputationCommand): nu
     case "workspace.manifest.serialize":
     case "workspace.reconcile.preflight":
     case "workspace.manifest.overlay":
+    case "workspace.manifest.tree-input":
       return bytes + command.input.payload.byteLength;
     case "workspace.manifest.staged":
       return bytes + (command.input.root.length + command.input.ref.length) * 2;
@@ -82,6 +84,7 @@ function transferableManifestInput(command: GitWorkerCommand): ArrayBuffer[] {
     case "workspace.manifest.capture":
     case "workspace.manifest.snapshot":
     case "workspace.manifest.file":
+    case "workspace.manifest.nodes":
       return [command.input.payload.buffer];
     case "workspace.manifest.parse":
       return [command.input.raw.buffer];
@@ -92,6 +95,7 @@ function transferableManifestInput(command: GitWorkerCommand): ArrayBuffer[] {
     case "workspace.manifest.serialize":
     case "workspace.reconcile.preflight":
     case "workspace.manifest.overlay":
+    case "workspace.manifest.tree-input":
       return [command.input.payload.buffer];
     default:
       return [];
@@ -245,6 +249,18 @@ export async function computeWorkspaceFileSnapshot(
   );
 }
 
+export async function readWorkspaceNodes(root: string, paths: string[]) {
+  const hashes = captureHashes();
+  return new Map(
+    hashes.accept(
+      await compute({
+        type: "workspace.manifest.nodes",
+        input: encodeManifestValue({ root, paths, hashes: hashes.hashes }),
+      }),
+    ),
+  );
+}
+
 export async function parseWorkspaceManifest(
   raw: string,
   expectedRef: string,
@@ -372,6 +388,7 @@ export async function prepareWorkspaceStageInput(
     {
       type: "workspace.manifest.stage-input",
       input: {
+        inputPath: input.inputPath,
         stagingRoot: input.stagingRoot,
         stagedResultRef: input.stagedResultRef,
         baseManifestRef: input.baseManifestRef,
@@ -382,4 +399,13 @@ export async function prepareWorkspaceStageInput(
     },
     signal,
   );
+}
+
+export async function prepareWorkspaceTreeInput(
+  input: WorkspaceManifestValueInputs["workspace.manifest.tree-input"],
+): Promise<null> {
+  return await compute({
+    type: "workspace.manifest.tree-input",
+    input: encodeManifestValue(input),
+  });
 }

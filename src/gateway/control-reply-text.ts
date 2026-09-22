@@ -8,6 +8,12 @@ const SUPPRESSED_CONTROL_REPLY_TOKENS = [
   "REPLY_SKIP",
 ] as const;
 
+// Long padding falls through to the full classifier without another unbounded scan.
+const POSSIBLE_CONTROL_REPLY_START = new RegExp(
+  `^(?:[\\s\\p{P}]{64}|[\\s\\p{P}]{0,63}(?:${SUPPRESSED_CONTROL_REPLY_TOKENS.join("|")}))`,
+  "iu",
+);
+
 const CONTROL_REPLY_SEQUENCE_PREFIX = new RegExp(
   `^(?:(?:${SUPPRESSED_CONTROL_REPLY_TOKENS.join("|")})\\s+)+([A-Z_]+)$`,
   "i",
@@ -17,6 +23,9 @@ const CONTROL_REPLY_SEQUENCE_PREFIX = new RegExp(
  * Recognize control-only replies, including a repeated marker's unfinished tail.
  */
 export function isSuppressedControlReplyText(text: string): boolean {
+  if (!POSSIBLE_CONTROL_REPLY_START.test(text)) {
+    return false;
+  }
   const normalized = text.trim();
   const repeatedFragment = CONTROL_REPLY_SEQUENCE_PREFIX.exec(normalized)?.[1]?.toUpperCase();
   return SUPPRESSED_CONTROL_REPLY_TOKENS.some(

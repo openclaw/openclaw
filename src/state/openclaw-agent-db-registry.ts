@@ -1,25 +1,32 @@
-import { randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, realpathSync, rmdirSync, statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { resolvePathPrefixSync } from "../infra/fs-safe-advanced.js";
+import { probePathSuffixAliasesSync, resolvePathPrefixSync } from "../infra/fs-safe-advanced.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
 } from "./agent-deletion-journal.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  type OpenClawAgentDatabaseRegistrationCommit,
+} from "./openclaw-agent-db-contract.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "./openclaw-agent-db-registry-listing.js";
 import {
   invalidateOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidationsForAgent,
 } from "./openclaw-agent-db-validation-cache.js";
+import { requireOpenClawStateDatabaseIdentity } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import { resolveOpenClawAgentDatabaseStoredPath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawAgentDatabaseStoredPath,
+  resolveOpenClawRegisteredAgentDatabasePath,
+} from "./openclaw-state-db.paths.js";
 
 export {
   inspectOpenClawRegisteredAgentDatabases,
@@ -41,21 +48,6 @@ type AgentDatabasePathIdentity = {
 };
 
 const missingSuffixAliasCache = new Map<string, boolean>();
-const PROBE_NAME_LENGTH = 6;
-const PROBE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
-const PROBE_FIRST_ALPHABET = "bdefghijkmoqrstuvwxyz";
-
-type CreatedProbePath = {
-  path: string;
-  device: bigint | number;
-  inode: bigint | number;
-};
-
-function areAsciiCaseVariants(left: string | undefined, right: string | undefined): boolean {
-  const foldAsciiCase = (value: string) =>
-    value.replace(/[A-Z]/gu, (letter) => String.fromCharCode(letter.charCodeAt(0) + 0x20));
-  return left !== undefined && right !== undefined && foldAsciiCase(left) === foldAsciiCase(right);
-}
 
 function shouldProbeUnicodeCaseVariants(left: string, right: string): boolean {
   const hasNonAscii = (value: string) =>
@@ -75,202 +67,6 @@ function shouldProbeUnicodeCaseVariants(left: string, right: string): boolean {
     lowercaseEquivalent &&
     !uppercaseEquivalent
   );
-}
-
-function isWindowsReservedPathComponent(value: string): boolean {
-  const stem = value
-    .split(".", 1)[0]!
-    .replace(/[ .]+$/u, "")
-    .toUpperCase();
-  return /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/u.test(stem);
-}
-
-function createNormalizationProbePairs(
-  left: string,
-  right: string,
-): readonly (readonly [string, string])[] {
-  const pairs: Array<readonly [string, string]> = [];
-  const seen = new Set<string>();
-  const addPair = (candidateLeft: string, candidateRight: string) => {
-    if (!areAsciiCaseVariants(candidateLeft.normalize("NFC"), candidateRight.normalize("NFC"))) {
-      return;
-    }
-    if (
-      isWindowsReservedPathComponent(candidateLeft) ||
-      isWindowsReservedPathComponent(candidateRight)
-    ) {
-      return;
-    }
-    if (
-      candidateLeft === left ||
-      candidateLeft === right ||
-      candidateRight === left ||
-      candidateRight === right
-    ) {
-      return;
-    }
-    const key = `${candidateLeft}\0${candidateRight}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      pairs.push([candidateLeft, candidateRight]);
-    }
-  };
-
-  const replaceAscii = (value: string, replacements: ReadonlyMap<string, string>) =>
-    value.replace(/[A-Za-z]/gu, (character) => {
-      const lower = character.toLowerCase();
-      const replacement = replacements.get(lower);
-      if (!replacement) {
-        return character;
-      }
-      return character === lower ? replacement : replacement.toUpperCase();
-    });
-  const presentAscii = [...new Set(`${left}${right}`.toLowerCase().match(/[a-z]/gu) ?? [])];
-  const mutableAscii = presentAscii.filter((source) => {
-    const replacement = source === "z" ? "y" : "z";
-    const replacements = new Map([[source, replacement]]);
-    return areAsciiCaseVariants(
-      replaceAscii(left, replacements).normalize("NFC"),
-      replaceAscii(right, replacements).normalize("NFC"),
-    );
-  });
-  for (let attempt = 0; attempt < 24 && mutableAscii.length > 0; attempt += 1) {
-    const entropy = randomBytes(mutableAscii.length);
-    const replacements = new Map(
-      mutableAscii.map((source, index) => [
-        source,
-        String.fromCharCode("a".charCodeAt(0) + (entropy[index]! % 26)),
-      ]),
-    );
-    addPair(replaceAscii(left, replacements), replaceAscii(right, replacements));
-  }
-  return pairs;
-}
-
-function createAsciiCaseProbePairs(
-  nameLength: number,
-  forbiddenNames: ReadonlySet<string>,
-): readonly (readonly [string, string])[] {
-  const pairs: Array<readonly [string, string]> = [];
-  for (let attempt = 0; attempt < 96 && pairs.length < 24; attempt += 1) {
-    const base = createPrivateProbeName(nameLength);
-    const alias = `${base[0]!.toUpperCase()}${base.slice(1)}`;
-    if (!forbiddenNames.has(base) && !forbiddenNames.has(alias)) {
-      pairs.push([base, alias]);
-    }
-  }
-  return pairs;
-}
-
-function createPrivateProbeName(nameLength: number): string {
-  const entropy = randomBytes(nameLength);
-  return [...entropy]
-    .map((value, index) => {
-      const alphabet = index === 0 ? PROBE_FIRST_ALPHABET : PROBE_ALPHABET;
-      return alphabet[value % alphabet.length];
-    })
-    .join("");
-}
-
-function createPrivateProbeNames(
-  nameLength: number,
-  forbiddenNames: ReadonlySet<string>,
-): readonly string[] {
-  const names: string[] = [];
-  for (let attempt = 0; attempt < 96 && names.length < 24; attempt += 1) {
-    const name = createPrivateProbeName(nameLength);
-    if (!forbiddenNames.has(name)) {
-      names.push(name);
-    }
-  }
-  return names;
-}
-
-function removeOwnedProbePath(created: CreatedProbePath): boolean {
-  try {
-    const current = lstatSync(created.path, { bigint: true });
-    if (current.dev !== created.device || current.ino !== created.inode || !current.isDirectory()) {
-      return false;
-    }
-    // Never recursively remove a probe: another process may have started using the
-    // directory after our exclusive mkdir. ENOTEMPTY deliberately leaves it intact.
-    rmdirSync(created.path);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
-  }
-}
-
-function removeTrackedProbePath(createdPaths: CreatedProbePath[], probePath: string): void {
-  const index = createdPaths.findLastIndex((created) => created.path === probePath);
-  if (index >= 0) {
-    createdPaths.splice(index, 1);
-  }
-}
-
-function createDirectoryAliasProbe(params: {
-  parentPath: string;
-  pairs: readonly (readonly [string, string])[];
-  createdPaths: CreatedProbePath[];
-}): { aliases: boolean; path: string } | undefined {
-  for (const [firstName, aliasName] of params.pairs) {
-    const probePath = path.join(params.parentPath, firstName);
-    const aliasPath = path.join(params.parentPath, aliasName);
-    try {
-      mkdirSync(probePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        continue;
-      }
-      throw error;
-    }
-    const probeStat = lstatSync(probePath, { bigint: true });
-    params.createdPaths.push({
-      path: probePath,
-      device: probeStat.dev,
-      inode: probeStat.ino,
-    });
-    try {
-      const aliasStat = lstatSync(aliasPath, { bigint: true });
-      if (aliasStat.dev === probeStat.dev && aliasStat.ino === probeStat.ino) {
-        return { aliases: true, path: probePath };
-      }
-      // The alternate spelling raced with the probe on a case-sensitive directory.
-      // Remove our entry and try another pair rather than inferring its semantics.
-      const created = params.createdPaths.at(-1);
-      if (created?.path === probePath && removeOwnedProbePath(created)) {
-        removeTrackedProbePath(params.createdPaths, probePath);
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return { aliases: false, path: probePath };
-      }
-      throw error;
-    }
-  }
-  return undefined;
-}
-
-function createNeutralProbeDirectory(params: {
-  parentPath: string;
-  createdPaths: CreatedProbePath[];
-  forbiddenNames: ReadonlySet<string>;
-  nameLength: number;
-}): string | undefined {
-  for (const name of createPrivateProbeNames(params.nameLength, params.forbiddenNames)) {
-    const probePath = path.join(params.parentPath, name);
-    try {
-      mkdirSync(probePath);
-      const stat = lstatSync(probePath, { bigint: true });
-      params.createdPaths.push({ path: probePath, device: stat.dev, inode: stat.ino });
-      return probePath;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        throw error;
-      }
-    }
-  }
-  return undefined;
 }
 
 function areMissingSuffixAliases(params: {
@@ -307,121 +103,28 @@ function areMissingSuffixAliases(params: {
   if (cached !== undefined) {
     return cached;
   }
-  const createdPaths: CreatedProbePath[] = [];
-  const maxProbePathLength = Math.max(
-    path.join(params.parentRealPath, params.left).length,
-    path.join(params.parentRealPath, params.right).length,
-  );
+  let aliases: boolean | undefined;
+  let cause: unknown;
   try {
-    let probeParent = params.parentRealPath;
-    for (let index = 0; index < leftSegments.length; index += 1) {
-      const leftSegment = leftSegments[index]!;
-      const rightSegment = rightSegments[index]!;
-      const normalizedLeft = leftSegment.normalize("NFC");
-      const normalizedRight = rightSegment.normalize("NFC");
-      const availableProbeNameLength =
-        maxProbePathLength - probeParent.length - (probeParent.endsWith(path.sep) ? 0 : 1);
-      const componentProbeNameLength = Math.max(
-        1,
-        Math.min(PROBE_NAME_LENGTH, leftSegment.length, rightSegment.length),
-      );
-      const forbiddenNames = new Set([leftSegment, rightSegment]);
-
-      let nextProbeParent: string | undefined;
-      if (normalizedLeft !== normalizedRight) {
-        // Case and normalization are independent gates. A synthetic ASCII case
-        // probe here never bypasses the raw-spelling normalization probe below.
-        let caseProbeParent = probeParent;
-        let caseProbePairs = createAsciiCaseProbePairs(componentProbeNameLength, forbiddenNames);
-        if (!areAsciiCaseVariants(normalizedLeft, normalizedRight)) {
-          if (!shouldProbeUnicodeCaseVariants(normalizedLeft, normalizedRight)) {
-            missingSuffixAliasCache.set(cacheKey, false);
-            return false;
-          }
-          const privateParent = createNeutralProbeDirectory({
-            parentPath: probeParent,
-            createdPaths,
-            forbiddenNames,
-            nameLength: componentProbeNameLength,
-          });
-          if (!privateParent) {
-            return true;
-          }
-          caseProbeParent = privateParent;
-          caseProbePairs = [[leftSegment, rightSegment]];
-        }
-        const caseProbe = createDirectoryAliasProbe({
-          parentPath: caseProbeParent,
-          pairs: caseProbePairs,
-          createdPaths,
-        });
-        if (!caseProbe) {
-          return true;
-        }
-        if (!caseProbe.aliases) {
-          missingSuffixAliasCache.set(cacheKey, false);
-          return false;
-        }
-        nextProbeParent = caseProbe.path;
-      }
-      if (leftSegment !== normalizedLeft || rightSegment !== normalizedRight) {
-        let normalizationPairs = createNormalizationProbePairs(leftSegment, rightSegment).filter(
-          ([probeLeft, probeRight]) =>
-            probeLeft.length <= availableProbeNameLength &&
-            probeRight.length <= availableProbeNameLength,
-        );
-        let normalizationProbeParent = probeParent;
-        if (normalizationPairs.length === 0) {
-          const privateParent = createNeutralProbeDirectory({
-            parentPath: probeParent,
-            createdPaths,
-            forbiddenNames,
-            nameLength: componentProbeNameLength,
-          });
-          if (!privateParent) {
-            return true;
-          }
-          normalizationProbeParent = privateParent;
-          normalizationPairs = [[leftSegment, rightSegment]];
-        }
-        const normalizationProbe = createDirectoryAliasProbe({
-          parentPath: normalizationProbeParent,
-          pairs: normalizationPairs,
-          createdPaths,
-        });
-        if (!normalizationProbe) {
-          return true;
-        }
-        if (!normalizationProbe.aliases) {
-          missingSuffixAliasCache.set(cacheKey, false);
-          return false;
-        }
-        nextProbeParent ??= normalizationProbe.path;
-      }
-      if (index < leftSegments.length - 1) {
-        nextProbeParent ??= createNeutralProbeDirectory({
-          parentPath: probeParent,
-          createdPaths,
-          forbiddenNames,
-          nameLength: componentProbeNameLength,
-        });
-        if (!nextProbeParent) {
-          return true;
-        }
-        probeParent = nextProbeParent;
-      }
-    }
-    missingSuffixAliasCache.set(cacheKey, true);
-    return true;
-  } catch {
-    // Unprobeable case/normalization candidates are ambiguous. Treat them as
-    // colliding so registry uniqueness fails closed instead of admitting two owners.
-    return true;
-  } finally {
-    for (const created of createdPaths.toReversed()) {
-      removeOwnedProbePath(created);
-    }
+    aliases = probePathSuffixAliasesSync({
+      directory: params.parentRealPath,
+      left: params.left,
+      right: params.right,
+      maxDepth: leftSegments.length,
+      shouldProbeCaseVariants: shouldProbeUnicodeCaseVariants,
+    });
+  } catch (error) {
+    cause = error;
   }
+  if (aliases === undefined) {
+    throw new Error(
+      `Cannot determine whether database paths alias under ${JSON.stringify(params.parentRealPath)}: ${JSON.stringify(params.left)} and ${JSON.stringify(params.right)}. Check directory access and retry.`,
+      { cause },
+    );
+  }
+  // A comparison becomes reusable only after every owned probe was removed.
+  missingSuffixAliasCache.set(cacheKey, aliases);
+  return aliases;
 }
 
 function anchorDatabasePathWithoutNormalizing(pathname: string): string {
@@ -519,7 +222,10 @@ function areSameAgentDatabasePathIdentities(
 }
 
 /** Create a synchronous-operation matcher that prepares each exact locator once. */
-export function createOpenClawAgentDatabasePathMatcher(): (left: string, right: string) => boolean {
+export function createOpenClawAgentDatabasePathMatcher(): {
+  (left: string, right: string): boolean;
+  isCurrent(): boolean;
+} {
   const identities = new Map<string, AgentDatabasePathIdentity>();
   const resolveIdentity = (pathname: string): AgentDatabasePathIdentity => {
     const lexicalPath = anchorDatabasePathWithoutNormalizing(pathname);
@@ -532,8 +238,30 @@ export function createOpenClawAgentDatabasePathMatcher(): (left: string, right: 
     identities.set(lexicalPath, identity);
     return identity;
   };
-  return (left, right) =>
-    areSameAgentDatabasePathIdentities(resolveIdentity(left), resolveIdentity(right));
+  return Object.assign(
+    (left: string, right: string) =>
+      areSameAgentDatabasePathIdentities(resolveIdentity(left), resolveIdentity(right)),
+    {
+      isCurrent() {
+        for (const previous of identities.values()) {
+          const current = resolveAgentDatabasePathIdentity(previous.lexicalPath);
+          // Equal locators alone cannot validate a snapshot after replacement.
+          if (
+            previous.realPath !== current.realPath ||
+            previous.device !== current.device ||
+            previous.inode !== current.inode ||
+            previous.parentDevice !== current.parentDevice ||
+            previous.parentInode !== current.parentInode ||
+            previous.parentRealPath !== current.parentRealPath ||
+            previous.unresolvedSuffix !== current.unresolvedSuffix
+          ) {
+            return false;
+          }
+        }
+        return true;
+      },
+    },
+  );
 }
 
 /** Compare two database locators by canonical filesystem identity when available. */
@@ -544,12 +272,15 @@ export function isSameOpenClawAgentDatabasePath(left: string, right: string): bo
   );
 }
 
-export function registerOpenClawAgentDatabase(params: {
-  agentId: string;
-  path: string;
-  env?: NodeJS.ProcessEnv;
-  schemaVersion?: number;
-}): void {
+export function registerOpenClawAgentDatabase(
+  params: {
+    agentId: string;
+    path: string;
+    env?: NodeJS.ProcessEnv;
+    schemaVersion?: number;
+  },
+  onCommitted?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void,
+): void {
   if (!isPersistentOpenClawAgentDatabasePath(params.path, params.env)) {
     return;
   }
@@ -589,6 +320,26 @@ export function registerOpenClawAgentDatabase(params: {
           ),
       );
       invalidateRegisteredAgentDatabasesMemo({ env: params.env });
+      if (onCommitted) {
+        const receipt = Object.freeze({
+          agentId: params.agentId,
+          agentPath: params.path,
+          stateDatabasePath: database.path,
+          stateDatabaseIdentity: requireOpenClawStateDatabaseIdentity(database).key,
+        });
+        // Record the native fact before fallible observers; the recorder never performs work.
+        if (
+          !stageSqliteTransactionState(database.db, {
+            stage() {},
+            rollback() {},
+            commit: () => onCommitted(receipt),
+          })
+        ) {
+          throw new Error(
+            "Agent registration requires its canonical transaction publication scope",
+          );
+        }
+      }
       sessionChanges.emit({ all: true, scope: "stores" }, database.db);
     },
     { env: params.env },
@@ -664,14 +415,17 @@ export function unregisterOpenClawAgentDatabases(params: {
     env: params.env,
     ...(params.database ? { database: params.database, path: params.database.path } : {}),
   };
-  runOpenClawStateWriteTransaction((database) => {
+  const removedPaths = runOpenClawStateWriteTransaction((database) => {
     const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
-    executeSqliteQuerySync(
+    const removed = executeSqliteQuerySync(
       database.db,
-      db.deleteFrom("agent_databases").where("agent_id", "=", params.agentId),
+      db.deleteFrom("agent_databases").where("agent_id", "=", params.agentId).returning("path"),
     );
     invalidateRegisteredAgentDatabasesMemo(options);
     sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+    return removed.rows.map((row) =>
+      resolveOpenClawRegisteredAgentDatabasePath(database.path, row.path),
+    );
   }, options);
-  invalidateOpenClawAgentDatabaseValidationsForAgent(params.agentId);
+  invalidateOpenClawAgentDatabaseValidationsForAgent(params.agentId, removedPaths);
 }

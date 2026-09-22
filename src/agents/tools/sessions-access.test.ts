@@ -2,7 +2,7 @@
 // and agent-to-agent allow rules.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { pageExecutionDecisionFactsForContext } from "../../audit/execution-decision-facts.js";
+import { pageExecutionDecisionFactsForContextInDatabase } from "../../audit/execution-decision-facts.js";
 import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
 import {
   createExecutionIdentityAdmissionToken,
@@ -21,6 +21,11 @@ import {
   resolveSandboxSessionToolsVisibility,
   resolveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   formatSessionToolAccessDenial,
@@ -41,6 +46,11 @@ vi.mock("../../gateway/call.js", async (importOriginal) => ({
 
 beforeEach(() => {
   gatewayMocks.callGateway.mockReset();
+});
+
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -577,7 +587,10 @@ describe("createSessionVisibilityGuard", () => {
     const now = Date.now();
     const stateDir = tempDirs.make("openclaw-session-access-audit-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const stopWriter = startAgentLocalAuditWriter({ stateDir });
+    const stopWriter = startAgentLocalAuditWriter(
+      { logging: { audit: { executionIdentity: true } } },
+      { stateDir },
+    );
     if (!stopWriter) {
       throw new Error("expected an isolated direct-local audit writer");
     }
@@ -637,12 +650,10 @@ describe("createSessionVisibilityGuard", () => {
       await stopWriter();
     }
 
-    const page = pageExecutionDecisionFactsForContext({
-      context: token,
-      limit: 10,
-      now: now + 1,
-      database,
-    });
+    const page = pageExecutionDecisionFactsForContextInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { context: token, limit: 10, now: now + 1 },
+    );
     expect(page.receipts).toHaveLength(1);
     expect(page.receipts[0]).toMatchObject({
       contextId: token.contextId,

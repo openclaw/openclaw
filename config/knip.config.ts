@@ -20,6 +20,8 @@ const repositoryScriptEntries = [
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
   "scripts/render-proof-video.mts!",
+  // tsdown builds this private macOS app worker protocol entry by path.
+  "src/node-host/mac-worker-entry.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
   ".github/actions/git-owner/test-prerequisites.mjs!",
   // mobile-release-authority invokes this helper from composite-action YAML.
@@ -34,6 +36,8 @@ const repositoryScriptEntries = [
   "scripts/build-discord-activity-sdk.mts!",
   // package-mac-app.sh launches the architecture scheduler by path.
   "scripts/build-mac-swift.mts!",
+  // CI passes this native test launcher through the Apple command log wrapper.
+  "scripts/test-macos-native.mts!",
   "scripts/check-control-ui-performance.mts!",
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
@@ -48,6 +52,8 @@ const repositoryScriptEntries = [
   "scripts/dev/computer-use-macos-live-proof.ts!",
   "scripts/dev/ios-node-e2e.ts!",
   "scripts/diffs-shiki-curated.ts!",
+  // The Doctor migration guide invokes this source-checkout replay by path.
+  "scripts/doctor-config-upgrade-replay.mjs!",
   // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
   "scripts/docker-e2e.mts!",
   // Docker and package-install harnesses invoke this verifier by path.
@@ -82,6 +88,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fleet-cache/prepare-podman-storage.mjs!",
   "scripts/e2e/lib/fleet-cache/probe-podman-cell.mjs!",
   "scripts/e2e/lib/fleet-cache/runtime-preflight.mjs!",
+  // test:e2e:node-auto-update runs the installed-package proof against a frozen tarball.
+  "scripts/e2e/lib/node-auto-update/scenario.mjs!",
   "scripts/e2e/lib/npm-telegram-live/prepare-package.mts!",
   "scripts/e2e/lib/onboard/assert-config.mjs!",
   "scripts/e2e/lib/onboard/write-config.mjs!",
@@ -117,6 +125,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   "scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
@@ -168,11 +177,17 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/ci-dispatch.mjs!",
   // merge.sh invokes this native review-authority parser by path.
   "scripts/pr-lib/clawsweeper-review-gate.mjs!",
+  // review.sh invokes the corrected-candidate review validator by path.
+  "scripts/pr-lib/correction-review.mjs!",
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/materialize-dependencies.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
   // merge.sh executes legacy capture qualification as a standalone Node CLI.
   "scripts/pr-lib/merge-legacy-refusal.mjs!",
+  // merge.sh and merge-outcome.sh execute refusal qualification by path.
+  "scripts/pr-lib/merge-pre-dispatch-refusal.mjs!",
+  // merge-outcome.sh launches the REST adapter as a standalone Node CLI.
+  "scripts/pr-lib/merge-rest.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
   // worktree.sh invokes this journal-state validator by path before native replay.
   "scripts/pr-lib/review-transition-state.mjs!",
@@ -188,6 +203,8 @@ const repositoryScriptEntries = [
   "scripts/run-stylelint.mts!",
   // Path-spawned test roots are development entries; `!` would audit dev tools as production.
   "scripts/run-vitest-child.mts",
+  // The isolated Vitest adapter executes this entry by path inside its container.
+  "scripts/lib/vitest-isolated-entry.mts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
@@ -241,12 +258,19 @@ const rootEntries = [
   // OpenGrep rule tests read these as static source inputs; they are never executed.
   "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.js!",
   "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.ts!",
+  "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.js!",
+  "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.ts!",
   "openclaw.mjs!",
+  // update-command-node-runtime-resolution loads this package-root module by absolute URL.
+  "node-runtime-recovery.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
   // Built as the official image's Docker HEALTHCHECK entrypoint.
   "src/docker-healthcheck.ts!",
-  // Uploaded in the worker bundle and launched by rsync; no static host import exists.
+  // Deployed in the worker archive and launched by path, without a static host import.
+  "src/worker/worker-deploy-entry.ts!",
+  "src/worker/worker-deploy-image-processor.ts!",
+  "src/worker/worker-deploy-sqlite-store.ts!",
   "src/worker/workspace-rsync-receiver.ts!",
   // v2026.9.1 Gateways lazy-import this stable dist entry after an in-place update.
   "src/gateway/plugin-channel-reload-targets.ts!",
@@ -263,18 +287,24 @@ const rootEntries = [
   "scripts/release-plan-producer-core.mts!",
   "scripts/release-plan-producer.mts!",
   "scripts/full-release-publication-observations.mts!",
+  "scripts/release-verify-publish.ts!",
   // Spawned by the agent concurrency benchmark; no static import edge exists.
   "scripts/bench-agent-concurrency-worker.ts!",
   // Spawned by the durable task registry churn benchmark in a fresh GC-enabled process.
   "scripts/bench-task-registry-sqlite-worker.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   "scripts/bench-cron-session-reaper.ts!",
+  "scripts/bench-codex-catalog-pages.ts!",
+  "scripts/bench-redaction-hot-paths.ts!",
   // docs/reference/test/performance.md invokes this standalone comparison harness.
   "scripts/bench-workspace-computation.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/agents/prepared-model-catalog.worker.ts!",
+  // Documented core-only Decision Labs foundation entry. No automatic consumers
+  // ship with the gate; remove this root when the first consumer imports it.
+  "src/agents/decision-assistance.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
@@ -398,6 +428,8 @@ const rootBundledPluginRuntimeDependencies = [
   "@mozilla/readability",
   "@silvia-odwyer/photon-node",
   "@trycua/cua-driver",
+  // Root bundles the browser plugin's patched MCP server for npm installations.
+  "chrome-devtools-mcp",
   "grammy",
   "linkedom",
   "minimatch",
@@ -870,8 +902,9 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace([
-      // The subprocess boundary tests spawn this fixture by computed URL.
+      // The subprocess boundary tests spawn these fixtures by computed URL.
       "src/memory/fixtures/manager-search-knn-child.fixture.mjs!",
+      "src/memory/fixtures/manager-search-knn-parent.fixture.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: {
       ...bundledPluginWorkspace(),

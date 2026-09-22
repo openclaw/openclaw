@@ -15,6 +15,7 @@ import { MatrixClientBase } from "./client-base.js";
 import { matrixEventToRaw, parseMxc } from "./event-helpers.js";
 import { noop } from "./logger.js";
 import type { MatrixMessageWireDispatch } from "./message-wire-dispatch.js";
+import { captureMatrixSendCurrentness, withoutMatrixSendCurrentness } from "./send-currentness.js";
 import type { HttpMethod, QueryParams } from "./transport.js";
 import type { MatrixRawEvent, MatrixRelationsPage, MessageEventContent } from "./types.js";
 
@@ -61,12 +62,14 @@ export abstract class MatrixClientCore extends MatrixClientBase {
   }
 
   async getTransactionScopeId(): Promise<string> {
+    captureMatrixSendCurrentness(this)?.();
     if (this.transactionScopeId) {
       return this.transactionScopeId;
     }
+    // The memoized identity belongs to this client generation, not its first waiter.
     const active =
       this.transactionScopePromise ??
-      (async () => {
+      withoutMatrixSendCurrentness(async () => {
         const configuredUserId = this.client.getUserId()?.trim() || this.selfUserId;
         const configuredDeviceId =
           this.transactionScopeDeviceId || this.client.getDeviceId()?.trim() || null;
@@ -98,7 +101,7 @@ export abstract class MatrixClientCore extends MatrixClientBase {
           .update("\0")
           .update(this.transactionScopeAccessTokenHash)
           .digest("hex");
-      })();
+      });
     this.transactionScopePromise = active;
     try {
       const resolved = await active;
@@ -193,12 +196,14 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     beforeWireDispatch?: (dispatch: MatrixMessageWireDispatch) => Promise<void>,
   ): Promise<string> {
     // Keep ephemeral sends on the same per-wire guard as durable transaction IDs.
+    const assertCurrent = captureMatrixSendCurrentness(this);
     const wireTransactionId =
-      transactionId ?? (beforeWireDispatch ? this.client.makeTxnId() : undefined);
+      transactionId ?? (beforeWireDispatch || assertCurrent ? this.client.makeTxnId() : undefined);
     return await this.runSerializedRoomSend(roomId, async () => {
       return await this.messageWireDispatchGuards.run({
         transactionId: wireTransactionId,
         guard: beforeWireDispatch,
+        assertCurrent,
         run: async () => {
           if (wireTransactionId) {
             const room = this.client.getRoom(roomId);

@@ -86,23 +86,28 @@ export const intro = (message: string) => clackIntro(stylePromptTitle(message) ?
 /** Styled configure wizard outro wrapper. */
 export const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
 /** Styled text prompt wrapper. */
-export const text = (params: Parameters<typeof clackText>[0]) =>
+export const text = (params: Parameters<typeof clackText>[0]): ReturnType<typeof clackText> =>
   clackText({
     ...params,
     message: stylePromptMessage(params.message),
   });
 /** Styled password prompt wrapper. Echoes bullets so secrets never appear in cleartext. */
-export const password = (params: Parameters<typeof clackPassword>[0]) =>
+export const password = (
+  params: Parameters<typeof clackPassword>[0],
+): ReturnType<typeof clackPassword> =>
   clackPassword({
     ...params,
     message: stylePromptMessage(params.message),
   });
 /** Styled confirm prompt wrapper. */
-export const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
+export const confirm = (
+  params: Parameters<typeof clackConfirm>[0],
+): ReturnType<typeof clackConfirm> =>
   clackConfirm({
     ...params,
     message: stylePromptMessage(params.message),
   });
 /** Styled select prompt wrapper that also normalizes option hints. */
-export const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
-  clackSelect(styleSelectParams(params));
+export const select = <T>(
+  params: Parameters<typeof clackSelect<T>>[0],
+): ReturnType<typeof clackSelect<T>> => clackSelect(styleSelectParams(params));

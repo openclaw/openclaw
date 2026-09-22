@@ -28,10 +28,16 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import type { GatewayClient } from "./shared-types.js";
 
+export type GatewayChatUserTurnPersist = (options?: {
+  contextFreeCommand?: true;
+}) => ReturnType<UserTurnTranscriptRecorder["persistFallback"]>;
+
 type GatewayChatUserTurnController = {
   baseInput: UserTurnInput;
-  persist: ReturnType<typeof createUserTurnTranscriptRecorder>["persistFallback"];
-  persistBestEffort: () => Promise<void>;
+  persist: (
+    ...args: Parameters<GatewayChatUserTurnPersist>
+  ) => ReturnType<UserTurnTranscriptRecorder["persistFallback"]>;
+  persistBestEffort: GatewayChatUserTurnPersist;
   recorder: UserTurnTranscriptRecorder;
   replyContextFieldsPromise?: Promise<ChatSendReplyContextFields>;
   setInputPromise: (input: Promise<UserTurnInput>) => void;
@@ -67,6 +73,7 @@ export function createGatewayChatUserTurnController(params: {
     ...params.transcript,
     ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
     text: request.rawMessage,
+    ...(request.workContext ? { workContext: request.workContext } : {}),
     ...(request.mentions ? { mentions: request.mentions } : {}),
     timestamp: session.now,
     idempotencyKey: sourceId,
@@ -101,6 +108,7 @@ export function createGatewayChatUserTurnController(params: {
           : {}),
       }))
     : Promise.resolve(baseInput);
+  let contextFreeCommand = false;
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     ...(sender?.id && !request.goalOperation
       ? {
@@ -170,6 +178,16 @@ export function createGatewayChatUserTurnController(params: {
       // Fence only fresh original input, never accepted custody or terminal notices.
       if (originalInput && next?.role === "user") {
         recorder.assertOriginalInputCommit?.();
+        if (contextFreeCommand) {
+          return {
+            ...next,
+            excludeFromContext: true,
+            __openclaw: {
+              ...asOptionalRecord(Reflect.get(next, "__openclaw")),
+              contextFreeCommand: true,
+            },
+          };
+        }
       }
       return next;
     },
@@ -206,6 +224,11 @@ export function createGatewayChatUserTurnController(params: {
             }
             mentionInbox.recordCommittedInput({
               sourceId,
+              committedSource: {
+                generation: anchor.generation,
+                sequence: anchor.rawSeq,
+                timestamp: message.timestamp,
+              },
               agentId: anchor.agentId,
               sessionKey: session.sessionKey,
               sessionId: anchor.sessionId,
@@ -218,8 +241,11 @@ export function createGatewayChatUserTurnController(params: {
         }
       : {}),
   });
-  const persist = async () =>
-    await measureDiagnosticsTimelineSpan(
+  const persist: GatewayChatUserTurnController["persist"] = async (options) => {
+    if (options?.contextFreeCommand === true && !recorder.hasPersisted()) {
+      contextFreeCommand = true;
+    }
+    return await measureDiagnosticsTimelineSpan(
       "gateway.chat_send.persist_user_transcript",
       () => recorder.persistFallback(),
       {
@@ -228,11 +254,12 @@ export function createGatewayChatUserTurnController(params: {
         attributes: admission.chatSendTraceAttributes,
       },
     );
+  };
   return {
     baseInput,
     persist,
-    persistBestEffort: async () => {
-      await persist().catch(() => undefined);
+    persistBestEffort: async (options) => {
+      return await persist(options).catch(() => undefined);
     },
     recorder,
     replyContextFieldsPromise,

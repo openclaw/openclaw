@@ -94,6 +94,41 @@ describe("install-cli.sh", () => {
     expect(result.stdout.trim()).toBe("node:linux:x64:/tmp/private node");
   });
 
+  it.each([false, true])(
+    "keeps browser runtime-only installation free of service and onboarding effects (runtimeOnly=%s)",
+    (runtimeOnly) => {
+      const root = tempDirs.make("openclaw-browser-runtime-install-");
+      const prefix = join(root, "private-runtime");
+      const commandLog = join(root, "commands.log");
+      mkdirSync(join(prefix, "bin"), { recursive: true });
+      writeFileSync(
+        join(prefix, "bin", "openclaw"),
+        [
+          "#!/bin/bash",
+          'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
+          'if [[ "$1" == --version ]]; then printf "OpenClaw 2026.9.4\\n"; fi',
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "install_node() { :; }; install_openclaw() { :; }",
+          'ensure_git() { printf "git\\n" >> "$COMMAND_LOG"; }',
+          'refresh_gateway_service_if_loaded() { printf "service-refresh\\n" >> "$COMMAND_LOG"; }',
+          `main --json --npm --onboard ${runtimeOnly ? "--runtime-only" : ""} --prefix ${JSON.stringify(prefix)}`,
+        ].join("\n"),
+        { COMMAND_LOG: commandLog },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual(
+        runtimeOnly ? ["--version"] : ["git", "--version", "service-refresh", "onboard"],
+      );
+      expect(result.stdout).toContain('"event":"done"');
+    },
+  );
+
   it("refuses musl Node-only recovery before an installer can invoke system package changes", () => {
     const result = runInstallCliShell(`
       source ${SCRIPT_PATH}
@@ -2323,18 +2358,22 @@ fi
 
   defineInstallerNpmConfigContract(installerContract);
 
-  it("rejects OpenClaw GitHub source targets for npm installs", () => {
-    const result = runInstallCliShell(`
+  it.each(["linux", "darwin"])(
+    "rejects OpenClaw GitHub source targets for npm installs on %s",
+    (os) => {
+      const result = runInstallCliShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
+      os_detect() { printf '${os}\\n'; }
       OPENCLAW_VERSION=main
       install_openclaw
     `);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("npm installs do not support OpenClaw GitHub source targets");
-    expect(result.stdout).toContain("--install-method git --version main");
-  });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("npm installs do not support OpenClaw GitHub source targets");
+      expect(result.stdout).toContain("--install-method git --version main");
+    },
+  );
 
   defineInstallerNpmRetryContract(installerContract);
 

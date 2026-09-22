@@ -1,4 +1,3 @@
-// Slack plugin module implements directory live behavior.
 import type { ConversationsListResponse, UsersListResponse } from "@slack/web-api";
 import type {
   ChannelDirectoryEntry,

@@ -21,6 +21,7 @@ import {
   sendHttpRequestRejection,
 } from "../infra/http-request-lifecycle.js";
 import { logDebug, logWarn } from "../logger.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -34,6 +35,7 @@ import {
 } from "./mcp-grant-store.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
+  getActiveMcpLoopbackRuntime,
   markMcpLoopbackRequestClassified,
   markMcpLoopbackRequestFinished,
   markMcpLoopbackRequestStarted,
@@ -57,6 +59,28 @@ import {
 // is registered per process.
 
 const MAX_MCP_BODY_BYTES = 1_048_576;
+const MCP_HTTP_KEEPALIVE_MS = 15_000;
+
+function keepMcpResponseAlive(res: ServerResponse, contentType: string, frame: string): () => void {
+  const timer = setInterval(() => {
+    if (res.destroyed || res.writableEnded || res.writableNeedDrain) {
+      return;
+    }
+    if (!res.headersSent) {
+      res.writeHead(200, { "Content-Type": contentType });
+    }
+    res.write(frame);
+  }, MCP_HTTP_KEEPALIVE_MS);
+  timer.unref();
+  const stop = () => {
+    clearInterval(timer);
+    res.off("close", stop);
+    res.off("finish", stop);
+  };
+  res.once("close", stop);
+  res.once("finish", stop);
+  return stop;
+}
 
 let closeActiveMcpLoopbackServer: (() => Promise<void>) | undefined;
 let activeMcpLoopbackServerPromise: Promise<void> | null = null;
@@ -148,6 +172,7 @@ async function startMcpLoopbackServer(
 
   const trackSseResponse = (res: ServerResponse): void => {
     activeSseResponses.add(res);
+    keepMcpResponseAlive(res, "text/event-stream", ":\n\n");
     const cleanup = () => {
       activeSseResponses.delete(res);
       res.off("close", cleanup);
@@ -186,6 +211,7 @@ async function startMcpLoopbackServer(
     const requestAbort = createHttpRequestAbortSignal(req, res);
     void work.track(async () => {
       let parsed: unknown;
+      let stopKeepalive: (() => void) | undefined;
       let cliCaptureHandles: Array<ReturnType<typeof markMcpLoopbackToolCallStarted>> = [];
       try {
         const body = await readRequestBodyWithLimit(req, {
@@ -232,7 +258,10 @@ async function startMcpLoopbackServer(
         }
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
-        const authorizeToolCall = boundClientGrant?.isCurrent;
+        const authorizeToolCall = () =>
+          !work.isClosing &&
+          getActiveMcpLoopbackRuntime()?.ownerToken === ownerToken &&
+          (boundClientGrant?.isCurrent() ?? true);
         const harnessEntry = isAgentHarnessSessionKey(requestContext.sessionKey)
           ? resolveSessionEntryAccessTarget({ cfg, sessionKey: requestContext.sessionKey }).entry
           : undefined;
@@ -311,6 +340,12 @@ async function startMcpLoopbackServer(
           toolCount: scopedTools.toolSchema.length,
           cronVisible: scopedTools.toolSchema.some((tool) => isAutomationsToolName(tool.name)),
         });
+        // Keep the existing single JSON response: leading whitespace prevents
+        // HTTP header/body idle timeouts without completing or replaying the tool.
+        // Notifications still receive an empty 202, so they must not start a body.
+        if (messages.some(shouldSendJsonRpcResponse)) {
+          stopKeepalive = keepMcpResponseAlive(res, "application/json", "\n");
+        }
         const responses: object[] = [];
         for (const [messageIndex, message] of messages.entries()) {
           if (!isJsonRpcRequest(message)) {
@@ -381,6 +416,7 @@ async function startMcpLoopbackServer(
               ? createAdmittedGatewayToolCallerIdentity({
                   admittedRunContext: boundClientGrant.admittedRunContext,
                   receiptAuthority: boundClientGrant.isCurrent,
+                  cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
                   mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
                   agentId: scopedTools.agentId,
                   sessionKey: requestContext.sessionKey,
@@ -426,7 +462,9 @@ async function startMcpLoopbackServer(
         const payload = Array.isArray(parsed)
           ? JSON.stringify(responses)
           : JSON.stringify(responses[0]);
-        res.writeHead(200, { "Content-Type": "application/json" });
+        if (!res.headersSent) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+        }
         res.end(payload, () => {
           // Ending queues bytes; only a completed write owns result delivery.
           if (res.writableFinished) {
@@ -443,7 +481,9 @@ async function startMcpLoopbackServer(
           : formatErrorMessage(error);
         logWarn(`mcp-loopback: request handling failed: ${message}`);
         logMcpLoopbackTraffic("request-failed", { message });
-        if (!res.headersSent) {
+        if (res.headersSent && !res.destroyed && !res.writableEnded) {
+          res.end(JSON.stringify(jsonRpcInternalError(parsed)));
+        } else if (!res.headersSent) {
           // Capture settles when rejection is queued; the transport owner joins socket cleanup.
           if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
             void sendHttpRequestRejection(
@@ -476,6 +516,7 @@ async function startMcpLoopbackServer(
           }
         }
       } finally {
+        stopKeepalive?.();
         requestAbort.cleanup();
         for (const captureHandle of cliCaptureHandles) {
           markMcpLoopbackToolCallFinished(captureHandle);
@@ -532,10 +573,10 @@ export async function ensureMcpLoopbackServer(port = 0): Promise<void> {
   }
   if (!activeMcpLoopbackServerPromise) {
     // The listener owns its context until Gateway close; callers own only requests.
-    // Inheriting the first turn's scope poisons later tool calls when that turn closes.
+    // The first turn's work and plugin generation can retire before later requests.
     const work = new AsyncWorkScope();
-    activeMcpLoopbackServerPromise = runOutsideGatewayRootWorkAdmission(() =>
-      work.run(() => startMcpLoopbackServer(port, work)),
+    activeMcpLoopbackServerPromise = runOutsidePluginRuntimeGenerationScope(() =>
+      runOutsideGatewayRootWorkAdmission(() => work.run(() => startMcpLoopbackServer(port, work))),
     )
       .then((close) => {
         closeActiveMcpLoopbackServer = close;

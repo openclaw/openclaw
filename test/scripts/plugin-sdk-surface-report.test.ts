@@ -136,6 +136,23 @@ describe("plugin SDK surface report", () => {
 
   it("keeps default public surface budgets pinned to current source counts", () => {
     expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
+    const channelMessage = surfaceReport.publicStats.byEntrypoint.get("channel-message");
+    expect(channelMessage).toBeDefined();
+    expect(
+      readPluginSdkSurfaceBudgets({}).publicDeprecatedExportsByEntrypointBudget["channel-message"],
+    ).toBe(channelMessage?.deprecatedExports);
+  });
+
+  it("accepts frozen named facades while rejecting missing deprecated reexports", () => {
+    expect(surfaceReport.deprecatedBarrelWithoutReexports).toEqual([]);
+    const report = {
+      ...surfaceReport,
+      deprecatedBarrelWithoutReexports: ["channel-message"],
+    };
+
+    expect(evaluatePluginSdkSurfaceReport(report, readPluginSdkSurfaceBudgets({}))).toContain(
+      "deprecated barrel entrypoints without reexports: channel-message",
+    );
   });
 
   it("keeps approval store internals out of the deprecated infra barrel", () => {

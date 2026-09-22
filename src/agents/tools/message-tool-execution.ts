@@ -1,13 +1,11 @@
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-  normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
 import { isScheduledMessageWriteAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
@@ -25,19 +23,16 @@ import {
 } from "../../infra/outbound/message-account-selection.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { projectGatewayQueuedDeliveryResult } from "../../infra/outbound/message-action-execution.js";
+import { hasAcceptedMessageActionResult } from "../../infra/outbound/message-action-result-acceptance.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import { isDeliveredCurrentSourceReplyAsync } from "../../infra/outbound/source-reply-mirror.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
-import { normalizeAccountId } from "../../routing/session-key.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import {
-  attachEmbeddedMessageDeliveryFact,
-  projectEmbeddedMessageDeliveryFact,
-} from "../embedded-agent-message-delivery.js";
+import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
@@ -62,6 +57,10 @@ import {
   buildMessageToolDeliveryFingerprint,
   normalizeMessageToolIdempotencyKeyPart,
 } from "./message-tool-idempotency.js";
+import {
+  projectScheduledMessageActionPartialResult,
+  shouldRevalidateCompletedMessageAction,
+} from "./message-tool-scheduled-execution.js";
 import { MessageToolSchema } from "./message-tool-schema.js";
 import {
   addSourceReplyFinalControl,
@@ -76,7 +75,7 @@ import {
   sanitizeMessageToolVisiblePayload,
   type VisibleTextSuppressionReason,
 } from "./message-tool-visible-content.js";
-import { isPollVoteEchoText } from "./poll-vote-echo.js";
+import { isPollVoteEchoText, resolvePollVoteEchoRoute } from "./poll-vote-echo.js";
 
 const POLL_VOTE_ECHO_TTL_MS = 30_000;
 
@@ -91,54 +90,6 @@ const recentPollVoteBySession = new Map<
   string,
   { option: string; route: string; recordedAt: number }
 >();
-
-function resolvePollVoteEchoRoute(params: {
-  action: ChannelMessageActionName;
-  args: Record<string, unknown>;
-  channel?: string | null;
-  accountId?: string;
-  currentChannelId?: string;
-  currentChatType?: ChatType;
-  currentMessagingTarget?: string;
-  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
-}): string | undefined {
-  const channel = normalizeMessageChannel(params.channel);
-  if (!channel) {
-    return undefined;
-  }
-  let deliveryAliasTarget: string | undefined;
-  try {
-    const selectedChannel = params.preparedMessageToolCatalog
-      ? params.preparedMessageToolCatalog.getChannel(channel)
-      : getChannelPlugin(channel);
-    deliveryAliasTarget = resolveActionDeliveryTargetAlias(params.action, params.args, {
-      channel,
-      aliasSpec:
-        params.preparedMessageToolCatalog || selectedChannel
-          ? (selectedChannel?.actions?.messageActionTargetAliases?.[params.action] ?? null)
-          : undefined,
-    });
-  } catch {
-    return undefined;
-  }
-  const targets = ["target", "to", "channelId"]
-    .map((key) => normalizeOptionalStringifiedId(params.args[key]))
-    .concat(deliveryAliasTarget ?? [])
-    .filter((value): value is string => Boolean(value));
-  if (new Set(targets).size > 1) {
-    return undefined;
-  }
-  const target = targets[0];
-  const currentTargets = new Set(
-    [params.currentMessagingTarget, params.currentChannelId].filter((value): value is string =>
-      Boolean(value),
-    ),
-  );
-  // Plugin-declared aliases keep owner-specific target fields out of core.
-  // A route mismatch fails open; provider/account keys prevent cross-send suppression.
-  const routeTarget = !target || currentTargets.has(target) ? "<current-source>" : target;
-  return `${channel}\0${normalizeAccountId(params.accountId ?? "default")}\0${routeTarget}`;
-}
 
 type MessageToolOptions = {
   agentAccountId?: string;
@@ -281,7 +232,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const schema = addSourceReplyFinalControl(baseSchema);
   const description = options?.sourceReplyOnly
     ? "Send a message to the current source conversation. Supports actions: send."
-    : `${buildMessageToolDescription(actions)}${currentChannelIsInternal ? ' When the user asks whether you can perform an action or install a capability, use action="send" with clawhub={query:"capability"} to check official plugins and skills and present installation cards. Omit channel and target. Installed capabilities show their current status; the card opens the listing inside Control UI.' : ""}`;
+    : buildMessageToolDescription(actions);
   const sandboxRoot = options?.sandboxRoot?.trim();
   const sandboxWorkspaceMediaAccess =
     sandboxRoot && options?.sandboxFsBridge && options.sandboxWorkspaceMediaReadAllowed === true
@@ -353,7 +304,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const assertActionCurrent = () => {
         assertCaller();
         turnAuthority.assertCurrent();
-        (scheduledRead ?? scheduledWrite)?.assertCurrent();
+        const scheduled = messageActionAuthorization.scheduled;
+        ((scheduledRead ?? scheduledWrite)
+          ? (scheduled?.assertSourceCurrent ?? scheduled?.assertCurrent)
+          : scheduled?.assertCurrent)?.();
         assertDashboardReadCurrent?.();
       };
       assertActionCurrent();
@@ -408,7 +362,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const gatewayContext = { ...options, messageActionTurnCapability: gatewayTurnCapability };
       const gateway = createMessageToolGateway(params, gatewayContext, signal, {
         resolveConfig: () => cfg,
-        preserveWriteOutcome: Boolean(scheduledWrite),
+        preserveWriteOutcome: Boolean(
+          messageActionAuthorization.scheduled &&
+          !scheduledRead &&
+          readBooleanParam(params, "dryRun") !== true,
+        ),
+        hasScheduledAuthority: Boolean(messageActionAuthorization.scheduled),
       });
       decisions.runBoundary(() =>
         validateExplicitMessageAccountSelection({
@@ -617,6 +576,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
                 ),
                 messageActionAuthorization,
                 assertDirectAdapterHandoff: assertActionCurrent,
+                onPlatformSendDispatch: messageActionAuthorization.scheduled
+                  ? async () => assertActionCurrent()
+                  : undefined,
+                skipQueue: Boolean(messageActionAuthorization.scheduled),
                 senderIsOwner: options?.senderIsOwner,
                 conversationReadOrigin: options?.conversationReadOrigin,
                 workspaceDir: options?.workspaceDir,
@@ -651,21 +614,32 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               }),
             );
           } catch (error) {
-            if (autogeneratedDeliveryFingerprint && actionIdempotencyKey) {
-              failedAutogeneratedIdempotencyKeys.set(
-                autogeneratedDeliveryFingerprint,
-                actionIdempotencyKey,
-              );
+            const partialResult = projectScheduledMessageActionPartialResult({
+              error,
+              action,
+              actionParams: params,
+              scopeChannel: scope.channel,
+              hasScheduledAuthority: Boolean(messageActionAuthorization.scheduled),
+            });
+            if (partialResult) {
+              result = partialResult;
+            } else {
+              if (autogeneratedDeliveryFingerprint && actionIdempotencyKey) {
+                failedAutogeneratedIdempotencyKeys.set(
+                  autogeneratedDeliveryFingerprint,
+                  actionIdempotencyKey,
+                );
+              }
+              // Queue-owned retry: the gateway already holds the durable row and
+              // caches this outcome under the same idempotency key, so a model resend
+              // of the same content collapses instead of minting a second send.
+              const queuedDelivery = projectGatewayQueuedDeliveryResult(error);
+              if (queuedDelivery) {
+                return jsonResult(queuedDelivery);
+              }
+              decisions.recordTypedDenial(error);
+              throw error;
             }
-            // Queue-owned retry: the gateway already holds the durable row and
-            // caches this outcome under the same idempotency key, so a model resend
-            // of the same content collapses instead of minting a second send.
-            const queuedDelivery = projectGatewayQueuedDeliveryResult(error);
-            if (queuedDelivery) {
-              return jsonResult(queuedDelivery);
-            }
-            decisions.recordTypedDenial(error);
-            throw error;
           }
           if (
             autogeneratedDeliveryFingerprint &&
@@ -698,10 +672,24 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             (await isDeliveredCurrentSourceReplyAsync(sourceReply));
           // A completed provider write must settle even if its caller was revoked
           // while awaiting the accepted response. Its next request stays fenced.
-          if (!scheduledWrite) {
+          if (
+            !embeddedMessageDelivery.hasAcceptedBroadcastDelivery(result) &&
+            shouldRevalidateCompletedMessageAction({
+              hasScheduledAuthority: Boolean(messageActionAuthorization.scheduled),
+              scheduledRead: Boolean(scheduledRead),
+              dryRun: result.dryRun,
+              acceptedResult: hasAcceptedMessageActionResult(
+                result,
+                messageActionAuthorization.scheduled !== undefined,
+              ),
+            })
+          ) {
             assertActionCurrent();
           }
-          const messageDelivery = projectEmbeddedMessageDeliveryFact(result, currentSourceReply);
+          const messageDelivery = embeddedMessageDelivery.projectEmbeddedMessageDeliveryFact(
+            result,
+            currentSourceReply,
+          );
           groupThread.record(result, sourceReply, currentSourceReply, requestedSourceReplyFinal);
           if (
             messageDelivery?.status === "settled" &&
@@ -739,8 +727,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           }
           const response = toolResult ?? jsonResult(result.payload);
-          const notice = result.kind === "send" ? result.normalization?.notice : undefined;
-          return attachEmbeddedMessageDeliveryFact(
+          const notice =
+            result.kind === "send" && !result.dryRun ? result.normalization?.notice : undefined;
+          return embeddedMessageDelivery.attachEmbeddedMessageDeliveryFact(
             notice
               ? { ...response, content: [...response.content, { type: "text", text: notice }] }
               : response,

@@ -2,6 +2,8 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { nothing } from "lit";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
+import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
+import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { i18n } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
@@ -36,7 +38,6 @@ import {
 } from "../chat-thread.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
-import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { resolveChatDefaultAvatarPlacement } from "./chat-author-avatar.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
@@ -83,9 +84,8 @@ export function projectChatTranscript(
   transcript: ChatTranscriptSession,
 ): ChatTranscriptProjection {
   const state = getTranscriptState(props.paneId);
-  const asyncQuestions = createAsyncQuestionPresentation(state, props);
+  const asyncQuestions = props.asyncQuestions;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  const displayStream = props.stream ?? null;
   const sessionHost = props.sessionHost ?? null;
   const activeSession = props.selectedSession;
   // Use unfiltered history and retained participants so searching or paging away
@@ -153,7 +153,7 @@ export function projectChatTranscript(
     toolMessages: props.toolMessages,
     guardianNotices: props.guardianNotices,
     streamSegments: props.streamSegments,
-    stream: displayStream,
+    stream: props.stream ?? null,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     initialTurnId: props.initialTurnId,
@@ -289,6 +289,7 @@ export function projectChatTranscript(
   const loadedReplySources = new Map<string, LoadedReplySource>();
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
+    entryRefFor: transcript.entryAnimations.refFor,
     presented: props.presented,
     onReply: props.onSetReply
       ? (target) => state.transcriptRenderContext.onSetReply?.(target)
@@ -315,10 +316,12 @@ export function projectChatTranscript(
     fetchLinkFavicon: props.fetchLinkFavicon,
     pluginToolIcons: props.pluginToolIcons,
     githubRepo: props.githubRepo,
+    githubRepositories: props.githubRepositories,
     showAssistantAvatar: avatarPlacement === "gutter",
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
+    branding: props.branding,
     assistant: assistantIdentity,
     startupLabel: props.startupLabel,
     waitingApproval: props.waitingApproval,
@@ -427,7 +430,7 @@ export function projectChatTranscript(
   };
   const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {
-      return renderChatDivider(item, props.onOpenSessionCheckpoints);
+      return renderChatDivider(item);
     }
     if (item.kind === "notice") {
       return renderChatNotice(item);
@@ -481,6 +484,7 @@ export function projectChatTranscript(
       sessionKey: props.sessionKey,
       runWorking: Boolean(props.runWorking),
       searchActive: searchFiltering,
+      session: activeSession,
     }),
     { searchActive: searchFiltering },
   );
@@ -553,6 +557,7 @@ export function projectChatTranscript(
     expandedToolCards,
     messageRowKeysById,
   );
+  transcript.entryAnimations.project(chatItems);
   transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null && tailStatusOwner?.runId === turnRecap.runId) {
@@ -600,8 +605,16 @@ export function projectChatTranscript(
   if (typingIndicator) {
     transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
   }
+  // Deferred palettes apply leaf branding after the preference snapshot.
+  const appliedBranding = currentThemeBranding();
   trackTranscriptRenderDependencies(state, [
     locale,
+    props.branding?.mascot,
+    props.branding?.avatarHat,
+    props.branding?.artwork,
+    props.branding?.workingPhrases,
+    appliedBranding.mascot,
+    appliedBranding.avatarHat,
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     expandedUserMessages,
@@ -630,6 +643,8 @@ export function projectChatTranscript(
     props.startupLabel,
     Boolean(props.waitingApproval),
     props.questionPrompts,
+    state.asyncQuestionRevision,
+    props.asyncQuestions?.historyKey,
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,
@@ -655,9 +670,10 @@ export function projectChatTranscript(
     props.pluginToolIcons,
     props.githubRepo?.owner,
     props.githubRepo?.repo,
+    markdownGitHubAliasSignature(props.githubRepositories, props.githubRepo),
     threadContextWindow,
     Boolean(props.onSetReply),
-    Boolean(props.onAsyncQuestionSubmit),
+    Boolean(props.asyncQuestions?.submit),
     Boolean(props.onRetryQueuedMessage),
     Boolean(props.onDiscardQueuedMessage),
     props.queuedMessageAction?.id,
@@ -668,7 +684,6 @@ export function projectChatTranscript(
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
   state.transcriptRenderContext.onSetReply = props.onSetReply;
-  state.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
     const loaded = loadedReplySources.get(replyToId);
     if (loaded && resolveMessageReplyText(loaded.message)) {

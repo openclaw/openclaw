@@ -205,22 +205,26 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       },
       attachedResults: {
         channel: "nextcloud-talk",
-        sendText: async ({ cfg, to, text, accountId, replyToId }) =>
+        sendText: async (ctx) =>
           await nextcloudTalkMessageAdapter.send.text({
-            cfg,
-            to,
-            text,
-            accountId,
-            replyToId,
+            cfg: ctx.cfg,
+            to: ctx.to,
+            text: ctx.text,
+            accountId: ctx.accountId,
+            replyToId: ctx.replyToId,
+            onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+            assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
           }),
-        sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
+        sendMedia: async (ctx) =>
           await nextcloudTalkMessageAdapter.send.media({
-            cfg,
-            to,
-            text,
-            mediaUrl: mediaUrl ?? "",
-            accountId,
-            replyToId,
+            cfg: ctx.cfg,
+            to: ctx.to,
+            text: ctx.text,
+            mediaUrl: ctx.mediaUrl ?? "",
+            accountId: ctx.accountId,
+            replyToId: ctx.replyToId,
+            onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+            assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
           }),
       },
     },

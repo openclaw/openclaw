@@ -17,21 +17,37 @@ export type ListedAgentEntry = {
   source: { kind: "entries"; key: string } | { kind: "list"; index: number };
 };
 
-function collectAgentEntries(cfg: AgentRosterConfig, withSource: true): ListedAgentEntry[];
-function collectAgentEntries(cfg: AgentRosterConfig, withSource: false): AgentEntry[];
+function collectAgentEntries(
+  cfg: AgentRosterConfig,
+  withSource: true,
+  limit?: number,
+): ListedAgentEntry[];
+function collectAgentEntries(
+  cfg: AgentRosterConfig,
+  withSource: false,
+  limit?: number,
+): AgentEntry[];
 function collectAgentEntries(
   cfg: AgentRosterConfig,
   withSource: boolean,
+  limit?: number,
 ): Array<AgentEntry | ListedAgentEntry> {
   const roster = readAgentRosterProperty(cfg);
   if (roster?.kind === "entries" && isRecord(roster.value)) {
     const result: Array<AgentEntry | ListedAgentEntry> = [];
-    for (const [id, entry] of Object.entries(roster.value)) {
+    for (const id in roster.value) {
+      if (!Object.hasOwn(roster.value, id)) {
+        continue;
+      }
+      const entry = roster.value[id];
       if (isRecord(entry)) {
         const projected = { ...entry, id };
         result.push(
           withSource ? { entry: projected, source: { kind: "entries", key: id } } : projected,
         );
+        if (result.length === limit) {
+          break;
+        }
       }
     }
     return result;
@@ -39,11 +55,14 @@ function collectAgentEntries(
   if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
     return [];
   }
-  const listed = roster.value.flatMap((entry, index) =>
-    entry !== null && typeof entry === "object"
-      ? [{ entry: entry as AgentEntry, source: { kind: "list" as const, index } }] // SAFETY: Raw roster compatibility keeps objects verbatim; callers normalize ids.
-      : [],
-  );
+  const listed: ListedAgentEntry[] = [];
+  roster.value.some((entry, index) => {
+    if (entry !== null && typeof entry === "object") {
+      // SAFETY: Raw roster compatibility keeps objects verbatim; callers normalize ids.
+      listed.push({ entry: entry as AgentEntry, source: { kind: "list", index } });
+    }
+    return listed.length === limit;
+  });
   return withSource ? listed : listed.map(({ entry }) => entry);
 }
 
@@ -103,7 +122,7 @@ export function listAgentIds(cfg: AgentRosterConfig): string[] {
 }
 
 export function tryResolveSoleAgentId(cfg: AgentRosterConfig): string | undefined {
-  const agents = listAgentEntries(cfg);
+  const agents = collectAgentEntries(cfg, false, 2);
   if (agents.length === 0) {
     if (!hasAgentRosterProperty(cfg)) {
       return LEGACY_IMPLICIT_AGENT_ID;

@@ -1,4 +1,3 @@
-// Telegram plugin module implements sequential key behavior.
 import type { Message, UserFromGetMe } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
@@ -22,17 +21,25 @@ import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
 import type { TelegramPollRegistryEntry } from "./poll-registry.js";
 import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
 
-const TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS = new Set([
+const TELEGRAM_READ_ONLY_COMMAND_KEYS = new Set([
+  "agents",
   "commands",
   "context",
   "help",
+  "models",
   "status",
+  "subagents",
   "tasks",
   "tools",
   "whoami",
 ]);
 
-const TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS = new Set(["queue", "steer"]);
+// Control-lane admission is an inspection/interrupt privilege, not a restatement of
+// `activeRunSafe`. `activeRunSafe` only says a command may execute while a turn is
+// active; it also covers session-mutating commands (`/new`, `/reset`, `/think`) whose
+// writes must stay ordered behind their own topic's pending input. `/approve` belongs
+// here because the run that requested the approval is holding its own lane.
+const TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS = new Set(["approve", "queue", "steer"]);
 
 type TelegramSequentialKeyContext = {
   chat?: { id?: number };
@@ -86,56 +93,51 @@ function getTelegramMessageReactionSequentialKey(
     : undefined;
 }
 
+/** Registry key for a text command, or undefined when the text is not one. */
+function resolveTelegramCommandKeyForControlLane(params: {
+  rawText?: string;
+  botUsername?: string;
+}): string | undefined {
+  const trimmed = params.rawText?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const alias = maybeResolveTextAlias(
+    normalizeCommandBody(
+      trimmed,
+      params.botUsername ? { botUsername: params.botUsername } : undefined,
+    ),
+  );
+  if (!alias) {
+    return undefined;
+  }
+  return listChatCommands().find((entry) =>
+    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
+  )?.key;
+}
+
 export function isTelegramReadOnlyControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
 }): boolean {
-  // Only read-only status commands should bypass the per-topic lane.
-  // Diagnostics and export commands materialize state and should not interleave with an active turn.
-  const normalizedBody = normalizeCommandBody(
-    params.rawText?.trim() ?? "",
-    params.botUsername ? { botUsername: params.botUsername } : undefined,
-  );
-  const alias = maybeResolveTextAlias(normalizedBody);
-  if (!alias) {
-    return false;
-  }
-  const command = listChatCommands().find((entry) =>
-    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
-  );
-  return command?.category === "status" && TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS.has(command.key);
-}
-
-function resolveTelegramCommandAliasForControlLane(
-  rawText?: string,
-  botUsername?: string,
-): string | undefined {
-  const trimmed = rawText?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return (
-    maybeResolveTextAlias(
-      normalizeCommandBody(trimmed, botUsername ? { botUsername } : undefined),
-    ) ?? undefined
-  );
+  // Read-only commands must not supersede pending work when they enter the control lane.
+  // Diagnostics and export commands materialize state and remain on the ordinary lane.
+  const key = resolveTelegramCommandKeyForControlLane(params);
+  return key !== undefined && TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key);
 }
 
 function isTelegramActiveRunControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
 }): boolean {
-  const alias = resolveTelegramCommandAliasForControlLane(params.rawText, params.botUsername);
-  if (!alias) {
-    return false;
-  }
-  const command = listChatCommands().find((entry) =>
-    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
-  );
-  return command ? TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(command.key) : false;
+  const key = resolveTelegramCommandKeyForControlLane(params);
+  return key !== undefined && TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(key);
 }
 
-function isTelegramControlLaneText(params: { rawText?: string; botUsername?: string }): boolean {
+export function isTelegramControlLaneText(params: {
+  rawText?: string;
+  botUsername?: string;
+}): boolean {
   // Live polling and webhook admission already have bot identity. In defensive pre-identity
   // paths, accepting every @target admits foreign-bot commands; only canonical aborts fence.
   const abortCommandOptions = params.botUsername

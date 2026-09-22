@@ -4,17 +4,18 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   prepareTaskCancellationControl,
   withTaskCancellationContext,
   withTaskCancellationControl,
 } from "../../tasks/task-cancellation-context.js";
 import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
+import { reloadTaskRegistryFromStoreAsync } from "../../tasks/task-registry-state.js";
 import {
   createTaskRecord,
   findTaskByRunId,
   markTaskTerminalById,
-  reloadTaskRegistryFromStore,
 } from "../../tasks/task-registry.js";
 import { getTaskRunOwner } from "../../tasks/task-run-owner.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -64,7 +65,7 @@ export function registerAgentTaskCancellationTests() {
           { context, reqId: runId },
         );
         const task = requireValue(findTaskByRunId(runId), "tracked task missing");
-        reloadTaskRegistryFromStore();
+        await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         const entry = requireValue(context.chatAbortControllers.get(runId), "run owner missing");
         const reason = "Stop this selected work.";
         const cancellation =
@@ -201,6 +202,7 @@ export function registerAgentTaskCancellationTests() {
             await accepted;
           }
         },
+        { selectedTask: task },
       );
     });
   });

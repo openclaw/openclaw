@@ -1,6 +1,8 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import * as historyWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import * as sqlite from "../../infra/kysely-sync.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -17,47 +19,67 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 describe("resident session rows", () => {
-  it.each(["list", "describe"] as const)(
-    "keeps sessions.%s current when a commit arrives as readiness resolves",
-    async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const context = requestContext(await seedSessions());
-        const client = identifiedClient("owner@example.com");
-        await listSessions({ context, client, request: { archived: "all" } });
-        const projection = getSessionRowProjection(context)!;
-        const key = "agent:main:active";
-        const entry = projection.describe({ agentId: "main", key })!.entry;
-        const respond = vi.fn();
-        const handler =
-          method === "list"
-            ? sessionReadHandlers["sessions.list"]!
-            : sessionByKeyReadHandlers["sessions.describe"]!;
-        const pending = handler({
-          req: { type: "req", id: "commit-during-readiness", method: `sessions.${method}` },
-          params: method === "list" ? { archived: "all" } : { key },
-          context,
-          client,
-          isWebchatConnect: () => false,
-          respond,
-        });
+  it.each([
+    { method: "list", transition: "a commit arrives as readiness resolves" },
+    { method: "describe", transition: "its row is dirtied before the request" },
+  ] as const)("keeps sessions.$method current when $transition", async ({ method }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const context = requestContext(await seedSessions());
+      const client = identifiedClient("owner@example.com");
+      await listSessions({ context, client, request: { archived: "all" } });
+      const projection = getSessionRowProjection(context)!;
+      const key = "agent:main:active";
+      const entry = projection.describe({ agentId: "main", key })!.entry;
+      const respond = vi.fn();
+      const handler =
+        method === "list"
+          ? sessionReadHandlers["sessions.list"]!
+          : sessionByKeyReadHandlers["sessions.describe"]!;
+      const commit = () =>
         replaceSessionEntrySync(
           { agentId: "main", sessionKey: key },
           { ...entry, label: "Current" },
         );
-        await expect(Promise.resolve(pending)).resolves.toBeUndefined();
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
-        expect(respond.mock.calls[0]?.[1]).toMatchObject(
-          method === "list"
-            ? {
-                sessions: expect.arrayContaining([
-                  expect.objectContaining({ key, label: "Current" }),
-                ]),
-              }
-            : { session: expect.objectContaining({ key, label: "Current" }) },
+      if (method === "describe") {
+        commit();
+        const prepare = projection.withPreparedExactRows.bind(projection);
+        vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
+          (queries, consume, options) =>
+            prepare(
+              queries,
+              (read) => {
+                const result = consume(read);
+                expect(respond).toHaveBeenCalledTimes(1);
+                return result;
+              },
+              options,
+            ),
         );
+      }
+      const pending = handler({
+        req: { type: "req", id: "commit-during-readiness", method: `sessions.${method}` },
+        params: method === "list" ? { archived: "all" } : { key },
+        context,
+        client,
+        isWebchatConnect: () => false,
+        respond,
       });
-    },
-  );
+      if (method === "list") {
+        commit();
+      }
+      await expect(Promise.resolve(pending)).resolves.toBeUndefined();
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      expect(respond.mock.calls[0]?.[1]).toMatchObject(
+        method === "list"
+          ? {
+              sessions: expect.arrayContaining([
+                expect.objectContaining({ key, label: "Current" }),
+              ]),
+            }
+          : { session: expect.objectContaining({ key, label: "Current" }) },
+      );
+    });
+  });
 
   it("replies in the final authorized presentation before yielding its result promise", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -179,53 +201,56 @@ describe("resident session rows", () => {
         { ...current.entry, label: "Committed label" },
       );
       expect(projection.dirtyRowCount).toBeGreaterThan(0);
-      const queries = vi.spyOn(sqlite, "executeSqliteQuerySync");
-      const firstRows = vi.spyOn(sqlite, "executeSqliteQueryTakeFirstSync");
-      const iterators = vi.spyOn(sqlite, "iterateSqliteQuerySync");
-      const native = (["all", "get", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
+      const workerKeys = vi.fn<(keys: readonly string[]) => void>();
+      const readDatabases = historyWorker.withSessionHistoryWorkerDatabases;
+      vi.spyOn(historyWorker, "withSessionHistoryWorkerDatabases").mockImplementation(
+        (databases, consume) =>
+          readDatabases(databases, (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                readRowFacts: (input: Parameters<typeof owner.readRowFacts>[0]) => {
+                  workerKeys(input.sessionKeys);
+                  return owner.readRowFacts(input);
+                },
+              })),
+            ),
+          ),
       );
-      const listed = await listSessions({ context, client, request });
-      expect(listed.sessions.find((row) => row.key === key)?.label).toBe("Committed label");
-      expect(projection.materializedCount - before).toBe(1);
-      expect(projection.describe({ agentId: "work", key: "agent:work:active" })?.materialized).toBe(
-        untouched.materialized,
-      );
-      const compiled = [
-        ...queries.mock.calls,
-        ...firstRows.mock.calls,
-        ...iterators.mock.calls,
-      ].map(([, query]) => query.compile());
-      expect(compiled.length).toBeGreaterThan(0);
-      for (const query of compiled) {
-        expect(query.sql).not.toMatch(/from ["`]?agent_databases/i);
-        if (/from ["`]?session_(nodes|members|windows|active_path)/i.test(query.sql)) {
-          expect(query.sql).toMatch(/\bwhere\b/i);
-          expect(
-            query.parameters.some((value) => value === key || value === current.entry.sessionId),
-          ).toBe(true);
+      const hostSql = observeHostDataSql();
+      try {
+        const listed = await listSessions({ context, client, request });
+        expect(listed.sessions.find((row) => row.key === key)?.label).toBe("Committed label");
+        expect(projection.materializedCount - before).toBe(1);
+        expect(
+          projection.describe({ agentId: "work", key: "agent:work:active" })?.materialized,
+        ).toBe(untouched.materialized);
+        expect(workerKeys).toHaveBeenCalled();
+        for (const [keys] of workerKeys.mock.calls) {
+          expect(keys).toEqual([key]);
         }
-        expect(query.parameters).not.toContain("agent:work:active");
-      }
-      for (const spy of [queries, firstRows, iterators, ...native]) {
-        spy.mockClear();
-      }
-      await listSessions({ context, client, request });
-      const respond = vi.fn();
-      await sessionByKeyReadHandlers["sessions.describe"]!({
-        req: { type: "req", id: "dirty-described", method: "sessions.describe" },
-        params: { key },
-        context,
-        client,
-        isWebchatConnect: () => false,
-        respond,
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ session: expect.objectContaining({ label: "Committed label" }) }),
-      );
-      for (const spy of [queries, firstRows, iterators, ...native]) {
-        expect(spy).not.toHaveBeenCalled();
+        expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+        workerKeys.mockClear();
+        await listSessions({ context, client, request });
+        const respond = vi.fn();
+        await sessionByKeyReadHandlers["sessions.describe"]!({
+          req: { type: "req", id: "dirty-described", method: "sessions.describe" },
+          params: { key },
+          context,
+          client,
+          isWebchatConnect: () => false,
+          respond,
+        });
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            session: expect.objectContaining({ label: "Committed label" }),
+          }),
+        );
+        expect(workerKeys).not.toHaveBeenCalled();
+        expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+      } finally {
+        hostSql.restore();
       }
     });
   });

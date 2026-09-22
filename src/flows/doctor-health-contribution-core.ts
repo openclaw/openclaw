@@ -33,9 +33,10 @@ function reportDoctorRepairResult(
 function withDoctorHealthCheckFacts<T extends object>(
   ctx: DoctorHealthFlowContext,
   input: T,
-): T & Pick<DoctorHealthCheckContext, "runWithPluginMetadataSnapshot"> {
+): T & Pick<DoctorHealthCheckContext, "runWithPluginMetadataSnapshot" | "agentDatabaseRefusals"> {
   return {
     ...input,
+    agentDatabaseRefusals: ctx.agentDatabaseRefusals,
     ...(ctx.runWithPluginMetadataSnapshot
       ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
       : {}),

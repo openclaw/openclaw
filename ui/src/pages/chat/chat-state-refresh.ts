@@ -21,13 +21,14 @@ import {
   isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { isPersistedSessionRow } from "../../lib/sessions/session-row-reconcile.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-queue-reconnect.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import {
-  flushChatQueueAfterIdleSessionReconciliation,
   refreshCurrentChatSessionList,
   retireChatModelSelectionOwnership,
 } from "./chat-session.ts";
@@ -57,6 +58,7 @@ type ChatMetadataBinding = {
   scope: { agentId?: string; sessionKey: string };
   version: number;
   sessionFactsInvalidated: boolean;
+  sessionRefreshPending?: boolean;
   sessionFactsRetryPending?: boolean;
   sessionFactsRequest?: { version: number; promise: Promise<void> };
   refreshPending?: { refresh: ChatMetadataRefresh; promise: Promise<void> };
@@ -177,6 +179,8 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
           return;
         }
         if (update.type === "invalidated" || update.type === "loading") {
+          binding.sessionRefreshPending =
+            update.type === "invalidated" && update.scope === "session";
           binding.version += 1;
           if (binding.sessionFactsRequest) {
             binding.sessionFactsInvalidated = true;
@@ -184,9 +188,11 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
           }
         }
         if (update.type === "invalidated") {
-          binding.catalogRequest?.controller.abort();
-          binding.catalogRequest = undefined;
-          host.chatModelsLoading = false;
+          if (update.scope === "full") {
+            binding.catalogRequest?.controller.abort();
+            binding.catalogRequest = undefined;
+            host.chatModelsLoading = false;
+          }
           binding.sessionFactsInvalidated ||= update.refreshSessionFacts;
           void refreshChatMetadata(host, { automatic: true });
           return;
@@ -198,6 +204,10 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
               agentId: scope.agentId,
               result: update.result,
             });
+            if (update.catalogChanged) {
+              binding.sessionFactsInvalidated = true;
+              void refreshChatMetadata(host, { automatic: true });
+            }
           }
           if (binding.sessionFactsRetryPending) {
             binding.sessionFactsRetryPending = false;
@@ -493,6 +503,7 @@ export function applyChatModelCatalogSnapshot(host: ChatPageHost): boolean {
   if (
     binding &&
     fresh &&
+    !binding.sessionRefreshPending &&
     binding.sessionFactsInvalidated &&
     host.chatMetadataIsPresented?.() !== false
   ) {
@@ -569,10 +580,11 @@ async function refreshChat(
       return;
     }
     // The shared roster may belong to another agent. Keep this pane's accepted
-    // global history separate rather than relabeling or borrowing that roster.
+    // history separate rather than relabeling or borrowing that roster.
     const scopedHistory =
-      isUiSelectedGlobalSessionKey(host, refreshedSessionKey) &&
-      host.sessions.state.agentId !== refreshedAgentId;
+      host.sessions.state.agentId !== refreshedAgentId &&
+      (isUiSelectedGlobalSessionKey(host, refreshedSessionKey) ||
+        isPersistedSessionRow(history.sessionInfo));
     host.sessionsResult = scopedHistory
       ? reconcileSessionHistory(
           host.sessionsResultAgentId === refreshedAgentId ? host.sessionsResult : null,
@@ -619,8 +631,16 @@ async function refreshChat(
     }
     const runReconciled = reconcileChatRunFromSessionRow(host, sessionInfo, {
       publishRunStatus: true,
+      historyRun:
+        history.observation.run &&
+        history.sessionInfo.hasActiveRun === false &&
+        !isSessionRunActive(history.sessionInfo) &&
+        !history.inFlightRun &&
+        history.sessionInfo.sessionId === history.observation.run.sessionId
+          ? history.observation.run
+          : null,
     });
-    if (!runReconciled) {
+    if (!runReconciled && !host.chatRunId && host.chatStream == null) {
       reconcileChatRunFromCurrentSessionRow(host, { publishRunStatus: true });
     }
   });

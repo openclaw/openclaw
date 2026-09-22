@@ -42,7 +42,7 @@ import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../utils/delivery-context.shared.js";
+} from "../utils/delivery-context.read.js";
 import { formatTokenCount } from "../utils/token-format.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import {
@@ -171,15 +171,6 @@ function resolveSessionStoreDisplayPath(target: { agentId: string; storePath: st
   return resolveSqliteTargetFromSessionStorePath(target.storePath, {
     agentId: target.agentId,
   }).path;
-}
-
-function toJsonSessionRow<T extends { displayModelRef: unknown; runtimeLabel: string }>(
-  row: T,
-): Omit<T, "displayModelRef" | "runtimeLabel"> {
-  const { displayModelRef, runtimeLabel, ...jsonRow } = row;
-  void displayModelRef;
-  void runtimeLabel;
-  return jsonRow;
 }
 
 function stripChannelRecipientPrefix(
@@ -375,7 +366,7 @@ export async function sessionsCommand(
       resolvedContextTokens: modelContext.contextTokens,
       authoredContextTokens: modelContext.authoredContextTokens,
     });
-    return Object.assign({}, row, {
+    return Object.assign(row, {
       agentId,
       acpRuntime,
       agentRuntime,
@@ -388,13 +379,15 @@ export async function sessionsCommand(
         key: row.key,
         entry,
       }),
-      runtimeLabel: resolveSessionRuntimeLabel({
-        cfg,
-        entry,
-        agentRuntime,
-        modelProvider: modelRef.provider,
-        classifyCliProvider,
-      }),
+      runtimeLabel: opts.json
+        ? ""
+        : resolveSessionRuntimeLabel({
+            cfg,
+            entry,
+            agentRuntime,
+            modelProvider: modelRef.provider,
+            classifyCliProvider,
+          }),
     });
   });
   const hasMore = rows.length < totalCount;
@@ -416,17 +409,15 @@ export async function sessionsCommand(
       limitApplied: limit ?? null,
       hasMore,
       activeMinutes: activeMinutes ?? null,
-      sessions: rows.map((row) => {
-        const r = toJsonSessionRow(row);
-        const modelRef = row.displayModelRef;
-        return {
-          ...r,
-          totalTokens: resolveSessionTotalTokens(r) ?? null,
-          totalTokensFresh: resolveFreshSessionTotalTokens(r) !== undefined,
-          contextTokens: r.contextTokens ?? configContextTokens ?? null,
+      sessions: rows.map(({ displayModelRef: modelRef, runtimeLabel, ...row }) => {
+        void runtimeLabel;
+        return Object.assign(row, {
+          totalTokens: resolveSessionTotalTokens(row) ?? null,
+          totalTokensFresh: resolveFreshSessionTotalTokens(row) !== undefined,
+          contextTokens: row.contextTokens ?? configContextTokens ?? null,
           modelProvider: modelRef.provider,
           model: modelRef.model,
-        };
+        });
       }),
     });
     return;

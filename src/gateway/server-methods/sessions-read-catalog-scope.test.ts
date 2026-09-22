@@ -130,6 +130,7 @@ function preparedOwner(params: {
       throw new Error("session listing must not start full catalog discovery");
     }),
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => {
       throw new Error("session listing must not create execution stores");

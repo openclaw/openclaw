@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
@@ -14,7 +15,6 @@ import {
 import {
   claimAgentRunContext,
   consumeCronNextCheckProposal,
-  getAgentRunContext,
   releaseAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -33,27 +33,27 @@ import {
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
-import type { CronCompletedPromptRun } from "./run-executor.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { prepareCronRunContext } from "./run-prepare.js";
 import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
 import { applyCronRunUsage, recordCronRunUsage } from "./run-usage.js";
 import { logWarn } from "./run.runtime.js";
-import type { RunCronAgentTurnResult } from "./run.types.js";
+import type { CronCompletedPromptRun, RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
 
 // Release the full session snapshot after persistence and delivery to avoid retaining skill prompts.
 async function disposeCronRunContext(params: {
+  runId: string;
   sessionId: string;
   cronSession: MutableCronSession;
-  ownsRunContext: boolean;
+  ownsSessionRuntime: boolean;
   runContextOwnerToken?: string;
 }): Promise<void> {
-  releaseAgentRunContext(params.sessionId, params.runContextOwnerToken);
-  if (params.ownsRunContext) {
+  releaseAgentRunContext(params.runId, params.runContextOwnerToken);
+  if (params.ownsSessionRuntime) {
     await retireSessionMcpRuntime({
       sessionId: params.sessionId,
       reason: "isolated-cron-dispose",
@@ -113,9 +113,10 @@ export async function runCronIsolatedAgentTurn(
       preparedRuntimeLease.pluginGeneration,
       () =>
         withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, async () => {
-          // Capture the stable run id before execution can rotate its persisted session.
+          // One invocation owns retries and fallbacks; persistent transcripts outlive that identity.
+          const runId = randomUUID();
           const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
-          const ownsRunContext = params.job.sessionTarget === "isolated";
+          const ownsSessionRuntime = params.job.sessionTarget === "isolated";
           let runContextOwnerToken: string | undefined;
           let runLifecycleGeneration = admittedLifecycleGeneration;
           let executionStarted = false;
@@ -198,7 +199,7 @@ export async function runCronIsolatedAgentTurn(
           // The execution owner spans fallback and interim-ack retries. Individual
           // attempts must not retire the shared run before that execution settles.
           const lifecycle = createAgentLifecycleTerminalBackstop({
-            runId: initialSessionId,
+            runId,
             sessionKey: prepared.context.runSessionKey,
             startedAt: turnStartedAtMs,
             getLifecycleGeneration: () => runLifecycleGeneration,
@@ -207,14 +208,10 @@ export async function runCronIsolatedAgentTurn(
           });
           try {
             assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
-            const existingRunContext = getAgentRunContext(initialSessionId);
             runContextOwnerToken = claimAgentRunContext(
-              initialSessionId,
+              runId,
               {
-                sessionKey:
-                  ownsRunContext || !existingRunContext?.sessionKey
-                    ? prepared.context.runSessionKey
-                    : existingRunContext.sessionKey,
+                sessionKey: prepared.context.runSessionKey,
                 sessionId: initialSessionId,
                 lifecycleGeneration: runLifecycleGeneration,
                 cronRunsByJobId: new Map([
@@ -223,43 +220,17 @@ export async function runCronIsolatedAgentTurn(
               },
               {
                 trackOwner: true,
-                ownsContext: ownsRunContext,
+                ownsContext: true,
               },
             );
             const { executeCronRun } = await cronExecutorRuntimeLoader.load();
             const executionParams: Parameters<typeof executeCronRun>[0] = {
+              ...prepared.context,
+              runId,
               cfg: params.cfg,
-              cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,
               job: params.job,
-              agentId: prepared.context.agentId,
-              agentDir: prepared.context.agentDir,
-              agentSessionKey: prepared.context.agentSessionKey,
-              runSessionKey: prepared.context.runSessionKey,
-              usesDetachedRunSession: prepared.context.usesDetachedRunSession,
-              workspaceDir: prepared.context.workspaceDir,
-              executionRoot: prepared.context.executionRoot,
               lane: params.lane,
-              resolvedDelivery: {
-                channel: prepared.context.resolvedDelivery.channel,
-                to: prepared.context.resolvedDelivery.to,
-                accountId: prepared.context.resolvedDelivery.accountId,
-                threadId: prepared.context.resolvedDelivery.threadId,
-              },
-              resolvedDeliveryOk: prepared.context.resolvedDelivery.ok,
-              deliveryRequested: prepared.context.deliveryRequested,
-              sourceDelivery: prepared.context.sourceDelivery,
-              skillsSnapshot: prepared.context.skillsSnapshot,
-              agentPayload: prepared.context.agentPayload,
-              useSubagentFallbacks: prepared.context.useSubagentFallbacks,
-              inheritDefaultFallbacksForAgentStringModel:
-                prepared.context.inheritDefaultFallbacksForAgentStringModel,
-              modelFallbacksOverride: prepared.context.modelFallbacksOverride,
               agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
-              liveSelection: prepared.context.liveSelection,
-              cronSession: prepared.context.cronSession,
-              commandBody: prepared.context.commandBody,
-              inputProvenance: prepared.context.inputProvenance,
-              persistSessionEntry: prepared.context.persistSessionEntry,
               persistRunContinuationSession: prepared.context.runContinuationSession?.sync,
               setRunContinuationCliExecutionProvider:
                 prepared.context.runContinuationSession?.setCliExecutionProvider,
@@ -276,10 +247,8 @@ export async function runCronIsolatedAgentTurn(
               immutableThinkLevel: prepared.context.thinkingSelection.immutableThinkLevel,
               thinkingCatalog: prepared.context.thinkingSelection.catalog,
               loadThinkingCatalog: prepared.context.thinkingSelection.loadThinkingCatalog,
-              timeoutMs: prepared.context.timeoutMs,
-              runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
-              suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
               executionIdentity: params.executionIdentity,
+              admissionSource: params.admissionSource,
             };
             const execution = await prepared.context.sessionWorkAdmission.run(() =>
               withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
@@ -306,13 +275,13 @@ export async function runCronIsolatedAgentTurn(
               outcome = "error";
               outcomeError = finalized.error;
             }
-            const delayMs = consumeCronNextCheckProposal(initialSessionId, params.job.id);
+            const delayMs = consumeCronNextCheckProposal(runId, params.job.id);
             return finalized.status !== "ok" || delayMs === undefined
               ? finalized
               : { ...finalized, nextCheck: { delayMs } };
           } catch (err) {
             lifecycle.emit("error", err);
-            consumeCronNextCheckProposal(initialSessionId, params.job.id);
+            consumeCronNextCheckProposal(runId, params.job.id);
             const isCronLaneTimeout =
               isAborted() || isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
             const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
@@ -400,9 +369,10 @@ export async function runCronIsolatedAgentTurn(
                 try {
                   try {
                     await disposeCronRunContext({
+                      runId,
                       sessionId: initialSessionId,
                       cronSession: prepared.context.cronSession,
-                      ownsRunContext,
+                      ownsSessionRuntime,
                       runContextOwnerToken,
                     });
                   } finally {

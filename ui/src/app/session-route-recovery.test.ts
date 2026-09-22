@@ -2,7 +2,7 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
-import { createApplicationRouter, startApplicationRouter, type RouteId } from "../app-routes.ts";
+import { createApplicationRouter, startApplicationRouter } from "../app-routes.ts";
 import {
   createSessionRouteContext,
   createSessionRouteRow,
@@ -32,7 +32,7 @@ async function setup(pathname = "/chat/main/dashboard/12345678-90ab-cdef-1234-56
     basePath: "",
     gateway: fixture.gateway,
     agents: { state: { agentsList: { mainKey: "main" } } },
-  } as ApplicationContext<RouteId>;
+  } as ApplicationContext;
   let location: RouteLocation = { pathname: "/activity", search: "", hash: "" };
   const writeHistory = vi.fn((next: RouteLocation) => {
     location = next;

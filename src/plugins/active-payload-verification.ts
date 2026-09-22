@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveSourceCheckoutBundledPluginIds } from "./bundled-sources.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
+import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
@@ -36,6 +38,12 @@ export function filterRecordsToActive(params: {
 }): Record<string, PluginInstallRecord> {
   const env = params.env ?? process.env;
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
+  const ownership = params.cfg.plugins?.load?.paths?.length
+    ? createInstalledPluginOwnershipResolver(
+        loadInstalledPluginIndex({ config: params.cfg, installRecords: params.records, env }),
+        env,
+      )
+    : undefined;
   const sourceBundledIds = resolveSourceCheckoutBundledPluginIds({
     config: params.cfg,
     installRecords: params.records,
@@ -46,8 +54,12 @@ export function filterRecordsToActive(params: {
     if (!record || typeof record !== "object") {
       continue;
     }
-    if (sourceBundledIds.has(pluginId)) {
-      // A dormant registry generation must not quarantine the selected source-built plugin.
+    const update = ownership?.resolveUpdate(pluginId);
+    if (
+      sourceBundledIds.has(pluginId) ||
+      (update?.ok && update.value.kind === "operator-managed")
+    ) {
+      // A dormant registry generation must not quarantine the selected plugin source.
       continue;
     }
     const enableState = resolveEffectiveEnableState({

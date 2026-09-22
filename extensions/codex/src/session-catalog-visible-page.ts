@@ -1,4 +1,5 @@
 import { currentCodexCatalogListDiagnostics } from "./session-catalog-diagnostics.js";
+import { CodexCatalogListRequest } from "./session-catalog-list-request.js";
 import {
   filterCatalogPageByTitle,
   MAX_TITLE_SEARCH_CATALOG_PAGES,
@@ -20,7 +21,7 @@ type VisiblePageParams = {
   signal?: AbortSignal;
 };
 
-/** One outer fill; each step awaits the existing complete, shared control-page producer. */
+/** Fill exclusions from bounded resident pages. */
 export class CodexCatalogVisiblePage {
   private readonly sessions: CodexSessionCatalogPage["sessions"] = [];
   private cursor: string | undefined;
@@ -28,12 +29,37 @@ export class CodexCatalogVisiblePage {
   private readonly seenCursors = new Set<string>();
   private pages = 0;
   private complete = false;
+  private readonly request = new CodexCatalogListRequest();
 
   constructor(private readonly params: VisiblePageParams) {
     this.cursor = params.cursor;
   }
 
   async next(): Promise<{ done: false } | { done: true; page: CodexSessionCatalogPage }> {
+    try {
+      const step = await this.request.run(() => this.nextPage());
+      if (step.done) {
+        this.request.resolved();
+      }
+      return step;
+    } catch (error) {
+      if (this.params.signal?.aborted) {
+        this.request.close();
+      } else {
+        this.request.rejected(error);
+      }
+      throw error;
+    }
+  }
+
+  close(): void {
+    this.complete = true;
+    this.request.close();
+  }
+
+  private async nextPage(): Promise<
+    { done: false } | { done: true; page: CodexSessionCatalogPage }
+  > {
     if (this.complete) {
       throw new Error("Codex catalog page is already complete");
     }
@@ -46,31 +72,24 @@ export class CodexCatalogVisiblePage {
     }
     let rawPage: CodexSessionCatalogPage;
     try {
-      rawPage = await params.control.listPage(
-        {
-          limit: params.limit - this.sessions.length,
-          ...(this.cursor ? { cursor: this.cursor } : {}),
-          ...(params.searchTerm ? { searchTerm: params.searchTerm } : {}),
-          ...(params.cwd ? { cwd: params.cwd } : {}),
-        },
-        undefined,
-        {
-          headWalk: !params.cursor,
-          maxScanPages: MAX_TITLE_SEARCH_CATALOG_PAGES - this.pages,
-        },
-      );
+      rawPage = await params.control.listPage({
+        limit: params.limit - this.sessions.length,
+        ...(this.cursor ? { cursor: this.cursor } : {}),
+        ...(params.searchTerm ? { searchTerm: params.searchTerm } : {}),
+        ...(params.cwd ? { cwd: params.cwd } : {}),
+      });
     } finally {
       if (diagnostics && !diagnostics.closed) {
         diagnostics.fields.controlWaitSumMs =
           (diagnostics.fields.controlWaitSumMs ?? 0) + performance.now() - started;
       }
     }
+    this.request.assertActive();
     params.signal?.throwIfAborted();
     const page = filterCatalogPageByTitle(parseCatalogPage(rawPage), params.searchTerm);
-    if (this.pages === 0) {
+    if (this.pages++ === 0) {
       this.backwardsCursor = page.backwardsCursor;
     }
-    this.pages += rawPage.scannedPages ?? 1;
     let excludedFromPage = false;
     for (const managed of rawPage.managedThreads ?? []) {
       excludedFromPage = true;
@@ -95,7 +114,7 @@ export class CodexCatalogVisiblePage {
       }
       this.seenCursors.add(nextCursor);
       this.cursor = nextCursor;
-      this.complete = this.pages >= MAX_TITLE_SEARCH_CATALOG_PAGES;
+      this.complete = this.pages >= MAX_TITLE_SEARCH_CATALOG_PAGES || !this.request.hasPages;
     }
     return this.complete
       ? {
@@ -113,10 +132,14 @@ export class CodexCatalogVisiblePage {
 /** Node and direct callers finish the same bounded outer algorithm inline. */
 export async function listVisiblePage(params: VisiblePageParams): Promise<CodexSessionCatalogPage> {
   const operation = new CodexCatalogVisiblePage(params);
-  for (;;) {
-    const step = await operation.next();
-    if (step.done) {
-      return step.page;
+  try {
+    for (;;) {
+      const step = await operation.next();
+      if (step.done) {
+        return step.page;
+      }
     }
+  } finally {
+    operation.close();
   }
 }

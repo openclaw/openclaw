@@ -5,7 +5,7 @@ import type { SessionsResolveParams } from "../../packages/gateway-protocol/src/
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
 import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -16,6 +16,7 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { artifactsHandlers } from "./server-methods/artifacts.js";
 import { identifiedClient } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
+import type { RespondFn } from "./server-methods/types.js";
 import {
   resetResolvedSessionKeyForRunCacheForTest,
   resolveSessionKeyForRun,
@@ -65,7 +66,6 @@ async function withOpenClawTestState(
 }
 async function resolve(p: SessionsResolveParams) {
   return resolveSessionKeyFromResolveParams({
-    cfg,
     client: null,
     p,
     projection: await projectionFor(),
@@ -181,7 +181,6 @@ describe("session resolution metadata", () => {
       replaceSessionEntrySync(scope, visible);
       const lookup = async (p: SessionsResolveParams) =>
         resolveSessionKeyFromResolveParams({
-          cfg: roleCfg,
           client,
           p,
           projection: await projectionFor(roleCfg),
@@ -221,6 +220,61 @@ describe("session resolution metadata", () => {
       } finally {
         external.close();
       }
+    });
+  });
+
+  it("does not publish a discovery result after its session becomes a foreign draft", async () => {
+    await withOpenClawTestState({ label: "resolve-publication-visibility" }, async () => {
+      const client = roleClient("view", "resolve-publication-viewer");
+      const owner = roleClient("write", "resolve-publication-owner");
+      const roleCfg = { ...cfg, ...rolePolicyConfig() };
+      const visible = {
+        ...entry,
+        visibility: "shared" as const,
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: owner.authenticatedUserProfile!.profileId,
+        },
+      };
+      replaceSessionEntrySync(scope, visible);
+      const projection = await projectionFor(roleCfg);
+      await projection.ensureMaterialized();
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => roleCfg,
+        ...bindSessionRowProjection({}, () => projection),
+      });
+      const publications: Array<{
+        visibility: string | undefined;
+        response: Parameters<RespondFn>;
+      }> = [];
+      const request = () =>
+        expectDefined(
+          sessionReadHandlers["sessions.resolve"],
+          "resolve handler",
+        )({
+          params: { reference: { key: scope.sessionKey }, agentId: "main", allowMissing: true },
+          context,
+          req: { type: "req", id: "resolve-publication", method: "sessions.resolve" },
+          client,
+          isWebchatConnect: () => false,
+          respond: (...response) => {
+            publications.push({ visibility: loadSessionEntry(scope)?.visibility, response });
+          },
+        });
+      await request();
+      const pending = request();
+      replaceSessionEntrySync(scope, { ...visible, visibility: "draft" });
+      await pending;
+      await request();
+
+      const found = [true, { ...resolved, displayName: entry.label }, undefined];
+      const missing = [true, { ok: false }, undefined];
+      expect(publications).toHaveLength(3);
+      expect(publications[0]).toEqual({ visibility: "shared", response: found });
+      const raced = publications[1]!;
+      expect(raced.response).toEqual(raced.visibility === "shared" ? found : missing);
+      expect(publications[2]).toEqual({ visibility: "draft", response: missing });
     });
   });
 
@@ -267,8 +321,11 @@ describe("session resolution metadata", () => {
         );
         expect(read(siblingKey)?.sessionId).toBe("sibling");
         closeOpenClawAgentDatabasesForTest();
-        expect(read(scope.sessionKey)).toBeUndefined();
-        expect(read(siblingKey)).toBeUndefined();
+        for (const key of [scope.sessionKey, siblingKey]) {
+          expect(() => read(key)).toThrow(
+            expect.objectContaining({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" }),
+          );
+        }
       });
     },
   );
@@ -371,7 +428,7 @@ describe("gateway session lookups", () => {
     });
   });
 
-  it("preserves the worker target payload while narrowing its identity scan", async () => {
+  it("preserves the worker target payload without decoding unrelated saved prompts", async () => {
     await withOpenClawTestState({ label: "lookup-worker-projection" }, async () => {
       setRuntimeConfigSnapshot(cfg);
       seedStore();
@@ -383,12 +440,11 @@ describe("gateway session lookups", () => {
       expect(observed.result?.agentId).toBe("main");
       expect(observed.result?.sessionId).toBe("target-id");
 
-      // The selected entry is re-read through its own still-full loader, so the
-      // narrowed store default must not strip the payload this caller returns.
+      // The exact selected-entry read must retain the full payload this caller returns.
       expect(observed.result?.sessionEntry.skillsSnapshot?.prompt).toBe(TARGET_PROMPT);
 
-      // The separate selected-store loader still reads full entries.
-      expect(observed.decodes).toBe(SIBLING_ROWS);
+      // Metadata discovery and the exact payload read must never decode sibling prompts.
+      expect(observed.decodes).toBe(0);
 
       expect(resolveWorkerSessionTarget(cfg, "absent-session-id")).toBeUndefined();
     });

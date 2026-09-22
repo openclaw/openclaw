@@ -8,7 +8,10 @@ import {
 import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
 import type { ChatRunUiStatus } from "../pages/chat/run-lifecycle.ts";
 import type { ApplicationContext } from "./context.ts";
-import { applyControlUiFaviconStatus } from "./control-ui-environment-presentation.runtime.ts";
+import {
+  applyControlUiFaviconStatus,
+  invalidateControlUiFaviconPalette,
+} from "./control-ui-environment-presentation.runtime.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
   createQuestionPromptState,
@@ -24,6 +27,7 @@ export function connectControlUiFavicon(
   context: Pick<ApplicationContext, "gateway" | "agentSelection" | "sessions" | "overlays">,
   startedAt = Date.now(),
 ): () => void {
+  invalidateControlUiFaviconPalette();
   let scopeStartedAt = startedAt;
   let disposed = false;
   let unread = false;
@@ -162,10 +166,13 @@ export function connectControlUiFavicon(
     context.agentSelection.subscribe(synchronize),
     context.sessions.subscribe(synchronize),
   ];
-  const palette = new MutationObserver(synchronize);
+  const palette = new MutationObserver(() => {
+    invalidateControlUiFaviconPalette();
+    synchronize();
+  });
   palette.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ["style", "data-theme", "data-theme-mode"],
+    attributeFilter: ["style", "data-theme", "data-theme-mode", "data-theme-mascot"],
   });
   document.addEventListener("visibilitychange", synchronize);
   shell.addEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, synchronize);

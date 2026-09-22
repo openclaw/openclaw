@@ -67,6 +67,7 @@ function owner(config: OpenClawConfig, entries: ModelCatalogEntry[]): PreparedMo
     allowGatewaySubagentBinding: false,
     modelCatalog: { entries, routeVariants: entries },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => {
       throw new Error("Passive capability reads must not create stores");
@@ -126,6 +127,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
         allowGatewaySubagentBinding: false,
         modelCatalog: { entries: [missingEntry], routeVariants: [missingEntry] },
         configuredRuntimeModels: [],
+        findConfiguredRuntimeModel: () => undefined,
         inlineProviderModels: [],
         createStores: () => {
           throw new Error("Passive capability reads must not create stores");

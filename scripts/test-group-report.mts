@@ -29,7 +29,6 @@ import {
   renderGroupedTestComparison,
   renderGroupedTestReport,
 } from "./lib/test-group-report.mts";
-import { resolveVitestNodeArgs } from "./lib/vitest-process-env.mts";
 import { formatMs } from "./lib/vitest-report-cli-utils.mts";
 import {
   applyParallelVitestCachePaths,
@@ -569,14 +568,6 @@ async function runVitestJsonReport(params: RunVitestParams) {
       // The JSON reporter can stay silent for the entire config. The profiler
       // owns the wall-clock timeout and process-group cleanup for this child.
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0",
-      NODE_OPTIONS: [
-        (params.env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS)?.trim(),
-        ...resolveVitestNodeArgs({ ...process.env, ...params.env }).filter(
-          (arg) => arg !== "--no-maglev",
-        ),
-      ]
-        .filter(Boolean)
-        .join(" "),
     },
     killGraceMs: params.killGraceMs,
     logPath: params.logPath,

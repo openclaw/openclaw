@@ -73,6 +73,7 @@ async function withSyntheticReader(
     });
     bindSessionRowProjection(context, () => projection);
     try {
+      await projection.ensureMaterialized();
       await run({
         readerId: reader.id,
         ownerEmail,
@@ -133,6 +134,7 @@ describe("synthetic plugin session reads", () => {
     "preserves a non-admin operator's foreign-session grant on %s",
     async (method) => {
       await withSyntheticReader(async ({ dispatch }) => {
+        expectVisible(method, await dispatch(method), "viewer");
         const native = vi.spyOn(openOpenClawStateDatabase().db, "prepare");
         const reads = [
           "executeSqliteQuerySync",
@@ -165,18 +167,24 @@ describe("synthetic plugin session reads", () => {
   it.each(methods)("honors role revocation during projection readiness on %s", async (method) => {
     await withSyntheticReader(async ({ readerId, dispatch, blockCatalog }) => {
       const gate = blockCatalog();
-      const pending = dispatch(method);
-      await gate.entered;
-      setUserProfileRole(readerId, "blocked");
-      gate.release();
-      const result = await pending;
-      if (method === "sessions.list") {
-        expect(result).toMatchObject({ ok: true, payload: { sessions: [] } });
-      } else {
-        expect(result).toMatchObject({
-          ok: false,
-          error: { message: `Session "${sessionKey}" was not found.` },
-        });
+      const pending = method === "sessions.list" ? dispatch(method) : undefined;
+      try {
+        await gate.entered;
+        setUserProfileRole(readerId, "blocked");
+        if (pending) {
+          gate.release();
+        }
+        const result = await (pending ?? dispatch(method));
+        if (method === "sessions.list") {
+          expect(result).toMatchObject({ ok: true, payload: { sessions: [] } });
+        } else {
+          expect(result).toMatchObject({
+            ok: false,
+            error: { message: `Session "${sessionKey}" was not found.` },
+          });
+        }
+      } finally {
+        gate.release();
       }
     });
   });

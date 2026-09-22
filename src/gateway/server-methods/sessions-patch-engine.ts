@@ -19,10 +19,9 @@ import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lif
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { recordSessionStatusModelPatchOutcome } from "../session-model-patch-origin.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
-import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveCanonicalSessionEntryFromStoreKeys,
@@ -44,15 +43,14 @@ import {
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { publishSessionPatchEffects } from "./sessions-patch-effects.js";
 import {
+  assertSessionPatchCommitAllowed,
   invalidSessionPatchOutcome,
   sessionChangedError,
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
 import * as sessionPatchExpectations from "./sessions-patch-expectations.js";
-import {
-  prepareSessionPatchRuntimeSelection,
-  refreshSessionPatchQueuedSelection,
-} from "./sessions-patch-model-selection.js";
+import * as modelSelection from "./sessions-patch-model-selection.js";
+import { prepareSessionPatchReplacement } from "./sessions-patch-replacement.js";
 import type {
   GroupAdmissionResult,
   GroupMutationOperation,
@@ -91,11 +89,15 @@ export async function executeSessionPatchMutations(params: {
   const creation = { ...operatorCreation, ...(sandbox ? { sandbox } : {}) };
   const archiveActor = gatewayClientSessionCreator(client);
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  const callerCanManageCron = client === null || callerScopes.includes(ADMIN_SCOPE);
+  const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
   const permissionRuntime =
     "permissionMode" in params.patch
       ? await import("./sessions-patch-permissions.runtime.js")
+      : undefined;
+  const sandboxRuntime =
+    "sandboxMode" in params.patch || "nativeRuntimeConsent" in params.patch
+      ? await import("./sessions-patch-sandbox.runtime.js")
       : undefined;
   const targetDiscoveryCache = new Map();
   const preflightTargets = params.targets.map((input) => {
@@ -310,6 +312,13 @@ export async function executeSessionPatchMutations(params: {
                   const requestedLabel = parseSessionLabel(first.fullPatch.label);
                   const archiveTransitions = new Map<number, ArchiveTransition>();
                   const commitGuards = new Set<() => ErrorShape | undefined>();
+                  const assertCommitAllowed = () => {
+                    assertSessionPatchCommitAllowed({
+                      personalModelSelection,
+                      guards: commitGuards,
+                      archiveTransitions: archiveTransitions.values(),
+                    });
+                  };
                   const projectGroup = async (
                     entries: SqliteLifecycleTargetSnapshot,
                     admission: "admitted" | "detached",
@@ -363,35 +372,13 @@ export async function executeSessionPatchMutations(params: {
                         }
                         // Compare tool policy against the captured snapshot; the final
                         // commit rejects a selection changed during preparation.
-                        const expectedSessionChanged =
-                          (target.fullPatch.expectedSessionId !== undefined &&
-                            existingEntry?.sessionId !== target.fullPatch.expectedSessionId) ||
-                          (target.fullPatch.expectedLifecycleRevision !== undefined &&
-                            existingEntry?.lifecycleRevision !==
-                              target.fullPatch.expectedLifecycleRevision) ||
-                          sessionPatchExpectations.sessionPatchExpectationsChanged(
+                        const expectationError =
+                          sessionPatchExpectations.resolveSessionPatchTargetError(
                             existingEntry,
-                            target.fullPatch,
+                            target,
                           );
-                        const lifecycleEntryRemoved =
-                          target.initialEntry !== undefined && existingEntry === undefined;
-                        const archiveTargetChanged =
-                          target.fullPatch.archived === true &&
-                          (target.initialEntry === undefined
-                            ? existingEntry !== undefined
-                            : existingEntry !== undefined &&
-                              (existingEntry.sessionId !== target.initialEntry.sessionId ||
-                                existingEntry.lifecycleRevision !==
-                                  target.initialEntry.lifecycleRevision));
-                        if (
-                          expectedSessionChanged ||
-                          lifecycleEntryRemoved ||
-                          archiveTargetChanged
-                        ) {
-                          projectedOutcomes.push({
-                            ok: false,
-                            error: sessionChangedError(target.key),
-                          });
+                        if (expectationError) {
+                          projectedOutcomes.push({ ok: false, error: expectationError });
                           continue;
                         }
                         if (target.fullPatch.archived === true) {
@@ -461,13 +448,35 @@ export async function executeSessionPatchMutations(params: {
                           projectedOutcomes.push(projected);
                           continue;
                         }
-                        const runtimeSelection = await prepareSessionPatchRuntimeSelection({
-                          cfg,
-                          agentId: target.targetAgentId,
-                          patch: target.fullPatch,
-                          entry: projected.entry,
-                          placement: { context: params.context, sessionKey: primaryKey },
-                        });
+                        const validateSandbox = sandboxRuntime
+                          ? () =>
+                              sandboxRuntime.validateSessionPatchSandboxChange({
+                                client,
+                                context: params.context,
+                                patch: target.fullPatch,
+                                existingEntry,
+                                entry: projected.entry,
+                                sessionKey: primaryKey,
+                                storePath: target.storePath,
+                                lifecycleIdentities: target.lifecycleIdentities,
+                              })
+                          : undefined;
+                        const sandboxError = validateSandbox?.();
+                        if (sandboxError) {
+                          projectedOutcomes.push({ ok: false, error: sandboxError });
+                          continue;
+                        }
+                        const runtimeSelection =
+                          await modelSelection.prepareSessionPatchRuntimeSelection({
+                            cfg,
+                            agentId: target.targetAgentId,
+                            patch: target.fullPatch,
+                            entry: projected.entry,
+                            expectedEntry: existingEntry,
+                            callerCanConsent: callerIsAdmin,
+                            catalog: (await catalogs.available(target.targetAgentId))?.entries,
+                            placement: { context: params.context, sessionKey: primaryKey },
+                          });
                         if (!runtimeSelection.ok) {
                           projectedOutcomes.push(runtimeSelection);
                           continue;
@@ -518,34 +527,27 @@ export async function executeSessionPatchMutations(params: {
                           }
                           target.permissionChange = permission.change;
                         }
-                        const previousSessionKeys = candidateKeys.filter(
-                          (sessionKey) => sessionKey !== primaryKey && workingStore[sessionKey],
-                        );
                         commitGuards.add(params.targets[target.index]!.commitGuard);
+                        if (validateSandbox) {
+                          commitGuards.add(validateSandbox);
+                        }
                         if (runtimeSelection.validate) {
                           commitGuards.add(runtimeSelection.validate);
                         }
-                        replacements.push({
-                          entry: projected.entry,
-                          previousSessionKeys,
-                          sessionKey: primaryKey,
-                        });
-                        const cloned = labelOwners.replaceEntry(
-                          candidateKeys,
+                        const replacement = prepareSessionPatchReplacement({
+                          existingEntry,
+                          projectedEntry: projected.entry,
                           primaryKey,
-                          projected.entry,
-                        );
-                        projectedOutcomes.push({
-                          ok: true,
-                          applied: true,
-                          // The replacement writer validates this row snapshot at COMMIT.
-                          // Unknown generations and canonical moves still invalidate access.
-                          accessChanged:
-                            primaryKey !== target.canonicalKey ||
-                            previousSessionKeys.length > 0 ||
-                            hasSessionReadAccessChanged(existingEntry, projected.entry),
-                          entry: cloned,
+                          canonicalKey: target.canonicalKey,
+                          candidateKeys,
+                          workingStore,
+                          labelOwners,
+                          assertCurrent: assertCommitAllowed,
                         });
+                        if (replacement.replacement) {
+                          replacements.push(replacement.replacement);
+                        }
+                        projectedOutcomes.push(replacement.outcome);
                       } catch (error) {
                         projectedOutcomes.push({
                           ok: false,
@@ -559,20 +561,7 @@ export async function executeSessionPatchMutations(params: {
                     };
                   };
                   const groupStore = {
-                    assertCommitAllowed: () => {
-                      // Fresh selections remain human-owned through the final commit;
-                      // existing session pins are intentionally not rebound to the caller.
-                      personalModelSelection?.assertCurrent();
-                      for (const guard of commitGuards) {
-                        const error = guard();
-                        if (error) {
-                          throw new SessionMutationAuthorizationChangedError(error);
-                        }
-                      }
-                      for (const transition of archiveTransitions.values()) {
-                        transition.assertCommitAllowed();
-                      }
-                    },
+                    assertCommitAllowed,
                     agentId: first.targetAgentId,
                     sessionKeys: selectedSessionKeys,
                     ...(requestedLabel.ok ? { includeLabelOwners: requestedLabel.label } : {}),
@@ -646,8 +635,11 @@ export async function executeSessionPatchMutations(params: {
                   for (const [groupIndex, target] of group.entries()) {
                     const outcome = groupOutcomes[groupIndex]!;
                     outcomes[target.index] = outcome;
-                    if (outcome.ok && outcome.applied && "agentRuntime" in target.fullPatch) {
-                      refreshSessionPatchQueuedSelection({
+                    if (outcome.ok) {
+                      recordSessionStatusModelPatchOutcome(outcome.applied);
+                    }
+                    if (outcome.ok && outcome.applied) {
+                      modelSelection.refreshSessionPatchQueuedSelection({
                         cfg,
                         entry: outcome.entry,
                         patch: target.fullPatch,
@@ -708,7 +700,7 @@ export async function executeSessionPatchMutations(params: {
     cfg,
     context: params.context,
     callerScopes,
-    callerCanManageCron,
+    callerCanManageCron: callerIsAdmin,
     category: params.patch.category,
     targets: prepared.flatMap((target) => {
       const outcome = outcomes[target.index];

@@ -20,6 +20,15 @@ import {
 } from "../../scripts/lib/gateway-run-chunk-metadata.mts";
 
 const tempRoots: string[] = [];
+const workerDeployArtifactNames = [
+  "github-exec-launcher.mjs",
+  "image-processor.worker.mjs",
+  "service-child-group-anchor.mjs",
+  "service-child-relay.mjs",
+  "sqlite-store.worker.mjs",
+  "worker.mjs",
+  "workspace-rsync-receiver.mjs",
+];
 
 function makeTempRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "openclaw-cli-bootstrap-imports-"));
@@ -327,25 +336,65 @@ describe("check-cli-bootstrap-imports", () => {
     ]);
   });
 
-  it("accepts the self-contained worker deploy artifacts with builtin imports", () => {
+  it("accepts builtin imports and forward exports without treating source text as imports", () => {
     const root = makeTempRoot();
-    writeFixture(
-      root,
-      "dist/worker/worker.mjs",
-      'import fs from "node:fs";\nexport const worker = Boolean(fs);\n',
-    );
-    writeFixture(
-      root,
-      "dist/worker/workspace-rsync-receiver.mjs",
-      'import path from "node:path";\nexport const receiver = Boolean(path);\n',
-    );
-    writeFixture(
-      root,
-      "dist/worker/github-exec-launcher.mjs",
-      'import fs from "node:fs";\nexport const launcher = Boolean(fs);\n',
-    );
+    const source = [
+      "#!/usr/bin/env node",
+      "export { available };",
+      'import fs from "node:fs";',
+      "const available = Boolean(fs);",
+      `const text = ${JSON.stringify('require("string-only")')};`,
+      String.raw`const expression = /require\("regex-only"\)/;`,
+      '// import("comment-only");',
+      'const interpolated = `require("template-only") ${import("node:fs")}`;',
+      'import "node:os"',
+    ].join("\n");
+    for (const artifact of workerDeployArtifactNames) {
+      writeFixture(root, `dist/worker/${artifact}`, source);
+    }
 
     expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "duplicate bindings across statements",
+      source: 'let value; import "node:fs"; let value;',
+      message: "Identifier 'value' has already been declared",
+    },
+    {
+      label: "duplicate exports across statements",
+      source: 'const value = 1; export { value }; import "node:fs"; export { value };',
+      message: "Duplicate export 'value'",
+    },
+    {
+      label: "unresolved forward exports at EOF",
+      source: 'export { missing }; import "node:fs";',
+      message: "Export 'missing' is not defined",
+    },
+    {
+      label: "module strictness after completed statements",
+      source: "const value = 1; with ({}) {}",
+      message: "'with' in strict mode",
+    },
+    {
+      label: "invalid syntax after an external import",
+      source: 'import "earlier-external"; const = 1;',
+      message: "Unexpected token",
+    },
+  ])("preserves module syntax validation for $label", ({ source, message }) => {
+    const root = makeTempRoot();
+    for (const artifact of workerDeployArtifactNames) {
+      writeFixture(
+        root,
+        `dist/worker/${artifact}`,
+        artifact === "worker.mjs" ? source : "export {};\n",
+      );
+    }
+
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
+      expect.stringContaining(`is not parseable JavaScript: ${message}`),
+    ]);
   });
 
   it("accepts no worker artifact directory when the target has no worker contract", () => {
@@ -369,6 +418,9 @@ describe("check-cli-bootstrap-imports", () => {
 
   it("rejects worker package imports and dependency manifests", () => {
     const root = makeTempRoot();
+    for (const artifact of workerDeployArtifactNames) {
+      writeFixture(root, `dist/worker/${artifact}`, "export {};\n");
+    }
     writeFixture(
       root,
       "dist/worker/worker.mjs",
@@ -376,12 +428,26 @@ describe("check-cli-bootstrap-imports", () => {
         'import "left-pad";',
         'await import("./lazy.mjs");',
         '__require("json5");',
+        '__require2("numbered");',
+        '(__require)("parenthesized");',
+        '__require?.("optional");',
+        'const interpolated = `literal ${import("template-expression")}`;',
+        String.raw`__r\u0065quire("escaped");`,
+        'function nested() { require("nested"); }',
+        'export * from "export-all";',
+        'export { value } from "export-named";',
         'createRequire(import.meta.url)("../../package.json");',
         'moduleNamespace.createRequire(import.meta.url)("@openclaw/fs-safe/temp");',
+        'import "final-external"',
       ].join("\n"),
     );
-    writeFixture(root, "dist/worker/workspace-rsync-receiver.mjs", "export {};\n");
     writeFixture(root, "dist/worker/github-exec-launcher.mjs", 'import "yaml";\n');
+    writeFixture(root, "dist/worker/service-child-group-anchor.mjs", 'import "signal-exit";\n');
+    writeFixture(
+      root,
+      "dist/worker/service-child-relay.mjs",
+      'await import("./service-child-group-anchor.mjs");\n',
+    );
     writeFixture(root, "dist/worker/lazy.mjs", "export {};\n");
     writeFixture(
       root,
@@ -391,29 +457,51 @@ describe("check-cli-bootstrap-imports", () => {
 
     expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
       'Worker deploy artifact dist/worker/github-exec-launcher.mjs retains runtime import "yaml" instead of bundling it.',
+      'Worker deploy artifact dist/worker/service-child-group-anchor.mjs retains runtime import "signal-exit" instead of bundling it.',
+      'Worker deploy artifact dist/worker/service-child-relay.mjs retains runtime import "./service-child-group-anchor.mjs" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "../../package.json" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "./lazy.mjs" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "@openclaw/fs-safe/temp" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "escaped" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "export-all" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "export-named" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "final-external" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "json5" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "left-pad" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "nested" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "numbered" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "optional" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "parenthesized" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "template-expression" instead of bundling it.',
       "Worker deploy artifact emits unstaged runtime asset dist/worker/lazy.mjs.",
       "Worker deploy artifact must not contain a dependency manifest or lifecycle scripts.",
     ]);
   });
 
-  it.each(["two", "three", "default"] as const)(
-    "requires the %s-artifact worker deployment contract",
-    (contract) => {
+  it.each([
+    ["two", undefined],
+    ["three", undefined],
+    ["three", "github-exec-launcher.mjs"],
+    ["default", "github-exec-launcher.mjs"],
+    ["default", "service-child-group-anchor.mjs"],
+    ["default", "service-child-relay.mjs"],
+    ["default", "sqlite-store.worker.mjs"],
+  ] as const)(
+    "enforces the %s-artifact worker deployment contract with missing artifact %s",
+    (contract, missingArtifact) => {
       const root = makeTempRoot();
-      const workerDeployEntrypoints = [
-        "dist/worker/worker.mjs",
-        "dist/worker/workspace-rsync-receiver.mjs",
-      ];
-      for (const entrypoint of workerDeployEntrypoints) {
-        writeFixture(root, entrypoint, "export {};\n");
-      }
+      const artifacts =
+        contract === "default"
+          ? workerDeployArtifactNames
+          : ["worker.mjs", "workspace-rsync-receiver.mjs"];
       if (contract === "three") {
-        workerDeployEntrypoints.push("dist/worker/github-exec-launcher.mjs");
+        artifacts.push("github-exec-launcher.mjs");
+      }
+      const workerDeployEntrypoints = artifacts.map((artifact) => `dist/worker/${artifact}`);
+      for (const entrypoint of workerDeployEntrypoints) {
+        if (entrypoint !== `dist/worker/${missingArtifact}`) {
+          writeFixture(root, entrypoint, "export {};\n");
+        }
       }
       expect(
         collectWorkerDeployArtifactErrors({
@@ -421,10 +509,10 @@ describe("check-cli-bootstrap-imports", () => {
           workerDeployEntrypoints: contract === "default" ? undefined : workerDeployEntrypoints,
         }),
       ).toEqual(
-        contract === "two"
+        missingArtifact === undefined
           ? []
           : [
-              "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing. Run pnpm build first.",
+              `Worker deploy artifact dist/worker/${missingArtifact} is missing. Run pnpm build first.`,
             ],
       );
     },

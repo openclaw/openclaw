@@ -31,6 +31,7 @@ describe("retained transcript sharing", () => {
         await upsertSessionEntryCore(scope, {
           sessionId: scope.sessionId,
           updatedAt: 1,
+          displayName: "Private retained conversation",
           visibility: "draft",
           createdActor: { type: "human", source: "profile", id: "owner" },
         });

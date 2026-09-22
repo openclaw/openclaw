@@ -18,7 +18,11 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const SCRIPT = path.resolve("scripts/release-telegram-candidate-archive.py");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const pythonExecPath = (() => {
-  for (const candidate of ["/opt/homebrew/bin/python3.12", "python3"]) {
+  for (const candidate of [
+    "/opt/homebrew/bin/python3.12",
+    "/opt/homebrew/bin/python3",
+    "python3",
+  ]) {
     const probe = spawnSync(candidate, [
       "-c",
       'import tarfile; assert hasattr(tarfile, "data_filter") and hasattr(tarfile, "FilterError")',

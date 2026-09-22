@@ -1,4 +1,3 @@
-// Discord plugin module implements channel actions behavior.
 import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
@@ -373,6 +372,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     inboundEventKind,
     conversationReadOrigin,
     reply,
+    progressSnapshot,
     assertDirectAdapterHandoff,
   }) => {
     return await (
@@ -393,6 +393,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       ...(requesterAccountId ? { requesterAccountId } : {}),
       ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
       ...(reply ? { reply } : {}),
+      ...(progressSnapshot ? { progressSnapshot } : {}),
       ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
     });
   },

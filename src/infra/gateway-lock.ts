@@ -9,17 +9,20 @@ import {
   resolveTimerTimeoutMs,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
-import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { hasErrnoCode } from "./errno.js";
 import { createFileLockManager } from "./file-lock-manager.js";
+import {
+  type GatewayLockRole,
+  type LockPayload,
+  parseGatewayLockPayload,
+} from "./gateway-lock-payload.js";
 import {
   acquireGatewayOwnerLease,
   type GatewayOwnerLease,
@@ -47,33 +50,6 @@ const GATEWAY_LOCKS = createFileLockManager("openclaw.gateway-lock");
 export const GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS = 5 * 60_000;
 const log = createSubsystemLogger("gateway");
 
-type LockPayload = {
-  pid: number;
-  ownerId?: string;
-  /** Present when Gateway cron writes use the dynamic-default ownership projection. */
-  cronOwnerProjection?: "dynamic-default-v1";
-  createdAt: string;
-  configPath: string;
-  port?: number;
-  role?: GatewayLockRole;
-  stateDir?: string;
-  startTime?: number;
-};
-
-const LockPayloadSchema = z.object({
-  pid: z.number(),
-  ownerId: z.string().min(1).optional(),
-  cronOwnerProjection: z.literal("dynamic-default-v1").optional(),
-  createdAt: z.string(),
-  configPath: z.string(),
-  port: z.number().int().min(1).max(65_535).optional(),
-  role: z
-    .enum(["gateway", "agent-embedded", "skill-workshop-apply", "sqlite-maintenance"])
-    .optional(),
-  stateDir: z.string().optional(),
-  startTime: z.number().optional(),
-}) as z.ZodType<LockPayload>;
-
 type GatewayLockHandle = {
   lockPath: string;
   stateLockPath: string;
@@ -82,8 +58,6 @@ type GatewayLockHandle = {
   release: () => Promise<void>;
   run<T>(operation: () => T): T;
 };
-
-type GatewayLockRole = "gateway" | "agent-embedded" | "skill-workshop-apply" | "sqlite-maintenance";
 
 export type GatewayLockIdentity = {
   pid: number;
@@ -210,7 +184,7 @@ function defaultReadProcessCmdline(pid: number, platform: NodeJS.Platform): stri
   return null;
 }
 
-async function resolveGatewayOwnerStatus(
+export async function resolveGatewayOwnerStatus(
   pid: number,
   payload: LockPayload | null,
   platform: NodeJS.Platform,
@@ -268,7 +242,7 @@ async function resolveGatewayOwnerStatus(
   return isGatewayArgv(args, { allowGatewayBinary: true }) ? "alive" : "dead";
 }
 
-async function readLockPayload(
+export async function readLockPayload(
   lockPath: string,
   requireInspection = false,
 ): Promise<LockPayload | null> {
@@ -286,8 +260,23 @@ async function readLockPayload(
   }
 }
 
-function parseGatewayLockPayload(raw: string): LockPayload | null {
-  return safeParseJsonWithSchema(LockPayloadSchema, raw);
+/** Read the same lock contract while a synchronous mutation admission is held. */
+export function readLockPayloadSync(
+  lockPath: string,
+  requireInspection = false,
+): LockPayload | null {
+  try {
+    const payload = parseGatewayLockPayload(fsSync.readFileSync(lockPath, "utf8"));
+    if (requireInspection && !payload) {
+      throw new GatewayLockError("Gateway lock payload could not be verified");
+    }
+    return payload;
+  } catch (error) {
+    if (requireInspection && !hasErrnoCode(error, "ENOENT")) {
+      throw new GatewayLockError("Gateway lock inspection is unavailable", error);
+    }
+    return null;
+  }
 }
 
 async function shouldReclaimGatewayLock(params: {
@@ -327,7 +316,7 @@ async function shouldReclaimGatewayLock(params: {
   }
 }
 
-function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
+export function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
   const resolvedStateDir = resolveStateDir(env);
   const stateDir = resolveIdentityPathViaExistingAncestorSync(resolvedStateDir);
   const lockDir = suppliedLockDir ?? resolveGatewayLockDir(stateDir);

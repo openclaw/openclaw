@@ -99,7 +99,7 @@ suite.define(() => {
         const gateway = await installSettingsGateway(page);
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         await waitForControlUiRoute(page, { routeId: "model-providers" });
-        await page.getByRole("heading", { name: "Global defaults", exact: true }).waitFor();
+        await page.getByRole("heading", { name: "Defaults for all agents", exact: true }).waitFor();
         const primaryModel = page.locator(".model-providers__defaults .model-picker").first();
         await primaryModel.getByRole("button", { name: "Model: GPT-4.1", exact: true }).waitFor();
 

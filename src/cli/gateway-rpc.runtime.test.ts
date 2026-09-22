@@ -1,6 +1,6 @@
 // Gateway RPC runtime tests cover CLI gateway RPC calls and runtime error handling.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { addGatewayClientOptions } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
@@ -75,9 +75,12 @@ describe("callGatewayFromCliRuntime", () => {
   );
 
   it("preserves operator messaging and subagent read-only CLI calls", async () => {
-    await withEnvAsync({ OPENCLAW_SUBAGENT_EXEC: undefined }, async () => {
-      await callGatewayFromCliRuntime("sessions.send", {}, { key: "agent:main:main" });
-    });
+    await withEnvAsync(
+      { OPENCLAW_SUBAGENT_EXEC: undefined, OPENCLAW_SHELL: undefined },
+      async () => {
+        await callGatewayFromCliRuntime("sessions.send", {}, { key: "agent:main:main" });
+      },
+    );
     await withEnvAsync({ OPENCLAW_SUBAGENT_EXEC: "1" }, async () => {
       await callGatewayFromCliRuntime("sessions.history", {}, { key: "agent:main:main" });
     });
@@ -260,5 +263,74 @@ describe("isImplicitLocalGatewayTargetFromCliRuntime", () => {
       url: "ws://127.0.0.1:18789",
       localPortOverride: undefined,
     });
+  });
+});
+
+describe("agent exec session input", () => {
+  beforeEach(() => {
+    callGatewayMock.mockClear().mockResolvedValue({ ok: true });
+    vi.stubEnv("OPENCLAW_SHELL", "exec");
+    vi.stubEnv("OPENCLAW_SUBAGENT_EXEC", undefined);
+  });
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each(["sessions.send", "sessions.steer", "chat.send", "agent"])(
+    "does not send %s as fresh operator input from an unbound exec child",
+    async (method) => {
+      await expect(
+        callGatewayFromCliRuntime(method, { json: true }, { message: "Worker result" }),
+      ).rejects.toThrow(/attributed|completion/i);
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves operator session input outside agent exec", async () => {
+    vi.stubEnv("OPENCLAW_SHELL", undefined);
+    await callGatewayFromCliRuntime("sessions.send", {}, { message: "Human request" });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.send", params: { message: "Human request" } }),
+    );
+  });
+
+  it("preserves non-message Gateway diagnostics inside agent exec", async () => {
+    await callGatewayFromCliRuntime("health", {});
+    expect(callGatewayMock).toHaveBeenCalledWith(expect.objectContaining({ method: "health" }));
+  });
+
+  it.each([
+    { message: "Worker result" },
+    { task: "Worker task" },
+    { attachments: [{ type: "image", content: "fixture" }] },
+  ])("refuses initial session input through sessions.create: %j", async (params) => {
+    await expect(callGatewayFromCliRuntime("sessions.create", {}, params)).rejects.toThrow(
+      /inter-session attribution/,
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves session creation without an initial turn", async () => {
+    await callGatewayFromCliRuntime(
+      "sessions.create",
+      {},
+      {
+        key: "agent:main:empty",
+        message: " ",
+        attachments: [],
+      },
+    );
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not reinterpret claimed provenance or connection overrides as agent authority", async () => {
+    await expect(
+      callGatewayFromCliRuntime(
+        "sessions.send",
+        { url: "wss://gateway.example/ws", token: "fixture-token" },
+        { message: "[Inter-session message] Worker result", sourceSessionKey: "agent:main:worker" },
+        { clientName: "gateway-client", mode: "backend", scopes: ["operator.admin"] },
+      ),
+    ).rejects.toThrow(/inter-session attribution/);
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 });

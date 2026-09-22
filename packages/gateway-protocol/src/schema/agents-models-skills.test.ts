@@ -9,13 +9,14 @@ import {
   ModelsAuthLogoutParamsSchema,
   ModelsAuthOrderSetParamsSchema,
   ModelsAuthStatusParamsSchema,
-  ModelsListParamsSchema,
   ModelsListResultSchema,
   ModelsProbeParamsSchema,
   ModelsProbeResultSchema,
   SkillProposalEvaluationSchema,
   SkillProposalLifecycleEventSchema,
   SkillsCuratorStatusResultSchema,
+  SkillsCuratorLiveStatusResultSchema,
+  SkillsCuratorActionResultSchema,
   SkillsDetailResultSchema,
   SkillsProposalEvaluateParamsSchema,
   SkillsProposalEvaluateResultSchema,
@@ -26,6 +27,7 @@ import {
   ToolsEffectiveResultSchema,
   ToolsInvokeParamsSchema,
 } from "./agents-models-skills.js";
+import { ModelsListParamsSchema } from "./model-catalog.js";
 
 type ProtocolSchema = TSchema;
 
@@ -630,14 +632,57 @@ describe("SkillsProposalInspectResultSchema", () => {
 });
 
 describe("SkillsCuratorStatusResultSchema", () => {
+  const entry = {
+    skillFile: "/workshop/direct/SKILL.md",
+    skillKey: "direct",
+    skillName: "direct",
+    state: "active",
+    pinned: false,
+    createdAtMs: 100,
+    stateChangedAtMs: 100,
+    lastUsedAtMs: null,
+    useCount: 0,
+    archivedReason: null,
+  };
+  const legacy = {
+    lastAttemptAtMs: null,
+    lastSuccessAtMs: null,
+    lastError: null,
+    counts: { active: 1, stale: 0, archived: 0 },
+    skills: [entry],
+    overlaps: [],
+  };
+
+  it("keeps legacy numeric dates closed while live inventory requires its marker", () => {
+    const unknownEntry = { ...entry, createdAtMs: null, stateChangedAtMs: null };
+    const full = { ...legacy, inventory: "live-workshop", skills: [unknownEntry] };
+    expectAccepted(SkillsCuratorStatusResultSchema, legacy);
+    expectAccepted(SkillsCuratorActionResultSchema, entry);
+    expectRejected(
+      SkillsCuratorStatusResultSchema,
+      full,
+      { ...legacy, skills: [unknownEntry] },
+      { ...legacy, inventory: "live-workshop" },
+    );
+    expectRejected(SkillsCuratorActionResultSchema, unknownEntry);
+    expectAccepted(SkillsCuratorLiveStatusResultSchema, full, {
+      ...legacy,
+      inventory: "live-workshop",
+    });
+    expectRejected(
+      SkillsCuratorLiveStatusResultSchema,
+      legacy,
+      { ...full, inventory: "unknown" },
+      { ...full, extra: true },
+      { ...full, skills: [{ ...unknownEntry, extra: true }] },
+    );
+  });
   it("accepts typed collection and experience outcomes while rejecting invalid review records", () => {
     const legacyResult = {
+      ...legacy,
       lastAttemptAtMs: 100,
       lastSuccessAtMs: 101,
-      lastError: null,
-      counts: { active: 1, stale: 0, archived: 0 },
       skills: [],
-      overlaps: [],
     };
     const result = {
       ...legacyResult,

@@ -98,6 +98,9 @@ commands resolve the target workspace from `--agent <id>`, then the current
 working directory when it is inside a configured agent workspace, then the
 default agent.
 
+Search results add `v` only to numeric version labels, preserving existing prefixes
+and build names. JSON output keeps the registry's original version values.
+
 The skills table renders horizontal tabs as single spaces so descriptions
 stay aligned with the neighboring columns.
 JSON output preserves tabs and line endings in descriptions and paths as escaped
@@ -171,6 +174,19 @@ Notes:
 | `list`/`info`/`check` output     | Rendered output goes to stdout. With `--json`, the machine-readable payload stays on stdout for pipes and scripts.                                                                                                                                                                                                                |
 | `curator status --json`          | Reports live Workshop skill usage recorded from trusted `skill.used` events, collection review outcomes per agent, and experience review outcomes per agent and workspace.                                                                                                                                                        |
 | `curator pin`/`unpin`/`restore`  | Retired commands remain registered but return an error explaining that weekly collection review manages the skill collection.                                                                                                                                                                                                     |
+
+### Workshop inventory and upgrades
+
+`openclaw skills curator status` requests current Workshop inventory from the
+selected Gateway. With a compatible Gateway, JSON includes
+`"inventory": "live-workshop"`. Local status uses the current configuration too.
+Missing usage displays as `not recorded`, not proof that a skill was never used.
+
+An older Gateway can return an unmarked legacy response. The CLI accepts it
+without switching to local state and prints a limited-coverage notice in text
+output. JSON preserves the absence of the marker. See
+[Workshop inventory and usage](/tools/skill-workshop/reference#workshop-inventory-and-usage)
+for membership, tracking limits, unknown dates, and upgrade behavior.
 
 On servers supporting full scanner reports, verification JSON includes `security.scannerReports.aig` (the full upstream SARIF report)
 and `security.scannerReports.skillspector` (the full upstream JSON report) when ClawHub

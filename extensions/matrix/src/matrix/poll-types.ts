@@ -12,7 +12,11 @@ import {
   type PollKind as MatrixPollKind,
 } from "matrix-js-sdk/lib/@types/polls.js";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const M_POLL_START = "m.poll.start" as const;
 const M_POLL_RESPONSE = "m.poll.response" as const;
@@ -261,10 +265,7 @@ export function buildPollResultsSummary(params: {
     if (event.sender !== params.sender) {
       continue;
     }
-    const ts =
-      typeof event.origin_server_ts === "number" && Number.isFinite(event.origin_server_ts)
-        ? event.origin_server_ts
-        : Number.POSITIVE_INFINITY;
+    const ts = asFiniteNumber(event.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     if (ts < pollClosedAt) {
       pollClosedAt = ts;
     }
@@ -281,14 +282,8 @@ export function buildPollResultsSummary(params: {
   >();
 
   const orderedRelationEvents = [...params.relationEvents].toSorted((left, right) => {
-    const leftTs =
-      typeof left.origin_server_ts === "number" && Number.isFinite(left.origin_server_ts)
-        ? left.origin_server_ts
-        : Number.POSITIVE_INFINITY;
-    const rightTs =
-      typeof right.origin_server_ts === "number" && Number.isFinite(right.origin_server_ts)
-        ? right.origin_server_ts
-        : Number.POSITIVE_INFINITY;
+    const leftTs = asFiniteNumber(left.origin_server_ts) ?? Number.POSITIVE_INFINITY;
+    const rightTs = asFiniteNumber(right.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     if (leftTs !== rightTs) {
       return leftTs - rightTs;
     }
@@ -306,10 +301,7 @@ export function buildPollResultsSummary(params: {
     if (!senderId) {
       continue;
     }
-    const eventTs =
-      typeof event.origin_server_ts === "number" && Number.isFinite(event.origin_server_ts)
-        ? event.origin_server_ts
-        : Number.POSITIVE_INFINITY;
+    const eventTs = asFiniteNumber(event.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     if (eventTs > pollClosedAt) {
       continue;
     }

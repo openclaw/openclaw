@@ -10,7 +10,12 @@ const MAX_FRAME_BYTES = 1_048_576;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 type RpcMessage = Record<string, unknown>;
-type UnixOptions = { baseUrl: string; timeoutMs?: number; maxResponseBytes?: number };
+type UnixOptions = {
+  baseUrl: string;
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+  assertDirectAdapterHandoff?: () => void;
+};
 
 function socketPath(baseUrl: string): string {
   const url = new URL(baseUrl.trim());
@@ -155,7 +160,9 @@ export async function signalUnixRpcRequest<T>(
       ? Math.floor(options.maxResponseBytes)
       : MAX_FRAME_BYTES;
   try {
-    connection.socket.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    const frame = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
+    options.assertDirectAdapterHandoff?.();
+    connection.socket.write(frame);
     for await (const message of messages(connection.socket, maxBytes)) {
       if (message.id === id) {
         // SAFETY: The generic caller owns the method's result type after JSON-RPC envelope validation.

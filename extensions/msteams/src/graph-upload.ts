@@ -9,7 +9,9 @@
  */
 
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
+import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { createMSTeamsHttpError } from "./http-error.js";
 import {
@@ -17,11 +19,32 @@ import {
   withMSTeamsAbortableRequestTimeout,
   withMSTeamsRequestDeadline,
 } from "./request-timeout.js";
+import { assertMSTeamsSendHandoff, type MSTeamsSendHandoff } from "./send-handoff.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
+
+async function requestSharePoint(
+  url: string,
+  init: RequestInit,
+  params: Pick<MSTeamsSendHandoff, "assertDirectAdapterHandoff"> & { fetchFn?: typeof fetch },
+): Promise<Response> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init,
+    fetchImpl: params.fetchFn,
+    mode: "trusted_env_proxy",
+    beforeRequest: () => assertMSTeamsSendHandoff(params),
+    // Preserve fetch's redirect limit, method/body replay, and cross-origin
+    // credential stripping while checking authority again before each hop.
+    maxRedirects: 20,
+    allowCrossOriginUnsafeRedirectReplay: true,
+    auditContext: "msteams.graph-upload",
+  });
+  return responseWithRelease(response, release);
+}
 
 export function requireMSTeamsSharePointSiteId(siteId?: string): string {
   const normalized = siteId?.trim();
@@ -64,16 +87,16 @@ async function getGraphAccessToken(tokenProvider: MSTeamsAccessTokenProvider): P
  *
  * @param params.siteId - SharePoint site ID (e.g., "contoso.sharepoint.com,guid1,guid2")
  */
-async function uploadToSharePoint(params: {
-  buffer: Buffer;
-  filename: string;
-  contentType?: string;
-  tokenProvider: MSTeamsAccessTokenProvider;
-  siteId: string;
-  fetchFn?: typeof fetch;
-}): Promise<DriveUploadResult> {
-  const fetchFn = params.fetchFn ?? fetch;
-
+async function uploadToSharePoint(
+  params: {
+    buffer: Buffer;
+    filename: string;
+    contentType?: string;
+    tokenProvider: MSTeamsAccessTokenProvider;
+    siteId: string;
+    fetchFn?: typeof fetch;
+  } & MSTeamsSendHandoff,
+): Promise<DriveUploadResult> {
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
   // Graph's default conflictBehavior=replace overwrites a same-named file in place. Bot assets
@@ -86,17 +109,23 @@ async function uploadToSharePoint(params: {
     label: SHAREPOINT_UPLOAD_TIMEOUT_LABEL,
     timeoutMs,
     work: async (signal) => {
+      assertMSTeamsSendHandoff(params);
       const token = await getGraphAccessToken(params.tokenProvider);
-      const res = await fetchFn(uploadUrl, {
-        method: "PUT",
-        headers: {
-          "User-Agent": buildUserAgent(),
-          Authorization: `Bearer ${token}`,
-          "Content-Type": params.contentType ?? "application/octet-stream",
+      assertMSTeamsSendHandoff(params);
+      const res = await requestSharePoint(
+        uploadUrl,
+        {
+          method: "PUT",
+          headers: {
+            "User-Agent": buildUserAgent(),
+            Authorization: `Bearer ${token}`,
+            "Content-Type": params.contentType ?? "application/octet-stream",
+          },
+          body: new Blob([bufferToBlobPart(params.buffer)]),
+          signal,
         },
-        body: new Blob([bufferToBlobPart(params.buffer)]),
-        signal,
-      });
+        params,
+      );
 
       if (!res.ok) {
         throw await createMSTeamsHttpError(res, "SharePoint upload failed");
@@ -145,24 +174,27 @@ export interface DriveItemProperties {
  * @param params.siteId - SharePoint site ID
  * @param params.itemId - The driveItem ID (returned from upload)
  */
-export async function getDriveItemProperties(params: {
-  siteId: string;
-  itemId: string;
-  tokenProvider: MSTeamsAccessTokenProvider;
-  fetchFn?: typeof fetch;
-}): Promise<DriveItemProperties> {
-  const fetchFn = params.fetchFn ?? fetch;
-
+export async function getDriveItemProperties(
+  params: {
+    siteId: string;
+    itemId: string;
+    tokenProvider: MSTeamsAccessTokenProvider;
+    fetchFn?: typeof fetch;
+  } & MSTeamsSendHandoff,
+): Promise<DriveItemProperties> {
   const data = await withMSTeamsAbortableRequestTimeout({
     label: SHAREPOINT_REQUEST_TIMEOUT_LABEL,
     work: async (signal) => {
+      assertMSTeamsSendHandoff(params);
       const token = await getGraphAccessToken(params.tokenProvider);
-      const res = await fetchFn(
+      assertMSTeamsSendHandoff(params);
+      const res = await requestSharePoint(
         `${GRAPH_ROOT}/sites/${params.siteId}/drive/items/${params.itemId}?$select=eTag,webDavUrl,name`,
         {
           headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
           signal,
         },
+        params,
       );
 
       if (!res.ok) {
@@ -192,21 +224,27 @@ export async function getDriveItemProperties(params: {
  * Get members of a Teams chat for per-user sharing.
  * Used to create sharing links scoped to only the chat participants.
  */
-async function getChatMembers(params: {
-  chatId: string;
-  tokenProvider: MSTeamsAccessTokenProvider;
-  fetchFn?: typeof fetch;
-}): Promise<ChatMember[]> {
-  const fetchFn = params.fetchFn ?? fetch;
-
+async function getChatMembers(
+  params: {
+    chatId: string;
+    tokenProvider: MSTeamsAccessTokenProvider;
+    fetchFn?: typeof fetch;
+  } & MSTeamsSendHandoff,
+): Promise<ChatMember[]> {
   return await withMSTeamsAbortableRequestTimeout({
     label: SHAREPOINT_REQUEST_TIMEOUT_LABEL,
     work: async (signal) => {
+      assertMSTeamsSendHandoff(params);
       const token = await getGraphAccessToken(params.tokenProvider);
-      const res = await fetchFn(`${GRAPH_ROOT}/chats/${params.chatId}/members`, {
-        headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
-        signal,
-      });
+      assertMSTeamsSendHandoff(params);
+      const res = await requestSharePoint(
+        `${GRAPH_ROOT}/chats/${params.chatId}/members`,
+        {
+          headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
+          signal,
+        },
+        params,
+      );
 
       if (!res.ok) {
         // Graph 403 covers permissions, licensing, and conditional access. RSC
@@ -234,17 +272,18 @@ async function getChatMembers(params: {
  * For organization scope (default), uses v1.0 API.
  * For per-user scope, uses beta API with recipients.
  */
-async function createSharePointSharingLink(params: {
-  siteId: string;
-  itemId: string;
-  tokenProvider: MSTeamsAccessTokenProvider;
-  /** Sharing scope: "organization" (default) or "users" (per-user with recipients) */
-  scope?: "organization" | "users";
-  /** Required when scope is "users": AAD object IDs of recipients */
-  recipientObjectIds?: string[];
-  fetchFn?: typeof fetch;
-}): Promise<SharingLinkResult> {
-  const fetchFn = params.fetchFn ?? fetch;
+async function createSharePointSharingLink(
+  params: {
+    siteId: string;
+    itemId: string;
+    tokenProvider: MSTeamsAccessTokenProvider;
+    /** Sharing scope: "organization" (default) or "users" (per-user with recipients) */
+    scope?: "organization" | "users";
+    /** Required when scope is "users": AAD object IDs of recipients */
+    recipientObjectIds?: string[];
+    fetchFn?: typeof fetch;
+  } & MSTeamsSendHandoff,
+): Promise<SharingLinkResult> {
   const scope = params.scope ?? "organization";
 
   // Per-user sharing requires beta API
@@ -263,8 +302,10 @@ async function createSharePointSharingLink(params: {
   const data = await withMSTeamsAbortableRequestTimeout({
     label: SHAREPOINT_REQUEST_TIMEOUT_LABEL,
     work: async (signal) => {
+      assertMSTeamsSendHandoff(params);
       const token = await getGraphAccessToken(params.tokenProvider);
-      const res = await fetchFn(
+      assertMSTeamsSendHandoff(params);
+      const res = await requestSharePoint(
         `${apiRoot}/sites/${params.siteId}/drive/items/${params.itemId}/createLink`,
         {
           method: "POST",
@@ -276,6 +317,7 @@ async function createSharePointSharingLink(params: {
           body: JSON.stringify(body),
           signal,
         },
+        params,
       );
 
       if (!res.ok) {
@@ -307,16 +349,18 @@ async function createSharePointSharingLink(params: {
  * @param params.chatId - Optional chat ID for per-user sharing (group chats)
  * @param params.usePerUserSharing - Whether to use per-user sharing (requires beta API + chat-member read access)
  */
-export async function uploadAndShareSharePoint(params: {
-  buffer: Buffer;
-  filename: string;
-  contentType?: string;
-  tokenProvider: MSTeamsAccessTokenProvider;
-  siteId: string;
-  chatId?: string;
-  usePerUserSharing?: boolean;
-  fetchFn?: typeof fetch;
-}): Promise<{
+export async function uploadAndShareSharePoint(
+  params: {
+    buffer: Buffer;
+    filename: string;
+    contentType?: string;
+    tokenProvider: MSTeamsAccessTokenProvider;
+    siteId: string;
+    chatId?: string;
+    usePerUserSharing?: boolean;
+    fetchFn?: typeof fetch;
+  } & MSTeamsSendHandoff,
+): Promise<{
   itemId: string;
   webUrl: string;
   shareUrl: string;
@@ -330,6 +374,7 @@ export async function uploadAndShareSharePoint(params: {
     tokenProvider: params.tokenProvider,
     siteId: params.siteId,
     fetchFn: params.fetchFn,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
 
   // 2. Determine sharing scope
@@ -341,6 +386,7 @@ export async function uploadAndShareSharePoint(params: {
       chatId: params.chatId,
       tokenProvider: params.tokenProvider,
       fetchFn: params.fetchFn,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     });
     if (members.length === 0) {
       throw new Error("MS Teams chat member lookup returned no recipients");
@@ -357,6 +403,7 @@ export async function uploadAndShareSharePoint(params: {
     scope,
     recipientObjectIds,
     fetchFn: params.fetchFn,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
 
   return {

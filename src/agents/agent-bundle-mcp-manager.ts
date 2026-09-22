@@ -336,10 +336,16 @@ export function createSessionMcpRuntimeManager(
       return true;
     },
     async completeDeferredRetirement(sessionId, runtime) {
-      if (
-        !store.deferredRetirementSessionIds.has(sessionId) ||
-        (runtime !== undefined && runtime.sessionId !== sessionId)
-      ) {
+      if (runtime !== undefined && runtime.sessionId !== sessionId) {
+        return false;
+      }
+      if (!store.deferredRetirementSessionIds.has(sessionId)) {
+        for (const runtimeKey of lifecycle.runtimeKeysForSessionId(sessionId)) {
+          const current = store.runtimesBySessionId.get(runtimeKey);
+          if (current && sessionMcpRuntimeOwners.get(current)?.hasServers() === false) {
+            await lifecycle.releaseEmptyRuntimeSlot(runtimeKey, current);
+          }
+        }
         return false;
       }
       if (

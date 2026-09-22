@@ -17,24 +17,23 @@ extension DashboardWindowOwnershipTests {
             let bundlePathIndex = arguments.index(after: bundleFlagIndex)
             let testBundlePath = try #require(
                 arguments.indices.contains(bundlePathIndex) ? arguments[bundlePathIndex] : nil)
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: arguments[0])
-            process.arguments = [
-                "--test-bundle-path", testBundlePath,
-                "--testing-library", "swift-testing",
-                "--filter", "localized background session failure title",
-            ]
-            var environment = ProcessInfo.processInfo.environment
-            environment[probeKey] = "1"
-            process.environment = environment
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = output
-            try process.run()
-            process.waitUntilExit()
-            let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            #expect(process.terminationStatus == 0, Comment(rawValue: text))
-            #expect(text.contains("\(probeKey)=ok"), Comment(rawValue: text))
+            // Keep inherited fixture state alive while the child initializes AppState.
+            try await TestIsolation.withIsolatedState {
+                var environment = ProcessInfo.processInfo.environment
+                environment[probeKey] = "1"
+                let result = try await BoundedProcess.run(
+                    path: arguments[0],
+                    arguments: [
+                        "--test-bundle-path", testBundlePath,
+                        "--testing-library", "swift-testing",
+                        "--filter", "localized background session failure title",
+                    ],
+                    environment: environment,
+                    timeout: 120)
+                let text = String(decoding: result.output, as: UTF8.self)
+                #expect(result.terminationStatus == 0, Comment(rawValue: text))
+                #expect(text.contains("\(probeKey)=ok"), Comment(rawValue: text))
+            }
             return
         }
 

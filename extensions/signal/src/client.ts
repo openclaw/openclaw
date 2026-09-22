@@ -11,6 +11,7 @@ export type SignalRpcOptions = {
   baseUrl: string;
   timeoutMs?: number;
   maxResponseBytes?: number;
+  assertDirectAdapterHandoff?: () => void;
 };
 
 type SignalRpcError = {
@@ -134,11 +135,13 @@ function requestSignalHttp(
     body?: string;
     timeoutMs: number;
     maxResponseBytes?: number;
+    assertDirectAdapterHandoff?: () => void;
   },
 ): Promise<SignalHttpResponse> {
   assertSignalHttpProtocol(url, "HTTP");
   const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const client = url.protocol === "https:" ? https : http;
+  options.assertDirectAdapterHandoff?.();
   return new Promise((resolve, reject) => {
     let settled = false;
     const deadline = setTimeout(() => {
@@ -231,6 +234,7 @@ export async function signalRpcRequest<T = unknown>(
     body,
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     maxResponseBytes: opts.maxResponseBytes,
+    assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
   });
   if (res.status === 201) {
     return undefined as T;

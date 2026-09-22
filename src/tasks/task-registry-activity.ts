@@ -1,9 +1,21 @@
+import { hasExecutionSettlement } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
+import {
+  AgentActivityItemSchema,
+  type AgentActivityItem,
+} from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  isCompleteAgentPreamble,
+  projectAgentActivityItem,
+} from "../agents/agent-activity-presentation.js";
 import { readCompletedFileMutationDelta } from "../agents/file-mutation-args.js";
 import { resolveFileMutationToolName } from "../agents/tool-mutation-names.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { readTaskBackingInstance } from "./task-backing-records.js";
 import { cloneTaskRecordForObserver } from "./task-registry-records.js";
 import {
   emitTaskRegistryObserverEvent,
@@ -19,12 +31,20 @@ const STREAM_TEXT_BUFFER_CHARS = 4_000;
 const ACTIVITY_FLUSH_MS = 1_000;
 const MAX_PENDING_DIFFS = 64;
 const MAX_CURRENT_TOOLS = 64;
+const MAX_PREPARED_ITEMS = 64;
+const liveActivitySchema = Type.Object(
+  {
+    ...AgentActivityItemSchema.properties,
+    itemId: Type.Optional(AgentActivityItemSchema.properties.itemId),
+  },
+  { additionalProperties: true },
+);
 
 type TaskActivitySnapshot = {
   lastActivity?: string;
   diffStat?: { files: number; added: number; removed: number };
   executionRunId?: string;
-  executionState?: "running" | "waiting" | "unknown";
+  executionState?: TaskActivityOverlayState["executionState"];
   executionWait?: TaskActivityOverlayState["executionWait"];
   lastActivityAt?: number;
   currentTool?: { name: string; startedAt: number };
@@ -32,16 +52,24 @@ type TaskActivitySnapshot = {
 
 function activityFor(task: TaskRecord): TaskActivityOverlayState {
   const runId = task.runId ?? "";
+  const preparedGeneration = readTaskBackingInstance(task.detail)?.generation;
   const existing = taskActivityByTaskId.get(task.taskId);
   if (existing?.runId === runId) {
+    if (existing.preparedGeneration !== preparedGeneration) {
+      existing.preparedItems.clear();
+      existing.preparedGeneration = preparedGeneration;
+    }
     return existing;
   }
   if (existing?.flushTimer) {
     clearTimeout(existing.flushTimer);
   }
+  existing?.preparedItems.clear();
   const created: TaskActivityOverlayState = {
     runId,
     currentTools: new Map(),
+    preparedItems: new Map(),
+    preparedGeneration,
     pendingApprovalIds: new Set(),
     assistantText: "",
     thinkingText: "",
@@ -87,6 +115,17 @@ function markChanged(taskId: string, activity: TaskActivityOverlayState): void {
   scheduleFlush(taskId, activity);
 }
 
+/** Coalesces producer-owned activity without persisting or duplicating its execution state. */
+export function invalidateTaskActivity(taskId: string, at: number): void {
+  const task = tasks.get(taskId);
+  if (!task || isTerminalTaskStatus(task.status)) {
+    return;
+  }
+  const activity = activityFor(task);
+  activity.lastActivityAt = Math.max(activity.lastActivityAt ?? at, at);
+  markChanged(taskId, activity);
+}
+
 function readExecutionWait(value: unknown): TaskActivityOverlayState["executionWait"] {
   const wait = asOptionalObjectRecord(value);
   if (wait?.kind === "approval" || wait?.kind === "user_input" || wait?.kind === "agent_messages") {
@@ -116,13 +155,65 @@ function readExecutionWait(value: unknown): TaskActivityOverlayState["executionW
   };
 }
 
+export function readPreparedTaskActivityItem(
+  event: AgentEventPayload,
+): AgentActivityItem | undefined {
+  if (event.stream !== "item" || !Value.Check(liveActivitySchema, event.data)) {
+    return undefined;
+  }
+  const item = projectAgentActivityItem(event.data);
+  const itemId =
+    item.itemId ??
+    (item.kind === "preamble" && item.progressText?.trim() && isCompleteAgentPreamble(item)
+      ? `preamble:${event.seq}`
+      : undefined);
+  if (!itemId) {
+    return undefined;
+  }
+  if (item.hideFromChannelProgress || item.suppressChannelProgress) {
+    return {
+      itemId,
+      kind: item.kind,
+      phase: item.phase,
+      title: "",
+      hideFromChannelProgress: item.hideFromChannelProgress,
+      suppressChannelProgress: true,
+    };
+  }
+  // Live events may carry private telemetry. Retain only the prepared public contract.
+  return {
+    itemId,
+    kind: item.kind,
+    phase: item.phase,
+    status: item.status,
+    title: item.title,
+    progressText: item.progressText,
+    toolCallId: item.toolCallId,
+    name: item.name,
+    meta: item.meta,
+    commandBearing: item.commandBearing,
+    startedAt: item.startedAt,
+    endedAt: item.endedAt,
+    error: item.error,
+    summary: item.summary,
+    approvalId: item.approvalId,
+    approvalSlug: item.approvalSlug,
+    hideFromChannelProgress: item.hideFromChannelProgress,
+    suppressChannelProgress: item.suppressChannelProgress,
+  };
+}
+
 /** Folds transient text and file activity into the in-memory task overlay. */
-export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPayload): void {
+export function recordTaskActivityEvent(
+  task: TaskRecord,
+  event: AgentEventPayload,
+): AgentActivityItem | undefined {
   const activity = activityFor(task);
   if (activity.executionRunId !== event.runId) {
     // Task identity survives a resumed execution; its in-flight calls do not.
     activity.executionRunId = event.runId;
     activity.currentTools.clear();
+    activity.preparedItems.clear();
     activity.pendingApprovalIds.clear();
     activity.approvalObservationOverflow = undefined;
     activity.pendingDiffByToolCallId.clear();
@@ -130,6 +221,24 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
     activity.executionWait = undefined;
     activity.executionId = undefined;
     activity.executionSourceId = undefined;
+  }
+  if (event.stream === "item") {
+    const prepared = readPreparedTaskActivityItem(event);
+    if (!prepared) {
+      return undefined;
+    }
+    activity.preparedItems.delete(prepared.itemId);
+    if (prepared.suppressChannelProgress) {
+      return prepared;
+    }
+    activity.preparedItems.set(prepared.itemId, prepared);
+    if (activity.preparedItems.size > MAX_PREPARED_ITEMS) {
+      const oldest = activity.preparedItems.keys().next().value;
+      if (oldest !== undefined) {
+        activity.preparedItems.delete(oldest);
+      }
+    }
+    return prepared;
   }
   if (event.stream === "execution") {
     const approval = asOptionalObjectRecord(event.data.approval);
@@ -142,19 +251,19 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
           activity.approvalObservationOverflow = true;
         }
       } else if (!activity.pendingApprovalIds.delete(approvalId)) {
-        return;
+        return undefined;
       }
       activity.lastActivityAt = event.ts;
       markChanged(task.taskId, activity);
-      return;
+      return undefined;
     }
     const sourceId = normalizeOptionalString(event.data.sourceId);
     if (event.data.invalidate === true && (!sourceId || activity.executionSourceId !== sourceId)) {
-      return;
+      return undefined;
     }
     const state = event.data.state;
     if (state !== "running" && state !== "waiting" && state !== "unknown") {
-      return;
+      return undefined;
     }
     const executionId = normalizeOptionalString(event.data.executionId);
     if (
@@ -179,12 +288,14 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
     activity.executionWait = state === "waiting" ? readExecutionWait(event.data.wait) : undefined;
     activity.lastActivityAt = event.ts;
     markChanged(task.taskId, activity);
-    return;
+    return undefined;
   }
   if (event.stream === "lifecycle") {
     const phase = event.data.phase;
     if (phase === "start" || phase === "end" || phase === "error") {
-      activity.executionState = phase === "start" ? "running" : "unknown";
+      // Execution can settle before the task owner records its final outcome.
+      activity.executionState =
+        phase === "start" ? "running" : hasExecutionSettlement(event.data) ? "finished" : "unknown";
       activity.executionWait = undefined;
       activity.pendingApprovalIds.clear();
       activity.approvalObservationOverflow = undefined;
@@ -193,7 +304,7 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
       activity.lastActivityAt = event.ts;
       markChanged(task.taskId, activity);
     }
-    return;
+    return undefined;
   }
   if (
     (event.stream === "tool" && event.data.phase === "start") ||
@@ -213,7 +324,7 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
   const textStream = event.stream;
   if (textStream === "assistant" || textStream === "thinking") {
     if (textStream === "thinking" && activity.hasAssistantActivity) {
-      return;
+      return undefined;
     }
     const key = textStream === "assistant" ? "assistantText" : "thinkingText";
     let cumulative: string;
@@ -222,13 +333,13 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
     } else if (typeof event.data.delta === "string") {
       cumulative = activity[key] + event.data.delta;
     } else {
-      return;
+      return undefined;
     }
     // Retain only a suffix for delta-only producers; full snapshots remain authoritative.
     activity[key] = sliceUtf16Safe(cumulative, -STREAM_TEXT_BUFFER_CHARS);
     const snippet = lastLineSnippet(cumulative);
     if (!snippet) {
-      return;
+      return undefined;
     }
     if (textStream === "assistant") {
       activity.hasAssistantActivity = true;
@@ -238,11 +349,11 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
       activity.lastActivity = snippet;
       markChanged(task.taskId, activity);
     }
-    return;
+    return undefined;
   }
 
   if (event.stream !== "tool") {
-    return;
+    return undefined;
   }
   const toolName = typeof event.data.name === "string" ? event.data.name : "";
   const toolCallId = normalizeOptionalString(event.data.toolCallId);
@@ -258,32 +369,32 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
   }
   const kind = resolveFileMutationToolName(toolName);
   if (!kind) {
-    return;
+    return undefined;
   }
   if (event.data.phase === "start") {
     const args = asOptionalObjectRecord(event.data.args);
     const delta = args ? readCompletedFileMutationDelta(kind, args) : undefined;
     if (!toolCallId || !delta) {
-      return;
+      return undefined;
     }
     if (
       !activity.pendingDiffByToolCallId.has(toolCallId) &&
       activity.pendingDiffByToolCallId.size >= MAX_PENDING_DIFFS
     ) {
-      return;
+      return undefined;
     }
     activity.pendingDiffByToolCallId.set(toolCallId, delta);
-    return;
+    return undefined;
   }
   if (event.data.phase !== "result") {
-    return;
+    return undefined;
   }
   const delta = toolCallId ? activity.pendingDiffByToolCallId.get(toolCallId) : undefined;
   if (toolCallId) {
     activity.pendingDiffByToolCallId.delete(toolCallId);
   }
   if (event.data.isError === true || !delta) {
-    return;
+    return undefined;
   }
   let changed = delta.added > 0 || delta.removed > 0;
   for (const file of delta.files) {
@@ -296,6 +407,20 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
     activity.removed += delta.removed;
     markChanged(task.taskId, activity);
   }
+  return undefined;
+}
+
+export function getTaskPreparedActivity(
+  taskId: string,
+): ReadonlyMap<string, AgentActivityItem> | undefined {
+  const activity = taskActivityByTaskId.get(taskId);
+  const task = tasks.get(taskId);
+  return activity &&
+    task &&
+    activity.runId === (task.runId ?? "") &&
+    activity.preparedGeneration === readTaskBackingInstance(task.detail)?.generation
+    ? activity.preparedItems
+    : undefined;
 }
 
 export function getTaskActivitySnapshot(taskId: string): TaskActivitySnapshot | undefined {
@@ -360,5 +485,6 @@ export function clearTaskActivity(taskId: string): void {
   if (activity?.flushTimer) {
     clearTimeout(activity.flushTimer);
   }
+  activity?.preparedItems.clear();
   taskActivityByTaskId.delete(taskId);
 }

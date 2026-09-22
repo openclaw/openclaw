@@ -8,6 +8,7 @@ import type {
   registerExecApprovalRequestForHostOrThrow,
   resolveRegisteredExecApprovalDecision,
 } from "../bash-tools.exec-approval-request.js";
+import { resolveReplyExpectation } from "../reply-completion.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
@@ -192,6 +193,7 @@ export async function executeNodeClaudeRun(params: {
         kind: "cli" as const,
         runId: contextParams.runId,
         toolAuthorityFingerprint: contextParams.toolAuthorityFingerprint,
+        terminalReplyExpectation: resolveReplyExpectation(contextParams),
         cancel: abortNodeRun,
       }
     : undefined;

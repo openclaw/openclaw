@@ -118,6 +118,7 @@ describe("ircPlugin pairing.notifyApproval", () => {
     expect(hoisted.sendPrivmsg).toHaveBeenCalledExactlyOnceWith(
       "paired-user",
       PAIRING_APPROVED_MESSAGE,
+      undefined,
     );
   });
 });

@@ -41,16 +41,16 @@ export class GatewayExplicitAuthRequiredError extends Error {
   }
 }
 
-export function ensureExplicitGatewayAuth(params: {
+export async function ensureExplicitGatewayAuth(params: {
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
   explicitAuth?: ExplicitGatewayAuth;
   resolvedAuth?: ExplicitGatewayAuth;
   deviceAuthScope?: string;
-  allowStoredOriginAuth?: (scope: string) => boolean;
+  allowStoredOriginAuth?: (scope: string) => boolean | Promise<boolean>;
   errorHint: string;
   configPath?: string;
-}): void {
+}): Promise<void> {
   if (!params.urlOverride || !params.urlOverrideSource) {
     return;
   }
@@ -63,7 +63,10 @@ export function ensureExplicitGatewayAuth(params: {
   ) {
     return;
   }
-  if (params.deviceAuthScope && params.allowStoredOriginAuth?.(params.deviceAuthScope) === true) {
+  if (
+    params.deviceAuthScope &&
+    (await params.allowStoredOriginAuth?.(params.deviceAuthScope)) === true
+  ) {
     return;
   }
   const sourceHint =
@@ -186,7 +189,7 @@ export async function resolveGatewayClientBootstrap(params: {
   explicitTlsFingerprint?: string;
   serviceTargetUrl?: string;
   skipImplicitAuth?: boolean;
-  allowStoredOriginAuth?: (scope: string) => boolean;
+  allowStoredOriginAuth?: (scope: string) => boolean | Promise<boolean>;
   overrideAuthErrorHint?: string;
   buildConnectionDetails?: (options: {
     config: OpenClawConfig;
@@ -301,7 +304,7 @@ export async function resolveGatewayClientBootstrap(params: {
       ? gatewayOriginScope(connection.url)
       : undefined;
   if (params.overrideAuthErrorHint && !configuredTarget) {
-    ensureExplicitGatewayAuth({
+    await ensureExplicitGatewayAuth({
       urlOverride: urlOverrideSource ? connection.url : undefined,
       urlOverrideSource,
       explicitAuth,

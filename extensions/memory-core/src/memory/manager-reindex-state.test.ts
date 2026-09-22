@@ -89,6 +89,7 @@ describe("memory reindex state", () => {
       code,
       owner: "openclaw",
       versionOrder: "older",
+      ...(code === "chunking_version" ? { chunkingVersionOnly: true } : {}),
     });
   });
 
@@ -449,5 +450,26 @@ describe("memory reindex state", () => {
     if (state.status === "mismatched") {
       expect(state.reason).toContain("expected fts-only");
     }
+  });
+  it.each<Partial<MemoryIndexMeta>>([
+    { sources: ["sessions"] },
+    { scopeHash: "different-corpus" },
+    { chunkTokens: 999 },
+    { chunkOverlap: 999 },
+    { ftsTokenizer: "porter" },
+    { provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION - 1 },
+    { provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION + 1 },
+    { chunkingVersion: MEMORY_CHUNKING_VERSION + 1 },
+  ])("never marks incompatible or newer indexes as lexical-compatible: %j", (change) => {
+    const state = resolveMemoryIndexIdentityState(
+      createIdentityParams({
+        meta: createMeta({
+          chunkingVersion: MEMORY_CHUNKING_VERSION - 1,
+          ...change,
+        }),
+      }),
+    );
+    expect(state.status).toBe("mismatched");
+    expect(state).not.toHaveProperty("chunkingVersionOnly", true);
   });
 });

@@ -1,11 +1,8 @@
-import { randomUUID } from "node:crypto";
 /**
  * Prepares stream subscription, tool execution, and the active run queue.
  */
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import { validateAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import {
@@ -24,17 +21,13 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import {
-  createNestedToolActivity,
-  readNestedToolActivity,
   projectNestedToolActivityForHooks,
   type NestedToolActivity,
 } from "../../../sessions/nested-tool-activity.js";
-import { raceWithAbortSignal } from "../../agent-tools.abort.js";
-import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { sanitizeToolResult } from "../../embedded-agent-tool-results.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
+import { resolveReplyExpectation } from "../../reply-completion.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
@@ -42,14 +35,8 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import {
-  copyInternalToolResultState,
-  getInternalToolExecutionPreparer,
-} from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
-import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { log } from "../logger.js";
 import {
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
@@ -63,7 +50,6 @@ import {
   type EmbeddedAgentQueueMessageOptions,
   setActiveEmbeddedRun,
 } from "../runs.js";
-import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
@@ -72,6 +58,7 @@ import {
   claimEmbeddedPendingUserInputAnswer,
   steerActiveSessionWithOptionalDeliveryWait,
 } from "./attempt-queue-message.js";
+import { createSubscribedToolSearchExecutor } from "./attempt-tool-search-executor.js";
 import {
   createEmbeddedAttemptDeferredLifecycleOwner,
   type EmbeddedAttemptDeferredLifecycleOwner,
@@ -82,16 +69,13 @@ import {
   resolveReportedModelRef,
 } from "./helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
-import { notifyToolActivity } from "./tool-activity-heartbeat.js";
-import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
+import type {
+  EmbeddedAttemptClientToolCallSlot,
+  EmbeddedRunAttemptParams,
+  StreamRunState,
+} from "./types.js";
 
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
-type StreamRunState = {
-  aborted: boolean;
-  promptError: unknown;
-  timedOut: boolean;
-  yieldDetected: boolean;
-};
 
 type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
   kind: "embedded";
@@ -134,8 +118,6 @@ export function prepareEmbeddedAttemptStream(input: {
   >[0]["trajectoryRecorder"];
 }) {
   const { attempt, hookRunner } = input;
-  const activityScope = randomUUID();
-  let nestedStartOrder = 0;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let acceptingSteerMessages = true;
@@ -378,130 +360,16 @@ export function prepareEmbeddedAttemptStream(input: {
   });
   toolMetasForTerminal = subscription.toolMetas;
 
-  const toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor = async (toolParams) => {
-    const runSignal = input.runAbortController.signal;
-    const signal = AbortSignal.any([toolParams.signal ?? runSignal, runSignal]);
-    const yieldRunSignal = toolParams.toolName === "sessions_yield" ? runSignal : undefined;
-    const startedAt = Date.now();
-    const startOrder = nestedStartOrder++;
-    const manager = input.activeSession.sessionManager;
-    const afterEntryId = manager.getAppendParentId();
-    if (toolParams.source === "openclaw" && toolParams.sourceName === "core") {
-      recordStructuredReplayTrustForToolCall(
-        toolParams.toolCallId,
-        toolParams.tool as never,
-        attempt.runId,
-      );
-    }
-    return await raceWithAbortSignal(
-      subscription.runToolLifecycle({
-        toolName: toolParams.toolName,
-        toolCallId: toolParams.toolCallId,
-        parentToolCallId: toolParams.parentToolCallId,
-        args: toolParams.input,
-        replaySafe: toolParams.replaySafe ?? input.isReplaySafeTool(toolParams.tool),
-        hideFromChannelProgress:
-          "hideFromChannelProgress" in toolParams.tool &&
-          toolParams.tool.hideFromChannelProgress === true,
-        onTerminal: async (terminal) => {
-          const message = {
-            ...createNestedToolActivity({
-              runId: attempt.runId,
-              scopeId: activityScope,
-              afterEntryId,
-              startOrder,
-              parentToolCallId: toolParams.parentToolCallId,
-              toolCallId: toolParams.toolCallId,
-              toolName: toolParams.toolName,
-              input: terminal.executedArguments,
-              result: sanitizeToolResult(terminal.result),
-              isError: terminal.isError,
-              startedAt,
-              timestamp: Date.now(),
-            }),
-            idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
-          };
-          await runWithOwnedSessionTranscriptWrite(
-            { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
-            () =>
-              withSessionManagerWrite(manager, () => {
-                // Revalidate the exact attempt after awaited acceptance and writer admission.
-                if (
-                  ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) !== queueHandle ||
-                  input.getRunState().aborted
-                ) {
-                  return;
-                }
-                if (isRecord(terminal.result)) {
-                  copyInternalToolResultState(terminal.result, message);
-                }
-                manager.appendMessage(message);
-                const recorded = readNestedToolActivity(
-                  redactTranscriptMessage(message, attempt.config),
-                );
-                if (!recorded) {
-                  throw new Error("Nested activity became invalid during transcript redaction");
-                }
-                input.nestedToolActivities.push(recorded);
-              }),
-          );
-          notifyToolActivity(attempt.runId);
-        },
-        // Acceptance belongs inside execution: observers must never see a rejected success.
-        execute: async (onImplementationStart) =>
-          await raceWithAbortSignal(
-            (async () => {
-              signal.throwIfAborted();
-              const preparer = getInternalToolExecutionPreparer(toolParams.tool);
-              if (!preparer) {
-                onImplementationStart();
-                return await toolParams.tool.execute(
-                  toolParams.toolCallId,
-                  toolParams.input,
-                  signal,
-                  toolParams.onUpdate,
-                  undefined as never,
-                );
-              }
-              const prepared = await preparer({
-                toolCallId: toolParams.toolCallId,
-                args: toolParams.input,
-                signal,
-                onUpdate: toolParams.onUpdate,
-              });
-              try {
-                if (prepared.kind === "immediate") {
-                  if (prepared.outcome.kind === "error") {
-                    throw prepared.outcome.error;
-                  }
-                  return prepared.outcome.result;
-                }
-                return await prepared.execute(onImplementationStart);
-              } finally {
-                prepared.dispose();
-              }
-            })().then((result) => {
-              signal.throwIfAborted();
-              // Nested tools bypass the session's tool_result middleware hook.
-              // Preserve committed delivery before output acceptance can reject it.
-              recordEmbeddedToolReceipt(
-                manager,
-                toolParams.toolCallId,
-                result.details,
-                toolParams.source === "openclaw" &&
-                  toolParams.sourceName === "core" &&
-                  toolParams.toolName === "message",
-              );
-              return toolParams.acceptResultBeforeProjection(result);
-            }),
-            signal,
-            yieldRunSignal,
-          ),
-      }),
-      signal,
-      yieldRunSignal,
-    );
-  };
+  const toolSearchCatalogExecutor = createSubscribedToolSearchExecutor({
+    attempt,
+    runSignal: input.runAbortController.signal,
+    sessionManager: input.activeSession.sessionManager,
+    subscription,
+    isCurrent: () =>
+      ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle && !input.getRunState().aborted,
+    isReplaySafeTool: input.isReplaySafeTool,
+    nestedToolActivities: input.nestedToolActivities,
+  });
 
   let externalAbortAccepted = false;
   const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
@@ -668,6 +536,7 @@ export function prepareEmbeddedAttemptStream(input: {
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
+    terminalReplyExpectation: resolveReplyExpectation(attempt),
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
     cancel: abortActiveRunExternally,
     abort: (reason) => abortActiveRunExternally(reason),

@@ -94,6 +94,8 @@ export function resolveGatewayScopedTools(
      * the loopback server. Run-contract tools re-check it before they write.
      */
     isGrantCurrent?: () => boolean;
+    /** Authenticated standalone invocation lifetime supplied by its HTTP/RPC owner. */
+    assertInvocationCurrent?: () => void;
     excludeToolNames?: Iterable<string>;
     /** Server-minted coding tools that must be mediated through the loopback surface. */
     mediatedToolNames?: Iterable<string>;
@@ -323,6 +325,15 @@ export function resolveGatewayScopedTools(
         })
       : undefined,
     runId: params.runId,
+    assertInvocationCurrent:
+      params.assertInvocationCurrent || params.isGrantCurrent
+        ? () => {
+            params.assertInvocationCurrent?.();
+            if (params.isGrantCurrent && !params.isGrantCurrent()) {
+              throw new Error("Gateway tool invocation grant is no longer active");
+            }
+          }
+        : undefined,
     ...(swarmCollectorContext
       ? {
           swarmCollector: true,

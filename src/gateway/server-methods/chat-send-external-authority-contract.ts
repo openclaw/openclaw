@@ -7,6 +7,7 @@ type ChatSendExternalAdmissionParams = {
   sessionKey: string;
   spawnedBy?: string;
   client: GatewayRequestHandlerOptions["client"];
+  isCurrent?: () => boolean;
   inputProvenance?: InputProvenance;
   hasExplicitOrigin: boolean;
   hasRestoredCronContinuation: boolean;

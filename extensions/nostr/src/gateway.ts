@@ -1,8 +1,5 @@
 // Nostr plugin module implements gateway behavior.
-import {
-  resolveStableChannelMessageIngress,
-  type StableChannelIngressIdentityParams,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   runPassiveAccountLifecycle,
@@ -113,7 +110,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
     rawBody: string,
     contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
   ) =>
-    await resolveStableChannelMessageIngress({
+    await channelRuntime.inbound.ingress.resolveStable({
       channelId: "nostr",
       accountId: account.accountId,
       identity: nostrIngressIdentity,
@@ -359,7 +356,14 @@ export const nostrOutboundAdapter: NostrOutboundAdapter = {
       messageSendingHooks: true,
     },
   },
-  sendText: async ({ cfg, to, text, accountId }) => {
+  sendText: async ({
+    cfg,
+    to,
+    text,
+    accountId,
+    assertDirectAdapterHandoff,
+    onPlatformSendDispatch,
+  }) => {
     const core = getNostrRuntime();
     const aid = accountId ?? resolveDefaultNostrAccountId(cfg);
     const bus = activeBuses.get(aid);
@@ -376,7 +380,10 @@ export const nostrOutboundAdapter: NostrOutboundAdapter = {
       throw new Error("Nostr send requires non-empty text after markdown stripping.");
     }
     const normalizedTo = normalizePubkey(to);
-    const eventId = await bus.sendDm(normalizedTo, message);
+    const eventId = await bus.sendDm(normalizedTo, message, {
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+    });
     return attachChannelToResult("nostr", {
       to: normalizedTo,
       messageId: eventId,

@@ -1,78 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
+import {
+  createOpenAiCompatibleCliUsageCases,
+  joinJsonlFrames,
+  claudeStreamEvent,
+  claudeTextDelta,
+} from "./cli-output.test-helpers.js";
 
-const OPENAI_COMPATIBLE_CLI_USAGE_CASES = [
-  {
-    name: "standard OpenAI snake_case token fields",
-    raw: {
-      prompt_tokens: 17,
-      completion_tokens: 5,
-      total_tokens: 22,
-      prompt_tokens_details: { cached_tokens: 6 },
-    },
-    normalized: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
-  },
-  {
-    name: "camelCase OpenAI-compatible token fields",
-    raw: {
-      promptTokens: 17,
-      completionTokens: 5,
-      total_tokens: 22,
-      prompt_tokens_details: { cached_tokens: 6 },
-    },
-    normalized: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
-  },
-  {
-    name: "existing input/output field precedence",
-    raw: {
-      input_tokens: 19,
-      prompt_tokens: 99,
-      output_tokens: 7,
-      completion_tokens: 77,
-      total_tokens: 26,
-      prompt_tokens_details: { cached_tokens: 4 },
-    },
-    normalized: { input: 15, output: 7, cacheRead: 4, cacheWrite: undefined, total: 26 },
-  },
-  {
-    name: "flat Codex cached input is included in input_tokens",
-    raw: {
-      input_tokens: 15,
-      output_tokens: 4,
-      cached_input_tokens: 6,
-    },
-    normalized: { input: 9, output: 4, cacheRead: 6, cacheWrite: undefined, total: undefined },
-  },
-  {
-    name: "flat Codex input includes both cached reads and cache writes",
-    raw: {
-      input_tokens: 100,
-      output_tokens: 10,
-      cached_input_tokens: 40,
-      cache_write_input_tokens: 60,
-    },
-    normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
-  },
-  {
-    name: "nested Codex input includes both cached reads and cache writes",
-    raw: {
-      input_tokens: 100,
-      output_tokens: 10,
-      input_tokens_details: { cached_tokens: 40, cache_write_tokens: 60 },
-    },
-    normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
-  },
-] as const;
-
-function joinJsonlFrames(...frames: unknown[]) {
-  return frames
-    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
-    .join("\n");
-}
-
-function claudeStreamEvent(event: Record<string, unknown>) {
-  return { type: "stream_event", event };
-}
+const OPENAI_COMPATIBLE_CLI_USAGE_CASES = createOpenAiCompatibleCliUsageCases();
 
 function claudeMessageStart(id?: string) {
   return claudeStreamEvent({ type: "message_start", ...(id ? { message: { id } } : {}) });
@@ -87,14 +22,6 @@ function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number)
     type: "content_block_start",
     ...(index === undefined ? {} : { index }),
     content_block: contentBlock,
-  });
-}
-
-function claudeTextDelta(text: string, index?: number | string) {
-  return claudeStreamEvent({
-    type: "content_block_delta",
-    ...(index === undefined ? {} : { index }),
-    delta: { type: "text_delta", text },
   });
 }
 
@@ -879,4 +806,108 @@ describe("createCliJsonlStreamingParser", () => {
 
     expect(commentaryTexts).toEqual(expectedCommentary);
   });
+});
+
+it.each([
+  { name: "discrete", results: ["First answer.", "Second answer.", "Final answer."] },
+  { name: "shared lexical prefix", results: ["Hi", "History matters.", "Final answer."] },
+  {
+    name: "shared paragraph prefix",
+    results: ["First answer.", "First answer.\nMore detail.", "Final answer."],
+  },
+])(
+  "delivers completed $name results before transport settlement and retains retry boundaries",
+  ({ results }) => {
+    const completed: string[] = [];
+    const indices: number[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onCompletedReply: (text, assistantMessageIndex) => {
+        completed.push(text);
+        indices.push(assistantMessageIndex);
+      },
+    });
+    for (const result of results.slice(0, 2)) {
+      parser.push(
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          result,
+          openclaw_interim_result: true,
+        }) + "\n",
+      );
+    }
+    expect(completed).toEqual(results.slice(0, 2));
+    expect(indices).toEqual([0, 1]);
+    parser.push(JSON.stringify({ type: "result", subtype: "success", result: results[2] }) + "\n");
+    parser.finish();
+    expect(completed).toEqual(results.slice(0, 2));
+    expect(parser.getOutput()).toMatchObject({
+      text: results.join("\n"),
+      textParts: results,
+    });
+  },
+);
+
+it("does not redeliver repeated or empty held result acknowledgments", () => {
+  const completed: string[] = [];
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: () => {},
+    onCompletedReply: (text) => completed.push(text),
+  });
+  for (const result of [
+    "First answer.",
+    "",
+    "First answer.",
+    "Second answer.",
+    "Second answer.",
+    "",
+  ]) {
+    parser.push(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        result,
+        openclaw_interim_result: true,
+      }) + "\n",
+    );
+  }
+  parser.finish();
+  expect(completed).toEqual(["First answer.", "Second answer."]);
+  expect(parser.getOutput()).toMatchObject({
+    text: "First answer.\nSecond answer.",
+    textParts: ["First answer.", "Second answer."],
+  });
+  expect(parser.hasTerminalResult()).toBe(false);
+  parser.push(
+    JSON.stringify({ type: "result", subtype: "success", result: "Second answer." }) + "\n",
+  );
+  expect(parser.hasTerminalResult()).toBe(true);
+  expect(parser.getOutput()?.textParts).toEqual(["First answer.", "Second answer."]);
+});
+
+it.each([
+  {
+    subtype: "error_during_execution",
+    is_error: true,
+    result: "Failed answer",
+    errors: ["synthetic failure"],
+  },
+  { subtype: "success", result: "", terminal_reason: "hook_stopped", stop_reason: "tool_use" },
+])("does not dispatch failed held results: $subtype $terminal_reason", (result) => {
+  const completed: string[] = [];
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: () => {},
+    onCompletedReply: (text) => completed.push(text),
+  });
+  parser.push(JSON.stringify({ type: "result", ...result, openclaw_interim_result: true }) + "\n");
+  parser.finish();
+  expect(completed).toEqual([]);
+  expect(parser.getOutput()?.errorText).toBeTruthy();
 });

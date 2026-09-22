@@ -27,7 +27,7 @@ vi.mock("../daemon/systemd-peer-native.js", async (importOriginal) => ({
 vi.mock("../daemon/exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
-  runExec: vi.fn<typeof import("../process/exec.js").runExec>(async (command, _args, options) => {
+  runExec: vi.fn<typeof import("../process/exec.js").runExec>(async (command, args, options) => {
     if (
       command !== "/usr/bin/plutil" ||
       typeof options !== "object" ||
@@ -35,7 +35,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
     ) {
       throw new Error("Unexpected subprocess in service-inspection fixture");
     }
-    return decodeLaunchAgentPlistFixture(options.input);
+    return decodeLaunchAgentPlistFixture(options.input, args[1]);
   }),
 }));
 vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({

@@ -23,6 +23,16 @@ function textMessage(role: AgentMessage["role"], text: string): AgentMessage {
   } as AgentMessage;
 }
 
+function senderAttributedTextMessage(
+  text: string,
+  sender: { senderId?: string; senderName?: string; senderUsername?: string },
+): AgentMessage {
+  return {
+    ...textMessage("user", text),
+    __openclaw: sender,
+  } as unknown as AgentMessage;
+}
+
 function summaryMessages(type: "compaction" | "branch_summary", summary: string): AgentMessage[] {
   const entry = { id: "summary", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", summary };
   return buildSessionContext([
@@ -213,8 +223,38 @@ describe("projectContextEngineAssemblyForCodex", () => {
       originalHistoryMessages: [textMessage("user", "seed")],
       prompt: "next",
     });
-    expect(ordered.promptText).toContain("[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\nthree");
+    expect(ordered.promptText).toContain(
+      "[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\ntool result [content omitted]",
+    );
     expect(ordered.prePromptMessageCount).toBe(1);
+  });
+
+  it("preserves stable user provenance while leaving legacy user rows unattributed", async () => {
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        senderAttributedTextMessage("Ada owns the deployment decision.", {
+          senderId: "ada-id",
+          senderName: "Ada",
+        }),
+        senderAttributedTextMessage("Bea owns the rollback decision.", {
+          senderId: "bea-id",
+          senderName: "Bea",
+        }),
+        senderAttributedTextMessage("A legacy note has no authenticated author.", {
+          senderName: "Ada",
+        }),
+      ],
+      originalHistoryMessages: [],
+      prompt: "Continue.",
+    });
+
+    expect(result.promptText).toContain(
+      '[user sender={"id":"ada-id","name":"Ada"}]\nAda owns the deployment decision.',
+    );
+    expect(result.promptText).toContain(
+      '[user sender={"id":"bea-id","name":"Bea"}]\nBea owns the rollback decision.',
+    );
+    expect(result.promptText).toContain("[user]\nA legacy note has no authenticated author.");
   });
 
   it("neutralizes explicit mention sigils in projected history but not the current request", async () => {
@@ -290,6 +330,9 @@ describe("projectContextEngineAssemblyForCodex", () => {
         } as unknown as AgentMessage,
         {
           role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "exec",
+          isError: false,
           content: [{ type: "toolResult", toolUseId: "call-1", content: "API_KEY=sk-secret" }],
           timestamp: 2,
         } as unknown as AgentMessage,
@@ -325,6 +368,9 @@ describe("projectContextEngineAssemblyForCodex", () => {
         } as unknown as AgentMessage,
         {
           role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "exec",
+          isError: false,
           content: [
             {
               type: "toolResult",
@@ -356,6 +402,44 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).not.toContain("842761");
     expect(result.promptText).toContain('"attemptsRemaining": 3');
   });
+
+  it.each(["elide", "preserve"] as const)(
+    "applies %s to canonical tool results without exposing media bytes",
+    async (toolPayloadMode) => {
+      const message: AgentMessage = {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        isError: false,
+        content: [
+          { type: "text", text: "OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok" },
+          { type: "image", data: "private-image-bytes", mimeType: "image/png" },
+        ],
+        timestamp: 2,
+      };
+      const result = await projectContextEngineAssemblyForCodex({
+        assembledMessages: [message],
+        originalHistoryMessages: [],
+        prompt: "continue",
+        toolPayloadMode,
+      });
+
+      expect(result.promptText).toContain("tool result: call-1");
+      expect(result.promptText).not.toContain("sk-1234567890abcdef");
+      expect(result.promptText).not.toContain("private-image-bytes");
+      if (toolPayloadMode === "preserve") {
+        expect(result.promptText).toContain("status ok");
+        expect(result.promptText).toContain("tool result: call-1 (exec)");
+      } else {
+        expect(result.promptText).toContain("[content omitted]");
+        expect(result.promptText).not.toContain("status ok");
+      }
+      expect(message.content[0]).toEqual({
+        type: "text",
+        text: "OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok",
+      });
+    },
+  );
 
   it.each(["assistant", "compaction", "branch_summary"] as const)(
     "bounds oversized %s context",

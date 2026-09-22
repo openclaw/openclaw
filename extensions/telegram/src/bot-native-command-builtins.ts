@@ -1,4 +1,3 @@
-// Telegram plugin module implements built-in native command behavior.
 import {
   loadPreparedModelCatalog,
   resolveAgentConfig,

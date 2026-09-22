@@ -261,13 +261,6 @@
   }
 }
 
-.model-providers__fallbacks,
-.model-providers__inline-form,
-.model-providers__probe {
-  display: grid;
-  gap: 12px;
-}
-
 .model-providers__setup .settings-row {
   min-height: 92px;
   padding-block: var(--space-5);
@@ -311,6 +304,8 @@
 
 .model-providers__inline-form,
 .model-providers__probe {
+  display: grid;
+  gap: 12px;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -350,14 +345,6 @@
 .model-providers__probe-target small {
   flex-basis: 100%;
   color: var(--muted);
-}
-
-.model-providers__add-form {
-  display: grid;
-  grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1.4fr) auto;
-  align-items: end;
-  gap: 12px;
-  margin-top: 16px;
 }
 
 .model-providers__label-with-help {
@@ -463,10 +450,6 @@
     justify-content: flex-start;
   }
 
-  .model-providers__add-form {
-    grid-template-columns: 1fr;
-  }
-
   .model-providers__credentials {
     align-items: flex-start;
     flex-direction: column;
@@ -551,4 +534,81 @@ openclaw-model-account-usage,
     grid-row: 2;
     margin-left: var(--space-4);
   }
+}
+
+/* Agent-scoped provider connection picker; the secure wizard keeps its own layout. */
+.model-provider-login .model-setup-wizard__footer {
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.model-provider-login__providers {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  max-height: min(360px, 45dvh);
+  margin: 0;
+  padding: var(--space-1);
+  overflow-y: auto;
+  list-style: none;
+}
+
+.model-provider-login__option.btn {
+  justify-content: flex-start;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 52px;
+  padding: var(--space-3);
+  text-align: start;
+  white-space: normal;
+}
+
+.model-provider-login__copy {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-provider-login__copy > span {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 400;
+}
+
+.model-provider-login__provider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-provider-login__secondary {
+  margin-inline-end: auto;
+}
+
+.model-providers__installed-agent + .model-providers__installed-agent,
+.settings-row + .model-providers__installed-agent {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.model-providers__installed-agent .settings-row--toggle {
+  gap: var(--space-3);
+}
+
+.model-providers__agent-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.model-providers__agent-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.model-providers__installed-agent-message {
+  margin: 0 var(--space-4) var(--space-3);
 }

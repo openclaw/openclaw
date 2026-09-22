@@ -50,6 +50,8 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-transaction.ts",
     "src/infra/sqlite-user-version.ts",
     "src/infra/sqlite-wal.ts",
+    // Historical structural migrations extracted from the admitted schema owner.
+    "src/state/openclaw-agent-db-legacy-schema.ts",
     "src/state/openclaw-agent-db-maintenance.ts",
     "src/state/openclaw-agent-db-registry.ts",
     "src/state/openclaw-agent-db-registry-listing.ts",
@@ -62,6 +64,9 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-session-migrations.ts",
     "src/state/openclaw-agent-db-session-provenance.ts",
     "src/state/openclaw-agent-db.ts",
+    // Versioned payload rebuild preserves native bytes and 64-bit physical rowids.
+    "src/state/openclaw-agent-transcript-payload-migration.ts",
+    "src/state/openclaw-agent-transcript-fts-schema.ts",
     "src/state/openclaw-state-db-audit-migration.ts",
     "src/state/openclaw-state-db-delivery-queue-backfill.ts",
     "src/state/openclaw-state-db-legacy-backfills.ts",
@@ -81,6 +86,9 @@ const rawSqliteAllowPathGroups = {
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
   "cross-process SQLite coordination locks": ["src/infra/sqlite-coordinator.ts"],
+  "schema-less ownership token: lock only, no data queries; Kysely has no lock primitive": [
+    "src/infra/sqlite-snapshot-staging.ts",
+  ],
   "backup snapshot maintenance": [
     "src/commands/backup-verify.ts",
     "src/infra/backup-create.ts",
@@ -105,7 +113,7 @@ const rawSqliteAllowPathGroups = {
   ],
   "read-only SQLite status probes": [
     "src/commands/doctor-db-bloat.read.ts",
-    "src/commands/status.scan.shared.ts",
+    "extensions/memory-core/src/memory/manager-status-presence.ts",
   ],
   "doctor SQLite maintenance and legacy state migration": [
     "src/commands/doctor-agent-memory-schema.ts",

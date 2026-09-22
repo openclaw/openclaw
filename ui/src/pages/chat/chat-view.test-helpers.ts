@@ -1,16 +1,32 @@
-import type { ReactiveControllerHost } from "lit";
+import { render, type ReactiveControllerHost } from "lit";
 import { vi } from "vitest";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
-import type { renderChat } from "./chat-view.ts";
+import { renderChat } from "./chat-view.ts";
 import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./components/chat-message-markdown.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+
+export function requireElement(container: Element, selector: string, label: string): Element {
+  const element = container.querySelector(selector);
+  if (element === null) {
+    throw new Error(`expected ${label}`);
+  }
+  return element;
+}
+
+export function getComposerTextarea(container: Element): HTMLTextAreaElement {
+  return requireElement(
+    container,
+    ".agent-chat__composer-combobox > textarea",
+    "composer textarea",
+  ) as HTMLTextAreaElement;
+}
 
 export function createTestTranscript(): ChatTranscriptController {
   return new ChatTranscriptController({
@@ -177,7 +193,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onQueueRemove: () => undefined,
     onQueueSteer: () => undefined,
     onClearHistory: () => undefined,
-    onOpenSessionCheckpoints: () => undefined,
     agentsList: null,
     currentAgentId: "main",
     onAgentChange: () => undefined,
@@ -188,4 +203,14 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     basePath: "",
     ...overrides,
   };
+}
+
+export function renderChatView(overrides: Partial<ChatProps> = {}) {
+  const container = document.createElement("div");
+  render(renderChat(createChatProps(overrides)), container);
+  return container;
+}
+
+export function renderChatInto(container: HTMLElement, overrides: Partial<ChatProps> = {}) {
+  render(renderChat(createChatProps(overrides)), container);
 }

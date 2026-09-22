@@ -81,11 +81,28 @@ with its scheduler-owned continuation.
   After the successor binds its run scope, that scope owns the entitlement until
   it closes. Retiring the delivered child batch cannot revoke a still-running
   requester.
+- **Completion-source custody.** Registration retains the live operator source
+  separately from execution. Individual delivery and requester settlement use
+  that captured permission ceiling, not the async caller that later schedules
+  cleanup. Committed settlement, retirement, or source/Gateway revocation
+  releases it; provisional writes and same-task replacement cannot drop it.
+  Retained results do not retain usable authority after that release, and a
+  batch cannot combine incompatible operator sources. Cancellation-only batches
+  keep the existing cancellation caller's admission, rather than using the
+  revoked target to authorize a new turn. Mixed result/cancellation batches
+  require every original source to remain live and compatible. An explicit
+  delivery retry captures its newly admitted caller while live and transfers
+  custody only after the new delivery generation commits; it does not reopen the
+  expired source. Restart still admits a
+  fresh recovery owner rather than reviving the previous process capability.
 - **Stable audience.** A nested wake uses internal delivery. A settlement
   continuation targeting a live `sessions_yield`-paused row adopts that row;
-  ordinary inter-session messages do not adopt that row. A parent's
-  `sessions_send` turn to its native child has separate activity tracking and
-  keeps the child's original result or pending yield intact. Explicit plugin follow-ups
+  unrelated inter-session messages do not adopt that row. An ordinary
+  `sessions_send` from the controlling parent to its paused native child resumes
+  the existing task through the same exact-generation admission owner as explicit
+  `mode: "resume"`. Task-owned completion remains the sole result delivery path.
+  An explicit `mode: "followup"` keeps separate activity tracking and leaves the
+  child's original result or pending yield intact. Explicit plugin follow-ups
   naming a new requester continue to create their own delivery obligation.
 - **Deterministic batches.** Frozen run IDs are sorted. Findings use creation
   time, completion time, and child session identity as tie-breakers. Superseded
@@ -93,7 +110,11 @@ with its scheduler-owned continuation.
   IDs, and yield generation.
 - **Bounded delivery.** Existing limits remain: three attempts, three ambiguous
   transport replays, and ten stale deferrals. Active descendants do not consume
-  the stale-deferral budget. A private handoff's observation timeout does not
+  the stale-deferral budget. Delivery bookkeeping for executions that ended
+  before the current batch's earliest child was created cannot block its
+  continuation. Active descendants and delivery settlement overlapping that
+  batch still hold the wake; historical failure records remain available.
+  A private handoff's observation timeout does not
   cancel the underlying Gateway turn. When the Gateway reports that turn as
   in flight, settlement observes the same request without spending failure
   attempts or discarding the child results. Gateway admission and execution
@@ -105,31 +126,48 @@ with its scheduler-owned continuation.
 
 ## Progress after yield
 
-The old agent turn closes its admission authority and channel dispatch cleans
-up its draft. Task notifications can continue after this handoff: opt a child
-into `state_changes` with `openclaw tasks notify <lookup> state_changes`.
-The default `done_only` and `silent` policies produce no progress notifications.
+Yield closes the old execution, not the delegated work. On Discord and Telegram,
+an interactive requester can hand its existing progress card to the core task
+presenter. The message ID, checklist, commentary, and bounded public display
+state survive the handoff. Channel cleanup stops the old stream without
+deleting the adopted card. The final answer remains a separate delivery.
+Discord requires `streaming.mode: "progress"`; this handoff does not change
+channel streaming defaults.
 
-The existing task delivery owner coalesces host-observed child activity into a
-single update per requester batch over 15 seconds. It uses the original
-channel, account, recipient, and thread, and mirrors the update to the requester
-transcript. Updates show bounded task labels, execution or wait state, and tool
-activity counts. Private child prose, tool arguments, and results stay out of
-these notifications. A batch shows at most eight tasks in creation order;
-additional activity remains available in Tasks.
+An adopted card can continue for `done_only` children; `silent` children remain
+excluded. Channel commentary, tool-detail, and quiet-mode settings still apply.
+Without a usable card, the shared reply pipeline provides its normal waiting
+acknowledgment when the turn would otherwise be silent. It does not create a
+second detached progress card.
+Tasks explicitly set to `state_changes` still receive brief state notifications
+through the same core batching owner. Without an adopted card, those notices do
+not include command arguments or commentary.
 
-Progress does not start a requester turn or mark a result delivered. A resumed
-requester, changed batch generation, cancellation, reset, muted task, or closed
-Gateway invalidates queued progress. The delivery owner rechecks authority
-after loading the transport and immediately before the adapter sends. It never
-reuses the closed turn's callbacks or drafts.
+Core coalesces prepared child activity over 15 seconds and edits the captured
+channel, account, recipient, and thread. Updates show named child activity and
+terminal outcomes within the channel's line budget. Public commentary and tool
+details follow the shared compositor and redaction policy; private prompts,
+reasoning, and raw child results are not progress content. An admitted requester
+continuation can update the retained checklist.
 
-Progress is best effort and process-local: up to 128 batches retain at most 32
-task references each. An overflowing queue leaves activity in Tasks; transport
-failure does not affect completion. Progress without a concrete channel target
-remains visible in Tasks and does not wake the parent just to narrate activity.
-Restart discards queued progress while the existing durable completion owner
-continues to own the final result.
+After the requester confirms delivery of its final answer and its current child
+batch is terminal, core waits for pending edits and deletes the adopted message
+on channels with guarded deletion support. Silent private consumption, failed or
+uncertain final delivery, and another delegation wave do not trigger this cleanup.
+The final answer remains separate; a cleanup failure never retries that answer.
+
+Progress does not start a requester turn or credit completion delivery.
+Cancellation, reset, replacement, silence, and Gateway shutdown invalidate stale
+publication authority. Each edit rechecks current ownership after asynchronous
+preparation and immediately before transport handoff. Stored message IDs and
+display snapshots do not revive old callbacks or execution authority.
+
+The existing conversation receipt owner persists the bounded display snapshot.
+Restart restores presentation from that receipt only for the current task and
+requester window. Process-local queues remain bounded to 128 batches with at
+most 32 accepted children each. Missing or ambiguous receipts do not authorize
+a replacement message; activity remains available in Tasks. Presentation
+failure never takes ownership of the final result from completion delivery.
 
 Cron observes the registry's descendant settlement boundary before starting
 its bounded synthesis grace period. A yielded task remains pending between the

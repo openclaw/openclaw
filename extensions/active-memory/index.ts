@@ -24,7 +24,6 @@ import {
   buildCircuitBreakerKey,
   forgetActiveRecallRun,
   getCachedResult,
-  getCircuitBreakerEntry,
   isCircuitBreakerOpen,
   resetActiveRecallStateForTests,
   setCachedResult,
@@ -151,6 +150,11 @@ export default definePluginEntry({
           if (enabled !== undefined) {
             await api.runtime.config.mutateConfigFile({
               afterWrite: { mode: "auto" },
+              writeOptions: {
+                assertCurrent: Array.isArray(ctx.gatewayClientScopes)
+                  ? undefined
+                  : ctx.assertOwnerCurrent,
+              },
               mutate: (draft) => {
                 const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, enabled);
                 Object.assign(draft, nextConfig);
@@ -584,7 +588,6 @@ const testing = {
   setSetupGraceTimeoutMsForTests,
   setTimeoutPartialDataGraceMsForTests,
   setCachedResult,
-  getCircuitBreakerEntry,
 };
 
 export { testing };

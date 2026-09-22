@@ -1,5 +1,7 @@
 import { vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import {
   buildEmbeddedRunnerAssistant,
   createMockUsage,
@@ -12,6 +14,9 @@ import { createEmbeddedRunFailoverRetryController } from "./failover-retry-contr
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 export type TransportDropScenario = {
+  config?: OpenClawConfig;
+  assistant?: AssistantMessage;
+  providerOwner?: PreparedProviderFailoverOwner;
   assistantTexts?: string[];
   errorMessage?: string;
   errorBody?: string;
@@ -32,6 +37,8 @@ export type TransportDropScenario = {
   pluginHarnessOwnsTransport?: boolean;
   retryAvailable?: boolean;
   replaySafe?: boolean;
+  fallbackConfigured?: boolean;
+  providerRetryMaxDelayMs?: number;
   terminal?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["terminal"];
   usage?: AssistantMessage["usage"];
   terminate?: boolean;
@@ -52,26 +59,30 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     stopReason: "toolUse",
     content: toolCalls.map((id) => ({ type: "toolCall", id, name: "exec", arguments: {} })),
   });
-  const erroredAssistant = buildEmbeddedRunnerAssistant({
-    stopReason: scenario.terminal?.kind === "timeout" ? "aborted" : "error",
-    errorMessage:
-      scenario.errorMessage ??
-      (scenario.terminal?.kind === "timeout" ? "LLM request timed out." : "WebSocket error"),
-    errorBody: scenario.errorBody,
-    errorCode: scenario.errorCode,
-    errorType: scenario.errorType,
-    diagnostics:
-      scenario.diagnostics ??
-      ([
-        {
-          type: "provider_transport_failure",
-          error: { message: "WebSocket error" },
-          details: { phase: "after_message_stream_start" },
-        },
-      ] as never),
-    content: scenario.content ?? [{ type: "thinking", thinking: "checking the results" }],
-    usage: scenario.usage ?? createMockUsage(0, 0),
-  });
+  const erroredAssistant =
+    scenario.assistant ??
+    buildEmbeddedRunnerAssistant({
+      stopReason: scenario.terminal?.kind === "timeout" ? "aborted" : "error",
+      errorMessage:
+        scenario.errorMessage ??
+        (scenario.terminal?.kind === "timeout" ? "LLM request timed out." : "WebSocket error"),
+      errorBody: scenario.errorBody,
+      errorCode: scenario.errorCode,
+      errorType: scenario.errorType,
+      diagnostics:
+        scenario.diagnostics ??
+        ([
+          {
+            type: "provider_transport_failure",
+            error: { message: "WebSocket error" },
+            details: { phase: "after_message_stream_start" },
+          },
+        ] as never),
+      content: scenario.content ?? [{ type: "thinking", thinking: "checking the results" }],
+      usage: scenario.usage ?? createMockUsage(0, 0),
+    });
+  const provider = erroredAssistant.provider;
+  const modelId = erroredAssistant.model;
   const messagesSnapshot = [
     { role: "user", content: "why is it unauthorized?" },
     ...(toolCalls.length > 0 ? [toolAssistant] : []),
@@ -110,6 +121,9 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     },
     ...(scenario.terminal ? { terminal: scenario.terminal } : {}),
     ...(scenario.yieldDetected ? { yieldDetected: true } : {}),
+    ...(scenario.providerRetryMaxDelayMs !== undefined
+      ? { providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs }
+      : {}),
     ...(scenario.replaySafe
       ? { currentAttemptReplayMetadata: { replaySafe: true, hadPotentialSideEffects: false } }
       : {}),
@@ -122,14 +136,14 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
   const continueFromCurrentTranscript = vi.fn();
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
-    runParams: { runId: "run:transport-drop" } as Parameters<
+    runParams: { runId: "run:transport-drop", config: scenario.config } as Parameters<
       typeof createEmbeddedRunFailoverRetryController
     >[0]["runParams"],
-    provider: "openai",
-    modelId: "gpt-5.6-luna",
+    provider,
+    modelId,
     globalLane: "test",
     agentDir: "/tmp/provider-recovery-test",
-    fallbackConfigured: false,
+    fallbackConfigured: scenario.fallbackConfigured ?? false,
     profileFailureStore: { version: 1, profiles: {} },
     getLastProfileId: () => undefined,
     getSessionId: () => "session:transport-drop",
@@ -139,7 +153,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     advanceAuthProfile: vi.fn(async () => false),
   });
   if (scenario.retryAvailable === false) {
-    failoverRetryController.setTransientRetryBudget(0);
+    failoverRetryController.observeAttempt({ providerRetryMaxRetries: 0 });
   }
   vi.spyOn(failoverRetryController, "maybeMarkAuthProfileFailure");
   const onAgentEvent = vi.fn();
@@ -147,7 +161,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     recoverEmbeddedRunAttempt({
       runInput: {
         runParams: {
-          config: {},
+          config: scenario.config ?? {},
           agentId: "main",
           sessionId: "session:transport-drop",
           runId: "run:transport-drop",
@@ -158,9 +172,9 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         laneController: { throwIfAborted: vi.fn() },
       },
       preparedRuntime: {
-        provider: "openai",
-        modelId: "gpt-5.6-luna",
-        model: { id: "gpt-5.6-luna" },
+        provider,
+        modelId,
+        model: { id: modelId },
         genericCompactionRecoveryAllowed: scenario.compactionEnabled ?? false,
         snapshot: () => ({
           thinkLevel: "off",
@@ -168,6 +182,9 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
           outerContextTokenMeta: {},
           contextTokenBudget: scenario.compactionEnabled ? 200_000 : undefined,
           pluginHarnessOwnsTransport: scenario.pluginHarnessOwnsTransport ?? false,
+          providerRuntimeHandle: scenario.providerOwner
+            ? { plugin: scenario.providerOwner }
+            : undefined,
         }),
       },
       normalizedAttempt: {
@@ -180,7 +197,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         terminalState,
         setTerminalLifecycleMeta: vi.fn(),
         attemptCompactionCount: 0,
-        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        activeErrorContext: { provider, model: modelId },
         resolveReplayInvalidForAttempt: () => true,
         canRestartForLiveSwitch: false,
       },

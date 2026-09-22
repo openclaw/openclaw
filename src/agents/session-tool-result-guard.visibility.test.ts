@@ -45,6 +45,12 @@ describe("guardSessionManager transcript visibility", () => {
   it.each([
     { label: "memory maintenance", trigger: "memory", inputProvenance: undefined, hidden: true },
     {
+      label: "progress card refresh",
+      trigger: "user",
+      inputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
+      hidden: true,
+    },
+    {
       label: "subagent coordination",
       trigger: "user",
       inputProvenance: {
@@ -118,11 +124,11 @@ describe("guardSessionManager transcript visibility", () => {
     },
   );
 
-  it("hides a steered child input without hiding parent answers across reused runs", async () => {
+  it("preserves per-message provenance and run visibility across reused runs", async () => {
     const { sessionManager, target } = await openPersistedSessionManager();
     const childProvenance = {
       kind: "inter_session" as const,
-      sourceTool: "sessions_send",
+      sourceTool: "  sessions_send\t",
       sourceRole: "subagent" as const,
     };
     const parent = guardSessionManager(sessionManager, { runId: "human-run" });
@@ -138,13 +144,19 @@ describe("guardSessionManager transcript visibility", () => {
         timestamp: 2,
       }),
     );
-    guardSessionManager(sessionManager, {
+    const coordination = guardSessionManager(sessionManager, {
       runId: "coordination-run",
       inputProvenance: childProvenance,
-    }).appendMessage(
+    });
+    coordination.appendMessage(
+      applyInputProvenanceToUserMessage(makeUserMessage("Answer my follow-up", 3), {
+        kind: "external_user",
+      }),
+    );
+    coordination.appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Report received" }],
-        timestamp: 3,
+        timestamp: 4,
       }),
     );
     guardSessionManager(sessionManager, {
@@ -153,14 +165,15 @@ describe("guardSessionManager transcript visibility", () => {
     }).appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Your bug is fixed and tested" }],
-        timestamp: 4,
+        timestamp: 5,
       }),
     );
 
     const messages = SessionManager.open(target).buildSessionContext().messages;
-    expect(messages).toHaveLength(4);
+    expect(messages).toHaveLength(5);
     expect(messages.map((message) => Reflect.get(message, "display") === false)).toEqual([
       true,
+      false,
       false,
       true,
       false,
@@ -168,6 +181,10 @@ describe("guardSessionManager transcript visibility", () => {
     expect(messages[0]).toMatchObject({
       content: "Worker finished the reproduction",
       provenance: childProvenance,
+    });
+    expect(messages[2]).toMatchObject({
+      content: "Answer my follow-up",
+      provenance: { kind: "external_user" },
     });
   });
 

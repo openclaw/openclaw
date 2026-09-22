@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { spawnWithFallback } from "../spawn-utils.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
@@ -205,6 +205,55 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     expect(child.connected).toBe(false);
   });
 
+  it.each(["SIGTERM", "SIGINT"] as const)(
+    "keeps command completion and cleanup spawning available after a supervisor %s",
+    async (signal) => {
+      const host = await start();
+      const brokerPid = host.pid!;
+      const child = host.spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+          process.on('message', () => {
+            process.send('completed', () => process.disconnect());
+          });
+          process.send('ready');
+        `,
+        ],
+        { stdio: ["ignore", "ignore", "ignore", "ipc"] },
+      );
+      await child.ready();
+      expect((await once(child, "message"))[0]).toBe("ready");
+
+      process.kill(brokerPid, signal);
+      const [message, closed] = await Promise.all([
+        once(child, "message"),
+        once(child, "close"),
+        new Promise<void>((resolve, reject) => {
+          child.send("finish", (error) => (error ? reject(error) : resolve()));
+        }),
+      ]);
+      expect(message[0]).toBe("completed");
+      expect(closed).toEqual([0, null]);
+
+      const cleanup = host.spawn(
+        process.execPath,
+        ["-e", "process.stdout.write(String(process.ppid))"],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      await cleanup.ready();
+      let output = "";
+      cleanup.stdout!.on("data", (chunk) => {
+        output += chunk;
+      });
+      expect(await once(cleanup, "close")).toEqual([0, null]);
+      expect(Number(output)).toBe(brokerPid);
+      expect(host.pid).toBe(brokerPid);
+    },
+    15_000,
+  );
+
   it("cleans a detached descendant after its root exits and the host disconnects", async () => {
     const host = await start();
     const child = host.spawn(
@@ -262,23 +311,50 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
   it("fails in-flight commands on broker loss and restarts without local spawning", async () => {
     const host = await start();
     const previousPid = host.pid!;
-    const child = host.spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = host.spawn(
+      process.execPath,
+      [
+        "-e",
+        `
+      let stopping = false;
+      process.on('SIGTERM', () => {
+        if (!stopping) {
+          stopping = true;
+          setTimeout(() => process.exit(0), 2000);
+        }
+      });
+      process.stdout.write('ready');
+      setInterval(() => {}, 1000);
+    `,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
     await child.ready();
+    expect(String((await once(child.stdout!, "data"))[0])).toBe("ready");
+    const facts = {
+      childPid: child.pid!,
+      childStartIdentity: getFileLockProcessStartTime(child.pid!),
+      lossReason: "not observed",
+      cleanupSettled: false,
+    };
     const failure = new Promise<Error>((resolve) => {
       child.once("error", resolve);
     });
     try {
       process.kill(previousPid, "SIGKILL");
-      expect(await failure).toBeInstanceOf(SpawnBrokerError);
-      const stopDeadline = Date.now() + 1000;
-      while (!isPidDefinitelyDead(child.pid!) && Date.now() < stopDeadline) {
-        await delay(25);
-      }
-      expect(isPidDefinitelyDead(child.pid!)).toBe(true);
+      const loss = await failure;
+      facts.lossReason =
+        loss.cause instanceof Error ? `${loss.message}: ${loss.cause.message}` : loss.message;
+      expect(loss, JSON.stringify(facts)).toBeInstanceOf(SpawnBrokerError);
+      await expect(
+        host.waitForCleanup().then(() => {
+          facts.cleanupSettled = true;
+        }),
+        JSON.stringify(facts),
+      ).resolves.toBeUndefined();
+      expect(isPidDefinitelyDead(facts.childPid), JSON.stringify(facts)).toBe(true);
       await host.ready();
-      expect(host.pid).not.toBe(previousPid);
+      expect(host.pid, JSON.stringify(facts)).not.toBe(previousPid);
       const next = host.spawn(
         process.execPath,
         ["-e", "process.stdout.write(String(process.ppid))"],
@@ -290,7 +366,7 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
         stdout += chunk;
       });
       await once(next, "close");
-      expect(Number(stdout)).toBe(host.pid);
+      expect(Number(stdout), JSON.stringify(facts)).toBe(host.pid);
     } finally {
       try {
         process.kill(child.pid!, "SIGKILL");

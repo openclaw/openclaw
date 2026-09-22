@@ -42,6 +42,12 @@ const surfaces = [
     fact: "embeds OPENCLAW_GATEWAY_TOKEN",
     command: "openclaw gateway install --force",
   },
+  {
+    kind: "version-mismatch",
+    name: "installed service version mismatch",
+    fact: "Gateway service version: 2026.4.15",
+    command: "openclaw gateway install --force",
+  },
 ] as const;
 type StatusSurface = (typeof surfaces)[number]["kind"];
 
@@ -158,6 +164,15 @@ async function createStatus(surface: StatusSurface, accountHome: string): Promis
     };
   } else if (surface === "cached-label") {
     status.service.runtime = { status: "running", pid: 4242, cachedLabel: true };
+  } else if (surface === "version-mismatch") {
+    status.cli = { version: "2026.6.35", entrypoint: path.join(accountHome, "bin/openclaw") };
+    status.service.targetRole = "target";
+    status.service.layout = {
+      execStart: "/usr/bin/node /service-install/dist/index.js gateway",
+      packageRoot: path.join(accountHome, "service-install"),
+      packageVersion: "2026.4.15",
+    };
+    status.rpc = { ok: false, error: "protocol mismatch" };
   } else {
     const { auditGatewayServiceConfig } = await import("../../daemon/service-audit.js");
     const command = {
@@ -220,6 +235,7 @@ describe.each(deniedInvocations)(
           expect(output).toMatch(recovery);
           expect(output).not.toMatch(/\bgateway\s+install\b/);
           expect(output).not.toMatch(/\bdoctor\s+--repair\b/);
+          expect(output).not.toMatch(/\bdoctor\s+--fix\b/);
           expect(output).not.toContain("launchctl bootout");
           expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
         });
@@ -229,6 +245,55 @@ describe.each(deniedInvocations)(
 );
 
 describe("eligible status recovery", () => {
+  it("directs version-manager runtime findings to Doctor before reinstall", async () => {
+    await withStatusFixture(
+      () => ({}),
+      async (accountHome, print) => {
+        const status = await createStatus("config-audit", accountHome);
+        status.service.configAudit = {
+          ok: false,
+          issues: [
+            {
+              code: "gateway-runtime-node-version-manager",
+              message:
+                "Gateway service uses Node from a version manager; it can break after upgrades.",
+              level: "recommended",
+            },
+          ],
+        };
+        print(status, { json: false });
+        expect(humanOutput()).toContain("openclaw doctor");
+        expect(humanOutput()).toContain("Reinstalling alone may select the same runtime");
+        expect(humanOutput()).not.toContain("openclaw gateway install --force");
+      },
+    );
+  });
+
+  it.each([false, true])(
+    "keeps remote service-install facts diagnostic-only when install blocked=%s",
+    async (blocked) => {
+      await withStatusFixture(
+        () => ({ OPENCLAW_NIX_MODE: blocked ? "1" : undefined }),
+        async (accountHome, print) => {
+          const status = await createStatus("version-mismatch", accountHome);
+          status.service.targetRole = "diagnostic-only";
+          status.rpc = { ok: false, url: "wss://remote.example:19443", error: "protocol mismatch" };
+          print(status, { json: false });
+
+          const output = humanOutput();
+          expect(output).toContain("CLI version: 2026.6.35");
+          expect(output).toContain("Gateway service version: 2026.4.15");
+          expect(output).toContain("service-install");
+          expect(output).toContain("The Gateway did not report its own version");
+          expect(output).not.toMatch(/\breinstall\b/i);
+          expect(output).not.toMatch(/\bgateway\s+install\b/);
+          expect(output).not.toMatch(/\bdoctor\s+--fix\b/);
+          expect(output).not.toContain("Nix mode detected");
+        },
+      );
+    },
+  );
+
   it.each([true, false])(
     "gateway status keeps a missing diagnostic-only unit informational when probe ok=%s",
     async (ok) => {
@@ -276,6 +341,10 @@ describe("eligible status recovery", () => {
           const output = humanOutput();
           expectProblemAndLogs(output, fact);
           expect(output).toContain(command);
+          if (kind === "version-mismatch") {
+            expect(output).toContain("service-install");
+            expect(output).toContain("The Gateway did not report its own version");
+          }
           if (kind === "cached-label") {
             expect(output).toContain("launchctl bootout gui/$UID/ai.openclaw.gateway");
           }
@@ -296,6 +365,9 @@ describe("eligible status recovery", () => {
         print(await createStatus("missing-unit", accountHome), { json: false });
         expect(humanOutput()).toContain("openclaw --profile work gateway install");
         expect(humanOutput()).not.toContain("service management skipped");
+        print(await createStatus("version-mismatch", accountHome), { json: false });
+        expect(humanOutput()).toContain("openclaw --profile work doctor --fix");
+        expect(humanOutput()).toContain("openclaw --profile work gateway install --force");
       },
     );
   });

@@ -6,9 +6,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { readBundledPluginAssetHooks } from "../../scripts/bundled-plugin-assets.mts";
 import { collectSourceCheckoutPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { createWorktreeSetupPlan, parseWorktreeSetupArgs } from "../../scripts/worktree-setup.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { collectEagerRuntimeImportClosure } from "./eager-import-closure.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -16,7 +16,7 @@ const scriptPath = path.join(repoRoot, "scripts/worktree-setup.mjs");
 
 // Seed the entrypoint and its lazy runtime helpers; copy their eager source closure.
 // Cold subprocesses still run original bytes without a loader or node_modules.
-const COLD_SCRIPT_INPUTS = collectEagerRuntimeImportClosure([
+const COLD_SCRIPT_INPUTS = collectRuntimeImportClosure(repoRoot, [
   "scripts/worktree-setup.mjs",
   "scripts/bundled-plugin-assets.mts",
   "scripts/pnpm-runner.mts",

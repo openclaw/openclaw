@@ -84,6 +84,7 @@ export function resolveProjectChip(params: {
 }
 
 export function renderProjectChip(params: {
+  idPrefix?: string;
   state: ProjectChipState;
   browseAvailable: boolean;
   isAdmin: boolean;
@@ -166,7 +167,7 @@ export function renderProjectChip(params: {
   return html`
     <span class="new-session-page__select">
       <button
-        id="new-session-project-trigger"
+        id=${(params.idPrefix ?? "new-session") + "-project-trigger"}
         type="button"
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
@@ -196,7 +197,7 @@ export function renderProjectChip(params: {
     </span>
     <wa-popover
       class="new-session-page__select new-session-page__project-popover new-session-page__picker-popover"
-      for="new-session-project-trigger"
+      for=${(params.idPrefix ?? "new-session") + "-project-trigger"}
       placement="bottom-start"
       without-arrow
       @wa-show=${params.onPopoverShow}
@@ -207,7 +208,7 @@ export function renderProjectChip(params: {
         params.browserOpen
           ? renderPlaceBrowser({
               browser: params.browser,
-              id: "new-session-place-browser",
+              id: (params.idPrefix ?? "new-session") + "-place-browser",
               label: params.gatewayLabel,
               registerProjectPath: params.registerProjectPath,
               registeringProject: params.registeringProject,

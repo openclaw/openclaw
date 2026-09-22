@@ -20,7 +20,7 @@ const source = readFileSync(
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function fixture() {
+function fixture(platform = "linux", version = "12.3.4") {
   const root = tempDirs.make("pnpm-image-");
   const image = join(root, "image");
   const runnerTemp = join(root, "runner");
@@ -32,20 +32,24 @@ function fixture() {
   const store = realpathSync.native(storeDir);
   function archive(name: string) {
     writeFileSync(join(stage, "pnpm"), name);
+    mkdirSync(join(stage, "bin"), { recursive: true });
+    writeFileSync(join(stage, "bin", "pnpm.mjs"), `console.log(${JSON.stringify(version)});`);
     execFileSync("tar", ["-czf", join(image, name), "-C", root, "stage"]);
     return createHash("sha512")
       .update(readFileSync(join(image, name)))
       .digest("hex");
   }
-  const wrapperHash = archive("pnpm-12.3.4.tgz");
-  const nativeHash = archive("exe.linux-x64-12.3.4.tgz");
+  const wrapperHash = archive(`pnpm-${version}.tgz`);
+  const nativeHash = archive(`exe.linux-x64-${version}.tgz`);
   // The fixture is a trusted script with synthetic anchors, not a candidate-supplied pin.
   const script = source
     .replaceAll("/opt/crabbox/toolchain-archives", image)
-    .replaceAll("process.platform", '"linux"')
+    .replaceAll("process.platform", JSON.stringify(platform))
     .replaceAll("process.arch", '"x64"')
     .replace(
-      "961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
+      version === "12.4.0"
+        ? "37536c26ed40ab4134b6511e09f6b27f3ebb45687468f2406ca3805279a4e5ca158c1931350ad9774d6ab2108d71b3dbaeb39943159294375e4d053e8e05685c"
+        : "961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
       wrapperHash,
     )
     .replace(
@@ -54,7 +58,7 @@ function fixture() {
     );
   const scriptPath = join(root, "seed.mjs");
   writeFileSync(scriptPath, script);
-  const spec = `pnpm@12.3.4+sha512.${wrapperHash}`;
+  const spec = `pnpm@${version}+sha512.${wrapperHash}`;
   return {
     root,
     image,
@@ -68,6 +72,7 @@ function fixture() {
           RUNNER_TEMP: runnerTemp,
           COREPACK_HOME: join(root, "old-corepack"),
           PNPM_CONFIG_STORE_DIR: store,
+          COREPACK_ENABLE_NETWORK: "0",
         },
       });
     },
@@ -75,6 +80,33 @@ function fixture() {
 }
 
 describe("pnpm image archive consumer", () => {
+  it("seeds the pinned Windows wrapper without installing a Linux native binary", () => {
+    const f = fixture("win32", "12.4.0");
+    const result = f.run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).not.toBe("");
+    const pnpmRoot = join(result.stdout.trim(), "v1", "pnpm", "12.4.0");
+    const metadata = JSON.parse(readFileSync(join(pnpmRoot, ".corepack"), "utf8"));
+    expect(metadata.hash).toBe(f.spec.slice(f.spec.indexOf("+") + 1));
+    expect(metadata.bin.pnpm).toBe("./bin/pnpm.mjs");
+    expect(existsSync(join(pnpmRoot, "node_modules"))).toBe(false);
+    expect(
+      execFileSync(process.execPath, [join(pnpmRoot, metadata.bin.pnpm)], {
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("12.4.0");
+    expect(existsSync(join(f.root, "old-corepack"))).toBe(false);
+  });
+
+  it("does not admit a corrupt Windows wrapper with networking disabled", () => {
+    const f = fixture("win32", "12.4.0");
+    writeFileSync(join(f.image, "pnpm-12.4.0.tgz"), "corrupt wrapper");
+    const result = f.run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(readdirSync(f.runnerTemp)).toEqual([]);
+  });
+
   it("seeds each job from verified archives into independent private Corepack state", () => {
     const f = fixture();
     const homes: string[] = [];

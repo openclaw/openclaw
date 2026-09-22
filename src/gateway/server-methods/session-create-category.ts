@@ -3,15 +3,15 @@ import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { sessionLog } from "./sessions-shared.js";
 
-export function registerCreatedSessionCategory(
+export async function registerCreatedSessionCategory(
   category: string | undefined,
   context: Parameters<typeof emitSessionsChanged>[0],
-): void {
+): Promise<void> {
   if (!category) {
     return;
   }
   try {
-    if (ensureSessionGroupRegistered(category)) {
+    if (await ensureSessionGroupRegistered(category)) {
       // Catalog bookkeeping follows the authoritative session commit and has
       // its own invalidation. Its failure must not make a durable create ambiguous.
       emitSessionsChanged(context, { reason: "groups" });

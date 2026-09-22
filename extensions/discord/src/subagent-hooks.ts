@@ -1,4 +1,3 @@
-// Discord plugin module implements subagent hooks behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalStringifiedId,

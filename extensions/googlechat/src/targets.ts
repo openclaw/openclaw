@@ -71,6 +71,7 @@ function stripMessageSuffix(target: string): string {
 async function resolveGoogleChatOutboundSpaceDetails(params: {
   account: ResolvedGoogleChatAccount;
   target: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<{ name: string; resource?: GoogleChatSpace }> {
   const normalized = normalizeGoogleChatTarget(params.target);
   if (!normalized) {
@@ -84,6 +85,7 @@ async function resolveGoogleChatOutboundSpaceDetails(params: {
     const dm = await findGoogleChatDirectMessage({
       account: params.account,
       userName: base,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     });
     if (!dm?.name) {
       throw new Error(`No Google Chat DM found for ${base}`);
@@ -96,6 +98,7 @@ async function resolveGoogleChatOutboundSpaceDetails(params: {
 export async function resolveGoogleChatOutboundSpace(params: {
   account: ResolvedGoogleChatAccount;
   target: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<string> {
   return (await resolveGoogleChatOutboundSpaceDetails(params)).name;
 }

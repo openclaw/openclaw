@@ -1,3 +1,5 @@
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
+import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import {
   emitAgentEvent,
   emitAgentEventForRunContext,
@@ -71,6 +73,7 @@ export function createEmbeddedModelState(
   let lastUsage: NormalizedUsage | undefined;
   let retryUsage: NormalizedUsage | undefined;
   let completed: AssistantMessage | undefined;
+  let successfulModelResponse = false;
   let publishedMessageModel: string | undefined;
   const runContext = getAgentRunContext(params.runId);
 
@@ -154,7 +157,8 @@ export function createEmbeddedModelState(
       if (
         evt.type !== "message_start" &&
         evt.type !== "message_update" &&
-        evt.type !== "message_end"
+        evt.type !== "message_end" &&
+        evt.type !== "turn_end"
       ) {
         return;
       }
@@ -167,6 +171,23 @@ export function createEmbeddedModelState(
       }
       publishMessageModel(message, evt.type === "message_start");
       switch (evt.type) {
+        case "turn_end":
+          // message_end may describe an async tool fragment, not a completed provider response.
+          if (
+            !successfulModelResponse &&
+            (message.stopReason === "stop" || message.stopReason === "toolUse") &&
+            !isProviderRefusalAssistantError(message)
+          ) {
+            successfulModelResponse = true;
+            params.onContextAccountingEvent?.({
+              kind: "model",
+              contextTokens: deriveSessionTotalTokens({
+                lastCallUsage: normalizeUsage(message.usage),
+              }),
+              successful: true,
+            });
+          }
+          return;
         case "message_start":
           pending = undefined;
           return;
@@ -190,7 +211,7 @@ export function createEmbeddedModelState(
           });
           pending = undefined;
           // Context-engine projection can later mutate transcript objects; retain this run's result.
-          completed = structuredClone(message);
+          completed = applyAssistantDeliveryDirectives(structuredClone(message));
           lastUsage ??= message.stopReason === "error" ? retryUsage : undefined;
           retryUsage = undefined;
           params.onContextAccountingEvent?.({
@@ -198,6 +219,7 @@ export function createEmbeddedModelState(
             contextTokens: deriveSessionTotalTokens({
               lastCallUsage: normalizeUsage(message.usage),
             }),
+            successful: false,
           });
       }
     },
@@ -205,5 +227,6 @@ export function createEmbeddedModelState(
     getUsageTotals: () => toNormalizedUsage(totals),
     getLastAssistantUsage: () => normalizeUsage(lastUsage),
     getCurrentAttemptAssistant: () => (completed ? structuredClone(completed) : undefined),
+    hasSuccessfulModelResponse: () => successfulModelResponse,
   };
 }

@@ -9,6 +9,7 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../../../../src/chat/transcript-display-position.js";
 import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
+import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { resolveToolBlockId } from "./chat-thread-items.ts";
 import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
@@ -52,6 +53,11 @@ function resultBlock(card: ToolCard): Record<string, unknown> {
     details: card.details,
     isError: card.isError,
     exitCode: card.exitCode,
+    __openclaw: {
+      id: card.resultMessageId,
+      toolOutput: card.toolOutput,
+      truncated: card.outputTruncated,
+    },
   };
 }
 
@@ -148,7 +154,17 @@ function readProjections(item: MessageItem, index: number): Projection[] {
       block: {
         ...raw,
         id,
-        ...(call ? { arguments: card?.args } : { text: card?.outputText }),
+        ...(call
+          ? { arguments: card?.args }
+          : {
+              text: card?.outputText,
+              // Preserve the result owner when the call becomes the grouped row.
+              __openclaw: {
+                id: card?.resultMessageId,
+                toolOutput: card?.toolOutput,
+                truncated: card?.outputTruncated,
+              },
+            }),
         ...(card?.details !== undefined ? { details: card.details } : {}),
         ...(card?.isError !== undefined ? { isError: card.isError } : {}),
         ...(card?.exitCode !== undefined ? { exitCode: card.exitCode } : {}),
@@ -245,7 +261,11 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       invocation.live = projection.source.message;
     }
     if (projection.source.standalone) {
-      invocation.attachments.push(...projection.source.remaining);
+      // Attachment pixels follow the winning result too; a live omission must
+      // not survive beside its persisted image or return on a late tool event.
+      if (invocation.result?.source === projection.source) {
+        invocation.attachments = projection.source.remaining;
+      }
       projection.source.remaining = [];
     }
     invocations.set(invocationKey, invocation);
@@ -300,8 +320,33 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       (names.get(identity(owner))?.size ?? 0) > 1 ? owner.name : undefined,
     ]);
     const bundle = bundles.get(bundleKey);
+    const prepared = new Map<string, ReturnType<typeof readPreparedActivity>[number]>();
+    for (const source of [message, invocation.live, result?.source.message]) {
+      const activityItems = readPreparedActivity(source).filter(
+        (activity) =>
+          (activity.toolCallId ?? activity.itemId) === owner.id &&
+          !activity.suppressChannelProgress,
+      );
+      if (
+        source === result?.source.message &&
+        Array.isArray(asRecord(source)?.activity) &&
+        activityItems.length === 0
+      ) {
+        prepared.clear();
+      }
+      for (const activity of activityItems) {
+        const previous = prepared.get(activity.itemId);
+        if (previous?.phase !== "end" || activity.phase === "end") {
+          prepared.set(activity.itemId, activity);
+        }
+      }
+    }
     if (bundle) {
       bundle.item.message.content.push(...content);
+      bundle.item.message.activity = [
+        ...readPreparedActivity(bundle.item.message),
+        ...prepared.values(),
+      ];
       bundle.index = Math.min(bundle.index, index);
       continue;
     }
@@ -313,6 +358,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
         role: invocation.call ? "assistant" : message.role,
         runId: owner.runId,
         content,
+        activity: [...prepared.values()],
         ...(transcript ? { messageId: transcript } : {}),
         ...(invocation.live
           ? {

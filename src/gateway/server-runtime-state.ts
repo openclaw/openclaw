@@ -8,10 +8,12 @@ import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeCore } from "../plugins/runtime/types-core.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiRootState } from "./control-ui.js";
@@ -152,6 +154,8 @@ export async function createGatewayHttpTransport(params: {
     params: Parameters<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>[0],
   ) => ReturnType<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>;
 }> {
+  const spawnBroker = getSpawnBroker();
+  const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   if (params.testListener) {
     const address = params.testListener.address();
     if (
@@ -175,13 +179,17 @@ export async function createGatewayHttpTransport(params: {
     | undefined;
   const getHookDispatcher = async () => {
     const { createGatewayHookDispatcher } = await import("./server/hooks.js");
-    return (loadedHookDispatcher ??= createGatewayHookDispatcher({
-      deps: params.deps,
-      logHooks: params.logHooks,
-      ...(params.getGatewayRequestContext
-        ? { resolveGatewayContext: params.getGatewayRequestContext }
-        : {}),
-    }));
+    return (loadedHookDispatcher ??= runWithSpawnBroker(spawnBroker, () =>
+      runWithReadOnlyWorkers(() =>
+        createGatewayHookDispatcher({
+          deps: params.deps,
+          logHooks: params.logHooks,
+          ...(params.getGatewayRequestContext
+            ? { resolveGatewayContext: params.getGatewayRequestContext }
+            : {}),
+        }),
+      ),
+    ));
   };
   const handleHooksRequest: HooksRequestHandler = async (req, res) => {
     const hooksConfig = params.hooksConfig();
@@ -327,6 +335,12 @@ export async function createGatewayHttpTransport(params: {
   const portalService = createGatewayPortalService({
     httpBindHosts,
     httpServers,
+    ingress: params.cfg.gateway?.portals?.ingress,
+    managedTailscale: Boolean(managedTailscaleMode),
+    gatewayOrigins: [
+      params.cfg.gateway?.publicOrigin,
+      ...(params.cfg.gateway?.controlUi?.allowedOrigins ?? []),
+    ].filter((origin): origin is string => Boolean(origin)),
     ...(params.gatewayTls?.enabled ? { tlsOptions: params.gatewayTls.tlsOptions } : {}),
   });
   const reportUnattributableProxy = createGatewayUnattributableProxyReporter(params.log);
@@ -566,6 +580,9 @@ export async function createGatewayHttpTransport(params: {
       httpBindHosts.push(...bindHosts.filter((host) => boundHosts.has(host)));
       if (httpBindHosts.length === 0) {
         throw new Error("Gateway HTTP server failed to start");
+      }
+      if (!params.updateCanary) {
+        await portalService.startIngress();
       }
       // Published updaters retain the live sandbox port but already pass --update-canary.
       if (!params.updateCanary && params.cfg.mcp?.apps?.enabled === true) {

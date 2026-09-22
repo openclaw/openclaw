@@ -1,9 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { it, expect, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { CallGatewayOptions } from "../../../gateway/call.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
@@ -12,6 +10,7 @@ import { createHookRunner } from "../../../plugins/hooks.js";
 import { createPluginRecord } from "../../../plugins/loader-records.js";
 import { createRuntimeTestRegistry } from "../../../plugins/registry-runtime.test-helpers.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../../../plugins/runtime/index.js";
 import { createPluginSubagentRequesterContext } from "../../../plugins/runtime/subagent-requester-context.js";
 import {
@@ -26,14 +25,11 @@ import {
   resetDetachedTaskLifecycleRuntimeForTests,
 } from "../../../tasks/detached-task-runtime.test-support.js";
 import { findTaskByRunId, getTaskById } from "../../../tasks/runtime-internal.js";
-import { onTaskRegistryChange } from "../../../tasks/task-registry-state.js";
+import { onTaskRegistryChange } from "../../../tasks/task-registry.store.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import {
-  registerSubagentRun,
-  testing as registryTesting,
-} from "../registry/subagent-registry.test-helpers.js";
+import { registerSubagentRun } from "../registry/subagent-registry.test-helpers.js";
 
 type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
 
@@ -100,37 +96,33 @@ export function registerNativeCancellationCases<
     const waitFacade = await runtime.createAgentTurnFacade({
       client: createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" } }),
     });
-    registryTesting.setDepsForTest({
-      callGateway: async <T>(request: CallGatewayOptions): Promise<T> => {
-        const params = asOptionalRecord(request.params);
-        if (request.method !== "agent.wait" || typeof params?.runId !== "string") {
-          throw new Error("Unexpected native cancellation fixture request");
-        }
-        const response = await waitFacade.wait<T>(
-          {
-            runId: params.runId,
-            timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
-          },
-          request.timeoutMs ?? undefined,
-          waitCleanup.signal,
-        );
-        if (params.runId === targetRunId) {
-          terminalReady.resolve(response);
-          await releaseTerminal.promise;
-        }
-        return response;
-      },
-    });
-    registerSubagentRun({
-      runId: parentRunId,
-      childSessionKey: parentSessionKey,
-      requesterSessionKey: requester,
-      controllerSessionKey: requester,
-      requesterDisplayKey: requester,
-      task: "Own the selected native task",
-      cleanup: "keep",
-      expectsCompletionMessage: false,
-    });
+    const waitForAgent = vi
+      .spyOn(runtime.recovery, "waitForAgent")
+      .mockImplementation(
+        async <T>(
+          params: Parameters<typeof runtime.recovery.waitForAgent>[0],
+          timeoutMs?: number,
+        ): Promise<T> => {
+          const response = await waitFacade.wait<T>(params, timeoutMs, waitCleanup.signal);
+          if (params.runId === targetRunId) {
+            terminalReady.resolve(response);
+            await releaseTerminal.promise;
+          }
+          return response;
+        },
+      );
+    withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
+      registerSubagentRun({
+        runId: parentRunId,
+        childSessionKey: parentSessionKey,
+        requesterSessionKey: requester,
+        controllerSessionKey: requester,
+        requesterDisplayKey: requester,
+        task: "Own the selected native task",
+        cleanup: "keep",
+        expectsCompletionMessage: false,
+      }),
+    );
     const ancestor = subagentRuns.get(parentRunId)!;
     api.on("before_dispatch", async () => {
       await api.runtime.subagent.run({
@@ -169,16 +161,18 @@ export function registerNativeCancellationCases<
           operatorRoleActor: { kind: "system" },
         },
       );
-      registerSubagentRun({
-        runId: targetRunId,
-        childSessionKey: targetKey,
-        requesterSessionKey: parentSessionKey,
-        controllerSessionKey: parentSessionKey,
-        requesterDisplayKey: parentSessionKey,
-        task: "Selected native task",
-        cleanup: "keep",
-        expectsCompletionMessage: false,
-      });
+      withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
+        registerSubagentRun({
+          runId: targetRunId,
+          childSessionKey: targetKey,
+          requesterSessionKey: parentSessionKey,
+          controllerSessionKey: parentSessionKey,
+          requesterDisplayKey: parentSessionKey,
+          task: "Selected native task",
+          cleanup: "keep",
+          expectsCompletionMessage: false,
+        }),
+      );
       const task = expectDefined(findTaskByRunId(targetRunId), "selected task");
       const target = expectDefined(context.chatAbortControllers.get(targetRunId), "target run");
       const onAbort = vi.fn(() => entered.resolve());
@@ -322,6 +316,7 @@ export function registerNativeCancellationCases<
       }
       resetDetachedTaskLifecycleRuntimeForTests();
       failures.push(...(await closeBoundGateway(bound, runtime, targetRunId)));
+      waitForAgent.mockRestore();
       throwBoundFailures(failures);
     }
   });

@@ -21,7 +21,7 @@ describe("selected ancestry after an independent child-list admission", () => {
       const currentAt = initialAt + 50;
       const managedSuccessor = mode === "managed successor";
       const successor = mode !== "child metadata";
-      const key = "agent:main:subagent:child-admission";
+      const key = "agent:main:dashboard:child-admission";
       const p1 = "agent:main:child-controller";
       const p2 = "agent:main:new-navigation-parent";
       const grandparentKey = "agent:main:old-grandparent";

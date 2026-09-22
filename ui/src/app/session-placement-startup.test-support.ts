@@ -99,6 +99,22 @@ export function createPlacementStartupHarness(
   };
 }
 
+export function blockStorageWrites() {
+  const storage = sessionStorage;
+  vi.stubGlobal("sessionStorage", {
+    get length() {
+      return storage.length;
+    },
+    key: storage.key.bind(storage),
+    getItem: storage.getItem.bind(storage),
+    removeItem: storage.removeItem.bind(storage),
+    setItem: () => {
+      throw new Error("quota");
+    },
+  });
+  return storage;
+}
+
 export async function flushStartupMicrotasks() {
   for (let index = 0; index < 8; index += 1) {
     await Promise.resolve();

@@ -12,6 +12,7 @@ import {
 } from "../components/command-palette-contract.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  LINK_READER_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   HOME_PANEL_TOGGLE_EVENT,
   DEBUG_OVERLAY_REQUEST_EVENT,
@@ -26,9 +27,9 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
+  type KeyboardShortcutsDialogElement,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
-import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import {
   readDebugOverlayMode,
@@ -36,6 +37,8 @@ import {
   type DebugOverlayElement,
   type DebugOverlayMode,
 } from "../pages/debug/debug-overlay-frame.ts";
+import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
+import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import {
@@ -70,16 +73,10 @@ import { isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
-type KeyboardShortcutsDialogElement = HTMLElement & {
-  isOpen: boolean;
-  toggle: () => void;
-};
-
 let nativeCommandsOwner: AbortController | undefined;
 
-export interface ShellChromeHost extends HTMLElement, ShellPanelHost {
+export interface ShellChromeHost extends ShellNewSessionHost, ShellPanelHost {
   readonly activeSessionKey: string;
-  readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
   readonly commandPaletteElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
@@ -90,12 +87,10 @@ export interface ShellChromeHost extends HTMLElement, ShellPanelHost {
   navDrawerTrigger: HTMLElement | null;
   nativeHistoryState: NativeHistoryState;
   commandPaletteTarget: CommandPaletteTargetDetail | undefined;
-  pendingNativeNewSession: boolean;
   requestUpdate(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   exitSettings(): void;
   navigate(routeId: string, options?: ApplicationNavigationOptions): void;
-  openNewSession(agentId: string): void;
   chatNavigationOptions(
     face: BoardFace,
     options?: ApplicationNavigationOptions,
@@ -104,10 +99,17 @@ export interface ShellChromeHost extends HTMLElement, ShellPanelHost {
 
 export class ShellChromeOwner {
   readonly panels: ShellPanelOwner;
+  private readonly palette: ShellCommandPaletteOwner;
   private pendingLazyAction = readLazyShellAction();
   private listeners: AbortController | undefined;
   private readonly navDrawerSwipe: NavDrawerSwipeLoader;
   constructor(private readonly host: ShellChromeHost) {
+    this.palette = new ShellCommandPaletteOwner(host, {
+      request: (element, event, replay) => this.requestLazyElement(element, event, replay),
+      clear: (event) => this.clearPendingLazyAction(event),
+      cancel: () => this.cancelPendingLazyAction(),
+      pending: () => this.pendingLazyAction?.eventType === COMMAND_PALETTE_OPEN_EVENT,
+    });
     this.panels = new ShellPanelOwner(host, (element, event) =>
       this.requestLazyElement(element, event),
     );
@@ -131,7 +133,7 @@ export class ShellChromeOwner {
     window.addEventListener("drop", this.handleUnhandledFileDrag, options);
     // Shipped Mac hosts use these same events even when native web chrome is absent.
     for (const [type, listener] of [
-      [COMMAND_PALETTE_OPEN_EVENT, this.handleCommandPaletteOpen],
+      [COMMAND_PALETTE_OPEN_EVENT, this.palette.open],
       [SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle],
       [DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest],
       [KEYBOARD_SHORTCUTS_REQUEST_EVENT, this.handleKeyboardShortcutsRequest],
@@ -144,6 +146,7 @@ export class ShellChromeOwner {
       ["openclaw:native-navigate", this.handleNativeNavigate],
       [TERMINAL_PANEL_TOGGLE_EVENT, this.panels.handleDeferredTerminalToggle],
       [BROWSER_PANEL_TOGGLE_EVENT, this.panels.handleDeferredBrowserToggle],
+      [LINK_READER_PANEL_TOGGLE_EVENT, this.panels.handleDeferredLinkReaderToggle],
       [DESKTOP_PANEL_TOGGLE_EVENT, this.panels.handleDeferredDesktopToggle],
       [CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleAssistantToggleBeforeMount],
       [HOME_PANEL_TOGGLE_EVENT, this.handleAssistantToggleBeforeMount],
@@ -162,6 +165,7 @@ export class ShellChromeOwner {
   }
 
   disconnect(): void {
+    this.commandPaletteLoading.clear();
     const listenerOwner = this.listeners;
     this.listeners?.abort();
     this.listeners = undefined;
@@ -229,15 +233,17 @@ export class ShellChromeOwner {
 
   readonly closeNavDrawer = (options: { restoreFocus?: boolean } = {}): void => {
     const host = this.host;
+    // Desktop navigation also calls this cleanup; a closed drawer never owned focus.
+    const restoreFocus = host.navDrawerOpen && options.restoreFocus;
     if (host.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
       this.navDrawerSwipe.closed();
     }
     restoreToastFromNavDrawer(host);
-    const trigger = options.restoreFocus ? host.navDrawerTrigger : null;
+    const trigger = restoreFocus ? host.navDrawerTrigger : null;
     host.navDrawerOpen = false;
     host.navDrawerTrigger = null;
-    if (options.restoreFocus) {
+    if (restoreFocus) {
       requestAnimationFrame(() => this.restoreFocusTo(trigger));
     }
   };
@@ -264,25 +270,7 @@ export class ShellChromeOwner {
   };
 
   readonly handleNativeNewSession = (): void => {
-    const host = this.host;
-    const context = host.context;
-    if (host.onboardingMode) {
-      return;
-    }
-    if (!context) {
-      // Native document-finish can beat runtime initialization; replay the idempotent request.
-      host.pendingNativeNewSession = true;
-      return;
-    }
-    if (
-      !readSessionMethodAccess(context.gateway.snapshot, {
-        method: "sessions.create",
-        params: {},
-      }).allowed
-    ) {
-      return;
-    }
-    host.openNewSession(context.agentSelection.state.selectedId ?? "");
+    openShellNewSession(this.host, "native");
   };
 
   readonly handleNativeNavigate = (event: Event): void => {
@@ -400,6 +388,9 @@ export class ShellChromeOwner {
       host.lazyCustomElements.close();
       return;
     }
+    if (this.palette.handlePendingShortcut(event)) {
+      return;
+    }
     if (document.openClawModalLayers?.size) {
       return;
     }
@@ -434,6 +425,12 @@ export class ShellChromeOwner {
       return;
     }
     if (event.defaultPrevented) {
+      return;
+    }
+    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession, event)) {
+      if (!event.repeat && openShellNewSession(this.host, "shortcut")) {
+        event.preventDefault();
+      }
       return;
     }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts, event)) {
@@ -601,32 +598,19 @@ export class ShellChromeOwner {
     );
   }
 
-  private readonly handleCommandPaletteOpen = (event: Event, replay?: () => void): void => {
-    const host = this.host;
-    const palette = host.commandPalette;
-    const descriptor = lazyShellEvent(COMMAND_PALETTE_OPEN_EVENT, event);
-    if (palette) {
-      palette.openPalette();
-      this.clearPendingLazyAction(descriptor);
-      return;
-    }
-    this.requestLazyElement(host.commandPaletteElement, descriptor, replay);
-  };
+  get commandPaletteLoading() {
+    return this.palette.loading;
+  }
 
-  readonly openPalette = (): void =>
-    this.handleCommandPaletteOpen(new CustomEvent(COMMAND_PALETTE_OPEN_EVENT), this.openPalette);
+  readonly openPalette = (): void => this.palette.open();
+  readonly closePendingPalette = (): void => this.palette.closePending();
+  readonly togglePalette = (): void => this.palette.toggle();
+  synchronizeCommandPaletteScope(): void {
+    this.palette.synchronizeScope();
+  }
 
   readonly handleShellNavDrawerToggle = (event: Event): void => {
     this.toggleNavigationSurface(shellNavDrawerTriggerFromEvent(event));
-  };
-
-  readonly togglePalette = (): void => {
-    const palette = this.host.commandPalette;
-    if (palette) {
-      palette.togglePalette();
-    } else {
-      this.openPalette();
-    }
   };
 
   readonly openApprovals = (): void =>
@@ -651,6 +635,7 @@ export class ShellChromeOwner {
       [KEYBOARD_SHORTCUTS_REQUEST_EVENT]: KEYBOARD_SHORTCUTS_ELEMENT.tagName,
       [TERMINAL_PANEL_TOGGLE_EVENT]: host.terminalPanelElement.tagName,
       [BROWSER_PANEL_TOGGLE_EVENT]: host.browserPanelElement.tagName,
+      [LINK_READER_PANEL_TOGGLE_EVENT]: host.linkReaderPanelElement.tagName,
       [DESKTOP_PANEL_TOGGLE_EVENT]: host.desktopPanelElement.tagName,
       [CUSTODIAN_PANEL_TOGGLE_EVENT]: "openclaw-assistant-panel",
       [HOME_PANEL_TOGGLE_EVENT]: "openclaw-assistant-panel",
@@ -661,7 +646,11 @@ export class ShellChromeOwner {
 
   readonly restorePendingLazyAction = (): void => {
     const event = this.pendingLazyAction;
-    if (!event || this.host.lazyCustomElements.visibleState) {
+    if (
+      !event ||
+      this.host.lazyCustomElements.visibleState ||
+      this.commandPaletteLoading.waitingForComposition
+    ) {
       return;
     }
     const tagName = this.shellEventElementTag(event.eventType);
@@ -683,6 +672,9 @@ export class ShellChromeOwner {
     event: LazyShellEvent,
     replay: () => unknown = () => this.dispatchLazyShellEvent(event),
   ): void {
+    if (element !== this.host.commandPaletteElement) {
+      this.commandPaletteLoading.clear();
+    }
     this.pendingLazyAction = event;
     persistLazyShellAction(event);
     this.host.lazyCustomElements.request(element, () => {
@@ -715,6 +707,7 @@ export class ShellChromeOwner {
   }
 
   cancelPendingLazyAction(): void {
+    this.commandPaletteLoading.clear();
     const event = this.pendingLazyAction;
     if (event) {
       this.clearPendingLazyAction(event);
@@ -722,6 +715,7 @@ export class ShellChromeOwner {
   }
 
   abandonPendingLazyActionForContext(): void {
+    this.commandPaletteLoading.clear();
     this.panels.reset();
     this.pendingLazyAction = null;
     clearLazyShellAction();
@@ -733,21 +727,8 @@ export class ShellChromeOwner {
     this.host.lazyCustomElements.abandon();
   }
 
-  readonly handleCommandPaletteSlashCommand = (command: string): void => {
-    const host = this.host;
-    const chatHandler = host.commandPaletteTarget?.owner.isConnected
-      ? host.commandPaletteTarget.onSlashCommand
-      : null;
-    if (chatHandler) {
-      chatHandler(command);
-      return;
-    }
-    // Chat can update its existing draft; other routes hand it through navigation.
-    const navigation = host.chatNavigationOptions("chat");
-    const search = new URLSearchParams(navigation?.search ?? "");
-    search.set("draft", command.endsWith(" ") ? command : `${command} `);
-    host.navigate("chat", { ...navigation, search: `?${search.toString()}` });
-  };
+  readonly handleCommandPaletteSlashCommand = (command: string): void =>
+    this.palette.handleSlashCommand(command);
 
   readonly handleCommandPaletteTarget = (event: Event): void =>
     applyCommandPaletteTargetEvent(this.host, event);

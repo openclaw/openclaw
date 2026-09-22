@@ -28,20 +28,21 @@ import {
 } from "../../routing/session-key.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import type { SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import type { MaterializedRow } from "../session-row-projection-record.js";
 import {
   canAccessIncognitoSession,
   createSessionListEntryFilter,
   isGatewayAdmin,
+  prepareSessionSharingTargets,
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
-import { readSessionPreviewItemsFromTranscript } from "../session-transcript-preview.js";
+import { readSessionPreviewItemsFromTranscriptAsync } from "../session-transcript-preview.js";
 import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-lookup.js";
 import {
   listProjectedSessions,
-  resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
@@ -50,6 +51,7 @@ import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { withSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
+import { searchProjectedSessionTranscripts } from "./sessions-search-projected.js";
 import { resolveSessionSearchScope } from "./sessions-search-scope.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -64,72 +66,89 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "query must not be empty"));
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    const scope = resolveSessionSearchScope(cfg, params);
-    if (!scope.ok) {
-      respond(false, undefined, scope.error);
-      return;
-    }
-    const { agentId, configured, requestedAgentId, sessionKeys } = scope;
-    const restrictIncognito =
-      Boolean(gatewayClientSessionCreator(client)) && !isGatewayAdmin(client);
-    const roleVisibilityFilter = hasOperatorBoundary(client, cfg)
-      ? createSessionListEntryFilter({ client, cfg })
-      : undefined;
-    const restrictVisibility = restrictIncognito || Boolean(roleVisibilityFilter);
-    const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-    const canSearchSessionKey = (sessionKey: string) => {
-      if (
-        isIncognitoSessionKey(sessionKey) &&
-        !canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey, agentId })
-      ) {
-        return false;
+    if (params.scope !== undefined) {
+      try {
+        await searchProjectedSessionTranscripts({
+          query,
+          limit: params.limit,
+          scope: params.scope,
+          context,
+          client: client ?? null,
+          onResult: (result) => respond(true, result),
+        });
+      } catch (error) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
       }
-      if (!roleVisibilityFilter) {
-        return true;
+      return;
+    }
+    const prepareSearch = () => {
+      const cfg = context.getRuntimeConfig();
+      const scope = resolveSessionSearchScope(cfg, params);
+      if (!scope.ok) {
+        respond(false, undefined, scope.error);
+        return undefined;
       }
-      const target = resolveSessionSharingTarget({
-        cfg,
-        sessionKey,
-        agentId,
-        targetDiscoveryCache,
-      });
-      return Boolean(target && roleVisibilityFilter(target.storeKey, target.entry));
-    };
-    if (requestedAgentId && !params.sessionKeys && configured) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "agentId requires sessionKeys"),
-      );
-      return;
-    }
-    const scopedSessionKeys = (
-      configured
-        ? sessionKeys
-        : sessionKeys?.filter((sessionKey) => {
-            const sessionAgentId =
-              requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
-                ? requestedAgentId
-                : resolveSessionStoreAgentId(cfg, sessionKey);
-            return sessionAgentId === agentId;
-          })
-    )?.filter(canSearchSessionKey);
-    const searchTargets = configured
-      ? [{ agentId, storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }) }]
-      : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId);
-    if (!configured && (searchTargets.length === 0 || scopedSessionKeys?.length === 0)) {
-      respond(true, { results: [] }, undefined);
-      return;
-    }
-    try {
-      let archivedTranscriptsExcluded = 0;
-      const targetResults = searchTargets.flatMap((target) => {
+      const { agentId, configured, requestedAgentId, sessionKeys } = scope;
+      const restrictIncognito =
+        Boolean(gatewayClientSessionCreator(client)) && !isGatewayAdmin(client);
+      const roleVisibilityFilter = hasOperatorBoundary(client, cfg)
+        ? createSessionListEntryFilter({ client, cfg })
+        : undefined;
+      const restrictVisibility = restrictIncognito || Boolean(roleVisibilityFilter);
+      const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+      const canSearchSessionKey = (
+        sessionKey: string,
+        prepared?: ReturnType<typeof prepareSessionSharingTargets>[number],
+      ) => {
+        if (
+          isIncognitoSessionKey(sessionKey) &&
+          !canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey, agentId })
+        ) {
+          return false;
+        }
+        if (!roleVisibilityFilter) {
+          return true;
+        }
+        if (prepared && !prepared.ok) {
+          throw prepared.error;
+        }
+        const target = prepared
+          ? prepared.value
+          : resolveSessionSharingTarget({ cfg, sessionKey, agentId, targetDiscoveryCache });
+        return Boolean(target && roleVisibilityFilter(target.storeKey, target.entry));
+      };
+      if (requestedAgentId && !params.sessionKeys && configured) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "agentId requires sessionKeys"),
+        );
+        return undefined;
+      }
+      const scopedSessionKeys = (
+        configured
+          ? sessionKeys
+          : sessionKeys?.filter((sessionKey) => {
+              const sessionAgentId =
+                requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
+                  ? requestedAgentId
+                  : resolveSessionStoreAgentId(cfg, sessionKey);
+              return sessionAgentId === agentId;
+            })
+      )?.filter((sessionKey) => canSearchSessionKey(sessionKey));
+      const searchTargets = configured
+        ? [{ agentId, storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }) }]
+        : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId);
+      if (!configured && (searchTargets.length === 0 || scopedSessionKeys?.length === 0)) {
+        respond(true, { results: [] }, undefined);
+        return undefined;
+      }
+      return searchTargets.flatMap((target) => {
         const targetSessionKeys =
           scopedSessionKeys ??
           (restrictVisibility
-            ? withSessionEntryReadOnlyScope(target, () =>
-                listSessionEntriesReadOnly({
+            ? withSessionEntryReadOnlyScope(target, () => {
+                const keys = listSessionEntriesReadOnly({
                   agentId: target.agentId,
                   storePath: target.storePath,
                   projection: "list",
@@ -139,53 +158,92 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   .filter((sessionKey) => {
                     // A shared physical store can include rows owned by another agent.
                     const parsed = parseAgentSessionKey(sessionKey);
-                    if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
-                      return false;
-                    }
-                    return canSearchSessionKey(sessionKey);
-                  }),
-              )
+                    return !parsed || normalizeAgentId(parsed.agentId) === agentId;
+                  });
+                const prepared = roleVisibilityFilter
+                  ? prepareSessionSharingTargets({
+                      cfg,
+                      targets: keys
+                        .filter((sessionKey) => !isIncognitoSessionKey(sessionKey))
+                        .map((sessionKey) => ({ sessionKey, agentId })),
+                    })
+                  : [];
+                let ordinal = 0;
+                return keys.filter((sessionKey) => {
+                  // Incognito checks retain their scalar lookup and place in the error order.
+                  const sharing =
+                    roleVisibilityFilter && !isIncognitoSessionKey(sessionKey)
+                      ? prepared[ordinal++]
+                      : undefined;
+                  return canSearchSessionKey(sessionKey, sharing);
+                });
+              })
             : undefined);
         if (targetSessionKeys?.length === 0) {
           return [];
         }
-        const result = searchSessionTranscripts({
-          ...target,
-          query,
-          // Over-fetch retired multi-store searches so deduplication can still fill the caller's
-          // requested page when the same transcript was copied during a store migration.
-          limit: configured ? params.limit : 25,
-          ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
-        });
-        archivedTranscriptsExcluded += result.archivedTranscriptsExcluded ?? 0;
-        return [result];
+        return [
+          {
+            ...target,
+            query,
+            // Over-fetch retired multi-store searches so deduplication can still fill the caller's
+            // requested page when the same transcript was copied during a store migration.
+            limit: configured ? params.limit : 25,
+            ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
+          },
+        ];
       });
-      const limit = params.limit ?? 10;
-      const sortedHits = targetResults
-        .flatMap((result) => result.hits)
-        .toSorted(
-          (left, right) =>
-            right.score - left.score ||
-            right.timestamp - left.timestamp ||
-            left.messageId.localeCompare(right.messageId),
-        );
-      const seenHits = new Set<string>();
-      const hits = sortedHits.filter((hit) => {
-        const identity = `${hit.sessionKey}\u0000${hit.sessionId}\u0000${hit.messageId}`;
-        if (seenHits.has(identity)) {
-          return false;
+    };
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const requests = prepareSearch();
+        if (!requests) {
+          return;
         }
-        seenHits.add(identity);
-        return true;
-      });
-      respond(true, {
-        results: hits.slice(0, limit),
-        ...(archivedTranscriptsExcluded ? { archivedTranscriptsExcluded } : {}),
-        ...(targetResults.some((result) => result.indexing) ? { indexing: true } : {}),
-        ...(targetResults.some((result) => result.truncated) || hits.length > limit
-          ? { truncated: true }
-          : {}),
-      });
+        const targetResults = await Promise.all(
+          requests.map((request) => searchSessionTranscripts(request)),
+        );
+        // Current configuration, identity, and sharing must authorize the whole result page.
+        const current = prepareSearch();
+        if (!current) {
+          return;
+        }
+        if (JSON.stringify(current) !== JSON.stringify(requests)) {
+          continue;
+        }
+        const archivedTranscriptsExcluded = targetResults.reduce(
+          (count, result) => count + (result.archivedTranscriptsExcluded ?? 0),
+          0,
+        );
+        const limit = params.limit ?? 10;
+        const sortedHits = targetResults
+          .flatMap((result) => result.hits)
+          .toSorted(
+            (left, right) =>
+              right.score - left.score ||
+              right.timestamp - left.timestamp ||
+              left.messageId.localeCompare(right.messageId),
+          );
+        const seenHits = new Set<string>();
+        const hits = sortedHits.filter((hit) => {
+          const identity = `${hit.sessionKey}\u0000${hit.sessionId}\u0000${hit.messageId}`;
+          if (seenHits.has(identity)) {
+            return false;
+          }
+          seenHits.add(identity);
+          return true;
+        });
+        respond(true, {
+          results: hits.slice(0, limit),
+          ...(archivedTranscriptsExcluded ? { archivedTranscriptsExcluded } : {}),
+          ...(targetResults.some((result) => result.indexing) ? { indexing: true } : {}),
+          ...(targetResults.some((result) => result.truncated) || hits.length > limit
+            ? { truncated: true }
+            : {}),
+        });
+        return;
+      }
+      throw new Error("Session search scope changed while reading; retry the request");
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
@@ -224,60 +282,127 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const cfg = context.getRuntimeConfig();
-    const roleVisibilityFilter = hasOperatorBoundary(client, cfg)
-      ? createSessionListEntryFilter({ client, cfg })
-      : undefined;
+    const projection = getSessionRowProjection(context);
+    if (!projection) {
+      throw new Error("Session projection is unavailable before Gateway startup completes");
+    }
+    const withPreviewRows = async <T>(
+      requestedKeys: readonly string[],
+      consume: (read: SessionRowReadView) => T,
+    ): Promise<T> => {
+      while (true) {
+        const prepared = await projection.withPreparedExactRows(
+          (cfg) =>
+            requestedKeys.flatMap((key) => {
+              const agent = resolveRequestedGlobalAgentId(cfg, key);
+              return agent.ok ? [{ key, agentId: agent.agentId }] : [];
+            }),
+          consume,
+        );
+        if (prepared.kind === "complete") {
+          return prepared.value;
+        }
+        const { certifySessionCanonicalValidationPending } =
+          await import("../../config/sessions/session-canonical-validation-readiness.js");
+        await certifySessionCanonicalValidationPending(prepared.database);
+      }
+    };
     const previews: SessionsPreviewEntry[] = [];
+    const buffered: Array<{
+      preview: SessionsPreviewEntry;
+      record: MaterializedRow;
+      generation: MaterializedRow["generation"];
+      sessionId: string;
+      lifecycleRevision?: string;
+    }> = [];
 
     for (const key of keys) {
       if (previews.length > 0) {
         await yieldToEventLoop();
       }
-      const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
+      const requestedAgent = resolveRequestedGlobalAgentId(context.getRuntimeConfig(), key);
       if (!requestedAgent.ok) {
         respond(false, undefined, requestedAgent.error);
         return;
       }
+      const preview: SessionsPreviewEntry = { key, status: "missing", items: [] };
+      previews.push(preview);
       try {
-        // Each preview resumes after a yield; read its canonical row from the current store.
-        const target = resolveGatewaySessionStoreTargetWithStore({
-          cfg,
-          key,
-          agentId: requestedAgent.agentId,
-          exactRead: true,
-          readOnly: true,
-          projection: "list",
+        const record = await withPreviewRows([key], (read) => {
+          const cfg = context.getRuntimeConfig();
+          const currentAgent = resolveRequestedGlobalAgentId(cfg, key);
+          if (!currentAgent.ok) {
+            return undefined;
+          }
+          const current = read.describe({ key, agentId: currentAgent.agentId });
+          const visibilityFilter = hasOperatorBoundary(client, cfg)
+            ? createSessionListEntryFilter({ client, cfg })
+            : undefined;
+          return current?.entry.sessionId &&
+            visibilityFilter?.(current.key, current.entry) !== false
+            ? current
+            : undefined;
         });
-        const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
-        if (!entry?.sessionId || roleVisibilityFilter?.(target.canonicalKey, entry) === false) {
-          previews.push({ key, status: "missing", items: [] });
+        if (!record) {
           continue;
         }
-        const items = readSessionPreviewItemsFromTranscript(
+        buffered.push({
+          preview,
+          record,
+          generation: record.generation,
+          sessionId: record.entry.sessionId,
+          lifecycleRevision: record.entry.lifecycleRevision,
+        });
+        preview.items = await readSessionPreviewItemsFromTranscriptAsync(
           {
-            agentId: target.agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: target.canonicalKey,
-            storePath: target.storePath,
+            agentId: record.agentId,
+            sessionEntry: record.entry,
+            sessionId: record.entry.sessionId,
+            sessionKey: record.key,
+            storePath: record.storeTarget.storePath,
           },
           limit,
           maxChars,
         );
-        previews.push({ key, status: items.length > 0 ? "ok" : "empty", items });
+        preview.status = preview.items.length > 0 ? "ok" : "empty";
       } catch (error) {
-        previews.push({
-          key,
-          status: error instanceof SessionTranscriptColdError ? "cold" : "error",
-          items: [],
-        });
+        preview.status = error instanceof SessionTranscriptColdError ? "cold" : "error";
       }
     }
 
-    respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
+    // Later keys yield after earlier previews are buffered. Reauthorize the exact
+    // incarnations together, without another await before publishing their content.
+    await withPreviewRows(
+      buffered.map(({ preview }) => preview.key),
+      (read) => {
+        const cfg = context.getRuntimeConfig();
+        const visibilityFilter = hasOperatorBoundary(client, cfg)
+          ? createSessionListEntryFilter({ client, cfg })
+          : undefined;
+        for (const previous of buffered) {
+          const agent = resolveRequestedGlobalAgentId(cfg, previous.preview.key);
+          const current = agent.ok
+            ? read.describe({ key: previous.preview.key, agentId: agent.agentId }, previous.record)
+            : undefined;
+          if (
+            !current ||
+            current.agentId !== previous.record.agentId ||
+            current.key !== previous.record.key ||
+            current.storeTarget.storePath !== previous.record.storeTarget.storePath ||
+            current.generation !== previous.generation ||
+            current.entry.sessionId !== previous.sessionId ||
+            current.entry.lifecycleRevision !== previous.lifecycleRevision ||
+            visibilityFilter?.(current.key, current.entry) === false
+          ) {
+            previous.preview.status = "missing";
+            previous.preview.items = [];
+          }
+        }
+        respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
+      },
+    );
   },
-  "sessions.resolve": async ({ params, respond, context, client }) => {
+  "sessions.resolve": ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
     }
@@ -285,8 +410,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!projection) {
       throw new Error("Session projection is unavailable before Gateway startup completes");
     }
-    const resolved = await resolveSessionKeyFromResolveParams({
-      cfg: context.getRuntimeConfig(),
+    const resolved = resolveSessionKeyFromResolveParams({
       projection,
       client,
       p: params,

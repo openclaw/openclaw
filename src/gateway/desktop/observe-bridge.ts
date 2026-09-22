@@ -13,6 +13,7 @@ import { connectRfbAttachment, type DesktopRfbAttachment } from "./attachment.js
 import type { DesktopObserveRequester } from "./observe-requester.js";
 import {
   preauthenticateRfb,
+  RfbAuthenticationRejectedError,
   RfbPreauthBuffer,
   type RfbPreauthDescriptor,
   type RfbPreauthPeer,
@@ -330,8 +331,8 @@ export function handleDesktopObserveUpgrade(
     desktopSocket.once("close", () => closeBoth(1000, "desktop stream closed", "stream-close"));
     desktopSocket.once("error", () =>
       closeBoth(
-        negotiating ? 1008 : 1011,
-        negotiating ? "desktop authentication failed" : "desktop stream failed",
+        1011,
+        negotiating ? "desktop connection failed during authentication" : "desktop stream failed",
         "stream-error",
       ),
     );
@@ -362,10 +363,14 @@ export function handleDesktopObserveUpgrade(
         browser.detach();
         entry.preauth = undefined;
         closeBoth(
-          1008,
+          error instanceof RfbAuthenticationRejectedError ? 1008 : 1011,
           error instanceof RfbPreauthTimeoutError
             ? "desktop authentication timed out"
-            : `desktop ${preauth.auth === "ard-account" ? "ARD" : "VNC"} authentication failed`,
+            : error instanceof RfbAuthenticationRejectedError
+              ? preauth.auth === "ard-account"
+                ? "macOS denied desktop access; check credentials and Screen Sharing or Remote Management Observe/Control permissions"
+                : "desktop VNC authentication rejected"
+              : "desktop security negotiation failed; check the desktop service and reconnect",
           "authentication-failed",
         );
       }

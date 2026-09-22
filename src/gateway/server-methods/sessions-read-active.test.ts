@@ -269,6 +269,7 @@ it.each(["global", "unknown"] as const)(
           sessionId,
           boardFace,
           updatedAt: 100 - index,
+          displayName: `${agentId.charAt(0).toUpperCase()}${agentId.slice(1)} task`,
           visibility: agentId === "private" ? "draft" : "shared",
           createdActor: { type: "human", source: "profile", id: "owner@example.test" },
         });
@@ -361,6 +362,16 @@ it.each(["global", "unknown"] as const)(
         archived: "all" as const,
         limit: 10,
       };
+      await vi.waitFor(() => {
+        for (const agentId of ["ops", "research"]) {
+          expect(
+            getSessionRowProjection(context)?.snapshot(
+              { agentId, key: sentinel, storePath: storePathFor(agentId) },
+              { includeLastMessage: true },
+            ).row?.lastMessagePreview,
+          ).toBe(`${agentId} progress`);
+        }
+      });
       const active = await listSessions({ client, context, request });
       expect(active).toMatchObject({ count: 3, totalCount: 3, nextOffset: null });
       expect(active.sessions).toMatchObject([
@@ -392,8 +403,10 @@ it.each(["global", "unknown"] as const)(
       ]);
       expect(JSON.stringify(active)).not.toContain(`${sentinel}-private`);
       for (const row of active.sessions.filter((candidate) => candidate.key === sentinel)) {
-        expect(row).not.toHaveProperty("childSessions");
-        expect(row).not.toHaveProperty("hasActiveSubagentRun");
+        const wireJson = JSON.stringify(row);
+        const wireRow: unknown = JSON.parse(wireJson);
+        expect(wireRow).not.toHaveProperty("childSessions");
+        expect(wireRow).not.toHaveProperty("hasActiveSubagentRun");
       }
       expect(active.sessions[0]?.swarm?.groups).toMatchObject([
         { groupId: "ops-group", running: 1 },
@@ -465,6 +478,7 @@ it.each([{ activeMinutes: 1 }, { activeOnly: true }])(
       const request = { ...filter, agentId: "main", limit: 100 };
 
       await initializeSessionReadContext(context);
+      await listSessions({ client, context, request });
       const reads = vi.spyOn(rowInputs, "readSessionRowInputs");
       const results = await Promise.all(
         Array.from({ length: 8 }, () => listSessions({ client, context, request })),

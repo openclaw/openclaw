@@ -17,23 +17,6 @@ function normalizeSpawnDepth(value: unknown): number | undefined {
   return undefined;
 }
 
-export function findSubagentSessionEntryById<T extends SessionDepthEntry>(
-  store: Record<string, T>,
-  sessionId: string,
-): T | undefined {
-  const normalizedSessionId = normalizeOptionalString(sessionId);
-  if (!normalizedSessionId) {
-    return undefined;
-  }
-  for (const entry of Object.values(store)) {
-    const candidateSessionId = normalizeOptionalString(entry?.sessionId);
-    if (candidateSessionId && candidateSessionId === normalizedSessionId) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
 export function getSubagentDepthFromEntryLookup(
   sessionKey: string | undefined | null,
   resolveEntry: (sessionKey: string) => SessionDepthEntry | undefined,
@@ -62,13 +45,7 @@ export function getSubagentDepthFromEntryLookup(
       return storedDepth;
     }
 
-    // Only spawnedBy is spawn lineage. parentSessionKey is UI threading
-    // (dashboard auto-parenting, forks, checkpoints) and must never add depth;
-    // sessions.create persists explicit spawnDepth for every fresh entry.
-    // Accepted tradeoff: pre-upgrade visible children carried lineage only via
-    // parentSessionKey and now resolve as roots; that transient population may
-    // spawn one extra generation (still capped by maxChildrenPerAgent), which
-    // beats permanently misclassifying operator sessions as depth-1 leaves.
+    // parentSessionKey also links operator UI threads; only spawnedBy carries lineage.
     const parentKey = normalizeOptionalString(entry?.spawnedBy);
     if (!parentKey) {
       return undefined;
@@ -91,11 +68,11 @@ export function isSubagentSessionFromEntry(
   entry: SessionEntry | null | undefined,
   acpMeta?: unknown,
 ): boolean {
-  const store = { [sessionKey]: entry ?? {} };
+  const spawnDepth = normalizeSpawnDepth(entry?.spawnDepth);
   return (
-    getSubagentDepthFromEntryLookup(
-      sessionKey,
-      (key) => store[key] ?? findSubagentSessionEntryById(store, key),
-    ) > 0 || isParentOwnedBackgroundAcpSession(entry ? { ...entry, acp: acpMeta } : entry)
+    (spawnDepth === undefined
+      ? Boolean(normalizeOptionalString(entry?.spawnedBy)) || getSubagentDepth(sessionKey) > 0
+      : spawnDepth > 0) ||
+    isParentOwnedBackgroundAcpSession(entry ? { ...entry, acp: acpMeta } : entry)
   );
 }

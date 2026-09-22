@@ -174,9 +174,11 @@ function buildPluginCommandEntries(params: {
         config: params.cfg,
       })
     : getPluginCommandEntrySpecs(params.provider, { config: params.cfg });
+  const eligibleSpecs =
+    params.nameSurface === "native" ? pluginSpecs.filter((spec) => spec.nativeName) : pluginSpecs;
   const entries: CommandEntry[] = [];
 
-  for (const spec of pluginSpecs) {
+  for (const spec of eligibleSpecs) {
     entries.push({
       name: clampString(
         params.nameSurface === "text" ? spec.name : (spec.nativeName ?? spec.name),
@@ -194,9 +196,6 @@ function buildPluginCommandEntries(params: {
     });
   }
 
-  if (params.nameSurface === "native") {
-    return entries.filter((entry) => entry.nativeName);
-  }
   return entries;
 }
 

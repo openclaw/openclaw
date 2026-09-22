@@ -34,11 +34,6 @@ type Observation<T> = {
 type ListFields = {
   localHostCount?: number;
   controlPageCalls: number;
-  coldStarts: number;
-  pendingJoins: number;
-  freshHits: number;
-  staleHits: number;
-  refreshStarts: number;
   managedSnapshotMs?: number;
   controlWaitSumMs?: number;
   exclusionMarkCalls: number;
@@ -54,7 +49,7 @@ type ListFields = {
 };
 
 type PageFields = {
-  origin: "cold" | "refresh" | "uncached";
+  origin: "cold";
   listOperationId?: string;
   controlRequestCalls: number;
   controlFailurePhase?: CodexControlRequestPhase;
@@ -92,12 +87,7 @@ type ControlWaiterTuple = [
   wireObservedAtMs: number | null,
 ];
 
-type CacheWaitFields = {
-  listOperationId?: string;
-  producerOperationId?: string;
-  producerObserved: boolean;
-};
-type DiagnosticFields = ListFields | PageFields | CacheWaitFields;
+type DiagnosticFields = ListFields | PageFields;
 
 const WAITER_OUTCOMES = new Set<string>(CODEX_REQUEST_WAITER_OUTCOMES);
 const WIRE_OUTCOMES = new Set<string>(CODEX_REQUEST_WIRE_OUTCOMES);
@@ -190,7 +180,7 @@ function enabled(): boolean {
 }
 
 function start<T extends DiagnosticFields>(
-  kind: "list phases" | "page producer" | "cache wait",
+  kind: "list phases" | "page producer",
   fields: T,
 ): Observation<T> | undefined {
   if (!enabled()) {
@@ -270,11 +260,6 @@ export function currentCodexCatalogListDiagnostics(): CodexCatalogListDiagnostic
 export function createCodexCatalogListScope() {
   const observation = start<ListFields>("list phases", {
     controlPageCalls: 0,
-    coldStarts: 0,
-    pendingJoins: 0,
-    freshHits: 0,
-    staleHits: 0,
-    refreshStarts: 0,
     exclusionMarkCalls: 0,
     adoptionCalls: 0,
   });
@@ -306,30 +291,6 @@ export function startCodexCatalogPageDiagnostics(origin: PageFields["origin"]) {
     provenanceCacheHits: 0,
     provenanceReadCalls: 0,
   } satisfies PageFields);
-}
-
-export function waitForCodexCatalogPage<T>(
-  page: Promise<T>,
-  producerOperationId?: string,
-): Promise<T> {
-  const observation = start("cache wait", {
-    listOperationId: currentCodexCatalogListDiagnostics()?.operationId,
-    producerOperationId,
-    producerObserved: producerOperationId !== undefined,
-  });
-  if (!observation) {
-    return page;
-  }
-  return (async () => {
-    let outcome: "resolved" | "rejected" = "rejected";
-    try {
-      const result = await page;
-      outcome = "resolved";
-      return result;
-    } finally {
-      observation.finish(outcome);
-    }
-  })();
 }
 
 export function startCodexCatalogControlRequestDiagnostics(

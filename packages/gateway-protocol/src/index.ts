@@ -20,8 +20,11 @@ export * from "./schema/computer.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/skill-library.js";
 export * from "./schema/plugin-credentials.js";
+export * from "./schema/web-search.js";
 export * from "./schema/plugin-skills.js";
 export * from "./schema/ui-command.js";
+export * from "./schema/themes.js";
+export * from "./theme.js";
 export { TALK_VOICE_CHANGE_TIMEOUT_MS } from "./schema/talk-voice.js";
 export * from "./schema/board.js";
 export * from "./schema/canvas.js";
@@ -47,6 +50,7 @@ export * from "./schema/sessions-suggestions.js";
 export * from "./schema/sessions-activity-summary.js";
 export * from "./schema/sessions-delete.js";
 export * from "./schema/sessions-goal.js";
+export * from "./schema/sessions-provider-review.js";
 export {
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
   SESSION_CREATE_RETRY_WINDOW_MS,

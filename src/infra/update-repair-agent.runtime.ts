@@ -1,12 +1,20 @@
+import { randomUUID } from "node:crypto";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import { extractAgentRunTerminalError, extractAgentRunText } from "../agents/agent-run-result.js";
+import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
+import { createAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
+import { recordAgentCleanupFailure } from "../agents/run-cleanup-timeout.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../agents/tool-policy.js";
+import { buildExecRunConfig } from "../commands/agent-exec-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SystemAgentConfiguredRoute } from "../system-agent/inference-route.js";
-import { sanitizeHostExecEnv } from "./host-env-security.js";
+import { sanitizeHostExecEnv, withHostExecInheritedEnvOmitted } from "./host-env-security.js";
 import {
   installationTargetEnv,
   withInstallationTarget,
@@ -98,12 +106,12 @@ export async function withUpdateRepairEnvironment<T>(
 }
 
 export async function prepareUpdateRepairInference(signal: AbortSignal, timeoutMs: number) {
-  const [{ getRuntimeConfig }, { selectUpdateRepairInference }] = await Promise.all([
-    import("../config/io.js"),
-    import("./update-repair-inference.js"),
-  ]);
+  signal.throwIfAborted();
+  const { getRuntimeConfig } = await import("../config/io.js");
   signal.throwIfAborted();
   const config = getRuntimeConfig();
+  const { selectUpdateRepairInference } = await import("./update-repair-inference.js");
+  signal.throwIfAborted();
   return await selectUpdateRepairInference({ config, runtime: repairRuntime, signal, timeoutMs });
 }
 
@@ -227,34 +235,156 @@ export async function runUpdateRepairTurn(params: {
   if (!config.ok) {
     return { status: "unavailable" as const, reason: config.error };
   }
-  const { runConfig, modelFallbacks } = config.value;
-  const { agentExecCommand } = await import("../commands/agent-exec.js");
-  const result = await withInstallationTarget(
-    {
-      stateDir: target.stateDir,
-      configPath: target.configPath,
-      defaultWorkspaceDir: target.workspaceDir,
-    },
-    () =>
-      agentExecCommand(
-        params.prompt,
-        {
-          cwd: target.installRoot,
-          model: route.modelLabel,
-          fallback: modelFallbacks,
-          codeMode: "direct",
-        },
-        repairRuntime,
-        {
-          baseConfig: runConfig,
-          modelFallbacksOverride: modelFallbacks,
-          agentId: route.agentId,
-          abortSignal: params.signal,
-          timeoutMs: params.timeoutMs,
-          maxToolCalls: params.maxToolCalls,
-          isCurrent: params.isCurrent,
-        },
-      ),
+  const { modelFallbacks } = config.value;
+  const runConfig = buildExecRunConfig({ base: config.value.runConfig, cwd: target.installRoot });
+  const controller = new AbortController();
+  const signal = AbortSignal.any([params.signal, controller.signal]);
+  const assertCurrent = () => {
+    signal.throwIfAborted();
+    if (params.isCurrent?.() === false) {
+      throw new Error("Repair no longer owns the failed update.");
+    }
+  };
+  const runId = `update-repair-${randomUUID()}`;
+  const sessionKey = `agent:${route.agentId}:update-repair:${runId}`;
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    runConfig,
+    runId,
+    route.agentId,
+    "update.repair",
+    assertCurrent,
   );
-  return { status: "completed" as const, ...result };
+  const toolBudget = createAgentToolExecutionBudget({
+    maxToolCalls: params.maxToolCalls,
+    signal,
+    abort: (reason) => controller.abort(reason),
+    isCurrent: params.isCurrent,
+  });
+  const deadline = Date.now() + params.timeoutMs;
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error("per-turn-budget"));
+  }, params.timeoutMs);
+  let cleanupProcessScope: (() => Promise<void>) | undefined;
+  let envelope: {
+    model: string;
+    provider: string;
+    final: string;
+    error?: { message: string };
+    status: AgentRunTerminalOutcome["status"];
+  };
+  try {
+    const [{ runEmbeddedAgent }, { runEmbeddedAgentEntry }, { getProcessSupervisor }, secrets] =
+      await Promise.all([
+        import("../agents/embedded-agent.js"),
+        import("../agents/embedded-agent-runner/run-entry.js"),
+        import("../process/supervisor/index.js"),
+        import("../secrets/provider-env-vars.js"),
+      ]);
+    assertCurrent();
+    cleanupProcessScope = getProcessSupervisor().acquireScopeCleanup(sessionKey, {
+      processTree: "required-all",
+    });
+    const sessionManager = SessionManager.inMemory(target.installRoot);
+    const result = await withInstallationTarget(
+      {
+        stateDir: target.stateDir,
+        configPath: target.configPath,
+        defaultWorkspaceDir: target.workspaceDir,
+      },
+      () =>
+        toolBudget.run(() =>
+          withHostExecInheritedEnvOmitted(
+            secrets.listKnownProviderAuthEnvVarNamesCore({ env: process.env }),
+            () =>
+              runEmbeddedAgentEntry({
+                preparedRunAdmission,
+                selection: {
+                  cfg: runConfig,
+                  provider: route.provider,
+                  model: route.model,
+                  agentDir: route.agentDir,
+                  userLockedAuthProfileId: route.authProfileId,
+                  fallbacksOverride: modelFallbacks,
+                  requestedRouteResolution: "resolved",
+                },
+                identity: { runId, agentId: route.agentId, sessionId: runId, sessionKey },
+                harness: {
+                  workspaceDir: target.installRoot,
+                  sessionKey,
+                  preparation: { kind: "direct" },
+                  resolveRuntimeOverride: () => "openclaw",
+                },
+                behavior: {
+                  kind: "command-rpc",
+                  hasCommittedSideEffect: () => toolBudget.toolCalls > 0,
+                },
+                sessionOverride: { kind: "preserve" },
+                abortSignal: signal,
+                runCandidate: (provider, model, options) => {
+                  assertCurrent();
+                  return runEmbeddedAgent({
+                    ...options,
+                    preparedRunAdmission,
+                    runId,
+                    sessionId: runId,
+                    sessionKey,
+                    sessionFile: `in-memory:${runId}`,
+                    sessionManager,
+                    sessionPersistence: "detached",
+                    agentId: route.agentId,
+                    // Keep the credential owner durable; temporary agent-exec state
+                    // intentionally excludes shared OAuth to avoid duplicate refresh owners.
+                    agentDir: route.agentDir,
+                    workspaceDir: target.installRoot,
+                    cwd: target.installRoot,
+                    config: runConfig,
+                    prompt: params.prompt,
+                    provider,
+                    model,
+                    ...(route.authProfileId && provider === route.provider
+                      ? { authProfileId: route.authProfileId, authProfileIdSource: "user" as const }
+                      : {}),
+                    modelFallbacksOverride: modelFallbacks,
+                    codeModeOverride: false,
+                    disableTrajectory: true,
+                    trigger: "manual",
+                    timeoutMs: Math.max(1, deadline - Date.now()),
+                    abortSignal: signal,
+                    lane: sessionKey,
+                  });
+                },
+              }),
+          ),
+        ),
+    );
+    const error = extractAgentRunTerminalError(result.result);
+    envelope = {
+      model: result.model,
+      provider: result.provider,
+      final: extractAgentRunText(result.result) ?? "",
+      ...(error ? { error: { message: error } } : {}),
+      status: result.terminal.outcome.status,
+    };
+  } catch (error) {
+    envelope = {
+      model: route.model,
+      provider: route.provider,
+      final: "",
+      error: { message: error instanceof Error ? error.message : String(error) },
+      status: timedOut ? "timeout" : "error",
+    };
+  } finally {
+    clearTimeout(timeout);
+    preparedRunAdmission.close();
+    controller.abort(new Error("Update repair turn completed"));
+  }
+  try {
+    await cleanupProcessScope?.();
+  } catch (error) {
+    recordAgentCleanupFailure();
+    throw error;
+  }
+  return { status: "completed" as const, toolCalls: toolBudget.toolCalls, envelope };
 }

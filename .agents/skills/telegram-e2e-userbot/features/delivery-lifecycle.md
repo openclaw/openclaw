@@ -1,13 +1,13 @@
 # Delivery lifecycle
 
 Delivery lifecycle proves what one Telegram answer does over time: progress
-creation, edits, tool activity, receipt finalization, and persistent answer delivery.
+creation, edits, tool activity, finalization, and persistent answer delivery.
 
 ## Sub-features
 
 - `lifecycle-message` records the first visible SUT message.
 - `lifecycle-edit` records in-place preview revisions.
-- `lifecycle-finalize` records the progress message collapsing into an activity receipt.
+- `lifecycle-finalize` records the final answer and the progress message's final edit or deletion.
 - `lifecycle-typing` records Telegram chat actions emitted before or during delivery.
 
 ## How to get to it (user POV)
@@ -39,12 +39,17 @@ Preconditions:
   containing commentary and tool activity, and a separate persistent final
   message containing `OPENCLAW_E2E_DRAFTPROOF`.
 
-- **Confirm finalization.** Match progress edits by `botApiMessageId`. Its last
-  revision is the activity receipt. Require no `delete` event on this happy path.
+- **Confirm finalization.** Follow the progress message and final answer by raw
+  `messageId` in the same user's chat. Verify the transport's actual edit/delete
+  sequence and that one final answer remains; do not assume a retained receipt.
+- **Inspect the in-progress view.** Capture the actual Telegram client while
+  the agent is working and at the final state. For
+  commentary claims, use an actual agent and compare its emitted preambles with
+  the Telegram-visible revisions.
 
 ## Gotchas
 
-- Older checkouts can collapse the Responses preamble into one final answer; the recipe pins the completions fixture for that reason.
+- The recipe pins the `openai-completions` fixture because it is the shape that yields a separate preamble and final answer.
 - A fast one-turn response correctly creates no draft. Use the named fixture, not arbitrary text.
 - `updateMessageEdited` is metadata; content revisions arrive as `edit`.
 - TDLib may replay old updates. Judge only events after this recipe's sent message.

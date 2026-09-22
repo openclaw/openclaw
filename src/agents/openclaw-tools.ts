@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { createShowWidgetTool, hasRegisteredShowWidgetKinds } from "../canvas/widget-tool.js";
-import { selectApplicableRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, selectApplicableRuntimeConfig } from "../config/config.js";
 import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -48,6 +48,7 @@ import {
 } from "./tools/conversation-tools.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createDashboardTool } from "./tools/dashboard-tool.js";
+import { createDecisionTool } from "./tools/decision-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
@@ -85,6 +86,7 @@ import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-f
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
+import { createThemeTool } from "./tools/theme-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
@@ -107,7 +109,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     agentId: options?.requesterAgentIdOverride,
   });
   const swarmToolGroups = createOpenClawSwarmToolGroups({
-    config: resolvedConfig,
+    config: sessionConfig ?? getRuntimeConfig(),
     effectiveRequesterAgentId: sessionAgentId,
     agentSessionKey: options?.agentSessionKey,
     runSessionKey: options?.runSessionKey,
@@ -404,6 +406,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
           }),
+          createThemeTool(),
           ...(options?.sandboxed
             ? []
             : [
@@ -444,7 +447,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             presenterContext: widgetPresentation.context,
           }),
         ]),
-    ...collectPresentOpenClawTools([heartbeatTool]),
+    ...collectPresentOpenClawTools([heartbeatTool, createDecisionTool(sessionAgentId, options)]),
     createTtsTool({
       agentChannel: options?.agentChannel,
       config: resolvedConfig,
@@ -543,6 +546,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       requesterAgentIdOverride: sessionAgentId,
       requesterProfileId: options?.gatewayUiCommandTarget?.profileId,
       supportsActiveOnly: !embedded,
+      requireSessionReadOwner: embedded,
     }),
     createSessionsHistoryTool({
       ...sessionLookupToolOptions,

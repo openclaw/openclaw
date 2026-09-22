@@ -1,4 +1,9 @@
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import {
+  getProcessCleanupBudget,
+  runWithProcessCleanupBudget,
+  type ProcessCleanupBudget,
+} from "../process/supervisor/cleanup-budget.js";
+import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 
 export type GatewaySidecarStopOwner = ReturnType<typeof createGatewaySidecarStopOwner>;
 
@@ -7,6 +12,7 @@ export function createGatewaySidecarStopOwner() {
   let activeStop: Promise<void> | null = null;
   let failure: Error | undefined;
   let phase: "open" | "closing" | "sealed" = "open";
+  let cleanupBudget: ProcessCleanupBudget | undefined;
   const remove = (sidecar: GatewayPostReadySidecarHandle) => {
     registered.delete(sidecar);
   };
@@ -23,6 +29,7 @@ export function createGatewaySidecarStopOwner() {
     return () => sidecars.forEach(remove);
   };
   const beginClose = () => {
+    cleanupBudget ??= getProcessCleanupBudget();
     if (phase === "open") {
       phase = "closing";
     }
@@ -47,7 +54,10 @@ export function createGatewaySidecarStopOwner() {
           let results: PromiseSettledResult<void>[] = [];
           for (let attempt = 0; attempt < 2; attempt += 1) {
             results = await Promise.allSettled(
-              pending.map(async (sidecar) => await sidecar.stop()),
+              pending.map(
+                async (sidecar) =>
+                  await runWithProcessCleanupBudget(cleanupBudget, () => sidecar.stop()),
+              ),
             );
             pending = pending.filter((_sidecar, index) => results[index]?.status === "rejected");
             if (pending.length === 0) {

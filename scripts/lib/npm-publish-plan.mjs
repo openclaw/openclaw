@@ -9,6 +9,16 @@ import {
   parseReleaseVersion,
 } from "./release-version.mjs";
 
+// npm may accept a publish before its exact version becomes readable. Publication
+// callers keep their one-shot probes; only postpublish readback uses this budget.
+export function npmRegistryReadbackDeadline() {
+  const timeoutMs = Number(process.env.OPENCLAW_NPM_READBACK_TIMEOUT_MS ?? 15 * 60_000);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+    throw new Error("OPENCLAW_NPM_READBACK_TIMEOUT_MS must be a positive integer <= 2147483647.");
+  }
+  return Date.now() + timeoutMs;
+}
+
 /**
  * @typedef {object} NpmPublishPlan
  * @property {"stable" | "alpha" | "beta"} channel
@@ -62,6 +72,8 @@ async function cancelNpmRegistryResponseBody(response) {
  *   signal?: AbortSignal;
  * }} NpmRegistryReadOptions
  */
+
+export class NpmRegistryUnavailableError extends Error {}
 
 class RetryableNpmRegistryError extends Error {
   constructor(message, retryAfterMs = 0) {
@@ -121,7 +133,7 @@ async function fetchNpmRegistryWithRetry(params, reader) {
     let response;
     const remainingMs = deadlineMs - Date.now();
     if (remainingMs <= 0) {
-      throw new Error(`${reader.label} deadline exceeded.`);
+      throw new NpmRegistryUnavailableError(`${reader.label} deadline exceeded.`);
     }
     try {
       const attemptSignal = createSignal(Math.min(timeoutMs, remainingMs));
@@ -135,7 +147,7 @@ async function fetchNpmRegistryWithRetry(params, reader) {
       });
       if (Date.now() >= deadlineMs) {
         await cancelNpmRegistryResponseBody(response);
-        throw new Error(`${reader.label} deadline exceeded.`);
+        throw new NpmRegistryUnavailableError(`${reader.label} deadline exceeded.`);
       }
       if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
         await cancelNpmRegistryResponseBody(response);
@@ -151,7 +163,7 @@ async function fetchNpmRegistryWithRetry(params, reader) {
       const body = await reader.read(response, signal);
       params.signal?.throwIfAborted();
       if (Date.now() >= deadlineMs) {
-        throw new Error(`${reader.label} deadline exceeded.`);
+        throw new NpmRegistryUnavailableError(`${reader.label} deadline exceeded.`);
       }
       return { status: response.status, ok: true, body };
     } catch (error) {
@@ -172,9 +184,12 @@ async function fetchNpmRegistryWithRetry(params, reader) {
     if (attempt < attempts) {
       const retryDelayMs = Math.max(attempt * 1000, lastError?.retryAfterMs ?? 0);
       if (retryDelayMs >= deadlineMs - Date.now()) {
-        throw new Error(`${reader.label} deadline would be exceeded before the permitted retry.`, {
-          cause: lastError,
-        });
+        throw new NpmRegistryUnavailableError(
+          `${reader.label} deadline would be exceeded before the permitted retry.`,
+          {
+            cause: lastError,
+          },
+        );
       }
       if (params.signal && !params.sleep) {
         await delay(retryDelayMs, undefined, { signal: params.signal });
@@ -186,9 +201,12 @@ async function fetchNpmRegistryWithRetry(params, reader) {
   }
 
   const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${reader.label} did not return a stable response: ${message}.`, {
-    cause: lastError,
-  });
+  throw new NpmRegistryUnavailableError(
+    `${reader.label} did not return a stable response: ${message}.`,
+    {
+      cause: lastError,
+    },
+  );
 }
 
 /**
@@ -253,6 +271,9 @@ export async function fetchNpmRegistryTarballWithRetry(params) {
         }),
     },
   );
+  if (result.status === 404) {
+    throw new NpmRegistryUnavailableError(`${label} returned HTTP 404.`);
+  }
   if (!result.ok || result.body === null) {
     throw new Error(`${label} returned HTTP ${result.status}.`);
   }
@@ -370,7 +391,7 @@ export function resolvePublishedNpmVersionRoute(params) {
  * @param {string} targetVersion
  * @returns {NpmDistTagVersionState}
  */
-function classifyNpmDistTagVersion(currentVersion, targetVersion) {
+export function classifyNpmDistTagVersion(currentVersion, targetVersion) {
   if (currentVersion === undefined) {
     return "missing";
   }

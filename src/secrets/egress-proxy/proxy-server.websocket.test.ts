@@ -11,11 +11,14 @@ import { WebSocketServer } from "../../../packages/gateway-client/src/websocket.
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { ensureSecretEgressProxyCa, generateLocalProxyLeaf } from "../../proxy-capture/ca.js";
 import { sealSecretSentinel } from "../sentinel.js";
-import { startSecretEgressProxyServer, type SecretEgressProxyHandle } from "./proxy-server.js";
+import {
+  startSecretEgressProxyServer,
+  type SecretEgressProcessGrant,
+  type SecretEgressProxyHandle,
+} from "./proxy-server.js";
 
 type AuditEvent = Parameters<Parameters<typeof startSecretEgressProxyServer>[0]["onAudit"]>[0];
 
-const run = { instanceId: "websocket-instance", runId: "websocket-run" };
 const value = "synthetic-websocket-credential";
 const seedDirs = createTempDirTracker();
 const sockets = new Set<Socket>();
@@ -28,6 +31,7 @@ let wss: WebSocketServer;
 let port: number;
 let sentinel: string;
 let proxyEnv: Record<string, string>;
+let grant: SecretEgressProcessGrant;
 let auditEvents: AuditEvent[];
 let observed: Array<{
   authorization: string | undefined;
@@ -219,9 +223,8 @@ beforeEach(async () => {
   }
   port = address.port;
   sentinel = sealSecretSentinel(value, { label: "websocket-test" });
-  proxyEnv = proxy.registerRun(run, [
-    { name: "SERVICE_KEY", sentinel, allowedHosts: ["localhost"] },
-  ]);
+  grant = proxy.registerProcess([{ name: "SERVICE_KEY", sentinel, allowedHosts: ["localhost"] }]);
+  proxyEnv = grant.env;
 });
 
 afterEach(async () => {
@@ -286,7 +289,7 @@ describe("secret egress WebSocket forwarding", () => {
     "refuses %s proxy credentials before WSS origin access",
     async (kind) => {
       if (kind === "revoked") {
-        proxy.revokeRun(run);
+        grant.revoke();
       }
       const auth = kind === "missing" ? "" : kind === "wrong" ? "A".repeat(43) : undefined;
       expect((await connectTunnel(auth)).status).toBe(407);
@@ -309,13 +312,13 @@ describe("secret egress WebSocket forwarding", () => {
     "refuses a %s handshake sentinel without contacting the origin",
     async (kind) => {
       if (kind !== "unknown") {
-        proxy.registerRun(run, [
+        proxyEnv = proxy.registerProcess([
           {
             name: "SERVICE_KEY",
             sentinel,
             allowedHosts: kind === "unbound" ? [] : ["other.example"],
           },
-        ]);
+        ]).env;
       }
       const credential =
         kind === "unknown"
@@ -364,7 +367,7 @@ describe("secret egress WebSocket forwarding", () => {
       allowedHosts: ["localhost"],
       onAudit: () => {},
     });
-    proxyEnv = proxy.registerRun(run);
+    proxyEnv = proxy.registerProcess().env;
     const request = await rawUpgrade({
       pathname: "https://other.example/socket",
       credential: "ordinary-value",
@@ -389,7 +392,7 @@ describe("secret egress WebSocket forwarding", () => {
       originSocket.once("close", resolve);
     });
     if (action === "revocation") {
-      proxy.revokeRun(run);
+      grant.revoke();
     } else {
       request.socket.write(clientFrame("early-frame"));
       request.socket.end();
@@ -410,12 +413,12 @@ describe("secret egress WebSocket forwarding", () => {
     expect(await receive(request, "first-frame")).toMatch(/^HTTP\/1\.1 101 [\s\S]*ready/);
   });
 
-  it("closes both ends of an established WebSocket when the owning run is revoked", async () => {
+  it("closes both ends of an established WebSocket when its process grant is revoked", async () => {
     const client = await rawUpgrade();
     await receive(client, "ready");
     const originClient = [...wss.clients][0]!;
     const originClosed = once(originClient, "close");
-    proxy.revokeRun(run);
+    grant.revoke();
     await Promise.all([originClosed, client.closed]);
     expect((await connectTunnel()).status).toBe(407);
   });

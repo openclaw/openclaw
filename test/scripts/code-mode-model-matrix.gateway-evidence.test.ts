@@ -6,6 +6,7 @@ import {
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -25,14 +26,18 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../../scripts/lib/local-build-metadata.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function initializeGitFixture(root: string) {
-  const env = createNestedGitEnv();
+function initializeGitFixture(root: string, env = createNestedGitEnv()) {
   const git = (args: string[]) =>
-    execFileSync("git", args, { cwd: root, env, encoding: "utf8" }).trim();
+    execFileSync("git", ["-c", "maintenance.auto=false", "-c", "gc.auto=0", ...args], {
+      cwd: root,
+      env,
+      encoding: "utf8",
+    }).trim();
   git(["init", "--quiet"]);
   git(["add", "."]);
   git([
@@ -49,6 +54,93 @@ function initializeGitFixture(root: string) {
   ]);
   return { env, git, head: git(["rev-parse", "HEAD"]) };
 }
+
+it("the actual CLI completes a Gateway cell without a live provider or entrypoint import cycle", async () => {
+  const root = tempDirs.make("openclaw-matrix-cli-");
+  await Promise.all(
+    ["dist", "node_modules", "packages", "home", "tmp"].map((directory) =>
+      fs.mkdir(path.join(root, directory)),
+    ),
+  );
+  await fs.writeFile(
+    path.join(root, ".gitignore"),
+    "/dist/\n/node_modules/\n/packages/\n/home/\n/tmp/\n/artifacts/\n",
+  );
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+  await fs.writeFile(
+    path.join(root, "dist", "entry.js"),
+    'throw new Error("Unexpected synthetic runtime launch");\n',
+  );
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH,
+    SystemRoot: process.env.SystemRoot,
+    HOME: path.join(root, "home"),
+    USERPROFILE: path.join(root, "home"),
+    OPENCLAW_HOME: path.join(root, "home"),
+    TMPDIR: path.join(root, "tmp"),
+    TEMP: path.join(root, "tmp"),
+    TMP: path.join(root, "tmp"),
+    // The synthetic cwd must retain the source checkout's SDK path mapping.
+    TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "maintenance.auto",
+    GIT_CONFIG_VALUE_0: "0",
+    GIT_CONFIG_KEY_1: "gc.auto",
+    GIT_CONFIG_VALUE_1: "0",
+  };
+  const { head } = initializeGitFixture(root, env);
+  for (const stamp of [BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE]) {
+    await fs.writeFile(path.join(root, "dist", stamp), JSON.stringify({ head, inputsClean: true }));
+  }
+  const run = spawnSync(
+    resolveTestNodeExecPath(),
+    [
+      "--import",
+      new URL("../../scripts/tsx.mjs", import.meta.url).href,
+      fileURLToPath(new URL("../../scripts/code-mode-model-matrix.ts", import.meta.url)),
+      "--runtime-dir",
+      root,
+      "--model",
+      "openai/fixture",
+      "--mode",
+      "code",
+      "--task",
+      "javascript-contracts",
+      "--repetitions",
+      "1",
+      "--output-dir",
+      "artifacts",
+    ],
+    { cwd: root, env, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 },
+  );
+  expect(run.error).toBeUndefined();
+  expect(run.status, run.stderr).toBe(1);
+  const resultsPath = path.join(root, "artifacts", "results.jsonl");
+  const resultsText = await fs.readFile(resultsPath, "utf8").catch((cause: unknown) => {
+    throw new Error(
+      `Real CLI produced no result.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+      { cause },
+    );
+  });
+  const rows = resultsText
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  expect(rows).toMatchObject([
+    { task: "javascript-contracts", failureCategory: "provider_auth", passed: false },
+  ]);
+  expect(run.stdout).toContain("FAIL provider_auth");
+  const resultPrefix = "[code-mode-matrix-result] ";
+  const streamedResult = run.stdout.split("\n").find((line) => line.startsWith(resultPrefix));
+  expect(streamedResult).toBeDefined();
+  expect(JSON.parse(streamedResult?.slice(resultPrefix.length) ?? "null")).toEqual(rows[0]);
+  const summary = JSON.parse(
+    await fs.readFile(path.join(root, "artifacts", "summary.json"), "utf8"),
+  );
+  expect(summary.counts).toEqual({ total: 1, passed: 0, failed: 1 });
+});
 
 it.each([
   { stamp: BUILD_STAMP_FILE, input: "src/entry.ts", write: writeBuildStamp },
@@ -112,9 +204,12 @@ it.each([
   }
 });
 
-it.each([false, true])(
-  "retains frozen-runtime Gateway workloads and independent evidence (interrupted=%s)",
-  async (interrupted) => {
+it.each([
+  { interrupted: false, executor: "node" },
+  { interrupted: true, executor: "quickjs" },
+] as const)(
+  "retains frozen-runtime $executor Gateway workloads and independent evidence (interrupted=$interrupted)",
+  async ({ interrupted, executor }) => {
     const repoRoot = tempDirs.make("openclaw-matrix-gateway-evidence-");
     const runtimeDir = tempDirs.make("openclaw-matrix-frozen-runtime-");
     const { head: harnessSha } = initializeGitFixture(repoRoot);
@@ -145,7 +240,7 @@ it.each([false, true])(
       passed: true,
       gitSha: "baseline",
       elapsedMs: 10,
-      workload: createGatewayMatrixWorkload(task, repetition, "off", 10),
+      workload: createGatewayMatrixWorkload(task, repetition, "off", 10, executor),
     }));
     await fs.writeFile(baselineResults, baselineRows.map((row) => JSON.stringify(row)).join("\n"));
     const outputDir = path.join(repoRoot, "artifacts");
@@ -158,6 +253,7 @@ it.each([false, true])(
         dryRun: false,
         keepState: false,
         models: [model],
+        gatewayExecutor: executor,
         modes: ["code"],
         tasks: [task],
         repetitions: 3,
@@ -186,7 +282,12 @@ it.each([false, true])(
         // not a live Gateway, model, or target-runtime attestation.
         runCell: async (params): Promise<CodeModeMatrixCellResult> => {
           calls += 1;
-          expect(params).toMatchObject({ repoRoot: runtimeDir, gitSha: runtimeSha, buildSha256 });
+          expect(params).toMatchObject({
+            repoRoot: runtimeDir,
+            gitSha: runtimeSha,
+            buildSha256,
+            executor,
+          });
           const before = validateQaEvidenceSummaryJson(
             JSON.parse(await fs.readFile(path.join(outputDir, "qa-evidence.json"), "utf8")),
           );
@@ -264,6 +365,7 @@ it.each([false, true])(
       gitSha: runtimeSha,
       buildSha256,
       harness: { gitSha: harnessSha },
+      gatewayExecutor: executor,
     });
     const rows: CodeModeMatrixCellResult[] = (
       await fs.readFile(path.join(outputDir, "results.jsonl"), "utf8")
@@ -286,6 +388,7 @@ it.each([false, true])(
     expect(evidence.occurrences).toHaveLength(3 + calls);
     expect(new Set(rows.map((row) => row.evidenceOccurrenceId)).size).toBe(calls);
     for (const row of rows) {
+      expect(row.executor).toBe(executor);
       expect(row.workload).toEqual(baselineRows[row.repetition - 1]?.workload);
       const occurrence = evidence.occurrences.find((item) => item.id === row.evidenceOccurrenceId);
       expect(occurrence).toMatchObject({

@@ -105,7 +105,7 @@ describe("embedded gateway stub", () => {
   });
 
   it("resolves sessions through the gateway session resolver", async () => {
-    runtime.resolveSessionKeyFromResolveParams.mockResolvedValueOnce({
+    runtime.resolveSessionKeyFromResolveParams.mockReturnValueOnce({
       ok: true,
       key: "agent:main:main",
     });
@@ -118,7 +118,6 @@ describe("embedded gateway stub", () => {
 
     expect(result).toEqual({ ok: true, key: "agent:main:main" });
     expect(runtime.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
       projection,
       client: null,
       p: { sessionId: "sess-main", includeGlobal: true },
@@ -130,7 +129,7 @@ describe("embedded gateway stub", () => {
       { key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001", displayName: "One" },
       { key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002", displayName: "Two" },
     ];
-    runtime.resolveSessionKeyFromResolveParams.mockResolvedValueOnce({
+    runtime.resolveSessionKeyFromResolveParams.mockReturnValueOnce({
       ok: true,
       ambiguous: true,
       candidates,
@@ -143,7 +142,7 @@ describe("embedded gateway stub", () => {
   });
 
   it("throws resolver errors for unresolved sessions", async () => {
-    runtime.resolveSessionKeyFromResolveParams.mockResolvedValueOnce({
+    runtime.resolveSessionKeyFromResolveParams.mockReturnValueOnce({
       ok: false,
       error: { message: "No session found: missing" },
     });

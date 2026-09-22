@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { sleep } from "../utils.js";
@@ -8,6 +10,7 @@ import {
   readScheduledTaskCommand,
   resolveTaskName,
   resolveTaskScriptPath,
+  writeTaskXmlTempFile,
 } from "./schtasks-layout.js";
 import {
   describeUnverifiedPortListeners,
@@ -203,6 +206,63 @@ function parseScheduledTaskXmlEnabled(output: string): boolean | null {
   const enabled = /<Enabled>\s*(true|false)\s*<\/Enabled>/iu.exec(settings)?.[1];
   // Task Scheduler's schema defaults a missing Settings.Enabled value to true.
   return enabled === undefined ? true : enabled.toLowerCase() === "true";
+}
+
+export function setScheduledTaskXmlEnabled(xml: string, enabled: boolean): string {
+  if (parseScheduledTaskXmlEnabled(xml) === null) {
+    throw new Error("Scheduled Task enabled state could not be inspected.");
+  }
+  return xml.replace(
+    /(<Settings(?:\s[^>]*)?>)([\s\S]*?)(<\/Settings>)/iu,
+    (_match, open: string, body: string, close: string) => {
+      const value = `<Enabled>${enabled}</Enabled>`;
+      const field = /<Enabled>\s*(true|false)\s*<\/Enabled>/iu;
+      return `${open}${field.test(body) ? body.replace(field, value) : `${value}${body}`}${close}`;
+    },
+  );
+}
+
+export async function readScheduledTaskDefinition(env: GatewayServiceEnv): Promise<string> {
+  const result = await execSchtasks(["/Query", "/TN", resolveTaskName(env), "/XML"]);
+  const xml = result.stdout.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "");
+  if (result.code !== 0 || !/<Task[\s>]/u.test(xml)) {
+    throw new Error("Scheduled Task definition could not be inspected.");
+  }
+  return xml;
+}
+
+export async function restoreScheduledTaskDefinition(params: {
+  env: GatewayServiceEnv;
+  xml: string;
+  beforeWrite: () => Promise<void>;
+  assertCurrent: () => void;
+}): Promise<void> {
+  const current = await readScheduledTaskDefinition(params.env);
+  const enabled = parseScheduledTaskXmlEnabled(current);
+  if (enabled === null) {
+    throw new Error("Scheduled Task enabled state could not be preserved.");
+  }
+  const temporary = await writeTaskXmlTempFile(setScheduledTaskXmlEnabled(params.xml, enabled));
+  try {
+    await params.beforeWrite();
+    if ((await readScheduledTaskDefinition(params.env)) !== current) {
+      throw new Error("Scheduled Task changed before restoration.");
+    }
+    params.assertCurrent();
+    const result = await execSchtasks([
+      "/Create",
+      "/F",
+      "/TN",
+      resolveTaskName(params.env),
+      "/XML",
+      temporary,
+    ]);
+    if (result.code !== 0) {
+      throw new Error("Scheduled Task definition could not be restored.");
+    }
+  } finally {
+    await fs.rm(path.dirname(temporary), { recursive: true, force: true });
+  }
 }
 
 async function changeScheduledTaskEnabledState(params: {

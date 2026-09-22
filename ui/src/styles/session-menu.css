@@ -6,6 +6,12 @@ wa-dropdown.session-menu::part(menu) {
   box-shadow: var(--overlay-shadow);
 }
 
+/* Contributed dropdown rows share the menu typography without renderer-specific classes. */
+:is(.session-menu wa-dropdown-item, .session-menu__item, .sidebar-session-sort-menu__item) {
+  font: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
 .session-menu__item,
 .sidebar-session-sort-menu__item {
   box-sizing: border-box;
@@ -19,13 +25,25 @@ wa-dropdown.session-menu::part(menu) {
   border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
-  font: inherit;
-  font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
 }
 
 .row.session-menu__label {
   gap: 8px;
+}
+
+.session-menu__status {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: min(300px, calc(100vw - 48px));
+  padding: 8px;
+  color: var(--text);
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.session-menu__status .session-menu__text {
+  white-space: normal;
 }
 
 /* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
@@ -132,4 +150,49 @@ wa-dropdown-item.session-menu__item[data-new-tab-action]:not([disabled], [aria-d
   wa-dropdown.session-menu::part(menu) {
     corner-shape: superellipse(1.5);
   }
+}
+
+/* Search and page controls stay usable without mounting an entire directory. */
+.people-menu__search,
+.people-menu__pagination {
+  position: sticky;
+  z-index: 1;
+  padding: 6px 8px;
+  background: var(--bg-elevated);
+}
+
+.people-menu__search {
+  top: 0;
+}
+
+.people-menu__search input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--menu-item-radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.people-menu__pagination {
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.people-menu__pagination span {
+  flex: 1;
+}
+
+wa-dropdown-item:has(> .people-menu__search)::part(submenu) {
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }

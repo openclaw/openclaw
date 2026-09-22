@@ -10,6 +10,7 @@ import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
@@ -70,7 +71,10 @@ test.each(inventorySizes)(
       ...current,
       tools: { ...current.tools, sessions: { ...current.tools?.sessions, visibility: "all" } },
     };
+    const backfilled = observeSessionRowBackfill(Object.keys(entries));
     const projection = await createSessionRowProjection({ cfg });
+    await backfilled;
+    await projection.ensureMaterialized();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const callGateway: AgentToolGatewayRequestCaller = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
@@ -118,7 +122,7 @@ test.each(inventorySizes)(
       ...Array.from({ length: sampleCount }, (_, index) => "warm-" + (index + 1)),
     ];
     try {
-      // The Gateway lifetime initializes its resident rows before accepting requests.
+      // The warmed Gateway serves this inventory from its resident metadata.
       for (const phase of phases) {
         requests.length = 0;
         for (const spy of [

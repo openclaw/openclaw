@@ -1,8 +1,15 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  persistSubagentRunsToDiskOrThrow,
+  useSubagentControlFixture,
+} from "../registry/subagent-control.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../../infra/system-events.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { tasksWithPendingDelivery } from "../../../tasks/task-registry-state.js";
 import {
   cancelTaskById,
   findTaskByRunId,
@@ -10,10 +17,8 @@ import {
   maybeDeliverTaskTerminalUpdate,
 } from "../../../tasks/task-registry.js";
 import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
-import { useSubagentControlFixture } from "../registry/subagent-control.test-support.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "../registry/subagent-registry-run-pause.js";
-import { persistSubagentRunsToDiskOrThrow } from "../registry/subagent-registry-state.js";
 import {
   adoptPausedSubagentRunForFollowUp,
   markRequesterTurnYielded,
@@ -21,15 +26,12 @@ import {
   registerSubagentRun,
   settleRequesterAfterSessionSpawns,
 } from "../registry/subagent-registry.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 import { testing as registryTesting } from "../registry/subagent-registry.test-helpers.js";
 import {
   setSubagentAnnounceDeliveryDepsForTest,
-  type SubagentAnnounceDeliveryDeps,
-} from "./subagent-announce-delivery.runtime.js";
+  type SubagentAnnounceDeliveryTestDeps,
+} from "./subagent-announce-overrides.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
 const fixture = useSubagentControlFixture();
@@ -100,7 +102,7 @@ it.each([
     const startedTurns: string[] = [];
     const waitBeforeExecution =
       phase === "admitted" || phase === "requester reset" || phase === "requester replacement";
-    type Dispatch = SubagentAnnounceDeliveryDeps["dispatchGatewayMethodInProcess"];
+    type Dispatch = SubagentAnnounceDeliveryTestDeps["dispatchGatewayMethodInProcess"];
     const completion = { dispatch: dispatchGatewayMethodInProcess };
     vi.spyOn(completion, "dispatch").mockResolvedValue({
       status: "ok",
@@ -172,7 +174,7 @@ it.each([
       if (!waitBeforeExecution) {
         await registryTesting.sweepOnceForTests();
       }
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       if (phase === "unsuppressed" || phase === "failed kill") {
         expect(startedTurns).toEqual([requesterKey]);
       } else {
@@ -185,7 +187,7 @@ it.each([
       expect(subagentRuns.get("nested")?.requesterSettleWake).toBeUndefined();
     } finally {
       execute.resolve();
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
     }
   },
 );
@@ -246,6 +248,9 @@ it.each(["batch", "ordinary"] as const)(
       reason: "Operator cancelled this retrieval",
     });
     expect(result).toMatchObject({ found: true, cancelled: true });
+    // Cancellation owns a detached notification; join it before checking claim release.
+    await fixture.settle();
+    expect(tasksWithPendingDelivery.has(task.taskId)).toBe(false);
     // Redrive the public delivery path as well as the immediate cancellation notification.
     await maybeDeliverTaskTerminalUpdate(task.taskId);
     expect(getTaskById(task.taskId)).toMatchObject({

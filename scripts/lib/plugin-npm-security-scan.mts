@@ -117,11 +117,20 @@ const RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string,
 
 // The bounded async Codex version probe no longer produces this syntactic finding.
 // Keep shipped inventories intact; a new direct call must be reviewed again.
-const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
+const RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
   [...RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS].filter(
     ([key]) => key !== "@openclaw/codex:dangerous-exec:src/doctor.ts",
   ),
 );
+
+// Runtime launches added after 9.5: FaceTime starts its own staged capture
+// helper with no arguments and a sanitized env, and ONNX forks its bundled
+// worker entry from process.execPath.
+const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+  ...RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  ["@openclaw/facetime:dangerous-exec:src/audio-pump.ts", 1],
+  ["@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
+]);
 
 type ReviewedReleaseLayout = {
   id: string;
@@ -176,15 +185,27 @@ CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
   "@openclaw/codex:dangerous-exec:src/doctor.test.ts",
   1,
 );
-
 // Freeze the shipped 9.4 inventory before reviewing fixtures added for 9.5.
 const RELEASE_2026_9_4_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
   CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+// The Signal socket-path fixture launches two bounded child probes to leave
+// stale Unix sockets behind for cleanup coverage. It was added after 2026.9.4.
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/signal:dangerous-exec:src/socket-path.test.ts",
+  2,
 );
 // The composition fixture runs the real shell bridge under its owned temporary
 // workspace to prove denied canonical destinations cannot receive mutations.
 CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
   "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.fs-bridge-composition.test.ts",
+  1,
+);
+// The native session-catalog performance support spawns the real Codex
+// app-server once under its owned test state to time catalog queries. It was
+// added after 2026.9.4 (#150659).
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/session-catalog-native-performance.test-support.ts",
   1,
 );
 
@@ -221,6 +242,34 @@ for (const [key, count] of [
   ["@openclaw/codex:dangerous-exec:src/session-catalog-native.test.ts", 1],
   ["@openclaw/logbook:dangerous-exec:src/analyze.test.ts", 1],
   ["@openclaw/onepassword:dangerous-exec:src/secret-ref-resolver.test.ts", 4],
+] as const) {
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
+}
+
+const RELEASE_2026_9_5_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+// The post-9.5 lifecycle fixtures forward spawn and run an owned temporary
+// descendant to prove output drainage and failed-spawn settlement. Freeze 9.5
+// before admitting their exact test-only sites.
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.exit.test.ts",
+  2,
+);
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.spawn-error.test.ts",
+  1,
+);
+// The stabilized startup retry race fixtures (#155612) launch two fewer
+// bounded children; the acpx fixture pipes JSON-RPC frames through its own
+// checked-in app-server stub, and the node exec proof runs process.execPath
+// with an inline script under the exec server's owned workspace. The Codex
+// launcher-failure matcher launches nothing: its `spawn(` is a regex literal.
+for (const [key, count] of [
+  ["@openclaw/acpx:dangerous-exec:test/codex-app-server.test.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/app-server/attempt-startup-retry.test.ts", 4],
+  ["@openclaw/codex:dangerous-exec:src/app-server/managed-launcher-failure.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/node-exec-server.test.ts", 1],
 ] as const) {
   CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
 }
@@ -303,6 +352,7 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
     {
       ...CURRENT_SECURITY_INVENTORY_POLICY,
       optionalPackedFindingCounts: FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
   [
@@ -310,9 +360,18 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
     {
       ...CURRENT_SECURITY_INVENTORY_POLICY,
       optionalPackedFindingCounts: RELEASE_2026_9_4_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
-  ["release/2026.9.5", CURRENT_SECURITY_INVENTORY_POLICY],
+  [
+    "release/2026.9.5",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_5_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  ["release/2026.9.6", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
     {

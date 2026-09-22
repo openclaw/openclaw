@@ -269,6 +269,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
   const source = new AbortController();
   const jobId = "scheduled-config-handoff";
   const runId = "scheduled-config-run";
+  const sessionId = "scheduled-persistent-session";
   const sessionKey = `agent:ops:cron:${jobId}:run:${runId}`;
   const policy = { version: 1, mode: "trusted" } as const;
   // Only runtime config changes here; canonical job revocation has its own owner tests.
@@ -341,6 +342,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
         cfg: configA,
         agentId: "ops",
         runId,
+        sessionId,
         sessionKey,
         jobId,
         toolsAllow: ["message"],
@@ -371,7 +373,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
         agentId: "ops",
         sessionKey,
         runId,
-        sessionId: runId,
+        sessionId,
         agentAccountId: "default",
         scheduledToolPolicy: policy,
       }),
@@ -398,7 +400,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
       agentSessionKey: sessionKey,
       agentAccountId: "default",
       runId,
-      sessionId: runId,
+      sessionId,
       messageActionTurnCapability: capability,
       admitScheduledInvocation: admitInvocation,
       getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
@@ -442,7 +444,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
       () =>
         resolveTrustedMessageActionToolContext({
           client,
-          request: { sessionKey, sessionId: runId },
+          request: { sessionKey, sessionId },
         }),
     );
     expect(mismatched).toMatchObject({ ok: true, messageActionConfig: undefined });

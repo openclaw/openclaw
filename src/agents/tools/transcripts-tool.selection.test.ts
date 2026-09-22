@@ -2,9 +2,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
+import * as transcriptCapture from "../../transcripts/capture.js";
 import { activeSessions } from "../../transcripts/capture.js";
+import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
@@ -12,22 +19,21 @@ import type {
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
-const { getProvider } = vi.hoisted(() => ({ getProvider: vi.fn() }));
-vi.mock("../../transcripts/provider-registry.js", () => ({
-  getTranscriptSourceProvider: getProvider,
-  listTranscriptSourceProviders: () => [],
-}));
 const tempDirs = createTempDirTracker();
-afterEach(() => {
-  activeSessions.clear();
+afterEach(async () => {
+  await clearTranscriptCapturesForTest();
+  setActivePluginRegistry(createEmptyPluginRegistry());
   vi.restoreAllMocks();
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
 function harness() {
+  const realNow = Date.now.bind(Date);
   vi.useFakeTimers({ toFake: ["Date"] });
+  vi.spyOn(Date, "now").mockImplementation(realNow);
   const stateDir = tempDirs.make("transcript-selection-");
   const requests: TranscriptStartRequest[] = [];
   const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
@@ -56,7 +62,13 @@ function harness() {
     },
     stop,
   };
-  getProvider.mockReturnValue(provider);
+  const registry = createEmptyPluginRegistry();
+  registry.transcriptSourceProviders.push({
+    pluginId: provider.id,
+    provider,
+    source: import.meta.url,
+  });
+  setActivePluginRegistry(registry);
   const ctx = {
     stateDir,
     agentId: "research",
@@ -86,6 +98,18 @@ const collision = [
   { sessionId: "2026-07-03/raw-id", date: "2026-07-04", selector: "2026-07-04/2026-07-03-raw-id" },
   { sessionId: "raw-id", date: "2026-07-03", selector: "2026-07-03/raw-id" },
 ];
+
+async function startConfiguredCapture(
+  service: ReturnType<typeof createTranscriptsAutoStartService>,
+) {
+  const starts = vi.spyOn(transcriptCapture, "startTranscripts");
+  try {
+    service.start();
+    await Promise.all(starts.mock.results.map(({ value }) => value));
+  } finally {
+    starts.mockRestore();
+  }
+}
 
 describe("transcript tool selection", () => {
   it.each([false, true])(
@@ -346,8 +370,8 @@ describe("transcript tool selection", () => {
       },
     });
     try {
-      service.start();
-      await vi.waitFor(() => expect(activeSessions.has(collision[0]!.sessionId)).toBe(true));
+      await startConfiguredCapture(service);
+      expect(activeSessions.has(collision[0]!.sessionId)).toBe(true);
       await service.stop();
       expect(h.stop.mock.calls.map(([request]) => request.sessionId)).toEqual([
         collision[0]!.sessionId,
@@ -367,8 +391,8 @@ describe("transcript tool selection", () => {
       const h = harness();
       const service = h.configuredCapture("public-account");
       try {
-        service.start();
-        await vi.waitFor(() => expect(activeSessions.has("notes")).toBe(true));
+        await startConfiguredCapture(service);
+        expect(activeSessions.has("notes")).toBe(true);
         const session = (await h.store.readSession("notes"))!;
         const read = vi.spyOn(TranscriptsStore.prototype, "readSessionEntry");
         if (fault === "missing") {
@@ -401,8 +425,8 @@ describe("transcript tool selection", () => {
       const h = harness();
       const service = h.configuredCapture("private-account");
       try {
-        service.start();
-        await vi.waitFor(() => expect(activeSessions.has("notes")).toBe(true));
+        await startConfiguredCapture(service);
+        expect(activeSessions.has("notes")).toBe(true);
         const session = (await h.store.readSession("notes"))!;
         const selector = transcriptSessionSelector(session);
         await h.store.writeSession({

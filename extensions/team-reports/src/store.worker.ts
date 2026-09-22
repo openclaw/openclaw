@@ -168,13 +168,34 @@ class TeamReportsDatabase {
   getPeriod(period: Period, key: string): StoredPeriod | undefined {
     const row = executeSqliteQueryTakeFirstSync(
       this.db,
-      this.query
-        .selectFrom("team_reports_periods")
-        .selectAll()
-        .where("period", "=", period)
-        .where("period_key", "=", key),
+      this.selectPeriodDocument(period, key).select("markdown"),
     );
     return row ? { ...readPeriod(row), markdown: row.markdown } : undefined;
+  }
+
+  getPeriodDocument(period: Period, key: string) {
+    const row = executeSqliteQueryTakeFirstSync(this.db, this.selectPeriodDocument(period, key));
+    return row ? readPeriod(row) : undefined;
+  }
+
+  private selectPeriodDocument(period: Period, key: string) {
+    return (
+      this.query
+        .selectFrom("team_reports_periods")
+        // Retain native scalar decoding before validating the complete report and summary.
+        .select([
+          "period",
+          "period_key",
+          "since_ms",
+          "until_ms",
+          "status",
+          "generated_at_ms",
+          "data_json",
+          "summary_json",
+        ])
+        .where("period", "=", period)
+        .where("period_key", "=", key)
+    );
   }
 
   listPeriods(
@@ -517,6 +538,8 @@ export function createSqliteWorkerBackend(_input: undefined, context: { database
           return database.upsertPeriod(command.input);
         case "getPeriod":
           return database.getPeriod(command.input.period, command.input.key);
+        case "getPeriodDocument":
+          return database.getPeriodDocument(command.input.period, command.input.key);
         case "listPeriods":
           return database.listPeriods(command.input);
         case "latestSourceWarnings":

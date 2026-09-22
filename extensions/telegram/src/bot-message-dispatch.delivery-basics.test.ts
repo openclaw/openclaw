@@ -65,7 +65,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
       streamMode: "off",
       telegramDeps: {
         ...telegramDepsForTest,
-        deliverInboundReplyWithMessageSendContext: undefined,
+        deliverStructuredInboundReplyWithMessageSendContext: undefined,
       },
     });
 
@@ -550,6 +550,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
     "uses reply mode $replyToMode after retained pagination falls back to its suffix",
     async ({ replyToMode, expectedFallbackMode, keepsReply }) => {
       const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      answerDraftStream.lastDeliveredText.mockReturnValue("visible prefix");
       answerDraftStream.remainingFinalContent.mockReturnValue({
         text: "unsent suffix",
         sourceText: "unsent suffix",

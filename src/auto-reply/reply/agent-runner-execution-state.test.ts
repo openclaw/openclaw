@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
@@ -18,6 +18,58 @@ import type { FallbackRunnerParams } from "./agent-runner-execution.test-support
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: session state", () => {
+  it("settles spawned children under the conversation identity while preserving peer policy", async ({
+    onTestFinished,
+  }) => {
+    const subagentRegistry = await import("../../agents/subagents/registry/subagent-registry.js");
+    const { resolveModelFallbackOptions } = await import("./agent-runner-run-params.js");
+    const { resolveModelFallbackOptions: resolveFallbackOptionsForTest } =
+      await import("./agent-runner-utils.js");
+    const resolver = vi.mocked(resolveFallbackOptionsForTest);
+    const previousResolver = resolver.getMockImplementation();
+    resolver.mockImplementation(resolveModelFallbackOptions);
+    onTestFinished(() => {
+      if (previousResolver) {
+        resolver.mockImplementation(previousResolver);
+      }
+    });
+    const settle = vi
+      .spyOn(subagentRegistry, "settleRequesterAfterSessionSpawns")
+      .mockReturnValue(true);
+    onTestFinished(() => settle.mockRestore());
+    state.runEmbeddedAgentEntryMock.mockImplementation(async (params, delegate) => {
+      await params.preparedRunAdmission.admit("embedded");
+      return delegate(params);
+    });
+    const followupRun = createFollowupRun();
+    const policyKey = "agent:main:whatsapp:default:direct:qa-peer";
+    followupRun.run.runtimePolicySessionKey = policyKey;
+    const acceptedSessionSpawns = [
+      {
+        runId: "qa-child",
+        childSessionKey: "agent:main:subagent:qa-child",
+        expectsCompletionMessage: true,
+      },
+    ];
+    state.runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "Child started." }],
+      acceptedSessionSpawns,
+      meta: {},
+    });
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
+
+    expect(result.kind).toBe("success");
+    expect(settle).toHaveBeenCalledExactlyOnceWith({
+      requesterSessionKey: "main",
+      requesterAgentId: "main",
+      requesterTurnRunId: expect.any(String),
+      requesterYielded: false,
+      acceptedSessionSpawns,
+    });
+    expect(state.runEmbeddedAgentEntryMock.mock.calls[0]?.[0].harness.sessionKey).toBe(policyKey);
+  });
+
   it("keeps thinking paired with the winning runtime when a live model switch restarts the prompt", async () => {
     let fallbackInvocation = 0;
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {

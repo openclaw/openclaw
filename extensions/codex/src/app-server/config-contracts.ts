@@ -35,7 +35,7 @@ export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirement
 export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
-export type CodexManagedCommandOrder = "package-first" | "desktop-first";
+export type CodexManagedCommandOrder = "package-first" | "desktop-first" | "package-only";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
@@ -76,6 +76,8 @@ export type ResolvedCodexAppServerNetworkProxyConfig = {
 export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
   homeScope?: CodexAppServerHomeScope;
+  /** Lifecycle-captured local home; does not change requested home ownership. */
+  codexHome?: string;
   command: string;
   commandSource?: CodexAppServerCommandSource;
   /** Desktop-first is reserved for the macOS app process that owns Computer Use permissions. */

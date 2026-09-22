@@ -7,6 +7,11 @@ import {
   createAgentCleanupScope,
 } from "../agents/run-cleanup-timeout.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
+import * as childAdapter from "../process/supervisor/adapters/child.js";
+import { createProcessAdapterEvents } from "../process/supervisor/adapters/process-events.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { createStubChildAdapter } from "../process/supervisor/supervisor.test-support.js";
+import type { ProcessExtinctionResult } from "../process/supervisor/types.js";
 import { agentExecCommand } from "./agent-exec.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -65,6 +70,77 @@ function createSignalProcess() {
 }
 
 describe("agent exec retained-state ownership", () => {
+  it.each(
+    (["job-unavailable", "job-create-failed"] as const).flatMap((reason) =>
+      [false, true].map((retained) => ({ reason, retained })),
+    ),
+  )(
+    "retains state after $reason certification (retained=$retained)",
+    async ({ reason, retained }) => {
+      const root = tempDirs.make("openclaw-agent-exec-uncertain-extinction-");
+      const lockOptions = createGatewayLockOptions(root);
+      const certification: ProcessExtinctionResult =
+        reason === "job-unavailable"
+          ? { status: "uncertain", reason }
+          : { status: "uncertain", reason, cause: new Error("Job creation failed") };
+      const adapter = Object.assign(createStubChildAdapter(), createProcessAdapterEvents(), {
+        waitForExtinction: async () => certification,
+      });
+      const spawnAdapter = vi.spyOn(childAdapter, "createChildAdapter").mockResolvedValueOnce({
+        adapter,
+        ready: Promise.resolve(),
+      });
+      let runStateDir: string | undefined;
+      try {
+        const result = await agentExecCommand(
+          "inspect",
+          retained ? { stateDir: root } : {},
+          createTestRuntime(),
+          {
+            maxToolCalls: 1,
+            gatewayLockOptions: lockOptions,
+            runAgent: async (opts) => {
+              runStateDir = process.env.OPENCLAW_STATE_DIR;
+              if (!runStateDir) {
+                throw new Error("Expected the command's state directory");
+              }
+              await fs.writeFile(path.join(runStateDir, "owned-work"), "still owned");
+              const run = await getProcessSupervisor().spawn({
+                mode: "child",
+                argv: [process.execPath, "-e", ""],
+                scopeKey: String(opts.sessionKey),
+              });
+              adapter.settle(0);
+              await run.wait();
+              await expect(run.waitForExtinction?.()).resolves.toEqual(certification);
+              return successResult();
+            },
+          },
+        );
+        expect.soft(result.exitCode).toBe(1);
+        expect.soft(result.envelope.error?.message).toContain(reason);
+        expect(runStateDir).toBeDefined();
+        await expect
+          .soft(fs.readFile(path.join(runStateDir!, "owned-work"), "utf8"))
+          .resolves.toBe("still owned");
+        if (retained) {
+          await expect
+            .soft(
+              fs
+                .readFile(path.join(lockOptions.lockDir!, "gateway.state.lock"), "utf8")
+                .then((value) => JSON.parse(value)),
+            )
+            .resolves.toMatchObject({ pid: process.pid, role: "agent-embedded" });
+        }
+      } finally {
+        spawnAdapter.mockRestore();
+        if (!retained && runStateDir) {
+          await fs.rm(runStateDir, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
   it.each([false, true])(
     "retains state after uncertain runtime cleanup (retained=%s)",
     async (retained) => {

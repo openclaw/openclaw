@@ -164,6 +164,7 @@ describe("Crabbox plugin generation lifecycle", () => {
         expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
         const waitForDeviceId = vi.fn(async () => "device-classless");
         const lease = await generation.provider.provision(profile, "classless-operation", {
+          assertCurrent: () => {},
           executionMode,
           beginNodeEnrollment: async () => ({
             ...(executionMode === "worker-turn"

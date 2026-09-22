@@ -4,7 +4,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
-import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
+import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import type { VitestWorkerManifest } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
@@ -13,6 +13,7 @@ import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 import {
+  createControlledWorkerCompiler,
   createWorkerArtifactTest,
   preparationClient,
   writeFixture,
@@ -414,7 +415,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
             await waitForDead(pid, 5_000);
             await expect
               .poll(() =>
-                inspectManagedProcessGroup(
+                managedChild.inspectManagedProcessGroup(
                   { pid, exitCode: expectedExitCode },
                   { errorPolicy: "indeterminate" },
                 ),
@@ -433,8 +434,25 @@ it("rejects a live borrower when its owner closes during verification", ({
 }) =>
   workerArtifacts.fixtureLifetime.run(async () => {
     const { observeChild } = workerArtifacts.createFixtureCommands();
-    const owner = createVitestWorkerRun();
+    const controlled = createControlledWorkerCompiler(
+      workerArtifacts.fixtureDirectory(),
+      process.env,
+      process.versions.bun ? "bun" : "node",
+    );
+    const owner = createVitestWorkerRun(controlled.env);
     const directory = owner.descriptor.directory;
+    const runManaged = managedChild.runManagedCommand;
+    const compilerLaunch = vi
+      .spyOn(managedChild, "runManagedCommand")
+      .mockImplementation((options) => {
+        if (
+          options.args?.[0] === path.join(repoRoot, "scripts/lib/vitest-worker-compiler.mts") &&
+          options.args[1] === directory
+        ) {
+          return runManaged({ ...options, args: controlled.args(directory) });
+        }
+        return runManaged(options);
+      });
     const manifestFile = path.join(directory, "manifest.json");
     const started = createDeferred();
     const release = createDeferred();
@@ -491,6 +509,7 @@ it("rejects a live borrower when its owner closes during verification", ({
           throw new Error("Borrower exited before verification was held");
         }),
       ]);
+      expect(controlled.read()).toMatchObject([{ directory, inputs: 2, outputs: 2 }]);
       let disposed = false;
       const disposal = workerArtifacts.fixtureLifetime.track(
         owner.dispose().then(() => {
@@ -514,6 +533,7 @@ it("rejects a live borrower when its owner closes during verification", ({
         await owner.dispose();
       } finally {
         reader.mockRestore();
+        compilerLaunch.mockRestore();
       }
     }
   }));

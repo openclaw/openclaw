@@ -340,6 +340,18 @@ describe("single gateway session row child projections", () => {
           "agent:main:subagent:child-a": {
             ...runningChildSession("child-a", "agent:main:subagent:parent-a", now),
             skillsSnapshot: { prompt: "child saved skill prompt", skills: [] },
+            systemPromptReport: {
+              source: "run",
+              generatedAt: now,
+              systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+              injectedWorkspaceFiles: [],
+              skills: { promptChars: 0, entries: [] },
+              tools: {
+                listChars: 0,
+                schemaChars: 1,
+                entries: [{ name: "child saved report", summaryChars: 0, schemaChars: 1 }],
+              },
+            },
           },
           "agent:main:subagent:parent-b": parentSession("parent-b", now),
           "agent:main:subagent:child-b": runningChildSession(
@@ -359,37 +371,59 @@ describe("single gateway session row child projections", () => {
         expect(rowA?.childSessions).toEqual(["agent:main:subagent:child-a"]);
         expect(rowB?.childSessions).toEqual(["agent:main:subagent:child-b"]);
         expect(rowAAfterWindow?.childSessions).toEqual(["agent:main:subagent:child-a"]);
-        for (let index = 0; index < 2; index += 1) {
-          const loaded = loadGatewaySessionEntryReadOnly("agent:main:subagent:parent-a", {
-            clone: false,
-            includeStoreChildEntries: true,
-            projection: "list",
-          });
-          expect(loaded.store["agent:main:subagent:child-a"]?.skillsSnapshot).toBeUndefined();
-          {
+        for (const projection of [undefined, "list"] as const) {
+          const parse = vi.spyOn(JSON, "parse");
+          try {
+            const loaded = loadGatewaySessionEntryReadOnly("agent:main:subagent:parent-a", {
+              clone: false,
+              includeStoreChildEntries: true,
+              projection,
+            });
+            if (projection === undefined) {
+              expect(loaded.entry?.skillsSnapshot).toEqual({
+                prompt: "parent saved skill prompt",
+                skills: [],
+              });
+              expect(loaded.entry?.systemPromptReport).toMatchObject({
+                source: "run",
+                generatedAt: now,
+              });
+            }
+            expect(loaded.store["agent:main:subagent:child-a"]).toMatchObject({
+              sessionId: "child-a",
+              parentSessionKey: "agent:main:subagent:parent-a",
+              status: "running",
+            });
+            expect(loaded.store["agent:main:subagent:child-a"]?.skillsSnapshot).toBeUndefined();
+            expect(loaded.store["agent:main:subagent:child-a"]?.systemPromptReport).toBeUndefined();
+            expect(
+              parse.mock.calls.some(
+                ([value]) =>
+                  value.includes("child saved skill prompt") ||
+                  value.includes("child saved report"),
+              ),
+            ).toBe(false);
             const row = await rowReader.row(loaded.canonicalKey, { now });
             expect(row?.childSessions).toEqual(["agent:main:subagent:child-a"]);
-            const parse = vi.spyOn(JSON, "parse");
-            try {
-              const lifecycle = await rowReader.snapshot("agent:main:subagent:parent-a", { now });
-              expect(lifecycle.row).toEqual(row);
-              expect(
-                parse.mock.calls.some(
-                  ([value]) =>
-                    value.includes("saved skill prompt") || value.includes('"systemPromptReport"'),
-                ),
-              ).toBe(false);
-              const denied = lifecycle.row?.toolOverrides?.mcpToolsDeny?.synthetic;
-              if (!denied) {
-                throw new Error("expected lifecycle tool overrides");
-              }
-              denied.push("response-only");
-              expect(
-                (await rowReader.snapshot("agent:main:subagent:parent-a", { now })).row,
-              ).toEqual(row);
-            } finally {
-              parse.mockRestore();
+            parse.mockClear();
+            const lifecycle = await rowReader.snapshot("agent:main:subagent:parent-a", { now });
+            expect(lifecycle.row).toEqual(row);
+            expect(
+              parse.mock.calls.some(
+                ([value]) =>
+                  value.includes("saved skill prompt") || value.includes('"systemPromptReport"'),
+              ),
+            ).toBe(false);
+            const denied = lifecycle.row?.toolOverrides?.mcpToolsDeny?.synthetic;
+            if (!denied) {
+              throw new Error("expected lifecycle tool overrides");
             }
+            denied.push("response-only");
+            expect((await rowReader.snapshot("agent:main:subagent:parent-a", { now })).row).toEqual(
+              row,
+            );
+          } finally {
+            parse.mockRestore();
           }
         }
         await updateSessionEntry({ sessionKey: "agent:main:subagent:parent-a", storePath }, () => ({
@@ -466,7 +500,7 @@ describe("single gateway session row child projections", () => {
   });
 
   test.each(["main", "worker"])(
-    "removes deleted runtime-only children from exact rows (%s)",
+    "keeps runtime-only child reads compact and removes deleted children (%s)",
     async (agentId) => {
       await withSingleRowCacheStore(
         "openclaw-canonical-child-",
@@ -475,15 +509,41 @@ describe("single gateway session row child projections", () => {
           const parentKey = "agent:main:parent";
           const childKey = `agent:${agentId}:subagent:child`;
           const childStorePath = resolveSessionStorePathCore(undefined, { agentId });
+          const childPrompt = "unused registry child prompt ".repeat(2048);
           await seedSessionEntries(storePath, { [parentKey]: parentSession("parent", now) });
           await replaceSessionEntry(
             { agentId, storePath: childStorePath, sessionKey: childKey },
             {
               sessionId: "child",
               updatedAt: now,
+              skillsSnapshot: { prompt: childPrompt, skills: [] },
+              systemPromptReport: {
+                source: "run",
+                generatedAt: now,
+                systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+                injectedWorkspaceFiles: [],
+                skills: { promptChars: childPrompt.length, entries: [] },
+                tools: { listChars: 0, schemaChars: 0, entries: [] },
+              },
             },
           );
           setSubagentControllerRun(childKey, parentKey, now);
+          const parsed = vi.spyOn(JSON, "parse");
+          try {
+            const loaded = loadGatewaySessionEntryReadOnly(parentKey, {
+              includeStoreChildEntries: true,
+            });
+            expect(loaded.store[childKey]).toMatchObject({ sessionId: "child", updatedAt: now });
+            expect(loaded.store[childKey]?.skillsSnapshot).toBeUndefined();
+            expect(loaded.store[childKey]?.systemPromptReport).toBeUndefined();
+            expect(
+              parsed.mock.calls.some(
+                ([value]) => value.includes(childPrompt) || value.includes('"systemPromptReport"'),
+              ),
+            ).toBe(false);
+          } finally {
+            parsed.mockRestore();
+          }
           expect((await rowReader.row(parentKey, { now }))?.childSessions).toEqual([childKey]);
 
           await deleteSessionEntryLifecycle({
@@ -492,6 +552,11 @@ describe("single gateway session row child projections", () => {
             archiveTranscript: false,
             target: { canonicalKey: childKey, storeKeys: [childKey] },
           });
+          expect(
+            loadGatewaySessionEntryReadOnly(parentKey, { includeStoreChildEntries: true }).store[
+              childKey
+            ],
+          ).toBeUndefined();
           expect((await rowReader.row(parentKey, { now }))?.childSessions).toBeUndefined();
         },
       );

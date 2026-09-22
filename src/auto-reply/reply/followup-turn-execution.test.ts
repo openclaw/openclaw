@@ -77,6 +77,37 @@ async function runFastAutoProgressCase(params: {
 }
 
 describe("executeFollowupTurn", () => {
+  it.each([true, false])(
+    "refreshes the session personal profile when a queued turn starts (eligible: %s)",
+    async (eligible) => {
+      const turn = createTurn({
+        session: {
+          kind: "session",
+          key: "main",
+          current: () => ({
+            sessionId: "session",
+            updatedAt: 2,
+            createdActor: { type: "human", source: "profile", id: "creator" },
+            owner: { actor: { type: "human", id: "new-owner" } },
+          }),
+          publish: () => undefined,
+          adopt: () => undefined,
+        },
+      });
+      turn.queued.personalBootstrapEligible = eligible;
+      turn.queued.run.bootstrapUserProfileId = "previous-owner";
+      await executeFollowupTurn({
+        turn,
+        defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
+        onToolResult: vi.fn(async () => {}),
+        onCompactionNoticePayload: vi.fn(async () => {}),
+      });
+      expect(state.execute.mock.calls[0]?.[0]?.followupRun.run.bootstrapUserProfileId).toBe(
+        eligible ? "new-owner" : undefined,
+      );
+    },
+  );
+
   it.each([false, true])(
     "records each source receipt without changing newer runner state (preflight: %s)",
     async (preflight) => {
@@ -103,6 +134,33 @@ describe("executeFollowupTurn", () => {
       expect(receipts.map(resolveReplyOperationAgentTurn)).toEqual(["failed", "failed"]);
       expect(resolveReplyOperationAgentTurn(newerReceipt)).toBeUndefined();
       expect(state.execute).toHaveBeenCalledTimes(preflight ? 0 : 1);
+    },
+  );
+
+  it.each(["legacy", "lost", "dropped", "external"] as const)(
+    "keeps queued media ownership through %s source state",
+    async (source) => {
+      const turn = createTurn();
+      turn.queued.run.mediaNormalizationOwner =
+        source === "lost" || source === "dropped" ? "gateway" : undefined;
+      turn.queued.queuedFollowupReplyDisposition =
+        source === "legacy"
+          ? {
+              kind: "deliver",
+              deliver: Object.assign(async () => {}, { ownsCompletion: () => true }),
+            }
+          : source === "dropped"
+            ? { kind: "drop", reason: "source-unavailable" }
+            : undefined;
+      await executeFollowupTurn({
+        turn,
+        defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
+        onToolResult: vi.fn(async () => {}),
+        onCompactionNoticePayload: vi.fn(async () => {}),
+      });
+      expect(state.execute.mock.calls[0]?.[0]?.followupRun.run.mediaNormalizationOwner).toBe(
+        source === "external" ? undefined : "gateway",
+      );
     },
   );
 

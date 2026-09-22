@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { err } from "@openclaw/normalization-core/result";
 import { describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -208,21 +210,55 @@ describe("global session lookup ownership", () => {
           skillsSnapshot: { prompt: "selected synthetic prompt", skills: [] },
         },
       );
-      const results = prepareGatewaySessionStoreTargetsReadOnly({
-        cfg,
-        projection: "full",
-        targets: [{ key: "agent:research:main" }, { key: "agent:main:main", agentId: "research" }],
-      });
-      expect(results).toMatchObject([
-        {
-          ok: true,
-          value: {
-            agentId: "research",
-            store: { global: { skillsSnapshot: { prompt: "selected synthetic prompt" } } },
+      const failure = new Error("metadata unavailable", { cause: new Error("SQLITE_IOERR") });
+      const readMetadata = sessionAccessor.loadExactSessionEntryCandidatesReadOnlyBatch;
+      const failingRead = vi
+        .spyOn(sessionAccessor, "loadExactSessionEntryCandidatesReadOnlyBatch")
+        .mockImplementation((scopes) =>
+          readMetadata(scopes).map((result, index) =>
+            scopes[index]?.agentId === "main" ? err(failure) : result,
+          ),
+        );
+      try {
+        const results = prepareGatewaySessionStoreTargetsReadOnly({
+          cfg,
+          projection: "full",
+          targets: [
+            { key: "agent:main:main" },
+            { key: "agent:research:main" },
+            { key: "agent:main:main", agentId: "research" },
+          ],
+        });
+        expect(results[0]).toEqual(err(failure));
+        expect(results.slice(1)).toMatchObject([
+          {
+            ok: true,
+            value: {
+              agentId: "research",
+              store: { global: { skillsSnapshot: { prompt: "selected synthetic prompt" } } },
+            },
           },
-        },
-        { ok: false, error: { message: expect.stringContaining('belongs to "main"') } },
-      ]);
+          { ok: false, error: { message: expect.stringContaining('belongs to "main"') } },
+        ]);
+        const failingSingleRead = vi
+          .spyOn(sessionAccessor, "loadExactSessionEntryCandidates")
+          .mockImplementation(() => {
+            throw failure;
+          });
+        try {
+          expect(() =>
+            resolveGatewaySessionStoreTargetWithStore({
+              cfg,
+              key: "agent:main:main",
+              exactRead: true,
+            }),
+          ).toThrow(failure);
+        } finally {
+          failingSingleRead.mockRestore();
+        }
+      } finally {
+        failingRead.mockRestore();
+      }
     });
   });
 

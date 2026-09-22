@@ -78,6 +78,18 @@ export function updateConfigMachineState<T>(
 export function updateConfigMachineStateInDatabase<T>(
   database: DatabaseSync,
   stateKey: string,
+  update: (current: T | undefined) => T,
+  now: number,
+): T;
+export function updateConfigMachineStateInDatabase<T>(
+  database: DatabaseSync,
+  stateKey: string,
+  update: (current: T | undefined) => T | undefined,
+  now: number,
+): T | undefined;
+export function updateConfigMachineStateInDatabase<T>(
+  database: DatabaseSync,
+  stateKey: string,
   update: (current: T | undefined) => T | undefined,
   now: number,
 ): T | undefined {

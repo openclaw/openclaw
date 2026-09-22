@@ -191,8 +191,8 @@ describe("renderSecurity", () => {
       container,
     );
 
-    expect(expectRowByTitle(container, "Browser enabled").textContent).toContain(
-      "Using default: Enabled",
+    expect(expectRowByTitle(container, "Browser enabled").textContent).not.toContain(
+      "Using default:",
     );
     expect(expectRowByTitle(container, "Available tools").textContent).toContain(
       "Using core and default plugin tools. Choose Full to include available optional plugin tools.",

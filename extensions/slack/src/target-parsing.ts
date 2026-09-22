@@ -1,4 +1,3 @@
-// Slack plugin module implements target parsing behavior.
 import {
   buildMessagingTarget,
   ensureTargetId,

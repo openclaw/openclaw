@@ -14,18 +14,14 @@ import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { VERSION } from "../version.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import {
   getRegisteredEmbeddingProvider,
   registerEmbeddingProvider,
 } from "./embedding-providers.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-// Verifies plugin loader runtime registry behavior.
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
-import * as loaderModule from "./loader-module-runtime.js";
-import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import {
   resolveNativePluginModelAuth,
   resolveNativePluginModelConfig,
@@ -46,8 +42,8 @@ import {
   writePlugin,
 } from "./loader.test-fixtures.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
+import * as nativeModule from "./native-module-require.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { getPluginModuleLoaderStats } from "./plugin-module-loader-cache.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "./registry.js";
@@ -142,23 +138,22 @@ it.each(["cjs", "ts"])(
             "resolvePluginRuntimeModulePathWithDiagnostics",
           );
           let fullRuntime: typeof import("./runtime/index.js") | null = null;
-          const createLoader = loaderModule.createPluginModuleLoader;
+          const nativeLoad = nativeModule.tryNativeRequireModule;
           const factories = vi.fn(
             (...args: Parameters<typeof import("./runtime/index.js").createPluginRuntime>) =>
               fullRuntime!.createPluginRuntime(...args),
           );
-          vi.spyOn(loaderModule, "createPluginModuleLoader").mockImplementation((options) => {
-            const load = createLoader(options);
-            return (modulePath) => {
+          vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation(
+            (modulePath, options) => {
               if (modulePath === resolveRuntime.mock.results.at(-1)?.value?.resolvedPath) {
                 if (!fullRuntime) {
                   throw new Error("broad runtime requested before state registration completed");
                 }
-                return { createPluginRuntime: factories };
+                return { ok: true, moduleExport: { createPluginRuntime: factories } };
               }
-              return load(modulePath);
-            };
-          });
+              return nativeLoad(modulePath, options);
+            },
+          );
           const modelAuth = resolveNativePluginModelAuth();
           const modelConfig = resolveNativePluginModelConfig();
           const hooks = {
@@ -191,7 +186,6 @@ it.each(["cjs", "ts"])(
           );
           expect(fs.existsSync(observed)).toBe(false);
           expect(resolveRuntime).not.toHaveBeenCalled();
-          const loaderStats = getPluginModuleLoaderStats();
           const registry = loadPluginRegistryHandle({
             config,
             cache: false,
@@ -201,17 +195,6 @@ it.each(["cjs", "ts"])(
           expect(registry.plugins).toContainEqual(
             expect.objectContaining({ id: plugin.id, status: "loaded" }),
           );
-          const loadedStats = getPluginModuleLoaderStats();
-          if (process.versions.bun && extension === "cjs") {
-            expect(loadedStats.nativeHits).toBeGreaterThan(loaderStats.nativeHits);
-          } else {
-            expect(loadedStats.sourceTransformForced).toBeGreaterThan(
-              loaderStats.sourceTransformForced,
-            );
-            expect(loadedStats.topSourceTransformTargets).toContainEqual(
-              expect.objectContaining({ target: plugin.file }),
-            );
-          }
           expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({
             entries: [],
             selection: { ref: { provider: "fixture", model: "allowed" }, key: "fixture/allowed" },
@@ -234,7 +217,7 @@ it.each(["cjs", "ts"])(
           const system = runtime.system;
           expect(system.requestHeartbeat).toBe(requestHeartbeat);
           expect(system.runCommandWithTimeout).toBe(runCommandWithTimeout);
-          expect(drainSystemEvents("prepared-runtime-system")).toEqual(["registration"]);
+          expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["registration"]);
           await vi.waitFor(() =>
             expect(heartbeat).toHaveBeenCalledWith(
               expect.objectContaining({ reason: "registration" }),
@@ -303,7 +286,7 @@ it.each(["cjs", "ts"])(
           expect(runtime.system.formatNativeDependencyHint({ packageName: "fixture" })).toBe(
             "retained method",
           );
-          expect(drainSystemEvents("prepared-runtime-system")).toEqual(["materialized"]);
+          expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["materialized"]);
           await vi.waitFor(() =>
             expect(heartbeat).toHaveBeenCalledWith(
               expect.objectContaining({ reason: "materialized" }),
@@ -412,7 +395,7 @@ it.each(["cjs", "ts"])(
           expect(resolveRuntime).toHaveBeenCalledTimes(1);
         } finally {
           disposeHeartbeat();
-          drainSystemEvents("prepared-runtime-system");
+          drainSystemEvents("agent:main:prepared-runtime-system");
         }
       },
     );
@@ -425,73 +408,6 @@ it("keeps an empty scoped handle load from replacing the root registry", () => {
 
   expect(handle).not.toBe(root);
   expect(getActivePluginRegistry()).toBe(root);
-});
-
-it("keeps version and injected instance surfaces independent of the broad runtime module", () => {
-  const gateway = {} as PluginRuntime["gateway"];
-  const hooks = {
-    dispatchHookAgentTurn: vi.fn<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>(),
-  };
-  const nodes = {} as PluginRuntime["nodes"];
-  const subagent = {} as PluginRuntime["subagent"];
-  const loadPluginModule = vi.fn((_modulePath: string): unknown => {
-    throw new Error("broad runtime should stay lazy");
-  });
-  const runtime = createLazyPluginRuntime({
-    loadPluginModule,
-    runtimeOptions: { gateway, hooks, nodes, subagent },
-  });
-
-  expect(runtime.version).toBe(VERSION);
-  expect(Object.getOwnPropertyDescriptor(runtime, "version")?.get?.()).toBe(VERSION);
-  const descriptors = Object.getOwnPropertyDescriptors(runtime);
-  expect(Object.keys(runtime)).toEqual([
-    "version",
-    "gateway",
-    "config",
-    "agent",
-    "subagent",
-    "system",
-    "media",
-    "mediaUnderstanding",
-    "tts",
-    "channel",
-    "events",
-    "logging",
-    "state",
-    "modelAuth",
-    "imageGeneration",
-    "videoGeneration",
-    "musicGeneration",
-    "llm",
-    "hooks",
-    "nodes",
-    "sandbox",
-    "worktrees",
-    "webSearch",
-    "tasks",
-    "modelConfig",
-  ]);
-  expect(Reflect.ownKeys(runtime)).toEqual(Object.keys(descriptors));
-  for (const key of Object.keys(descriptors)) {
-    expect(key in runtime).toBe(true);
-    expect(descriptors[key]).toMatchObject({ configurable: true, enumerable: true });
-  }
-  for (const [key, instance] of [
-    ["gateway", gateway],
-    ["hooks", hooks],
-    ["nodes", nodes],
-    ["subagent", subagent],
-  ] as const) {
-    expect(runtime[key]).toBe(instance);
-    expect(descriptors[key]?.get?.()).toBe(instance);
-    expect(Reflect.get(runtime, key, null)).toBe(instance);
-    expect(Reflect.get(runtime, key, undefined)).toBe(instance);
-  }
-  expect(loadPluginModule).not.toHaveBeenCalled();
-  // Object.prototype names are not declared runtime metadata.
-  expect(() => Reflect.has(runtime, "toString")).toThrow("broad runtime should stay lazy");
-  expect(loadPluginModule).toHaveBeenCalledTimes(1);
 });
 
 it("reuses discovered registrations through prepared load options until invalidated", () => {

@@ -84,6 +84,7 @@ describe("check-release-metadata-only", () => {
   it("preserves refs, staged bytes, and worktree overlay through the package command", () => {
     const root = tempDirs.make("openclaw-release-metadata-mobile-");
     const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const fixtureTsconfigPath = path.join(root, "tsconfig.json");
     const { scripts } = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
     writeFileSync(
       path.join(root, "package.json"),
@@ -95,6 +96,7 @@ describe("check-release-metadata-only", () => {
         },
       }),
     );
+    copyFileSync(tsconfigPath, fixtureTsconfigPath);
     mkdirSync(path.join(root, "scripts"));
     copyFileSync(scriptPath, path.join(root, "scripts/check-release-metadata-only.mts"));
     for (const file of ["tsx.mjs", "changed-lanes.mts"]) {
@@ -106,7 +108,7 @@ describe("check-release-metadata-only", () => {
       const spec = createPnpmRunnerSpawnSpec({
         cwd: root,
         pnpmArgs: ["run", "release-metadata:check", ...args],
-        env: { ...process.env, TSX_TSCONFIG_PATH: tsconfigPath },
+        env: { ...process.env, TSX_TSCONFIG_PATH: fixtureTsconfigPath },
         stdio: "pipe",
       });
       return spawnSync(spec.command, spec.args, { ...spec.options, encoding: "utf8" });

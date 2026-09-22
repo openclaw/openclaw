@@ -12,7 +12,7 @@ Install-type switching, the source-server reference script, the installer, and m
 
 ## Switch between npm and git installs
 
-Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
+Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. Before retiring an old source wrapper, the updater rechecks its identity and contents and confirms that it still owns the update. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
 
 Candidate validation failures leave the old Gateway serving. After activation,
 package recovery can restore the retained previous package only when the shared
@@ -67,7 +67,9 @@ installation's owner. Normal package-to-package updates keep using pnpm or Bun.
 Git updates build the complete runtime, including plugins and the Control UI,
 in a temporary candidate worktree. Dev updates preserve local commits by
 rebasing the candidate before its build. The updater publishes that prepared
-runtime during activation instead of repeating the build while stopped.
+runtime during activation instead of repeating the build while stopped. It
+preserves the build timestamps, so ordinary CLI commands keep using that
+validated runtime without regenerating it after the move.
 Candidate installs and nested build commands use a private pnpm virtual store,
 so preparing an update cannot prune dependencies used by the serving Gateway.
 The candidate's temporary workspace settings are restored before checking for
@@ -86,7 +88,9 @@ with `scripts/update-gateway.sh` from inside that checkout. It is the reference
 for a source-server update: it fails closed on all tracked local changes,
 including build outputs, fast-forwards `main` (or rebases a local server branch
 onto `origin/main`), installs dependencies with a frozen lockfile, builds clean,
-and restarts the gateway only after the build succeeds.
+and stops the gateway before replacing its build output. If the build fails, it
+restores the previous output and restarts that build while still returning the
+build failure.
 
 Like `openclaw update`, the script builds runtime JavaScript, plugin assets, and
 the Control UI without generating TypeScript declarations by default. Set
@@ -103,12 +107,17 @@ the target pin or install a compatible Corepack, then retry.
 
 The same fetched commit is used for fast-forward or rebase. This is a fetched-target
 toolchain preflight, not a complete preflight of a rebased local branch or its
-build, and the script does not roll back later install or build failures. Local
-branch overrides remain in effect: install and build resolve the resulting
+build. The build rollback covers generated output, not Git, installed dependencies,
+or configuration. Local branch overrides remain in effect: install and build resolve the resulting
 checkout's pin, which may differ from the probed target pin. Operators must verify
 those overrides and maintain a recovery path. The same shim directory leads
 nested commands' `PATH`, and child workspace and lockfile roots follow each
-operation's directory. Bootstrap, install, or build failure prevents restart.
+operation's directory. Bootstrap or install failure leaves service lifecycle
+untouched. During the build, the updater owns all generated output roots, including
+package-local `dist` directories. If restoration cannot finish or build writers
+have not stopped, it leaves the service stopped and reports the retained backup
+path. If restart of a successful new build fails, it retains the previous output
+without replacing chunks that a new process may already be using.
 The hosted [installers](/install/installer) also support npm-owned temporary provisioning
 when Corepack is unavailable; this server script deliberately requires Corepack.
 
@@ -131,10 +140,22 @@ building a source checkout.
 ssh you@server 'cd /path/to/openclaw && scripts/update-gateway.sh'
 ```
 
-Override the restart for custom service units, or skip it entirely:
+The default stop command is `openclaw gateway stop --force`, so non-interactive
+SSH updates can stop the service. Override both commands for custom service units:
 
 ```bash
-OPENCLAW_UPDATE_RESTART_CMD='systemctl --user restart openclaw-gateway.service' scripts/update-gateway.sh
+OPENCLAW_UPDATE_STOP_CMD='systemctl --user stop openclaw-gateway.service' \
+OPENCLAW_UPDATE_RESTART_CMD='systemctl --user restart openclaw-gateway.service' \
+  scripts/update-gateway.sh
+```
+
+Custom automatic commands must be provided together and must not be blank.
+An exactly empty restart command keeps the operator-owned manual lifecycle:
+stop the Gateway yourself before invoking the script, then restart it yourself
+after resolving any failure. Do not also set a stop override in this mode.
+The script performs no automatic stop, restart, or build-output rollback:
+
+```bash
 OPENCLAW_UPDATE_RESTART_CMD='' scripts/update-gateway.sh
 ```
 
@@ -164,6 +185,26 @@ Pin the recovery to a specific version or dist-tag with `--version`:
 curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --version <version-or-dist-tag>
 ```
 
+## Homebrew formula installs
+
+For `brew install openclaw-cli`, update through Homebrew:
+
+```bash
+brew upgrade openclaw-cli
+openclaw gateway restart
+```
+
+`openclaw update` leaves the formula unchanged and prints these commands. Existing
+profiles retain that skipped outcome and guidance in `openclaw update status --json`
+and the update report. Stop a running Gateway before a manual upgrade to avoid
+loading files from a removed keg; back up first and run `openclaw doctor --fix`
+before restarting.
+
+New or refreshed service definitions use Homebrew's stable `opt/openclaw-cli`
+path. To repair a service still pointing at a versioned `Cellar` path, run
+`openclaw gateway install --force` from the upgraded CLI. Global npm packages
+under the Homebrew prefix continue to use npm.
+
 ## Alternative: manual npm, pnpm, or bun
 
 The npm command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
@@ -179,6 +220,21 @@ install, stop the managed Gateway first. Package managers replace files in
 place, and a running Gateway can otherwise try to load core or plugin files
 mid-swap. Restart the Gateway after the package manager finishes so it picks up
 the new install.
+
+Gateways with installation-replacement detection also check the installed build
+on their maintenance tick. If the running and installed builds differ, the
+Gateway records the replacement, stops accepting new work, and gives active work
+its existing bounded shutdown window before handing over to its service manager.
+A foreground Gateway exits with instructions to run `openclaw gateway run` again.
+Status and Doctor report the replacement while the Gateway drains. Afterward,
+`openclaw gateway status --deep`, `openclaw update status`, and Doctor show the
+recorded replacement as historical information until the next Gateway shutdown.
+This record does not by itself confirm that the new Gateway is healthy.
+If a reply's delivery module disappears before sending starts, the reply remains
+eligible for recovery instead of being treated as an uncertain send.
+This recovery cannot prevent every failure during a package manager's in-place
+swap, and older running Gateways do not gain it from files installed underneath
+them. `openclaw update` remains the supported path for coordinating replacement.
 
 Release packages include generated compatibility files for lazy imports from
 updaters in the supported upgrade window, including the 2026.9.1 service restart path. These
@@ -227,6 +283,12 @@ dependency scripts remain unapproved.
 This avoids npm overlaying a new package onto stale files from the old one. If
 the install command fails, OpenClaw retries once with `--omit=optional`, which
 helps hosts where native optional dependencies cannot compile.
+The packaged lifecycle restores the matching precompiled fs-safe dependency
+when that retry omitted it. It uses the version declared by the installed
+fs-safe package and does not run dependency build scripts. A working native
+binding needs no extra download. Unsupported hosts or failed downloads produce
+a warning and allow installation to finish; explicitly disabling fs-safe native
+support also skips this repair.
 
 For local tarball targets on npm 12, the archive filename and every parent
 directory must be comma-free. See [Installer path requirements](/install/installer).
@@ -284,6 +346,13 @@ still use them. `openclaw update` still runs Doctor after installing the candida
 after a manual package replacement, run `openclaw doctor --fix` before restarting
 the Gateway.
 
+Doctor also brings drifted active official npm plugins to the installed OpenClaw
+release, honoring recorded non-default tags and pins newer than its plugin cohort.
+It uses the same plugin updater as `openclaw update` and leaves third-party plugins
+unchanged. An unavailable plugin produces a warning with
+the reason; it does not prevent the other repairs from completing. Restore
+registry access or wait for the missing package, then rerun `openclaw doctor --fix`.
+
 `OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL=1` skips package-local postinstall
 cleanup, but still completes the lifecycle marker. It does not disable Doctor or
 Gateway startup migrations.
@@ -295,6 +364,37 @@ To evaluate an affected package without changing a working Gateway, use a
 disposable environment with separate home, config, and state directories. A
 different npm prefix alone does not isolate operator state.
 </Warning>
+
+### Stuck on 2026.9.3
+
+The published 2026.9.3 updater has a fixed five-minute limit that can stop an
+upgrade before it finishes. A timeout fix in the target release cannot replace
+the updater already running. Bypass that older updater once with a manual
+package installation.
+
+Create a [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
+first. Keep the same service account, npm prefix, profile, and state/config
+overrides. Stop the Gateway through its owning supervisor before replacing the
+package. For a managed npm install:
+
+```bash
+openclaw gateway stop
+npm install -g openclaw@latest --allow-scripts=openclaw
+openclaw doctor --fix
+openclaw gateway restart
+openclaw gateway status --deep
+```
+
+Omit `--allow-scripts=openclaw` on npm 11.15 and earlier. For an external
+supervisor, use its stop and restart commands. Doctor keeps an already-stopped
+Gateway stopped, so complete the restart after reviewing its repair results.
+
+Automatic official-plugin drift repair was added after 2026.9.5. If the installed
+release still prints **Fix each drifted plugin**, run its printed
+`openclaw plugins update` commands before restarting. Once installed, a build
+with automatic drift repair performs those official-plugin updates during
+`doctor --fix`; any remaining readiness warning names the plugin that still
+needs attention.
 
 ### Advanced npm install topics
 
@@ -318,9 +418,9 @@ different npm prefix alone does not isolate operator state.
 
     For package updates, the check runs before registry lookups and database-schema validation. Managed update runs retain the warning in update history so it also appears in the Control UI.
 
-    Before staging a replacement, a read-only snapshot check measures the known SQLite database families, including WAL, SHM, and journal files. It reports each family's bytes and the existing snapshot budget: twice the total family bytes, three times the largest family, and 64 MiB for metadata. Plugin copies and registered external databases remain unknown until the complete check after staging.
+    Before staging a replacement, a read-only snapshot check measures the known SQLite database families, including WAL, SHM, and journal files. Its non-warning diagnostic entries in `openclaw update status --json` record each family's size and the existing snapshot budget: twice the total family bytes, three times the largest family, and 64 MiB for metadata. Plugin copies and registered external databases remain unknown until the complete check after staging.
 
-    Snapshot space is checked at the existing destinations: `TMPDIR`, the capture directory beside the state directory, and the system temporary directory. An update refuses before staging only when every destination has known free space below the snapshot owner's requirement, because its private state copy cannot be taken. A usable alternative, unknown capacity, or incomplete measurement remains a warning with the available numbers. Package and Git targets that are already current need no candidate snapshot. The updater preserves a config copy, not a full-state backup.
+    Snapshot space is checked at the existing destinations: `TMPDIR`, the capture directory beside the state directory, and the system temporary directory. An update refuses before staging only when every destination has known free space below the snapshot owner's requirement, because its private state copy cannot be taken. Database sizes are inventory for the temporary snapshot, not database-health or growth warnings. A successful check needs no database cleanup. If measurement fails, the updater warns that it will check again after staging. A usable alternative or unknown free-space reading does not itself stop the update. Package and Git targets that are already current need no candidate snapshot. The updater preserves a config copy, not a full-state backup.
 
     This check runs in the installed updater; an already-installed 2026.9.3 updater retains its prior behavior for its own first upgrade hop.
 

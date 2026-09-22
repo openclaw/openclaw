@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -17,6 +17,98 @@ import {
 import { createMessageTool } from "./message-tool-execution.js";
 
 const scheduledWriteActions = ["edit", "delete", "pin", "unpin"] as const;
+
+it("separates generic sends, source reads, and simulated writes", async () => {
+  const registry = captureActivePluginRegistrySnapshot();
+  const identity = {
+    agentId: "main",
+    runId: "source-withdrawal-run",
+    sessionKey: "agent:main:cron:source-withdrawal:run:fixture",
+  };
+  let messageCurrent = true;
+  let sourceCurrent = true;
+  const assertMessageCurrent = vi.fn(() => {
+    if (!messageCurrent) {
+      throw new Error("message authority expired");
+    }
+  });
+  const assertSourceCurrent = vi.fn(() => {
+    if (!sourceCurrent) {
+      throw new Error("source authorization expired");
+    }
+  });
+  const capability = mintMessageActionTurnCapability({
+    ...identity,
+    scheduled: {
+      policy: { version: 1, mode: "trusted" },
+      assertCurrent: assertMessageCurrent,
+      assertSourceCurrent,
+    },
+  });
+  const outboundBoundary = new Error("generic send reached outbound dispatch");
+  try {
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      actions: { describeMessageTool: () => ({ actions: ["send", "read"] }) },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+    const config: OpenClawConfig = { channels: { discord: { token: "fixture-token" } } };
+    const tool = createMessageTool({
+      config,
+      agentId: identity.agentId,
+      agentSessionKey: identity.sessionKey,
+      runId: identity.runId,
+      messageActionTurnCapability: capability,
+      admitScheduledInvocation: () => config,
+      runMessageAction: async (input) => {
+        if (input.params.dryRun === true) {
+          messageCurrent = false;
+          return {
+            kind: "send",
+            channel: "discord",
+            action: "send",
+            to: "channel:100000000000000001",
+            handledBy: "plugin",
+            payload: { ok: true },
+            dryRun: true,
+          };
+        }
+        throw outboundBoundary;
+      },
+    });
+
+    sourceCurrent = false;
+    await expect(
+      tool.execute("generic-send", {
+        action: "send",
+        channel: "discord",
+        target: "channel:100000000000000001",
+        message: "Still authorized",
+      }),
+    ).rejects.toBe(outboundBoundary);
+    await expect(
+      tool.execute("source-read", {
+        action: "read",
+        channel: "discord",
+        target: "channel:100000000000000001",
+      }),
+    ).rejects.toThrow("source authorization expired");
+    expect(assertMessageCurrent).toHaveBeenCalled();
+    expect(assertSourceCurrent).toHaveBeenCalledOnce();
+    await expect(
+      tool.execute("scheduled-dry-run", {
+        action: "send",
+        channel: "discord",
+        target: "channel:100000000000000001",
+        message: "Simulate only",
+        dryRun: true,
+      }),
+    ).rejects.toThrow("message authority expired");
+  } finally {
+    revokeMessageActionTurnCapability(capability);
+    restoreActivePluginRegistrySnapshot(registry);
+  }
+});
 
 async function observeScheduledAccountSelection(
   action: (typeof scheduledWriteActions)[number] | "send",

@@ -17,7 +17,10 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import {
+  waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "../config/sessions/session-transcript-reconcile.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
@@ -879,6 +882,50 @@ describe("chat.history cursor catch-up", () => {
     const cursor = await prepare(context, storePath);
     const result = await callChat(context, "chat.history", { cursor });
     expect(result).toMatchObject({ ok: true, payload: { kind: "reset" } });
+  });
+
+  test("resets cached history after an appended leaf rewinds the active branch", async () => {
+    const { context, storePath } = await createCursorSession([
+      transcriptEvent({ content: "retained", id: "root", parentId: null, role: "user" }),
+      transcriptEvent({
+        content: "rejected draft",
+        id: "abandoned",
+        parentId: "root",
+        role: "assistant",
+      }),
+    ]);
+    const cached = await callChat<{ deltaCursor: string }>(context, "chat.history");
+    expect(cached).toMatchObject({
+      ok: true,
+      payload: {
+        deltaCursor: expect.any(String),
+        messages: [{ __openclaw: { id: "root" } }, { __openclaw: { id: "abandoned" } }],
+      },
+    });
+    const scope = currentScope(storePath);
+    await appendTranscriptEvent(scope, {
+      type: "leaf",
+      id: "rewind",
+      parentId: "abandoned",
+      targetId: "root",
+      appendParentId: "root",
+    });
+    await waitForSessionTranscriptProjection(scope);
+
+    const fresh = await callChat(context, "chat.history");
+    expect(fresh).toMatchObject({
+      ok: true,
+      payload: { messages: [{ __openclaw: { id: "root" } }] },
+    });
+    expect(
+      readTranscriptDisplayDelta(scope, { cursor: cached.payload!.deltaCursor }),
+    ).toMatchObject({
+      kind: "page",
+      activeLeafEntryId: "root",
+      events: [{ event: { type: "leaf", id: "rewind" } }],
+    });
+    const delta = await callChat(context, "chat.history", { cursor: cached.payload!.deltaCursor });
+    expect(delta).toMatchObject({ ok: true, payload: { kind: "reset" } });
   });
 
   test.each(["compaction", "reset"] as const)(

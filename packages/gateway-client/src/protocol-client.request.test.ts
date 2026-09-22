@@ -446,7 +446,8 @@ describe("GatewayProtocolClient requests", () => {
       {
         timeoutMs: null,
         expectFinal: true,
-        onSent: () => {
+        onSent: (requestId) => {
+          expect(requestId).toBe(latestFrame(connection).id);
           trace.push("sent");
           throw sentError;
         },

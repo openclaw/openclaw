@@ -190,34 +190,82 @@ describe("resumed Codex session binding migration", () => {
     },
   );
 
-  it("still imports a first legacy binding when canonical state exists but its source was never imported", async () => {
-    await withOpenClawTestState({ label: "codex-first-sidecar-import" }, async (state) => {
-      const { cfg, scope } = seedDeferredPluginSessionSource(state, "default", "codex");
-      await upsertSessionEntryCore(
-        { ...scope, sessionKey: "agent:main:unrelated" },
-        { sessionId: "unrelated", updatedAt: 1 },
+  it.each(["legacy-index", "explicit-sqlite"] as const)(
+    "imports retained legacy Codex sidecars with an existing %s session store",
+    async (locator) => {
+      await withOpenClawTestState(
+        { label: `codex-first-sidecar-import-${locator}` },
+        async (state) => {
+          const { cfg, scope, storePath, originals } = seedDeferredPluginSessionSource(
+            state,
+            "default",
+            "codex",
+          );
+          await upsertSessionEntryCore(
+            { ...scope, sessionKey: "agent:main:unrelated" },
+            { sessionId: "unrelated", updatedAt: 1 },
+          );
+          const config =
+            locator === "explicit-sqlite"
+              ? { ...cfg, session: { store: path.join(state.agentDir(), "openclaw-agent.sqlite") } }
+              : cfg;
+          const configuredScope = { ...scope, storePath: config.session?.store ?? scope.storePath };
+          expect(
+            loadExactSessionEntry({ ...configuredScope, sessionKey: "agent:main:unrelated" })?.entry
+              .sessionId,
+          ).toBe("unrelated");
+          const context = createPluginDoctorStateMigrationContext({
+            pluginId: "codex",
+            config,
+            env: state.env,
+          });
+          const params = {
+            config,
+            env: state.env,
+            stateDir: state.stateDir,
+            oauthDir: state.statePath("oauth"),
+            context,
+          };
+          const sidecars = await migration();
+          const result = await sidecars.migrateLegacyState(params);
+          expect(result.warnings).toEqual([]);
+          const bindings = context.readPluginStateEntriesInKeyRange?.(
+            "app-server-thread-bindings",
+            {
+              prefix: "session",
+              limit: 100,
+            },
+          );
+          for (const name of ["kept", "deleted"]) {
+            expect(
+              loadExactSessionEntry({ ...configuredScope, sessionKey: `agent:main:${name}` })?.entry
+                .agentHarnessId,
+            ).toBe("codex");
+            expect(bindings).toContainEqual(
+              expect.objectContaining({
+                value: expect.objectContaining({
+                  state: "active",
+                  sessionId: `legacy-${name}`,
+                  binding: expect.objectContaining({ threadId: name }),
+                }),
+              }),
+            );
+          }
+          expect(
+            loadExactSessionEntry({ ...configuredScope, sessionKey: "agent:main:unrelated" })?.entry
+              .sessionId,
+          ).toBe("unrelated");
+          expect(fs.readFileSync(storePath)).toEqual(originals.get(storePath));
+          for (const file of originals.keys()) {
+            if (file.endsWith(".codex-app-server.json")) {
+              expect(fs.existsSync(file)).toBe(false);
+              expect(fs.readFileSync(`${file}.migrated`)).toEqual(originals.get(file));
+            }
+          }
+          expect(await sidecars.detectLegacyState(params)).toBeNull();
+          expect(await sidecars.migrateLegacyState(params)).toEqual({ changes: [], warnings: [] });
+        },
       );
-      const context = createPluginDoctorStateMigrationContext({
-        pluginId: "codex",
-        config: cfg,
-        env: state.env,
-      });
-      const result = await (
-        await migration()
-      ).migrateLegacyState({
-        config: cfg,
-        env: state.env,
-        stateDir: state.stateDir,
-        oauthDir: state.statePath("oauth"),
-        context,
-      });
-      expect(result.warnings).toEqual([]);
-      expect(
-        loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.agentHarnessId,
-      ).toBe("codex");
-      expect(
-        loadExactSessionEntry({ ...scope, sessionKey: "agent:main:unrelated" })?.entry.sessionId,
-      ).toBe("unrelated");
-    });
-  });
+    },
+  );
 });

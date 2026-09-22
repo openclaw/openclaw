@@ -21,7 +21,6 @@ import {
 } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginModuleExport } from "./module-export.js";
-import { createPluginCacheKey } from "./plugin-cache-primitives.js";
 import {
   getPluginCache,
   getPluginCacheRoot,
@@ -321,7 +320,7 @@ function resolveSetupRegistryCacheKey(params?: {
   if (env !== process.env) {
     return null;
   }
-  return createPluginCacheKey([
+  return JSON.stringify([
     "setup-registry",
     resolvePluginControlPlaneFingerprint({
       config: params?.config,

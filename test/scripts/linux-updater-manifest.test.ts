@@ -42,6 +42,8 @@ type Remote = {
   calls: string[][];
   uploads: number;
   requests?: Array<{ ref: string; inputs: Record<string, string> }>;
+  requestRuns?: ActionRun[];
+  requestReadRejected?: boolean;
   uploadBehavior?: "accepted-error" | "rejected-error" | "deleted-error" | "success-noop";
   dispatchRejected?: boolean;
   dispatchResponse?: "missing-id" | "null-id";
@@ -161,9 +163,18 @@ if (args[0] === 'api') {
   } else if (endpoint === 'repos/${repository}/git/ref/heads/main' ||
       endpoint === 'repos/${repository}/commits/main') {
     result('${toolingSha}');
+  } else if (endpoint?.startsWith('repos/${repository}/actions/workflows/linux-app-release-request.yml/runs?')) {
+    if (state.requestReadRejected) fail('request history unavailable (HTTP 503)');
+    const page = Number(new URLSearchParams(endpoint.split('?')[1]).get('page'));
+    const runs = state.requestRuns || [];
+    result({total_count: runs.length, workflow_runs: runs.slice((page - 1) * 100, page * 100)});
   } else if (endpoint === 'repos/${repository}/actions/workflows/linux-app-release-request.yml/dispatches') {
     if (state.dispatchRejected) fail('workflow dispatch refused (HTTP 403)');
-    (state.requests ||= []).push(JSON.parse(fs.readFileSync(0, 'utf8')));
+    const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+    (state.requests ||= []).push(request);
+    (state.requestRuns ||= []).unshift({id: 456, head_sha: '${toolingSha}', head_branch: request.ref,
+      event: 'workflow_dispatch', status: 'queued', conclusion: null,
+      display_title: 'Linux App Release Request [' + request.inputs.tag + '] desktop=' + request.inputs['desktop-test-bundles']});
     result({...(state.dispatchResponse === 'missing-id' ? {} :
       {workflow_run_id: state.dispatchResponse === 'null-id' ? null : 456}),
       html_url: 'https://github.com/${repository}/actions/runs/456'});
@@ -811,6 +822,100 @@ it("reports a refused Linux workflow dispatch without a success receipt or retry
   expect(
     remote.read().calls.filter((args) => args.some((arg) => arg.endsWith("/dispatches"))),
   ).toHaveLength(1);
+});
+
+function pendingLinuxFixture(initial: Partial<Remote> = {}) {
+  return fixture({
+    releases: { "v2026.9.4": release("2026.9.4", { assets: [], manifest: undefined }) },
+    ...initial,
+  });
+}
+
+function linuxRequest(overrides: Partial<ActionRun> = {}): ActionRun {
+  return {
+    id: 455,
+    run_attempt: 1,
+    repository: { full_name: repository },
+    head_sha: "c".repeat(40),
+    head_branch: "main",
+    path: ".github/workflows/linux-app-release-request.yml",
+    event: "workflow_dispatch",
+    status: "completed",
+    conclusion: "success",
+    display_title: "Linux App Release Request [v2026.9.4] desktop=false",
+    ...overrides,
+  };
+}
+
+it.each(["requested", "waiting", "pending", "queued", "in_progress", "completed"])(
+  "reuses a manual same-tag Linux request in %s state without another build request",
+  (status) => {
+    const remote = pendingLinuxFixture({
+      requestRuns: [
+        linuxRequest({ status, conclusion: status === "completed" ? "success" : null }),
+      ],
+    });
+    const result = remote.dispatch();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.evidence).toMatchObject({
+      state: "request-reused",
+      requestRunId: "455",
+      workflowSha: "c".repeat(40),
+    });
+    expect(remote.read().requests ?? []).toEqual([]);
+  },
+);
+
+it("reuses its earlier request when a parent resumes before Linux assets arrive", () => {
+  const remote = pendingLinuxFixture();
+  const first = remote.dispatch();
+  expect(first.status, first.stderr).toBe(0);
+  expect(first.evidence.state).toBe("request-dispatched");
+  const resumed = remote.dispatch();
+  expect(resumed.status, resumed.stderr).toBe(0);
+  expect(resumed.evidence).toMatchObject({ state: "request-reused", requestRunId: "456" });
+  expect(remote.read().requests).toHaveLength(1);
+});
+
+it("finds a desktop-inclusive Linux request beyond the first history page", () => {
+  const remote = pendingLinuxFixture({
+    requestRuns: [
+      ...Array.from({ length: 100 }, () =>
+        linuxRequest({ display_title: "Linux App Release Request [v2026.9.3] desktop=false" }),
+      ),
+      linuxRequest({ display_title: "Linux App Release Request [v2026.9.4] desktop=true" }),
+    ],
+  });
+  const result = remote.dispatch();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.evidence).toMatchObject({ state: "request-reused", requestRunId: "455" });
+  expect(remote.read().requests ?? []).toEqual([]);
+});
+
+it.each([
+  { reason: "failed", overrides: { conclusion: "failure" } },
+  { reason: "cancelled", overrides: { conclusion: "cancelled" } },
+  { reason: "another branch", overrides: { head_branch: "feature" } },
+  { reason: "another event", overrides: { event: "push" } },
+  {
+    reason: "another tag",
+    overrides: { display_title: "Linux App Release Request [v2026.9.3] desktop=false" },
+  },
+])("does not reuse a Linux request that is $reason", ({ overrides }) => {
+  const remote = pendingLinuxFixture({ requestRuns: [linuxRequest(overrides)] });
+  const result = remote.dispatch();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.evidence.state).toBe("request-dispatched");
+  expect(remote.read().requests).toHaveLength(1);
+});
+
+it("refuses another Linux request when request history cannot be read", () => {
+  const remote = pendingLinuxFixture({ requestReadRejected: true });
+  const result = remote.dispatch();
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("request history unavailable");
+  expect(result.evidence.state).toBe("dispatch-unconfirmed");
+  expect(remote.read().requests ?? []).toEqual([]);
 });
 
 it("refuses a moved tag even when the dispatch caller suppresses shell errexit", () => {

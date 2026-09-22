@@ -12,7 +12,6 @@ import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
-  classifyAgentRunTerminalOutcome,
   isDefinitiveRunLifecycle,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
@@ -38,6 +37,10 @@ import {
 } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
+import {
+  getSubagentSessionListReadSnapshotIdentity,
+  prepareOptionalSubagentSessionListReadCache,
+} from "../agents/subagents/registry/subagent-registry-state.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { bindEmbeddedSessionRowProjection } from "../agents/tools/embedded-gateway-stub.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
@@ -67,6 +70,10 @@ import {
   shouldSuppressAssistantEventForLiveChat,
 } from "../gateway/live-chat-projector.js";
 import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
+import {
+  createChatHistoryActivityProjection,
+  createChatHistoryByteCounter,
+} from "../gateway/server-methods/chat-history-budget.js";
 import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-page-kernel.js";
 import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
 import {
@@ -81,7 +88,6 @@ import {
   type SessionRowProjection,
 } from "../gateway/session-row-projection.js";
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
-import { listProjectedSessions } from "../gateway/session-utils-list.js";
 import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
 import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
 import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lookup.js";
@@ -118,14 +124,22 @@ import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { applyQueueDropPolicy, waitForQueueDebounce } from "../utils/queue-helpers.js";
 import {
+  assistantChatMessage,
+  payloadText,
+  resolveDeltaPayload,
+  resolveTerminalChatState,
+} from "./embedded-chat-projection.js";
+import {
   buildLocalQueuedPrompt,
   createQueuedRunReadiness,
+  timeoutSecondsFromMs,
   waitForLocalRunShutdown,
   waitForQueuedLocalRun,
   type LocalRunState,
   type QueuedSessionRun,
 } from "./embedded-local-run.js";
 import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
+import { createEmbeddedSessionReader } from "./embedded-session-reader.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -134,19 +148,11 @@ import type {
   TuiChatSendResult,
   TuiEvent,
   TuiModelChoice,
-  TuiSessionList,
   TuiSessionCreateOptions,
   TuiImageRequest,
   TuiImageData,
 } from "./tui-backend.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
-
-const TUI_STATE_BY_TERMINAL_CLASSIFICATION = {
-  success: undefined,
-  timeout: "error",
-  cancellation: "aborted",
-  failure: "error",
-} as const;
 
 type LocalPendingMessage = {
   run: LocalRunState;
@@ -189,44 +195,6 @@ function resolveBtwQuestion(message: string): string | undefined {
   return question ? question : undefined;
 }
 
-function payloadText(parts: unknown): string {
-  if (!Array.isArray(parts)) {
-    return "";
-  }
-  return parts
-    .map((part) => {
-      if (!part || typeof part !== "object") {
-        return "";
-      }
-      const payload = part as { text?: unknown };
-      return typeof payload.text === "string" ? payload.text.trim() : "";
-    })
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-}
-
-function assistantChatMessage(text: string) {
-  return { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() };
-}
-
-function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
-    return undefined;
-  }
-  return String(Math.max(0, Math.ceil(timeoutMs / 1000)));
-}
-
-function resolveDeltaPayload(text: string, previousText: string | undefined) {
-  if (previousText === undefined) {
-    return { deltaText: text };
-  }
-  if (!text.startsWith(previousText)) {
-    return { deltaText: text, replace: true as const };
-  }
-  return { deltaText: text.slice(previousText.length) };
-}
-
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
 
@@ -253,6 +221,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private unbindSessionProjection?: () => void;
   // Store methods await migration and the shared resident session rows.
   private ready: Promise<void> = Promise.resolve();
+  private readonly sessionReader = createEmbeddedSessionReader({
+    ready: () => this.ready,
+    projection: () => this.sessionProjection,
+  });
 
   start() {
     if (this.unsubscribe) {
@@ -333,10 +305,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unbindSessionProjection = undefined;
     const projection = this.sessionProjection;
     this.sessionProjection = undefined;
-    await projection?.then(
-      (value) => value.dispose(),
-      () => {},
-    );
+    await projection?.catch(() => undefined).then((value) => value?.dispose());
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.pendingLifecycleErrors.forEach(clearTimeout);
@@ -351,6 +320,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.previousRuntimeLog = undefined;
     this.previousRuntimeError = undefined;
     setEmbeddedMode(false);
+    await this.preparedModelRuntime.waitUntilReady();
   }
 
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
@@ -534,6 +504,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
+    if (!getSubagentSessionListReadSnapshotIdentity()) {
+      await prepareOptionalSubagentSessionListReadCache();
+    }
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
     const selected = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
       ...loadOptions,
@@ -574,12 +547,19 @@ export class EmbeddedTuiBackend implements TuiBackend {
       messageId: undefined,
     });
     const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, entry);
+    const activity = createChatHistoryActivityProjection(normalized, historyPage.activity);
+    const byteCounter = createChatHistoryByteCounter(activity);
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
       messages: normalized,
+      byteCounter,
       maxSingleMessageBytes: perMessageHardCap,
     });
-    const messages = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
+    const messages = capArrayByJsonBytes(
+      replaced.messages,
+      maxHistoryBytes - byteCounter.framingBytes(replaced.messages),
+      byteCounter.messageBytes,
+    ).items;
     const newestInFlightRun = [...this.runs.entries()].findLast(
       ([, run]) =>
         !run.isBtw &&
@@ -658,6 +638,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionId,
       messages,
       defaults,
+      activity: messages.flatMap((message) => activity.get(message) ?? []),
       ...(sessionInfo ? { sessionInfo } : {}),
       thinkingLevel,
       fastMode: entry?.fastMode,
@@ -667,18 +648,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     };
   }
 
-  async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
-    await this.ready;
-    const publication = this.sessionProjection;
-    const projection = await publication;
-    if (!projection || publication !== this.sessionProjection) {
-      throw new Error("Embedded session projection is unavailable");
-    }
-    return (await listProjectedSessions({
-      projection,
-      opts: opts ?? {},
-    })) as TuiSessionList;
-  }
+  listSessions = this.sessionReader.listSessions;
+  describeSession = this.sessionReader.describeSession;
 
   async listAgents(): Promise<TuiAgentsList> {
     return (await listAgentsForGateway(getRuntimeConfig())) as TuiAgentsList;
@@ -1210,7 +1181,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         },
         abortSignal: run.controller.signal,
       });
-    const state = TUI_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(outcome)];
+    const state = resolveTerminalChatState(outcome);
     if (!state) {
       return false;
     }

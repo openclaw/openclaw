@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import {
+  getActiveAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
 import {
   type EligibleNodeMessages,
@@ -12,12 +16,16 @@ import {
 } from "./computer-tool-gateway.js";
 import type { ComputerHost, ComputerToolTransport } from "./computer-tool-shared.js";
 import { COMPUTER_ACT_COMMAND, SCREEN_SNAPSHOT_COMMAND } from "./computer-tool-shared.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import {
   callGatewayTool,
   shouldUseInProcessGatewayTool,
   type GatewayCallOptions,
 } from "./gateway.js";
+import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
 import { listNodes, type NodeListNode } from "./nodes-utils.js";
 
 export type ComputerBinding = {
@@ -84,9 +92,94 @@ export async function resolveComputerBinding(params: {
   gatewayStatus?: GatewayComputerStatus;
   target?: "gateway" | "node";
   node?: string;
+  environmentId?: string;
   gatewayOpts: GatewayCallOptions;
   signal?: AbortSignal;
 }): Promise<ComputerBinding> {
+  if (params.environmentId !== undefined) {
+    const caller = getGatewayToolCallerIdentity();
+    const assertCaller = captureGatewayToolCallerAssertion();
+    const resolveContext = () => getInProcessGatewayToolContext(caller?.gatewayContextResolver);
+    const context = resolveContext();
+    const service = context?.workerEnvironmentService;
+    const run = caller?.operationalRunInstance;
+    const runAuthority = run ? getActiveAgentRunDelegatedAuthority(run) : undefined;
+    if (!caller || !assertCaller || !run || !runAuthority || !service?.prepareAttachedComputer) {
+      throw new Error("Attached computer control requires an admitted agent run on its Gateway");
+    }
+    assertCaller();
+    const attachment = service.findSessionAttachment(caller);
+    if (!attachment || attachment.environmentId !== params.environmentId) {
+      throw new Error("Computer environment is not attached to this conversation");
+    }
+    const assertCurrent = () => {
+      if (!validateAgentRunDelegatedAuthority(runAuthority) || resolveContext() !== context) {
+        throw new Error("Attached computer Gateway owner changed");
+      }
+      service.assertSessionAttachment(attachment);
+    };
+    await service.touchSessionAttachment(attachment);
+    assertCaller();
+    assertCurrent();
+    const prepared = await service.prepareAttachedComputer({
+      ...attachment,
+      runId: run.runId,
+      assertCurrent,
+    });
+    try {
+      assertCaller();
+      assertCurrent();
+      if (!prepared) {
+        throw new Error(
+          "Attached environment has no available computer provider; use a desktop-enabled profile",
+        );
+      }
+      const transport = prepared.bind(run);
+      const node = await transport.resolveNode(undefined, params.signal);
+      assertCaller();
+      assertCurrent();
+      return {
+        host: { host: "node", nodeId: node.nodeId, environmentId: attachment.environmentId },
+        gatewayOpts: {},
+        capabilities: node.computerUse,
+        invoke: async (request) => {
+          if (
+            request.command === COMPUTER_ACT_COMMAND &&
+            request.commandParams.action === "__close_execution"
+          ) {
+            await prepared.close("execution-complete");
+            return { ok: true };
+          }
+          const invokingCaller = getGatewayToolCallerIdentity();
+          const assertInvocation = captureGatewayToolCallerAssertion();
+          if (
+            !assertInvocation ||
+            invokingCaller?.operationalRunInstance !== run ||
+            invokingCaller.agentId !== attachment.agentId ||
+            invokingCaller.sessionKey !== attachment.sessionKey
+          ) {
+            throw new Error("Attached computer invocation lost its admitted caller");
+          }
+          assertInvocation();
+          await service.touchSessionAttachment(attachment);
+          assertInvocation();
+          assertCurrent();
+          const result = await transport.invoke(
+            { ...request, nodeId: node.nodeId },
+            assertInvocation,
+          );
+          assertInvocation();
+          await service.touchSessionAttachment(attachment);
+          assertInvocation();
+          assertCurrent();
+          return result;
+        },
+      };
+    } catch (error) {
+      await prepared?.close("prepare-failed");
+      throw error;
+    }
+  }
   const sessionTransport = params.sessionTransport;
   if (sessionTransport) {
     const node = await sessionTransport.resolveNode(params.node, params.signal);

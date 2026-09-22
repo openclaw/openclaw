@@ -1,4 +1,3 @@
-// Discord plugin module implements native command status behavior.
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";

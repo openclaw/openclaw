@@ -7,7 +7,7 @@ import * as storage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { SqliteWorkerError } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { recordMemorySessionTombstones } from "../memory-entry-origins.js";
+import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import { MemorySourceIndexKernel } from "./manager-source-index-kernel.js";
@@ -71,7 +71,7 @@ describe("private session source staging", () => {
         {
           id: expect.any(String),
           text: expect.stringContaining("Violet session preference."),
-          embedding: vectorEnabled ? "[0,1,0,0]" : "[]",
+          embedding: storage.encodeMemoryEmbedding(vectorEnabled ? [0, 1, 0, 0] : []),
         },
       ]);
       if (vectorEnabled) {
@@ -102,7 +102,7 @@ describe("private session source staging", () => {
       function (this: MemoryIndexDatabase, input, assertCurrent) {
         // The shadow is complete; simulate forget advancing the published revision
         // before the final publication obtains transaction admission.
-        recordMemorySessionTombstones({ agentId: "main", sessionIds: ["shadow-session"] });
+        seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["shadow-session"] });
         return publish.call(this, input, assertCurrent);
       },
     );

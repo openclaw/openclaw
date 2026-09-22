@@ -139,6 +139,8 @@ export async function fenceOAuthRefreshPeers(params: {
   generation: OAuthCredential;
   fence: OAuthCredential;
   rollbackOnFailure?: boolean;
+  /** Register before CAS; release the provisional observation if another owner wins. */
+  onFence?: (databasePath: string) => () => void;
 }): Promise<OAuthRefreshPeerClaim[]> {
   const claims: OAuthRefreshPeerClaim[] = [];
   try {
@@ -152,6 +154,7 @@ export async function fenceOAuthRefreshPeers(params: {
         continue;
       }
       if (isExactOAuthCredential(credential, params.fence)) {
+        params.onFence?.(candidate.databasePath);
         claims.push({ candidate });
         continue;
       }
@@ -174,6 +177,7 @@ export async function fenceOAuthRefreshPeers(params: {
       }
       let claimed = false;
       const original = { ...credential };
+      const releaseUnclaimedObservation = params.onFence?.(candidate.databasePath);
       const updated = updateCandidateAuthProfileStore({
         candidate,
         profileId: params.profileId,
@@ -193,6 +197,7 @@ export async function fenceOAuthRefreshPeers(params: {
           claims.push({ candidate });
           continue;
         }
+        releaseUnclaimedObservation?.();
         if (current?.type === "oauth") {
           assertCredentialAllowsClaim({
             candidate,

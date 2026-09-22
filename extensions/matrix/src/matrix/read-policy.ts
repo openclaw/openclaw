@@ -168,7 +168,9 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
   }
   return await withResolvedActionClient(params.opts, async (client) => {
     assertCurrent?.();
-    const roomId = await resolveMatrixRoomId(client, params.roomId);
+    const roomId = await resolveMatrixRoomId(client, params.roomId, {
+      persistDirectMapping: false,
+    });
     assertCurrent?.();
     const inputAlias = params.roomId.trim().startsWith("#") ? params.roomId.trim() : undefined;
     const { getRoomInfo } = createMatrixRoomInfoResolver(client);

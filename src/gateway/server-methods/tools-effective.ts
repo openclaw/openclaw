@@ -44,7 +44,7 @@ import {
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly, resolveSessionModelRef } from "../session-utils.js";
@@ -125,6 +125,7 @@ function buildToolsEffectiveCacheKey(params: {
     // layer is applied after the base cache, so warm/stale runtime state alone
     // never invalidates base entries.
     sessionKey: params.sessionKey,
+    sessionId: context.sessionId,
     workspaceDir: optionalCacheString(context.workspaceDir),
     agentId: context.agentId,
     modelProvider: optionalCacheString(context.modelProvider),
@@ -270,25 +271,6 @@ function resolveRequestedAgentIdOrRespondError(params: {
   return requestedAgentId;
 }
 
-function appendMcpInventoryGroups(params: {
-  base: EffectiveToolInventoryResult;
-  mcpInventory: ReturnType<typeof buildRuntimeCompatibleMcpToolInventory>;
-}): EffectiveToolInventoryResult {
-  // MCP notices apply even when no tools are projectable; only source=mcp
-  // entries become new groups beside the base runtime inventory.
-  const mcpEntries = params.mcpInventory.entries.filter((entry) => entry.source === "mcp");
-  const notices = [...(params.base.notices ?? []), ...params.mcpInventory.notices];
-  const base = notices.length > 0 ? { ...params.base, notices } : params.base;
-  if (mcpEntries.length === 0) {
-    return base;
-  }
-  const mcpGroups = buildEffectiveToolInventoryGroups(mcpEntries);
-  return {
-    ...base,
-    groups: [...base.groups, ...mcpGroups],
-  };
-}
-
 function appendToolInventoryNotice(
   base: EffectiveToolInventoryResult,
   notice: EffectiveToolInventoryNotice,
@@ -376,6 +358,7 @@ async function resolveBaseToolsEffectiveInventory(
         agentId: context.agentId,
         agentDir,
         sessionKey: context.sessionKey,
+        sessionId: context.sessionId,
         workspaceDir: context.workspaceDir,
         messageProvider: context.messageProvider,
         modelProvider: context.modelProvider,
@@ -536,7 +519,15 @@ async function projectMcpCatalog(params: {
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
       });
-      return appendMcpInventoryGroups({ base: params.base, mcpInventory });
+      const notices = [...(params.base.notices ?? []), ...mcpInventory.notices];
+      if (mcpInventory.entries.length === 0) {
+        return notices.length > 0 ? { ...params.base, notices } : params.base;
+      }
+      return {
+        ...params.base,
+        ...(notices.length > 0 ? { notices } : {}),
+        groups: [...params.base.groups, ...buildEffectiveToolInventoryGroups(mcpInventory.entries)],
+      };
     });
   } finally {
     await acquired[Symbol.asyncDispose]();
@@ -635,6 +626,7 @@ function resolveTrustedToolsEffectiveContext(params: {
     capabilityProfile: resolveConversationCapabilityProfile({
       config: context.cfg,
       sessionKey: context.sessionKey,
+      preparedSessionEntry: { sessionKey: canonicalKey, entry: loaded.entry },
       agentId: context.agentId,
       modelProvider: context.modelProvider,
       modelId: context.modelId,

@@ -37,6 +37,8 @@ export function transitionOwnedDeliveryQueueEntryInDatabase(
     queueName: string;
     id: string;
     platformSendAttemptId: string | null;
+    /** A caller with no owner of its own treats an already-settled row as a no-op. */
+    allowMissingEntry?: boolean;
   },
   // Unlike void, undefined rejects async callbacks before they can escape the transaction.
   transition: (entry: DeliveryQueueEntryState, database: OpenClawStateDatabase) => undefined,
@@ -51,7 +53,7 @@ export function transitionOwnedDeliveryQueueEntryInDatabase(
         "pending",
       );
       if (!entry) {
-        return false;
+        return params.allowMissingEntry === true;
       }
       if (
         params.platformSendAttemptId === null

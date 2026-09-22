@@ -7,6 +7,8 @@ import {
   GatewayRequestError,
   type GatewayBrowserClient,
 } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isAwaitingGatewayFailure } from "../../lib/gateway-availability.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -20,6 +22,8 @@ import type {
   SessionPlacementStartMode,
   SessionPlacementTarget,
 } from "./session-placement-recovery.ts";
+
+registerNewSessionSetupEnglish();
 
 type SessionPlacementStartOutcome =
   | { status: "started"; messageId: string }
@@ -144,8 +148,13 @@ async function resolveActivePlacement(
   let next = params.initial ? ({ status: "read", placement: params.initial } as const) : undefined;
   let lookupFailures = 0;
   let emptyPlacements = 0;
+  let placementPending = false;
   for (let attempt = 0; attempt < DISPATCH_RECONCILE_ATTEMPTS; attempt += 1) {
     const result = next ?? (await readPlacement(client, params.key));
+    placementPending =
+      result.status === "read" &&
+      result.placement !== undefined &&
+      PENDING_PLACEMENT_STATES.has(result.placement.state);
     next = undefined;
     if (result.status === "missing") {
       return { status: "missing" };
@@ -238,9 +247,11 @@ async function resolveActivePlacement(
   }
   return {
     status: "cleanup-rejected",
-    error: isCurrent()
-      ? "session placement reconciliation timed out"
-      : "session placement cleanup timed out",
+    error: t(
+      placementPending
+        ? "newSession.placementStillStarting"
+        : "newSession.placementCompletionUnconfirmed",
+    ),
   };
 }
 

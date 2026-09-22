@@ -1,4 +1,7 @@
-import type {
+import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
+import type { SessionEntrySummary } from "./session-accessor.types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export type {
   DeletedAgentSessionEntryPurgeParams,
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
@@ -11,10 +14,14 @@ import type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
 } from "./session-accessor.lifecycle-types.js";
-import type { SessionEntrySummary } from "./session-accessor.types.js";
-import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
+
+export type SessionTranscriptContextVersion = {
+  generation: string | null;
+  rawSeq: number | null;
+  updatedAt: number | null;
+};
 
 export type CanonicalSessionValidationResult = {
   validatedRows: number;
@@ -30,6 +37,10 @@ export type SqliteSessionReclamationDiagnostics = {
     | "lifecycle-artifacts"
     | "history-eviction"
     | "historical-generation"
+    | "maintenance-plan"
+    | "maintenance-finalize"
+    | "maintenance-statistics"
+    | "maintenance-pages"
     | "cold-batch"
     | "cold-maintain"
     | "cold-restore";
@@ -72,6 +83,11 @@ export type SqliteSessionArchivePruningDiagnostics = {
   asyncAdmissions?: number;
   checkpointCalls?: number;
   checkpointIncomplete?: number;
+  checkpoint?: SqliteWalHealth;
+  totalBytesBefore?: number;
+  totalBytesAfter?: number;
+  walBytesBefore?: number;
+  walBytesAfter?: number;
   checkpointMs?: number;
   checkpointMaxMs?: number;
   vacuumMs?: number;
@@ -171,20 +187,6 @@ type SessionEntryBatchProjectionMutation = {
 export type SessionEntryBatchProjectionUpdate<T> = {
   mutations?: Iterable<SessionEntryBatchProjectionMutation>;
   result: T;
-};
-
-export type {
-  DeletedAgentSessionEntryPurgeParams,
-  DeleteSessionEntryLifecycleParams,
-  DeleteSessionEntryLifecycleResult,
-  ResetSessionEntryLifecycleParams,
-  ResetSessionEntryLifecycleResult,
-  SessionEntryLifecycleMutationResult,
-  SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
-  SessionLifecycleArchivedTranscript,
-  SessionLifecycleArtifactCleanupParams,
-  SessionLifecycleArtifactCleanupResult,
 };
 
 export type {

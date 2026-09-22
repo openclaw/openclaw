@@ -126,6 +126,7 @@ import {
   readCodexAppServerClientDesktopGeneration,
   readCodexAppServerClientProcessIdentity,
 } from "./shared-client.js";
+import { resolveCodexAppServerSpawnIdentity } from "./spawn-identity.js";
 
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let clearSharedCodexAppServerClientAndWait: typeof import("./shared-client.js").clearSharedCodexAppServerClientAndWait;
@@ -140,7 +141,6 @@ let retainSharedCodexAppServerClientByInstanceId: typeof import("./shared-client
 let releaseLeasedSharedCodexAppServerClient: typeof import("./shared-client.js").releaseLeasedSharedCodexAppServerClient;
 let releaseCodexAppServerClientLease: typeof import("./shared-client.js").releaseCodexAppServerClientLease;
 let resolveCodexNativeConfigFenceKey: typeof import("./shared-client.js").resolveCodexNativeConfigFenceKey;
-let resolveCodexAppServerSpawnIdentity: typeof import("./shared-client.js").resolveCodexAppServerSpawnIdentity;
 let retireSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").retireSharedCodexAppServerClientIfCurrent;
 let waitForCodexAppServerClientDesktopGenerationDrain: typeof import("./shared-client.js").waitForCodexAppServerClientDesktopGenerationDrain;
 let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
@@ -289,7 +289,6 @@ describe("shared Codex app-server client", () => {
       releaseLeasedSharedCodexAppServerClient,
       releaseCodexAppServerClientLease,
       resolveCodexNativeConfigFenceKey,
-      resolveCodexAppServerSpawnIdentity,
       retireSharedCodexAppServerClientIfCurrent,
       waitForCodexAppServerClientDesktopGenerationDrain,
       resetSharedCodexAppServerClientForTests,

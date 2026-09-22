@@ -82,7 +82,7 @@ describe("agentsListCommand", () => {
     buildProviderSummaryMetadataIndexMock.mockReturnValue(providerSummaryMetadataMock);
     listProvidersForAgentMock.mockReturnValue(["Telegram default: configured"]);
     listAgentProvenanceMock.mockResolvedValue([]);
-    readAgentProvenanceForDisplayMock.mockResolvedValue(undefined);
+    readAgentProvenanceForDisplayMock.mockResolvedValue([]);
     summarizeBindingsMock.mockReturnValue(["Telegram default"]);
   });
 
@@ -139,12 +139,14 @@ describe("agentsListCommand", () => {
   it("adds durable provenance to JSON without loading provider details", async () => {
     const runtime = createRuntime();
     listAgentProvenanceMock.mockRejectedValue(new Error("unrelated stored provenance is invalid"));
-    readAgentProvenanceForDisplayMock.mockResolvedValue({
-      agentId: "main",
-      createdVia: "operator",
-      creatorAgentId: null,
-      createdAtMs: 42,
-    });
+    readAgentProvenanceForDisplayMock.mockResolvedValue([
+      {
+        agentId: "main",
+        createdVia: "operator",
+        creatorAgentId: null,
+        createdAtMs: 42,
+      },
+    ]);
 
     await agentsListCommand({ json: true }, runtime);
 
@@ -159,6 +161,10 @@ describe("agentsListCommand", () => {
     });
     expect(summary).not.toHaveProperty("routes");
     expect(summary).not.toHaveProperty("providers");
+
+    await expect(agentsListCommand({ json: true, tree: true }, createRuntime())).rejects.toThrow(
+      "unrelated stored provenance is invalid",
+    );
   });
 
   it("renders roots, children, missing rows, and dangling creators as a tree", async () => {

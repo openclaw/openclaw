@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 
 // Resolution and Jiti must accept the same source family, including typed JSX variants.
 export const PLUGIN_SOURCE_MODULE_EXTENSIONS: readonly string[] = [
@@ -212,7 +213,10 @@ function installCapturedPluginModuleLoader(bun: BunPluginRuntime): void {
     setup(builder) {
       builder.onLoad(
         {
-          filter: /openclaw-plugin-build-[^/\\]+[/\\].*\.[cm]?[jt]sx$/u,
+          filter: new RegExp(
+            `${PLUGIN_SOURCE_CAPTURE_PREFIX}[^/\\\\]+[/\\\\].*\\.[cm]?[jt]sx$`,
+            "u",
+          ),
           namespace: "file",
         },
         ({ path: modulePath }) =>
@@ -250,6 +254,37 @@ export function isJavaScriptModulePath(modulePath: string): boolean {
   return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
 }
 
+function isBundledPluginDistModulePath(modulePath: string): boolean {
+  return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
+}
+
+function shouldPreferNativeModuleLoad(modulePath: string): boolean {
+  switch (path.extname(modulePath).trim().toLowerCase()) {
+    case ".js":
+    case ".mjs":
+    case ".cjs":
+    case ".json":
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function resolvePluginLoaderTryNative(
+  modulePath: string,
+  options?: {
+    preferBuiltDist?: boolean;
+  },
+): boolean {
+  if (isBundledPluginDistModulePath(modulePath)) {
+    return shouldPreferNativeModuleLoad(modulePath);
+  }
+  return (
+    shouldPreferNativeModuleLoad(modulePath) ||
+    (options?.preferBuiltDist === true && modulePath.includes(`${path.sep}dist${path.sep}`))
+  );
+}
+
 function isMissingTargetModuleError(
   error: { code?: unknown; message?: unknown },
   modulePath: string,
@@ -262,11 +297,10 @@ function isMissingTargetModuleError(
 }
 
 function isSourceTransformFallbackError(error: unknown, modulePath: string): boolean {
-  if (!error || typeof error !== "object") {
+  if (!error || typeof error !== "object" || !("code" in error)) {
     return false;
   }
-  const candidate = error as { code?: unknown; message?: unknown };
-  const code = candidate.code;
+  const code = error.code;
   return (
     code === "ERR_REQUIRE_ESM" ||
     code === "ERR_REQUIRE_ASYNC_MODULE" ||
@@ -274,7 +308,7 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
     code === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" ||
     code === "ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING" ||
     code === "ERR_UNKNOWN_FILE_EXTENSION" ||
-    isMissingTargetModuleError(candidate, modulePath)
+    isMissingTargetModuleError(error, modulePath)
   );
 }
 
@@ -295,17 +329,12 @@ export function tryNativeRequireJavaScriptModule(
 export function tryNativeRequireModule(
   moduleSpecifier: string,
   options: {
-    allowWindows?: boolean;
     aliasMap?:
       | Record<string, string>
       | ((specifier: string, parent?: string) => string | undefined);
     fallbackOnMissingDependency?: boolean;
-    fallbackOnNativeError?: boolean;
   } = {},
 ): { ok: true; moduleExport: unknown } | { ok: false } {
-  if (process.platform === "win32" && options.allowWindows !== true) {
-    return { ok: false };
-  }
   const modulePath = toNativeRequirePath(moduleSpecifier);
   // A process-wide require retains evicted graphs through its parent's children.
   // Keep that parent scoped to this load so retired graphs can be collected.
@@ -344,7 +373,7 @@ export function tryNativeRequireModule(
     ) {
       throw nativeModuleLoadFailures.get(resolvedPath);
     }
-    if (isSourceTransformFallbackError(error, modulePath) || options.fallbackOnNativeError) {
+    if (isSourceTransformFallbackError(error, modulePath)) {
       return { ok: false };
     }
     nativeModuleLoadFailures.set(resolvedPath, error);

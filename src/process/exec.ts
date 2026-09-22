@@ -8,6 +8,7 @@ import { runCommandWithTimeout } from "./exec-runner.js";
 import {
   COMMAND_PROCESS_TREE_KILL_GRACE_MS,
   resolveCommandProcessSignal,
+  retainCommandProcessCleanup,
   spawnCommand,
   waitForCommandSpawn,
 } from "./exec-spawn.js";
@@ -192,6 +193,12 @@ export async function runExec(
       }
       return { stdout: decodedStdout, stderr: decodedStderr };
     })();
+    retainCommandProcessCleanup(
+      completion.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
     return await (startupCanceled
       ? Promise.race([completion, startupCanceled.promise])
       : completion);

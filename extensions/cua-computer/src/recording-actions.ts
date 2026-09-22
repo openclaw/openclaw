@@ -241,6 +241,7 @@ export async function handleRecordingAct(
         },
       });
     }
+    default:
+      return undefined;
   }
-  return undefined;
 }
