@@ -322,13 +322,43 @@ async function until(predicate, label, deadline) {
 async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lease)) {
   // Readiness belongs to the owned child's lifetime. The supervisor's existing
   // watchdog bounds startup; an independent short timer can preempt legal Git work.
-  while (!stopped() && child.exitCode === null && child.signalCode === null) {
-    if (predicate()) {
-      return true;
+  return new Promise((resolve, reject) => {
+    const watchers = [];
+    let finished = false;
+    const finish = (ready, error) => {
+      if (finished) return;
+      finished = true;
+      for (const watcher of watchers) watcher.close();
+      child.off("exit", check);
+      child.off("error", fail);
+      if (error) reject(error);
+      else resolve(ready);
+    };
+    const fail = (error) => finish(false, error);
+    const check = () => {
+      if (finished) return;
+      try {
+        if (stopped() || child.exitCode !== null || child.signalCode !== null) finish(false);
+        else if (predicate()) finish(true);
+      } catch (error) {
+        fail(error);
+      }
+    };
+    try {
+      // Install before the first read: registration and atomic readiness renames
+      // can otherwise happen between observing absence and starting the watcher.
+      for (const directory of [root, recordsDir]) {
+        const watcher = fs.watch(directory, check);
+        watchers.push(watcher);
+        watcher.on("error", fail);
+      }
+      child.once("exit", check);
+      child.once("error", fail);
+      check();
+    } catch (error) {
+      fail(error);
     }
-    await delay(10);
-  }
-  return false;
+  });
 }
 
 function launch(role, attempt) {
@@ -392,7 +422,10 @@ function writeConsumer(target, tool) {
 
 async function command() {
   holdLease();
-  if (!options.performance || mode !== "observe") await record(process.pid, mode);
+  // Tree actors publish their attempt after installing their signal handler below.
+  if (mode !== "child" && mode !== "grandchild" && (!options.performance || mode !== "observe")) {
+    await record(process.pid, mode);
+  }
   if (mode === "sentinel") {
     return;
   }
@@ -1284,10 +1317,12 @@ async function supervise() {
       process.platform === "win32"
         ? [
             "-c",
-            'export PATH="$(cygpath -u "$1"):$PATH"; source "$2"',
+            'export PATH="$(cygpath -u "$1"):$PATH"; export TEMP="$3" TMP="$4"; source "$2"',
             "checkout-fixture",
             bin,
             checkoutScript,
+            options.env?.TEMP ?? root,
+            options.env?.TMP ?? root,
           ]
         : [checkoutScript];
     shell = spawn(workflowShell, ["--noprofile", "--norc", "-eo", "pipefail", ...shellArgs], {
@@ -1314,6 +1349,12 @@ async function supervise() {
         CHECKOUT_BASE_SHA: linux && scenario === "early-leader-exit" ? "c".repeat(40) : "",
         WORKFLOW_SHA: "b".repeat(40),
         ...options.env,
+        // MSYS shares its first /tmp mount across overlapping Bash processes.
+        // Bootstrap it from the retained artifact parent, then restore private
+        // TEMP/TMP in Bash before any checkout actor starts.
+        ...(process.platform === "win32"
+          ? { TEMP: path.dirname(root), TMP: path.dirname(root) }
+          : {}),
       },
     });
     const closed = track(shell);

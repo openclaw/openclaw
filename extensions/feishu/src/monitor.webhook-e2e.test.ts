@@ -91,8 +91,8 @@ async function sendRawSignedFeishuRequest(params: {
   });
 }
 
-afterEach(() => {
-  cleanupFeishuMonitorStateForTests();
+afterEach(async () => {
+  await cleanupFeishuMonitorStateForTests();
 });
 
 afterAll(() => {
@@ -162,6 +162,7 @@ describe("Feishu webhook signed-request e2e", () => {
       expect(httpServers.has(accountId)).toBe(false);
     } finally {
       releaseClose?.();
+      await observedMonitorPromise;
     }
   });
 

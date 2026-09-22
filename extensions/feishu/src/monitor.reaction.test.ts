@@ -4,7 +4,9 @@ import {
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { hasControlCommand, isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
@@ -24,6 +26,7 @@ const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
+let stopDebounceMonitor: (() => Promise<void>) | undefined;
 
 vi.mock("./client.js", () => ({
   createEventDispatcher: createEventDispatcherMock,
@@ -45,6 +48,26 @@ vi.mock("./monitor.transport.js", () => ({
 vi.mock("./thread-bindings.js", () => ({
   createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
 }));
+
+afterEach(async () => {
+  try {
+    const results = await Promise.allSettled([stopDebounceMonitor?.()]);
+    results.push(...(await Promise.allSettled([closeOpenClawStateDatabaseAsync()])));
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Feishu reaction test cleanup failed");
+    }
+    stopDebounceMonitor = undefined;
+    vi.restoreAllMocks();
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 afterAll(() => {
   vi.doUnmock("./client.js");
@@ -183,7 +206,13 @@ async function setupDebounceMonitor(params?: {
   });
   createEventDispatcherMock.mockReturnValue({ register });
 
-  await monitorSingleAccount({
+  const started = createDeferred<void>();
+  const finish = createDeferred<void>();
+  monitorWebSocketMock.mockImplementationOnce(async () => {
+    started.resolve();
+    await finish.promise;
+  });
+  const monitor = monitorSingleAccount({
     cfg: buildDebounceConfig(),
     account: buildDebounceAccount(),
     runtime: createNonExitingRuntimeEnv(),
@@ -193,6 +222,11 @@ async function setupDebounceMonitor(params?: {
       botName: params?.botName,
     },
   });
+  stopDebounceMonitor = async () => {
+    finish.resolve();
+    await monitor;
+  };
+  await Promise.race([started.promise, monitor]);
 
   const onMessage = handlers["im.message.receive_v1"];
   if (!onMessage) {
@@ -626,11 +660,6 @@ describe("Feishu inbound debounce regressions", () => {
     handlers = {};
     handleFeishuMessageMock.mockClear();
     setFeishuRuntime(createFeishuMonitorRuntime());
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
   });
 
   it("keeps root-less topic threads in separate debounce buckets", async () => {

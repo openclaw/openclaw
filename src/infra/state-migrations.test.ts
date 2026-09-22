@@ -81,35 +81,27 @@ type DetectLegacyStateParams = Parameters<typeof detectLegacyStateMigrationsWith
 type RunLegacyStateParams = Parameters<typeof runLegacyStateMigrationsWithSurfaces>[0];
 type AutoMigrateLegacyStateParams = Parameters<typeof autoMigrateLegacyStateWithSurfaces>[0];
 
+type CoreMigrationParams<T> = Omit<T, "legacySessionSurfaces"> & {
+  legacySessionSurfaces?: DetectLegacyStateParams["legacySessionSurfaces"];
+};
+
 // This broad core suite intentionally exercises migration mechanics without plugin-owned keys.
 // Package-shaped coverage owns configured plugin resolution and setup-sidecar loading.
-function detectLegacyStateMigrations(
-  params: Omit<DetectLegacyStateParams, "legacySessionSurfaces"> & {
-    legacySessionSurfaces?: DetectLegacyStateParams["legacySessionSurfaces"];
-  },
-) {
+function detectLegacyStateMigrations(params: CoreMigrationParams<DetectLegacyStateParams>) {
   return detectLegacyStateMigrationsWithSurfaces({
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     ...params,
   });
 }
 
-function runLegacyStateMigrations(
-  params: Omit<RunLegacyStateParams, "legacySessionSurfaces"> & {
-    legacySessionSurfaces?: RunLegacyStateParams["legacySessionSurfaces"];
-  },
-) {
+function runLegacyStateMigrations(params: CoreMigrationParams<RunLegacyStateParams>) {
   return runLegacyStateMigrationsWithSurfaces({
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     ...params,
   });
 }
 
-function autoMigrateLegacyState(
-  params: Omit<AutoMigrateLegacyStateParams, "legacySessionSurfaces"> & {
-    legacySessionSurfaces?: AutoMigrateLegacyStateParams["legacySessionSurfaces"];
-  },
-) {
+function autoMigrateLegacyState(params: CoreMigrationParams<AutoMigrateLegacyStateParams>) {
   return autoMigrateLegacyStateWithSurfaces({
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     ...params,
@@ -1247,7 +1239,11 @@ describe("state migrations", () => {
           database
             .prepare("SELECT agent_id, app_version FROM schema_meta WHERE meta_key = ?")
             .get("historical-transcript-directives-v1"),
-        ).toEqual({ agent_id: "main", app_version: JSON.stringify({ phase: "complete" }) });
+        ).toEqual(
+          doctorOnlyStateMigrations
+            ? { agent_id: "main", app_version: JSON.stringify({ phase: "complete" }) }
+            : undefined,
+        );
         expect(
           database.prepare("SELECT session_key FROM session_nodes ORDER BY session_key").all(),
         ).toEqual([{ session_key: "agent:qa:proof" }]);
@@ -1320,7 +1316,7 @@ describe("state migrations", () => {
       agents: { ownership: "explicit", entries: { main: {} } },
       cron: { store },
     };
-    const result = await autoMigrateLegacyState({ cfg, env });
+    const result = await autoMigrateLegacyState({ cfg, env, invocationPurpose: "doctor" });
     expect(result.warnings).toContainEqual(
       expect.stringContaining("invalid historical transcript migration cursor"),
     );
@@ -4072,9 +4068,16 @@ describe("state migrations", () => {
       homedir: () => root,
       doctorOnlyStateMigrations: true,
     });
-    db.exec("PRAGMA query_only = ON;");
-
-    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+    const result = await runLegacyStateMigrations({
+      detected,
+      config: cfg,
+      env,
+      onStepReceipt: (receipt) => {
+        if (receipt.id === "plugin-install-index") {
+          openOpenClawStateDatabase({ env }).db.exec("PRAGMA query_only = ON;");
+        }
+      },
+    });
 
     expect(result.stepReceipts.find((receipt) => receipt.id === "managed-worktrees")).toMatchObject(
       {
@@ -4093,10 +4096,9 @@ describe("state migrations", () => {
         refusal: { code: "blocked-by-prior-refusal" },
       },
     );
-    expect(db.prepare("SELECT id FROM worktrees ORDER BY id").all()).toEqual([
-      { id: "legacy-a" },
-      { id: "legacy-b" },
-    ]);
+    expect(
+      openOpenClawStateDatabase({ env }).db.prepare("SELECT id FROM worktrees ORDER BY id").all(),
+    ).toEqual([{ id: "legacy-a" }, { id: "legacy-b" }]);
   });
 
   it("does not run plugin doctor migrations after shared state schema repair fails", async () => {
@@ -5550,27 +5552,18 @@ describe("state migrations", () => {
       '"retryCount":2',
     );
     await expectMissingPath(path.join(queueDir, "outbound-completed.delivered"));
+    const migratedDb = openOpenClawStateDatabase({ env }).db;
     expect(
-      db
+      migratedDb
         .prepare(
-          "SELECT retry_count FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-1'",
+          "SELECT id, retry_count, failed_at FROM delivery_queue_entries WHERE queue_name = 'outbound' ORDER BY id",
         )
-        .get(),
-    ).toEqual({ retry_count: 0 });
-    expect(
-      db
-        .prepare(
-          "SELECT retry_count FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-2'",
-        )
-        .get(),
-    ).toEqual({ retry_count: 1 });
-    expect(
-      db
-        .prepare(
-          "SELECT retry_count, failed_at FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-failed'",
-        )
-        .get(),
-    ).toEqual({ retry_count: 3, failed_at: 12 });
+        .all(),
+    ).toEqual([
+      { id: "outbound-1", retry_count: 0, failed_at: null },
+      { id: "outbound-2", retry_count: 1, failed_at: null },
+      { id: "outbound-failed", retry_count: 3, failed_at: 12 },
+    ]);
 
     vi.setSystemTime(2_000);
     const rerunDetected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });

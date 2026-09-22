@@ -147,14 +147,18 @@ extension DashboardManager {
     }
 
     func loadWindow(
-        _ controller: DashboardWindowController, configuration: WindowConfiguration, present: Bool)
+        _ controller: DashboardWindowController,
+        configuration: WindowConfiguration,
+        present: Bool,
+        restoringRoute: URL? = nil)
     {
         if let page = configuration.signedOut {
             controller.showSignedOut(page, present: present, autoStart: configuration.autoStartSignIn)
         } else if present {
             controller.show(url: configuration.url, auth: configuration.auth)
         } else {
-            controller.loadInBackground(url: configuration.url, auth: configuration.auth)
+            controller.loadInBackground(
+                url: configuration.url, auth: configuration.auth, restoringRoute: restoringRoute)
         }
     }
 }

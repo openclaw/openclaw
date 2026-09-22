@@ -4,6 +4,11 @@ import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("./markdown.ts", async () => {
+  const actual = await vi.importActual<typeof import("./markdown.ts")>("./markdown.ts");
+  return { ...actual, toSanitizedMarkdownHtml: vi.fn(actual.toSanitizedMarkdownHtml) };
+});
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { observeTranscript } from "./session-progress-card.test-support.ts";
 import { renderSessionProgressCard } from "./session-progress-card.ts";
 import type { ComposerProgressRunLifecycle } from "./session-progress-disclosure-controller.ts";
@@ -211,6 +216,25 @@ describe("renderSessionProgressCard", () => {
         ".session-progress-card__step--pending .session-progress-card__step-marker polyline",
       ),
     ).not.toBeNull();
+  });
+
+  it("reuses sanitized progress HTML across repeated render cycles", () => {
+    const container = createContainer();
+    const renderMarkdown = vi.mocked(toSanitizedMarkdownHtml);
+
+    render(renderSessionProgressCard(progressCard, "board"), container);
+    const firstHtml = container.querySelector(".session-progress-card__markdown")?.innerHTML;
+    expect(renderMarkdown).toHaveBeenCalledTimes(1);
+
+    render(renderSessionProgressCard(progressCard, "board"), container);
+    expect(renderMarkdown).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".session-progress-card__markdown")?.innerHTML).toBe(firstHtml);
+
+    render(
+      renderSessionProgressCard({ ...progressCard, markdown: "**Updated progress**" }, "board"),
+      container,
+    );
+    expect(renderMarkdown).toHaveBeenCalledTimes(2);
   });
 
   it.each([

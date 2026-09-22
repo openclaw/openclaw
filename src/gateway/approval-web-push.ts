@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withCurrentDevicePairingSnapshot } from "../infra/device-pairing-worker.js";
 import {
   WEB_PUSH_USER_PREFERENCES_KEY,
   isWebPushQuietHours,
@@ -20,7 +21,6 @@ import {
   listWebPushApprovalDeliveryTargets,
   prepareWebPushApprovalDeliveries,
   prepareWebPushNotificationSender,
-  withBoundWebPushSubscriptions,
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
 import { getUserPreferences } from "../state/user-preferences.js";
@@ -35,7 +35,11 @@ import {
   canAccessApprovalSession,
   isApprovalRecordVisibleToClient,
 } from "./server-methods/approval-record-lookup.js";
-import { listCurrentWebPushTargets, webPushTargetClient } from "./web-push-authority.js";
+import {
+  listCurrentWebPushTargets,
+  webPushTargetClient,
+  withCurrentWebPushAuthority,
+} from "./web-push-authority.js";
 
 const WEB_PUSH_APPROVAL_TIMEOUT_MS = 10_000;
 const WEB_PUSH_TERMINAL_TTL_SECONDS = 5 * 60;
@@ -122,14 +126,30 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
   }
   const sendWebPushNotifications = await prepareWebPushNotificationSender(params.stateDir);
   const initialSubscriptions = await listBoundWebPushSubscriptions(params.stateDir);
-  let cfg = params.getRuntimeConfig();
-  const targets = listCurrentWebPushTargets({
-    cfg,
-    subscriptions: initialSubscriptions,
-    requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
-    stateDir: params.stateDir,
-  });
-  const eligibleSubscriptions = (candidates: ReturnType<typeof listCurrentWebPushTargets>) =>
+  const initialAuthority = await withCurrentDevicePairingSnapshot(
+    params.stateDir,
+    (pairedDevices) => ({
+      start: () => {
+        const cfg = params.getRuntimeConfig();
+        return {
+          cfg,
+          targets: listCurrentWebPushTargets({
+            cfg,
+            subscriptions: initialSubscriptions,
+            requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
+            pairedDevices,
+          }),
+        };
+      },
+    }),
+  );
+  if (!initialAuthority) {
+    return null;
+  }
+  const eligibleSubscriptions = (
+    candidates: ReturnType<typeof listCurrentWebPushTargets>,
+    cfg: OpenClawConfig,
+  ) =>
     candidates.flatMap((target) => {
       const subscription = target.subscription;
       const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
@@ -146,7 +166,7 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
         ? [subscription]
         : [];
     });
-  const subscriptions = eligibleSubscriptions(targets);
+  const subscriptions = eligibleSubscriptions(initialAuthority.targets, initialAuthority.cfg);
   if (subscriptions.length === 0) {
     return null;
   }
@@ -167,15 +187,15 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
       .filter((subscription) => preparedIds.has(subscription.subscriptionId))
       .map((subscription) => [subscription.subscriptionId, subscription]),
   );
-  const groupedResults = await withBoundWebPushSubscriptions(
+  const groupedResults = await withCurrentWebPushAuthority(
     params.stateDir,
-    (currentSubscriptions) => {
-      cfg = params.getRuntimeConfig();
+    (currentSubscriptions, pairedDevices) => {
+      const cfg = params.getRuntimeConfig();
       const currentEligibleSubscriptions = eligibleSubscriptions(
         listCurrentWebPushTargets({
           cfg,
           requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
-          stateDir: params.stateDir,
+          pairedDevices,
           subscriptions: currentSubscriptions.filter((subscription) => {
             const prepared = preparedById.get(subscription.subscriptionId);
             return (
@@ -184,6 +204,7 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
             );
           }),
         }),
+        cfg,
       );
       // Receipt persistence can yield. Recheck recipients and approval lifetime in
       // the network continuation so revoked or resolved requests never dispatch.
@@ -285,7 +306,7 @@ export function createApprovalWebPushDelivery(params: {
         requestDelivery?.sender ?? (await prepareWebPushNotificationSender(params.stateDir));
       const durableLookup = requestDelivery
         ? null
-        : getOperatorApprovalDetailed({
+        : await getOperatorApprovalDetailed({
             id: approval.id,
             databaseOptions: params.stateDir
               ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } }
@@ -301,14 +322,14 @@ export function createApprovalWebPushDelivery(params: {
       }
       const subscriptions = recordedSubscriptions;
       const suppressedSubscriptionIds: string[] = [];
-      const groupedResults = await withBoundWebPushSubscriptions(
+      const groupedResults = await withCurrentWebPushAuthority(
         params.stateDir,
-        (currentSubscriptions) => {
+        (currentSubscriptions, pairedDevices) => {
           const cfg = params.getRuntimeConfig();
           const currentTargets = listCurrentWebPushTargets({
             cfg,
             requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
-            stateDir: params.stateDir,
+            pairedDevices,
             subscriptions: currentSubscriptions,
           });
           const currentTargetsBySubscriptionId = new Map(

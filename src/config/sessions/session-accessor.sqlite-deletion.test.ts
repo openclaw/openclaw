@@ -41,7 +41,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntryCore,
-  recordSessionParticipant,
   replaceSessionEntry,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
@@ -51,6 +50,7 @@ import {
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { applySessionStoreProjection } from "./session-accessor.sqlite-projection.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 

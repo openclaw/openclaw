@@ -2,6 +2,7 @@
 // stale chat buffers, expired runs, health summaries, and timer disposal.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isGatewayWorkAdmissionClosed,
@@ -15,6 +16,7 @@ import type { HealthSummary } from "./health/types.js";
 import { createChatAbortMarker } from "./server-chat-state.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS, TICK_INTERVAL_MS } from "./server-constants.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import * as staleInstall from "./stale-install.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
@@ -25,30 +27,11 @@ const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
   deletedFileCount: 0,
   retainedCount: 0,
 }));
-const pruneExpiredDeliveryQueueTombstonesMock = vi.fn();
 const pruneExpiredDevicePairSetupCompletionsMock = vi.fn(async () => 0);
-const pruneOrphanedDeliveryQueueMediaMock = vi.fn(async () => undefined);
 
 vi.mock("../infra/device-bootstrap.js", () => ({
   pruneExpiredDevicePairSetupCompletions: pruneExpiredDevicePairSetupCompletionsMock,
 }));
-
-vi.mock("../infra/delivery-queue-sqlite.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/delivery-queue-sqlite.js")>(
-    "../infra/delivery-queue-sqlite.js",
-  );
-  return {
-    ...actual,
-    pruneExpiredDeliveryQueueTombstones: pruneExpiredDeliveryQueueTombstonesMock,
-  };
-});
-
-vi.mock("../infra/outbound/delivery-queue-media-spool.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../infra/outbound/delivery-queue-media-spool.js")
-  >("../infra/outbound/delivery-queue-media-spool.js");
-  return { ...actual, pruneOrphanedDeliveryQueueMedia: pruneOrphanedDeliveryQueueMediaMock };
-});
 
 vi.mock("../media/store.js", async () => {
   const actual = await vi.importActual<typeof import("../media/store.js")>("../media/store.js");
@@ -82,7 +65,7 @@ function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
     logHealth: { info: vi.fn(), error: vi.fn() },
-    runWorktreeGc: vi.fn(async () => undefined),
+    runWorktreeGc: vi.fn<() => Promise<ManagedWorktreeGcResult | void>>(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
   };
@@ -156,21 +139,11 @@ async function createTimedMaintenanceScenario() {
   return { startGatewayMaintenanceTimers, deps, now: Date.now() };
 }
 
-async function stopMaintenanceTimers(timers: {
-  tickInterval: NodeJS.Timeout;
-  healthInterval: NodeJS.Timeout;
-  dedupeCleanup: NodeJS.Timeout;
-  startMediaCleanup: () => void;
-  stopMediaCleanup: () => Promise<"drained" | "timed-out">;
-  stopSessionColdStorageMaintenance: () => Promise<void>;
-  worktreeCleanup: NodeJS.Timeout;
-}) {
-  clearInterval(timers.tickInterval);
-  clearInterval(timers.healthInterval);
-  clearInterval(timers.dedupeCleanup);
-  clearInterval(timers.worktreeCleanup);
-  await timers.stopMediaCleanup();
-  await timers.stopSessionColdStorageMaintenance();
+async function stopMaintenanceTimers(
+  timers: ReturnType<typeof import("./server-maintenance.js").startGatewayMaintenanceTimers>,
+) {
+  await timers.stopPeriodicTasks();
+  await timers.skillUsageCleanup();
 }
 
 describe("startGatewayMaintenanceTimers", () => {
@@ -366,6 +339,37 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
+  it("records partial managed worktree cleanup in health logs", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    deps.runWorktreeGc.mockResolvedValue({
+      removed: [],
+      orphansDeleted: 0,
+      snapshotsPruned: 0,
+      outcome: "partial",
+      issues: [
+        {
+          id: "retained",
+          stage: "idle",
+          outcome: "failed",
+          reason: "cleanup-failed: repository unavailable",
+        },
+      ],
+      issueCount: 1,
+      protectedCount: 0,
+      limitsSatisfied: false,
+    });
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.waitFor(() =>
+      expect(deps.logHealth.error).toHaveBeenCalledWith(
+        expect.stringContaining("retained: cleanup-failed"),
+      ),
+    );
+    await stopMaintenanceTimers(timers);
+  });
+
   it("runs setup-outcome cleanup immediately without overlapping minute ticks", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
@@ -396,44 +400,17 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("runs queue media cleanup at startup and hourly", async () => {
-    vi.useFakeTimers();
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const deps = createMaintenanceTimerDeps();
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(2);
-    expect(pruneExpiredDeliveryQueueTombstonesMock).not.toHaveBeenCalled();
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("runs tombstone expiry with default queue media cleanup at startup and hourly", async () => {
-    vi.useFakeTimers();
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const { runDeliveryQueueMediaGc: _runDeliveryQueueMediaGc, ...deps } =
-      createMaintenanceTimerDeps();
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(1);
-    expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(2);
-    expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(2);
-
-    await stopMaintenanceTimers(timers);
-  });
-
   it("passes owner activity to default managed worktree cleanup", async () => {
     vi.useFakeTimers();
     const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue({
       removed: [],
       orphansDeleted: 0,
       snapshotsPruned: 0,
+      outcome: "completed",
+      issues: [],
+      issueCount: 0,
+      protectedCount: 0,
+      limitsSatisfied: true,
     });
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const { runWorktreeGc: _runWorktreeGc, ...deps } = createMaintenanceTimerDeps();
@@ -547,23 +524,25 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("broadcasts tick keepalives without dropIfSlow", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-12T00:00:00Z"));
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+  it("broadcasts tick keepalives and checks installation replacement until the timer stops", async () => {
+    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
     const broadcast = vi.fn();
+    const check = vi.spyOn(staleInstall, "checkGatewayInstallationReplacement").mockResolvedValue();
 
     const timers = startGatewayMaintenanceTimers({
-      ...createMaintenanceTimerDeps(),
+      ...deps,
       broadcast,
     });
 
     broadcast.mockClear();
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS);
 
     expect(broadcast).toHaveBeenCalledWith("tick", { ts: Date.now() });
+    expect(check).toHaveBeenCalledOnce();
 
     await stopMaintenanceTimers(timers);
+    await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS);
+    expect(check).toHaveBeenCalledOnce();
   });
 
   it("refreshes automatic health snapshots without live channel probes", async () => {
@@ -818,43 +797,58 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("retains the timeout fence across gateway generations", async () => {
-    vi.useFakeTimers();
-    let resolveOldCleanup = () => {};
-    cleanupManagedOutgoingMediaRecordsMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveOldCleanup = () =>
-            resolve({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
-        }),
-    );
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const oldTimers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
-    oldTimers.startMediaCleanup();
-    await vi.waitFor(() => {
-      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
-    });
-    const oldStopping = oldTimers.stopMediaCleanup();
-    await vi.advanceTimersByTimeAsync(5_000);
-    await expect(oldStopping).resolves.toBe("timed-out");
+  it.each(["managed", "queue"] as const)(
+    "retains the %s timeout fence across gateway generations",
+    async (kind) => {
+      vi.useFakeTimers();
+      const cleanup =
+        kind === "queue"
+          ? vi.fn(async () => ({
+              deletedRecordCount: 0,
+              deletedFileCount: 0,
+              retainedCount: 0,
+            }))
+          : cleanupManagedOutgoingMediaRecordsMock;
+      const createDeps = () => ({
+        ...createMaintenanceTimerDeps(),
+        ...(kind === "queue" ? { runDeliveryQueueMediaGc: cleanup } : {}),
+      });
+      let resolveOldCleanup = () => {};
+      cleanup.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOldCleanup = () =>
+              resolve({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+          }),
+      );
+      const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+      const oldTimers = startGatewayMaintenanceTimers(createDeps());
+      oldTimers.startMediaCleanup();
+      await vi.waitFor(() => {
+        expect(cleanup).toHaveBeenCalledTimes(1);
+      });
+      const oldStopping = oldTimers.stopMediaCleanup();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(oldStopping).resolves.toBe("timed-out");
 
-    const restartedTimers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
-    restartedTimers.startMediaCleanup();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(1);
+      const restartedTimers = startGatewayMaintenanceTimers(createDeps());
+      restartedTimers.startMediaCleanup();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleanup).toHaveBeenCalledTimes(1);
 
-    resolveOldCleanup();
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.waitFor(() => {
-      expect(cleanupManagedOutgoingMediaRecordsMock).toHaveBeenCalledTimes(2);
-    });
-    await expect(restartedTimers.stopMediaCleanup()).resolves.toBe("drained");
-    const settledTimers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
-    await expect(settledTimers.stopMediaCleanup()).resolves.toBe("drained");
-    await stopMaintenanceTimers(oldTimers);
-    await stopMaintenanceTimers(restartedTimers);
-    await stopMaintenanceTimers(settledTimers);
-  });
+      resolveOldCleanup();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => {
+        expect(cleanup).toHaveBeenCalledTimes(2);
+      });
+      await expect(restartedTimers.stopMediaCleanup()).resolves.toBe("drained");
+      const settledTimers = startGatewayMaintenanceTimers(createDeps());
+      await expect(settledTimers.stopMediaCleanup()).resolves.toBe("drained");
+      await stopMaintenanceTimers(oldTimers);
+      await stopMaintenanceTimers(restartedTimers);
+      await stopMaintenanceTimers(settledTimers);
+    },
+  );
 
   it("keeps stale buffers for active runs that still have abort controllers", async () => {
     const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();

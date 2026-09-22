@@ -79,3 +79,28 @@ describe("replaceOversizedChatHistoryMessages", () => {
     expect((result.messages[0] as Record<string, unknown>)["__openclaw"]).toBeUndefined();
   });
 });
+
+it("keeps oversized tool results recoverable with identity, error, and provenance", () => {
+  const toolOutput = { source: "provider-response", modelInput: "unverified" };
+  const [message] = replaceOversizedChatHistoryMessages({
+    messages: [
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "read-call",
+        isError: true,
+        content: [{ type: "text", text: "x".repeat(4_000) }],
+        __openclaw: { id: "durable-result", seq: 3, toolOutput },
+      },
+    ],
+    maxSingleMessageBytes: 1_000,
+  }).messages;
+  expect(message).toMatchObject({
+    role: "toolResult",
+    toolName: "read",
+    toolCallId: "read-call",
+    isError: true,
+    __openclaw: { id: "durable-result", seq: 3, toolOutput, truncated: true, reason: "oversized" },
+  });
+  expect(Buffer.byteLength(JSON.stringify(message))).toBeLessThan(1_000);
+});

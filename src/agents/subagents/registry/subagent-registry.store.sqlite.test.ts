@@ -22,10 +22,11 @@ import {
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
   persistSubagentRunsToDiskOrThrow,
+  prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
+import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { upsertSubagentRunRowInDatabase } from "./subagent-registry.store.kernel.js";
 import {
-  bindSubagentRunRecord,
-  upsertSubagentRunRowInDatabase,
   readSubagentRun,
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForControllerFromSqlite,
@@ -254,10 +255,11 @@ describe("subagent registry sqlite store", () => {
           const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
           clearSubagentRunsReadCacheForTest();
           try {
+            await prepareSubagentSessionListReadCache();
+            queries.mockClear();
             const first = getSubagentSessionListRunsSnapshotForSessions(new Map(), keys);
             expect(first.size).toBe(kind === "empty" ? 0 : 1);
-            expect(queries).toHaveBeenCalled();
-            queries.mockClear();
+            expect(queries).not.toHaveBeenCalled();
             expect(getSubagentSessionListRunsSnapshotForSessions(new Map(), keys)).toEqual(first);
             expect(getSubagentSessionListRunsSnapshotForRead(new Map(), keys)).toEqual(first);
             expect(queries).not.toHaveBeenCalled();
@@ -309,7 +311,7 @@ describe("subagent registry sqlite store", () => {
   );
 
   it.each([false, true])(
-    "keeps partial trees out of the complete compact snapshot, including run-ID collisions (%s)",
+    "keeps complete compact facts after selected tree reads, including run-ID collisions (%s)",
     async (collision) => {
       await withTempStateEnv(async () => {
         await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
@@ -332,13 +334,15 @@ describe("subagent registry sqlite store", () => {
           const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
           clearSubagentRunsReadCacheForTest();
           try {
+            await prepareSubagentSessionListReadCache();
+            queries.mockClear();
             const tree = getSubagentSessionListRunsSnapshotForSessions(new Map(), [
               selected.requesterSessionKey,
             ]);
             expect([...tree.keys()]).toEqual(collision ? [] : [selected.runId]);
             queries.mockClear();
             const all = getSubagentSessionListRunsSnapshotForRead(new Map());
-            expect(queries).toHaveBeenCalled();
+            expect(queries).not.toHaveBeenCalled();
             expect(all.has(unrelated.runId)).toBe(true);
             expect(all.get(selected.runId)?.childSessionKey).toBe(
               collision ? other.childSessionKey : selected.childSessionKey,

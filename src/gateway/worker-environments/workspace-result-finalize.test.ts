@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAgentUserMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import {
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -21,6 +26,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   database,
   placements,
+  readWorkerTurnTranscriptStorageRows,
   root,
   seedActivePlacement,
   sessionTarget,
@@ -42,6 +48,139 @@ vi.mock("../../node-host/node-worker-transfer-client.js", async (importOriginal)
 describe("concurrent worker workspace results", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it.each(
+    (["prior", "report"] as const).flatMap((phase) =>
+      (["current", "draining", "claim", "session"] as const).map((change) => ({ phase, change })),
+    ),
+  )(
+    "revalidates $change settlement after $phase transcript hydration",
+    async ({ phase, change }) => {
+      seedActivePlacement("remote-exec");
+      const placement = placements.get(SESSION_ID);
+      if (placement?.state !== "active") {
+        throw new Error("expected active placement");
+      }
+      const source = SessionManager.open(sessionTarget);
+      source.appendMessage(
+        makeAgentUserMessage({ content: "Durable input 🦞\nunchanged", timestamp: 1 }),
+      );
+      const before = source.getPersistedEntries();
+      const beforeRows = readWorkerTurnTranscriptStorageRows();
+      const claim = placements.claimTurn({
+        ...sessionTarget,
+        owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+        claimId: `hydrate-${phase}-${change}`,
+        runId: `hydrate-${phase}-${change}`,
+      });
+      placements.markWorkspaceResultPending(claim);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const open = SessionManager.openAsync.bind(SessionManager);
+      let reads = 0;
+      const hydration = vi
+        .spyOn(SessionManager, "openAsync")
+        .mockImplementation(async (...args) => {
+          const manager = await open(...args);
+          if (++reads === (phase === "prior" ? 1 : 2)) {
+            entered.resolve();
+            await release.promise;
+          }
+          return manager;
+        });
+      const publish = vi.fn();
+      const quiesce = vi.fn(async () => ({ assertActive: async () => {}, resume: async () => {} }));
+      const tunnel: WorkerTunnelHandle = {
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace: quiesce,
+        reconcileWorkspace: async (request) => {
+          if (request.source.kind !== "local" || !request.source.stagedResult) {
+            throw new Error("expected local staged result");
+          }
+          request.source.stagedResult.record(request.source.stagedResult.ref);
+          request.source.journal.commit(MANIFEST_REF);
+          return {
+            manifestRef: MANIFEST_REF,
+            changed: false,
+            verifyStable: async () => {},
+            verifyLocalStable: async () => {},
+            getAppliedWorkspaceResult: () => ({
+              manifestRef: MANIFEST_REF,
+              manifest: { version: 1, baseCommit: null, entries: [] },
+              conflictPaths: ["src/retained.ts"],
+              verifyLocalStable: async () => {},
+            }),
+          };
+        },
+        syncWorkspace: vi.fn(),
+        stop: vi.fn(),
+      };
+      const operation = reconcileWorkspaceAfterTurn({
+        placement,
+        placements,
+        turnClaim: claim,
+        workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+        workspace: { kind: "local", path: root },
+        transcriptTarget: { ...sessionTarget },
+        tunnel,
+        publishAcceptedWorkspace: publish,
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        expect(await Promise.race([entered.promise.then(() => "hydrated"), operation])).toBe(
+          "hydrated",
+        );
+        if (change === "draining") {
+          placements.startWorkspaceResultDrain(claim);
+        } else if (change === "claim") {
+          const pending = placements.listPendingWorkspaceResults(SESSION_ID)[0];
+          if (!pending) {
+            throw new Error("expected retained result");
+          }
+          placements.failWorkspaceResultAndReleaseTurn(
+            pending,
+            new Error("fixture replaced result"),
+          );
+        } else if (change === "session") {
+          await patchSessionEntryCore(sessionTarget, () => ({ sessionId: "replacement-session" }));
+        }
+        release.resolve();
+        const outcome = await operation;
+        if (change === "current" || change === "draining") {
+          expect(outcome).toMatchObject({ value: { paths: ["src/retained.ts"] } });
+          expect(publish).toHaveBeenCalledOnce();
+          expect(placements.listPendingWorkspaceResults()).toEqual([]);
+          const after = SessionManager.open(sessionTarget).getPersistedEntries();
+          expect(after.slice(0, before.length)).toEqual(before);
+          expect(readWorkerTurnTranscriptStorageRows().slice(0, beforeRows.length)).toEqual(
+            beforeRows,
+          );
+          expect(after.at(-1)).toMatchObject({
+            type: "custom_message",
+            customType: "cloud-workspace-conflict",
+          });
+        } else {
+          expect(outcome).toMatchObject({ error: expect.any(Error) });
+          expect(publish).not.toHaveBeenCalled();
+          if (phase === "prior") {
+            expect(quiesce).not.toHaveBeenCalled();
+          }
+          if (change !== "session") {
+            expect(SessionManager.open(sessionTarget).getPersistedEntries()).toEqual(before);
+            expect(readWorkerTurnTranscriptStorageRows()).toEqual(beforeRows);
+          }
+        }
+      } finally {
+        release.resolve();
+        await operation;
+        hydration.mockRestore();
+      }
+    },
+  );
 
   it("reports cleanup failure and reclaims the inputs before the next turn without skills", async () => {
     const remote = path.join(await fs.realpath(root), "remote");
@@ -305,7 +444,7 @@ describe("concurrent worker workspace results", () => {
                     sequence: 1,
                     retain,
                   },
-                  () => [],
+                  async () => [],
                 );
                 retained.resolve();
               } catch (error) {

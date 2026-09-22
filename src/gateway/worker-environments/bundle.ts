@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { resolveStateDir } from "../../config/paths.js";
+import { sha256File } from "../../infra/directory-durability.js";
 import { isExactSemverVersion, resolveNpmJsonEntries } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -169,25 +170,12 @@ async function runNpmProofCommand(params: {
   }
 }
 
-async function updateHashFromFile(
-  hash: ReturnType<typeof createHash>,
-  filePath: string,
-): Promise<void> {
-  for await (const chunk of createReadStream(filePath)) {
-    hash.update(chunk);
-  }
-}
-
 async function hashNpmTarballIntegrity(tarballPath: string): Promise<string> {
   const hash = createHash("sha512");
-  await updateHashFromFile(hash, tarballPath);
+  for await (const chunk of createReadStream(tarballPath)) {
+    hash.update(chunk);
+  }
   return `sha512-${hash.digest("base64")}`;
-}
-
-async function hashWorkerBundleTarball(tarballPath: string): Promise<string> {
-  const hash = createHash("sha256");
-  await updateHashFromFile(hash, tarballPath);
-  return hash.digest("hex");
 }
 
 async function verifyPublishedNpmRelease(params: {
@@ -477,13 +465,14 @@ async function prepareWorkerBundle(
     if (!(await cachedTarballMatches(tarballPath, manifest))) {
       await writeTarball({ stagingRoot, entries: manifest, tarballPath });
     }
+    await using handle = await fs.open(tarballPath, "r");
     return {
       install: "bundle",
       bundleHash,
       openclawVersion,
       protocolFeatures,
       tarballBytes: (await fs.stat(tarballPath)).size,
-      tarballSha256: await hashWorkerBundleTarball(tarballPath),
+      tarballSha256: (await sha256File(handle)).digest,
       tarballPath,
     };
   } finally {

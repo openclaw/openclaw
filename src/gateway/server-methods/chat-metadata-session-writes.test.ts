@@ -10,10 +10,10 @@ import {
   listSessionParticipantsReadOnly,
   loadSessionEntry,
   patchSessionEntryCore,
-  recordSessionParticipant,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   openOpenClawAgentDatabase,

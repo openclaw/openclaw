@@ -146,11 +146,12 @@ struct ChatCatalogProjectionTests {
         #expect(request.params["includeDetails"]?.value as? Bool == true)
     }
 
-    @Test func `failed catalog refresh preserves supplied rows and failure guidance`() throws {
+    @Test func `failed catalog refresh preserves supplied rows without a picker warning`() throws {
         let catalog = try OpenClawChatGatewayPayloadCodec.decodeModelCatalog(Data(
             #"{"models":[{"id":"choice","name":"Choice","provider":"fixture"}],"refreshFailed":true}"#.utf8))
         #expect(catalog.refreshFailed)
         #expect(catalog.choices.map(\.selectionID) == ["fixture/choice"])
+        #expect(catalog.message == nil)
     }
 
     @Test func `background thinking uses its own model profile`() throws {

@@ -62,7 +62,10 @@ vi.mock("./doctor-sqlite-maintenance-lock.js", async (importOriginal) => {
   };
 });
 
+import { runSessionTranscriptsHealth } from "../flows/doctor-health-contribution-runners.state.js";
+import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 import { DoctorSqliteMaintenanceLockUnavailableError } from "./doctor-sqlite-maintenance-lock.js";
 
@@ -149,6 +152,7 @@ describe("doctor session transcript repair", () => {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     runDoctorSessionSqlite.mockResolvedValueOnce({
+      targets: [],
       totals: {
         archivedTranscriptFiles: 2,
         archivedUnreferencedJsonlFiles: 1,
@@ -384,68 +388,116 @@ describe("doctor session transcript repair", () => {
     );
   });
 
-  it("keeps session SQLite dry-run read-only without taking maintenance ownership", async () => {
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const warning = "Session entry is missing a valid sessionId.";
-    runDoctorSessionSqlite.mockResolvedValueOnce({
-      targets: [
-        {
-          storePath,
-          issues: [{ code: "entry_invalid", message: warning, sessionKey: "agent:main:invalid" }],
+  it.each(["entry_invalid", "historical_transcript_deferred", "historical_duplicate_settled"])(
+    "keeps session SQLite dry-run read-only with %s warnings",
+    async (code) => {
+      const sessionsDir = path.join(root, "agents", "main", "sessions");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const warnings =
+        code === "entry_invalid"
+          ? ["Session entry is missing a valid sessionId."]
+          : code === "historical_duplicate_settled"
+            ? [
+                "Retired 1307 byte-identical duplicate archive(s); rollback references now use the verified surviving originals.",
+              ]
+            : Array.from(
+                { length: 4 },
+                (_, index) =>
+                  `history-${index}: multiple primary files claim this identity; originals retained without importing`,
+              );
+      runDoctorSessionSqlite.mockResolvedValueOnce({
+        targets: [
+          {
+            storePath,
+            issues: warnings.map((message) => ({ code, message })),
+          },
+        ],
+        totals: {
+          archivedTranscriptFiles: 0,
+          archivedUnreferencedJsonlFiles: 0,
+          importedTranscriptEvents: 0,
+          issues: warnings.length,
+          legacyEntries: 1,
+          sqliteEntries: 0,
+          unreferencedJsonlFiles: 0,
+          validatedTranscriptEvents: 0,
         },
-      ],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedTranscriptEvents: 0,
-        issues: 1,
-        legacyEntries: 1,
-        sqliteEntries: 0,
-        unreferencedJsonlFiles: 0,
-        validatedTranscriptEvents: 0,
-      },
-    });
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
-    const cfg = {};
+      });
+      const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+      const cfg = {};
 
-    await noteSessionTranscriptHealth({
-      cfg,
-      env,
-      shouldRepair: false,
-    });
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: () => {
+          throw new Error("Unexpected Doctor exit");
+        },
+      };
+      const options = { nonInteractive: true };
+      const ctx: DoctorHealthFlowContext = {
+        cfg,
+        env,
+        runtime,
+        options,
+        cfgForPersistence: cfg,
+        configResult: { cfg },
+        configPath: path.join(root, "openclaw.json"),
+        sourceConfigValid: true,
+        prompter: createDoctorPrompter({ runtime, options }),
+      };
+      await runSessionTranscriptsHealth(ctx);
+      expect(ctx.updateWarnings).toEqual(
+        expect.arrayContaining(warnings.map((warning) => `${storePath}: [${code}] ${warning}`)),
+      );
 
-    expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
-      allAgents: true,
-      cfg,
-      env,
-      mode: "dry-run",
-    });
-    expect(migrateLegacyMainSessionKeys).toHaveBeenCalledWith({ cfg, env, mode: "detect" });
-    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({
-      apply: false,
-      cfg,
-      env,
-      targets: [],
-    });
-    expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
-    expect(runPostSessionPluginDoctorStateRepairs).toHaveBeenCalledWith({
-      config: cfg,
-      env,
-      maintenanceAuthority: undefined,
-    });
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Inspect with "openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents".',
-      ),
-      "Session SQLite",
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(`${storePath}: [entry_invalid] ${warning}`),
-      "Session SQLite",
-    );
-  });
+      expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
+        allAgents: true,
+        cfg,
+        env,
+        mode: "dry-run",
+      });
+      expect(migrateLegacyMainSessionKeys).toHaveBeenCalledWith({ cfg, env, mode: "detect" });
+      expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({
+        apply: false,
+        cfg,
+        env,
+        targets: [],
+      });
+      expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
+      expect(runPostSessionPluginDoctorStateRepairs).toHaveBeenCalledWith({
+        config: cfg,
+        env,
+        maintenanceAuthority: undefined,
+      });
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Inspect with "openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents".',
+        ),
+        "Session SQLite",
+      );
+      for (const warning of warnings) {
+        expect(note).toHaveBeenCalledWith(
+          expect.stringContaining(`${storePath}: [${code}] ${warning}`),
+          "Session SQLite",
+        );
+      }
+      if (code === "historical_transcript_deferred") {
+        expect(note).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "Deferred 4 historical transcript claim(s); originals remain protected",
+          ),
+          "Session SQLite",
+        );
+        expect(note).toHaveBeenCalledWith(
+          expect.stringContaining(
+            'Preserve the named files and migration manifests, resolve the reported conflicts, then rerun "openclaw doctor --fix"',
+          ),
+          "Session SQLite",
+        );
+      }
+    },
+  );
 
   it("reports post-session plugin changes and actionable ownership warnings", async () => {
     const sessionsDir = path.join(root, "agents", "main", "sessions");

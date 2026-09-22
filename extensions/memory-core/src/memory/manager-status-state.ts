@@ -23,7 +23,7 @@ export function collectMemoryStorageStatus(
   db: DatabaseSync,
   databasePath: string,
 ): NonNullable<MemoryProviderStatus["storage"]> {
-  const query = getNodeSqliteKysely<{ memory_embedding_cache: { embedding: string } }>(db)
+  const query = getNodeSqliteKysely<{ memory_embedding_cache: { embedding: Uint8Array } }>(db)
     .selectFrom("memory_embedding_cache")
     .select((eb) => [
       eb.fn.countAll<number>().as("entries"),
@@ -47,7 +47,7 @@ export function resolveStatusProviderInfo(params: {
   provider: StatusProvider | null;
   providerInitialized: boolean;
   requestedProvider: string;
-  configuredModel?: string;
+  resolveConfiguredModel?: () => string | undefined;
 }): {
   provider: string;
   model?: string;
@@ -69,7 +69,7 @@ export function resolveStatusProviderInfo(params: {
   }
   return {
     provider: params.requestedProvider,
-    model: params.configuredModel || undefined,
+    model: params.resolveConfiguredModel?.() || undefined,
     searchMode: "hybrid",
   };
 }

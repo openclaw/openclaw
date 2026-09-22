@@ -57,6 +57,7 @@ export type SessionListFilteredEntries = {
 export type SessionListFilterParams = {
   cfg: OpenClawConfig;
   entries: Iterable<SessionEntryPair>;
+  candidatesPrepared?: boolean;
   getTarget: SessionListTargetLookup;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   opts: SessionsListParams;
@@ -72,10 +73,33 @@ export type SessionListFilterParams = {
   shouldYield?: () => boolean;
 };
 
-export function* filterSessionEntries(
-  params: SessionListFilterParams,
-): SynchronousWork<SessionListFilteredEntries> {
-  const { cfg, opts, now, shouldYield } = params;
+/** The predicate and its cache key consume the same membership dependencies. */
+export function projectSessionListCandidateOptions(opts: SessionsListParams) {
+  return {
+    includeGlobal: opts.includeGlobal,
+    includeUnknown: opts.includeUnknown,
+    spawnedBy: opts.spawnedBy,
+    label: opts.label,
+    boardFace: opts.boardFace,
+    agentId: opts.agentId,
+    excludeCron: opts.excludeCron,
+    excludeSystem: opts.excludeSystem,
+    excludeSubagents: opts.excludeSubagents,
+    archived: opts.archived,
+    requireLastInteraction: opts.requireLastInteraction,
+    projectId: opts.projectId,
+    workspaceDir: opts.workspaceDir,
+    group: opts.group,
+    pinned: opts.pinned,
+  };
+}
+
+export function* filterSessionCandidateEntries(
+  params: Omit<SessionListFilterParams, "opts"> & {
+    opts: ReturnType<typeof projectSessionListCandidateOptions>;
+  },
+): SynchronousWork<SessionEntryPair[]> {
+  const { opts, now, shouldYield } = params;
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => (rowContext ??= params.getRowContext());
   const includeGlobal = opts.includeGlobal === true;
@@ -84,76 +108,6 @@ export function* filterSessionEntries(
   const label = normalizeOptionalString(opts.label) ?? "";
   const boardFace = opts.boardFace;
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
-  const search = normalizeLowercaseStringOrEmpty(opts.search);
-  const activeMinutes =
-    typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
-      ? Math.max(1, Math.floor(opts.activeMinutes))
-      : undefined;
-  const creatorId = normalizeOptionalString(opts.creatorId);
-  const ownerId = normalizeOptionalString(opts.ownerId);
-  const ownerFirstActorId = normalizeOptionalString(params.ownerFirstActorId);
-  const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
-  const entries: SessionEntryPair[] = [];
-  const ownerEntries: SessionEntryPair[] = [];
-  const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
-  const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
-  let peopleSessionCount = 0;
-  let peopleIncomplete = false;
-  const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
-  const identities =
-    params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
-  const identityProjection = getRowContext().identityProjection;
-  const projectOwner = identityProjection?.owner ?? projectSessionOwner;
-  const projectParticipants = identityProjection?.participants ?? projectSessionParticipants;
-  const profileRelation = opts.profileRelation
-    ? {
-        ...opts.profileRelation,
-        profileId: projectSessionParticipant(
-          { type: "profile", id: opts.profileRelation.profileId },
-          identities,
-          cfg,
-        ).identity.id,
-      }
-    : undefined;
-  const involvingActorId = normalizeOptionalString(params.involvingActorId);
-
-  // The caller owns these resident entries and their prepared visibility filter.
-  const visibleEntries: SessionEntryPair[] = [];
-  for (const [key, entry] of params.entries) {
-    if (params.entryFilter?.(key, entry) ?? true) {
-      visibleEntries.push([key, entry]);
-    }
-    if (shouldYield?.()) {
-      yield;
-    }
-  }
-  const allowedProfileIds =
-    opts.involvingProfileId && params.restrictProfileReferences ? new Set<string>() : undefined;
-  if (allowedProfileIds) {
-    for (const [, entry] of visibleEntries) {
-      const owner = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
-      for (const person of projectSessionPeople(entry, identities, owner)) {
-        allowedProfileIds.add(person.identity.id);
-      }
-      if (shouldYield?.()) {
-        yield;
-      }
-    }
-  }
-  const profileReference = opts.involvingProfileId
-    ? yield* resolveSessionListProfileReference(
-        opts.involvingProfileId,
-        visibleEntries,
-        identities,
-        allowedProfileIds,
-        shouldYield,
-      )
-    : undefined;
-  if (profileReference && !profileReference.ok) {
-    throw new Error("Person link is ambiguous. Use a longer profile ID in the Activity URL.");
-  }
-  const selectedProfileId = profileReference?.value;
-
   const keepCandidate = ([key, entry]: SessionEntryPair) => {
     const target = expectDefined(params.getTarget(key), "selection row owner");
     const { selection } = target;
@@ -161,7 +115,15 @@ export function* filterSessionEntries(
     if (
       selection.isCronRun ||
       (opts.excludeCron === true && isCronSessionDisplayKey(key)) ||
-      (opts.excludeSystem === true && isSystemCreatedSessionRow({ ...entry, key })) ||
+      (opts.excludeSystem === true &&
+        isSystemCreatedSessionRow({
+          key,
+          createdActor: entry.createdActor,
+          createdVia: entry.createdVia,
+          label: entry.label,
+          displayName: entry.displayName,
+          subject: entry.subject,
+        })) ||
       (opts.excludeSubagents === true && selection.isSubagent) ||
       (!includeGlobal && storeKey === "global") ||
       (!includeUnknown && storeKey === "unknown")
@@ -228,7 +190,7 @@ export function* filterSessionEntries(
     return true;
   };
   const candidateEntries: SessionEntryPair[] = [];
-  for (const pair of visibleEntries) {
+  for (const pair of params.entries) {
     if (keepCandidate(pair)) {
       candidateEntries.push(pair);
     }
@@ -236,6 +198,94 @@ export function* filterSessionEntries(
       yield;
     }
   }
+  return candidateEntries;
+}
+
+export function* filterSessionEntries(
+  params: SessionListFilterParams,
+): SynchronousWork<SessionListFilteredEntries> {
+  const { cfg, opts, now, shouldYield } = params;
+  let rowContext: SessionListRowContext | undefined;
+  const getRowContext = () => (rowContext ??= params.getRowContext());
+  const search = normalizeLowercaseStringOrEmpty(opts.search);
+  const activeMinutes =
+    typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
+      ? Math.max(1, Math.floor(opts.activeMinutes))
+      : undefined;
+  const creatorId = normalizeOptionalString(opts.creatorId);
+  const ownerId = normalizeOptionalString(opts.ownerId);
+  const ownerFirstActorId = normalizeOptionalString(params.ownerFirstActorId);
+  const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
+  const entries: SessionEntryPair[] = [];
+  const ownerEntries: SessionEntryPair[] = [];
+  const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
+  const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
+  let peopleSessionCount = 0;
+  let peopleIncomplete = false;
+  const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
+  const identities =
+    params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
+  const identityProjection = getRowContext().identityProjection;
+  const projectOwner = identityProjection?.owner ?? projectSessionOwner;
+  const projectParticipants = identityProjection?.participants ?? projectSessionParticipants;
+  const projectPeople = identityProjection?.people ?? projectSessionPeople;
+  const profileRelation = opts.profileRelation
+    ? {
+        ...opts.profileRelation,
+        profileId: projectSessionParticipant(
+          { type: "profile", id: opts.profileRelation.profileId },
+          identities,
+          cfg,
+        ).identity.id,
+      }
+    : undefined;
+  const involvingActorId = normalizeOptionalString(params.involvingActorId);
+
+  // The caller owns these resident entries and their prepared visibility filter.
+  const visibleEntries: SessionEntryPair[] = [];
+  for (const pair of params.entries) {
+    if (params.entryFilter?.(pair[0], pair[1]) ?? true) {
+      visibleEntries.push(pair);
+    }
+    if (shouldYield?.()) {
+      yield;
+    }
+  }
+  const allowedProfileIds =
+    opts.involvingProfileId && params.restrictProfileReferences ? new Set<string>() : undefined;
+  if (allowedProfileIds) {
+    for (const [, entry] of visibleEntries) {
+      const owner = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
+      for (const person of projectPeople(entry, identities, owner)) {
+        allowedProfileIds.add(person.identity.id);
+      }
+      if (shouldYield?.()) {
+        yield;
+      }
+    }
+  }
+  const profileReference = opts.involvingProfileId
+    ? yield* resolveSessionListProfileReference(
+        opts.involvingProfileId,
+        visibleEntries,
+        identities,
+        allowedProfileIds,
+        shouldYield,
+      )
+    : undefined;
+  if (profileReference && !profileReference.ok) {
+    throw new Error("Person link is ambiguous. Use a longer profile ID in the Activity URL.");
+  }
+  const selectedProfileId = profileReference?.value;
+
+  const candidateEntries = params.candidatesPrepared
+    ? visibleEntries
+    : yield* filterSessionCandidateEntries({
+        ...params,
+        opts: projectSessionListCandidateOptions(opts),
+        entries: visibleEntries,
+        getRowContext,
+      });
   // Excluded rows must not participate in search or ownership resolution.
   const matchesSearch = search
     ? createSessionListSearchMatcher({
@@ -248,12 +298,30 @@ export function* filterSessionEntries(
         projectActiveRun: params.projectActiveRun,
       })
     : undefined;
+  const matchesInvolvement = (
+    entry: SessionEntry,
+    effectiveOwner: NonNullable<ReturnType<typeof projectOwner>>["actor"] | undefined,
+    profileId: string,
+    personal: boolean,
+  ) => {
+    const state = projectSessionProfileInvolvement(entry, profileId, identities);
+    return (
+      !(personal && state?.hidden) &&
+      (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
+        (effectiveOwner?.identity?.type === "profile" &&
+          effectiveOwner.identity.id === profileId) ||
+        projectParticipants(entry, identities, cfg).has(
+          JSON.stringify({ type: "profile", id: profileId }),
+        ))
+    );
+  };
 
   for (const pair of candidateEntries) {
     if (shouldYield?.()) {
       yield;
     }
-    const [key, entry] = pair;
+    const key = pair[0];
+    const entry = pair[1];
     if (matchesSearch && !matchesSearch(key, entry)) {
       continue;
     }
@@ -282,22 +350,9 @@ export function* filterSessionEntries(
         continue;
       }
     }
-    let participants: ReturnType<typeof projectParticipants> | undefined;
-    const matchesInvolvement = (profileId: string, personal: boolean) => {
-      const state = projectSessionProfileInvolvement(entry, profileId, identities);
-      return (
-        !(personal && state?.hidden) &&
-        (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
-          (effectiveOwner?.identity?.type === "profile" &&
-            effectiveOwner.identity.id === profileId) ||
-          (participants ??= projectParticipants(entry, identities, cfg)).has(
-            JSON.stringify({ type: "profile", id: profileId }),
-          ))
-      );
-    };
     if (
       profileRelation?.relationship === "involving" &&
-      !matchesInvolvement(profileRelation.profileId, false)
+      !matchesInvolvement(entry, effectiveOwner, profileRelation.profileId, false)
     ) {
       continue;
     }
@@ -311,21 +366,26 @@ export function* filterSessionEntries(
       continue;
     }
     // Preserve the existing viewer-independent owner facet; explicit relations still narrow it.
-    if (involvingActorId && !matchesInvolvement(involvingActorId, true)) {
+    if (involvingActorId && !matchesInvolvement(entry, effectiveOwner, involvingActorId, true)) {
       continue;
     }
     if (opts.includePeople || opts.involvingProfileId) {
-      const associated = projectSessionPeople(entry, identities, effectiveOwner);
+      const associated = projectPeople(entry, identities, effectiveOwner);
       peopleSessionCount += 1;
       peopleIncomplete ||=
         (entry.participantCount ?? entry.participants?.length ?? 0) >= MAX_SESSION_PARTICIPANTS ||
         entry.participants?.some((participant) => participant.identity.type === "legacy") === true;
       for (const person of associated) {
         const existing = people.get(person.identity.id);
-        people.set(person.identity.id, {
-          ...person,
-          sessionCount: (existing?.sessionCount ?? 0) + 1,
-        });
+        if (existing) {
+          existing.identity = person.identity;
+          existing.label = person.label;
+          existing.avatarUrl = person.avatarUrl;
+          existing.sessionCount += 1;
+        } else {
+          // Counts belong to this request, never the cached association.
+          people.set(person.identity.id, { ...person, sessionCount: 1 });
+        }
       }
       if (opts.involvingProfileId) {
         if (!associated.some((person) => person.identity.id === selectedProfileId)) {

@@ -690,7 +690,7 @@ async function resolveSuiteExecutionPlan(
   }
   const selectedScenarios = resolveRequestedScenarios({
     scenarioIds,
-    scenarios: readQaBootstrapScenarioCatalog().scenarios,
+    scenarios: params?.scenarioDefinitions ?? readQaBootstrapScenarioCatalog().scenarios,
   });
   const flowScenarios = selectedScenarios.filter((scenario) => !isQaTestFileScenario(scenario));
   const testFileScenariosByKind = new Map<QaTestFileExecutionKind, QaTestFileScenario[]>();

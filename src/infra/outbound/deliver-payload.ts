@@ -18,9 +18,9 @@ import { flattenMarkdownDetails } from "./markdown-details.js";
 import {
   summarizeOutboundPayloadForTransport,
   type NormalizedOutboundPayload,
-  type OutboundPayloadPlan,
 } from "./payloads.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
+import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 
@@ -56,14 +56,19 @@ export function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPa
 export function normalizePayloadsForChannelDelivery(
   plan: readonly OutboundPayloadPlan[],
   handler: ChannelHandler,
+  copyPayloadMetadata?: (source: ReplyPayload, payload: ReplyPayload) => ReplyPayload,
 ): NormalizedPayloadForChannelDelivery[] {
+  const copyMetadata = copyPayloadMetadata ?? copyReplyPayloadMetadata;
   const normalizedPayloads: NormalizedPayloadForChannelDelivery[] = [];
   for (const entry of plan) {
-    let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(entry.payload);
+    let sanitizedPayload = copyMetadata(
+      entry.payload,
+      stripInternalRuntimeScaffoldingFromPayload(entry.payload),
+    );
     if (!handler.preserveMarkdownDetails && sanitizedPayload.text) {
       const text = flattenMarkdownDetails(sanitizedPayload.text);
       if (text !== sanitizedPayload.text) {
-        sanitizedPayload = copyReplyPayloadMetadata(sanitizedPayload, {
+        sanitizedPayload = copyMetadata(sanitizedPayload, {
           ...sanitizedPayload,
           text,
         });
@@ -73,7 +78,7 @@ export function normalizePayloadsForChannelDelivery(
       if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
         const text = handler.sanitizeText(sanitizedPayload);
         if (text !== sanitizedPayload.text) {
-          sanitizedPayload = copyReplyPayloadMetadata(sanitizedPayload, {
+          sanitizedPayload = copyMetadata(sanitizedPayload, {
             ...sanitizedPayload,
             text,
           });
@@ -83,18 +88,35 @@ export function normalizePayloadsForChannelDelivery(
     const normalizedPayload = handler.normalizePayload
       ? handler.normalizePayload(sanitizedPayload)
       : sanitizedPayload;
-    const normalized = normalizedPayload
-      ? normalizeEmptyPayloadForDelivery(
-          stripInternalRuntimeScaffoldingFromPayload(normalizedPayload),
-        )
-      : null;
+    let normalized = normalizedPayload ? copyMetadata(sanitizedPayload, normalizedPayload) : null;
+    if (normalized) {
+      const stripped = copyMetadata(
+        normalized,
+        stripInternalRuntimeScaffoldingFromPayload(normalized),
+      );
+      const nonEmpty = normalizeEmptyPayloadForDelivery(stripped);
+      normalized = nonEmpty ? copyMetadata(stripped, nonEmpty) : null;
+    }
     if (normalized) {
       normalizedPayloads.push({ index: entry.sourceIndex, payload: normalized });
     }
   }
-  return handler.normalizePayloadBatch
-    ? handler.normalizePayloadBatch(normalizedPayloads)
-    : normalizedPayloads;
+  if (!handler.normalizePayloadBatch) {
+    return normalizedPayloads;
+  }
+  const sources = copyPayloadMetadata
+    ? new Map(normalizedPayloads.map((entry) => [entry.index, entry.payload]))
+    : undefined;
+  const batch = handler.normalizePayloadBatch(normalizedPayloads);
+  if (!copyPayloadMetadata || !sources) {
+    return batch;
+  }
+  return batch.map((entry) => {
+    const source = sources.get(entry.index);
+    return source
+      ? { index: entry.index, payload: copyPayloadMetadata(source, entry.payload) }
+      : entry;
+  });
 }
 
 function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {

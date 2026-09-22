@@ -41,6 +41,7 @@ describe("authenticated request dispatcher load failures", () => {
       client,
     );
 
+    expect([...harness.clients.authorityClients]).toEqual([]);
     expect(await harness.awaitResponseFrame("stale-install")).toMatchObject({
       id: "stale-install",
       ok: false,

@@ -7,6 +7,7 @@ import type {
   WorkerLiveEventErrorDetails as ErrorDetails,
   WorkerLiveEventParams as Params,
 } from "../../../packages/gateway-protocol/src/schema.js";
+import { drainStoreWriterQueuesForTest } from "../../../test/helpers/promise.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
@@ -29,7 +30,6 @@ import {
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { drainStoreWriterQueuesForTest } from "../../shared/store-writer-queue.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   runOpenClawAgentWorkerWrite,

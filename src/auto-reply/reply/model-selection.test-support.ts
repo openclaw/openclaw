@@ -31,7 +31,6 @@ export function createModelSelectionStateFixture(params: {
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     hasConfiguredThinkingDefault: params.agentCfg?.thinkingDefault !== undefined,
     resolveDefaultReasoningLevel: async () => "off",
-    needsModelCatalog: false,
     modelContextWindow: undefined,
     modelContextTokens: undefined,
   };

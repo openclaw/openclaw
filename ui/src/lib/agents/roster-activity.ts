@@ -16,7 +16,21 @@ export function agentRosterCards(
   if (!roster) {
     return [];
   }
-  return selectableAgentsList(roster).agents.map((agent) => {
+  const agents = selectableAgentsList(roster).agents;
+  if (agents.length === 0) {
+    return [];
+  }
+  const sessionsByAgent = new Map<string, GatewaySessionRow[]>();
+  rows.forEach((row) => {
+    const agentId = resolveUiSessionRowAgentId(row, roster.defaultId);
+    const sessions = sessionsByAgent.get(agentId);
+    if (sessions) {
+      sessions.push(row);
+    } else {
+      sessionsByAgent.set(agentId, [row]);
+    }
+  });
+  return agents.map((agent) => {
     const identity = identityFor(agent.id);
     const name = normalizeAgentLabel(agent, identity);
     const mainKey = resolveUiConversationIdentity(
@@ -24,9 +38,7 @@ export function agentRosterCards(
       roster.mainKey,
       agent.id,
     ).sessionKey;
-    const sessions = rows.filter(
-      (row) => resolveUiSessionRowAgentId(row, roster.defaultId) === agent.id,
-    );
+    const sessions = sessionsByAgent.get(agent.id) ?? [];
     const recent = sessions.reduce<GatewaySessionRow | undefined>(
       (latest, row) => (!latest || (row.updatedAt ?? 0) > (latest.updatedAt ?? 0) ? row : latest),
       undefined,

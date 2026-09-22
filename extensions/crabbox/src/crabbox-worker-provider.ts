@@ -2,7 +2,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   WorkerProviderError,
-  type WorkerDesktopEndpoint,
   type WorkerLeaseStatus,
   type WorkerProfile,
   type WorkerProvider,
@@ -15,11 +14,6 @@ import {
   runCrabboxCommand,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
-import {
-  createCrabboxMacDesktopSetup,
-  createCrabboxWorkerDesktopEndpoint,
-  createCrabboxWorkerDesktopSetup,
-} from "./crabbox-worker-desktop-setup.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import { createCrabboxMachineOptionsResolver } from "./crabbox-worker-machine-options.js";
 import { collectCrabboxNodeEnrollmentEvidence } from "./crabbox-worker-node-enrollment-diagnostics.js";
@@ -49,6 +43,7 @@ import {
   inspectWithContext,
   isNonRunnableState,
   leaseRunArgs,
+  prepareProvisionDesktop,
   remainingProvisionTimeout,
   runProvisionSetup,
   runProvisionSetupAndWaitReady,
@@ -322,19 +317,13 @@ export function createCrabboxWorkerProvider(
       if (isNonRunnableState(inspected.inspect.state)) {
         return await failProvisionAfterCleanup(
           { ...inspectedParams, id: leaseId },
-          new WorkerProviderError("Crabbox warmup lease entered a terminal state"),
+          new WorkerProviderError(
+            `Crabbox warmup lease entered a terminal state${inspected.inspect.failureError ? `: ${inspected.inspect.failureError}` : ""}`,
+          ),
         );
       }
       inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
       inspectedParams.deadline = setupDeadline;
-      let desktop: WorkerDesktopEndpoint | undefined;
-      try {
-        desktop = parsed.desktop
-          ? createCrabboxWorkerDesktopEndpoint(parsed.target, inspectedParams.inspect.sshUser)
-          : undefined;
-      } catch (error) {
-        return await failProvisionAfterCleanup({ ...inspectedParams, id: leaseId }, error);
-      }
       if (parsed.setup && !(project?.preparation && allocationChoice.kind === "checkpoint")) {
         inspectedParams.inspect = await runProvisionSetupAndWaitReady({
           ...inspectedParams,
@@ -344,25 +333,11 @@ export function createCrabboxWorkerProvider(
           sleep,
         });
       }
-      const desktopSetup =
-        parsed.desktop && parsed.target === "linux"
-          ? createCrabboxWorkerDesktopSetup(leaseId, wallpaperBase64)
-          : undefined;
-      if (parsed.desktop && parsed.target === "macos") {
-        await runProvisionSetup({
-          ...inspectedParams,
-          phase: "desktop setup",
-          setup: createCrabboxMacDesktopSetup(),
-        });
-      }
-      if (desktopSetup && project) {
-        // Desktop launchers and XFCE configuration leave SSH and lease metadata unchanged.
-        await runProvisionSetup({
-          ...inspectedParams,
-          phase: "desktop setup",
-          setup: desktopSetup,
-        });
-      }
+      const desktop = await prepareProvisionDesktop({
+        ...inspectedParams,
+        wallpaperBase64,
+        prepareBeforeEnrollment: Boolean(project),
+      });
       if (project?.preparation && (await warmImages.lookupLease(leaseId))?.phase === "enrolled") {
         // An enrolled replay may have lost its response before core registration.
         // Verify the preserved completion only; setup and capture remain closed.
@@ -484,7 +459,7 @@ export function createCrabboxWorkerProvider(
       const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({
         enrollment,
         desktop: parsed.desktop,
-        desktopSetup: project ? undefined : desktopSetup,
+        desktopSetup: project ? undefined : desktop?.setup,
         target: parsed.target,
         leaseId,
       });
@@ -500,8 +475,7 @@ export function createCrabboxWorkerProvider(
         setup: nodeEnrollmentSetup.command,
         // Combine the existing phase budgets; desktop work starts after node launch.
         timeoutMs:
-          CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS +
-          (desktopSetup && !project ? CRABBOX_SETUP_TIMEOUT_MS : 0),
+          CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS + (desktop && !project ? CRABBOX_SETUP_TIMEOUT_MS : 0),
         ...(nodeEnrollmentSetup.forwardedEnv
           ? { forwardedEnv: nodeEnrollmentSetup.forwardedEnv }
           : {}),
@@ -551,15 +525,15 @@ export function createCrabboxWorkerProvider(
       return {
         ...allocation,
         node: { deviceId },
-        ...(desktop ? { desktop } : {}),
+        ...(desktop ? { desktop: desktop.endpoint } : {}),
       };
     };
   };
 
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
-    // Desktop provisioning requires a dedicated Linux XFCE display. Older fixed-size
-    // images are still safe to request: noVNC negotiates actual resize support.
+    resolveDisplayId: (profile) => parseCrabboxProfile(profile).provider,
+    // Disposable worker desktops may resize only when the RFB server negotiates support.
     allowsDesktopResize: true,
     async dispose() {
       maintenanceAbort.abort();

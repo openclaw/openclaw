@@ -23,25 +23,15 @@ import {
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
 import { icons } from "./icons.ts";
+import type { PersonActivityData } from "./person-activity-data.ts";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
 import "./elapsed-time.ts";
 import "./viewer-facepile.ts";
 
 type ScopedSession = { row: GatewaySessionRow; agentId: string };
-type PersonSessionData = Readonly<
-  Pick<
-    SessionDataController,
-    | "sessionsAgentId"
-    | "sessionsResult"
-    | "sessionResultsByAgent"
-    | "childSessionRowsByParent"
-    | "loadedChildSessionKeys"
-  >
->;
 type PersonCardInput = {
   user: PresenceViewer;
-  sessionData: PersonSessionData;
+  sessionData: PersonActivityData | undefined;
   watchAgentId: string;
   mainKey: string;
   globalScope: boolean;
@@ -50,7 +40,10 @@ type PersonCardInput = {
 };
 
 /** Loaded, caller-visible roster facts, paired with their owning list scope. */
-function loadedPresenceSessions(data: PersonSessionData): ScopedSession[] {
+function loadedPresenceSessions(data: PersonActivityData | undefined): ScopedSession[] {
+  if (!data) {
+    return [];
+  }
   const lists = [
     { agentId: data.sessionsAgentId, result: data.sessionsResult },
     ...Object.entries(data.sessionResultsByAgent).map(([agentId, result]) => ({
@@ -249,18 +242,12 @@ function renderPersonCardActivity(user: PresenceViewer, routing: PersonActivityR
   }`;
 }
 
-/** Durable identity only: absence of live observations does not imply that someone is offline. */
-export function renderPersonIdentityCard(user: PresenceViewer, routing: PersonActivityRouting) {
-  return html`<div class="person-activity-card">
-    ${renderPersonCardHeader(user)} ${renderPersonCardActivity(user, routing)}
-  </div>`;
-}
-
 export function renderPersonActivityCard(input: PersonCardInput) {
   const { user } = input;
   const label = presenceUserLabel(user, t("presence.card.person"));
-  // Presence projections always have entries; roster-only owners have no live facts.
-  const offline = (user.entries?.length ?? 0) === 0;
+  // Undefined means presence has not been observed; an empty snapshot means offline.
+  const observed = user.entries !== undefined;
+  const offline = user.entries?.length === 0;
   const entries = user.entries ?? [];
   const onlineSince = observedTimestamp(
     entries.map((entry) => entry.onlineSince),
@@ -305,22 +292,24 @@ export function renderPersonActivityCard(input: PersonCardInput) {
   return html`<div class="person-activity-card">
     ${renderPersonCardHeader(
       user,
-      html` <span
-        class="person-activity-card__status ${
-          offline ? "person-activity-card__status--offline" : ""
-        }"
-        ><span aria-hidden="true"></span>${
-          offline
-            ? t("presence.offline")
-            : onlineSince === undefined
-              ? t("presence.rosterTitle")
-              : html`${t("presence.card.onlineFor")} ${elapsed(onlineSince, "minute-compact")}`
-        }</span
-      >`,
+      observed
+        ? html` <span
+            class="person-activity-card__status ${
+              offline ? "person-activity-card__status--offline" : ""
+            }"
+            ><span aria-hidden="true"></span>${
+              offline
+                ? t("presence.offline")
+                : onlineSince === undefined
+                  ? t("presence.rosterTitle")
+                  : html`${t("presence.card.onlineFor")} ${elapsed(onlineSince, "minute-compact")}`
+            }</span
+          >`
+        : nothing,
     )}
     ${label.isSharedOwner ? html`<p class="person-activity-card__hint person-activity-card__muted">${t("presence.sharedOwner.hint")}</p>` : nothing}
     ${
-      offline
+      !observed || offline
         ? nothing
         : html`<dl class="person-activity-card__facts">
             ${

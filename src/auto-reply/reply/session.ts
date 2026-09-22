@@ -39,6 +39,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { selectSessionModelOverride } from "../../config/sessions/session-entry-selection.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import type { SessionResetBoundaryRequest } from "../../config/sessions/session-reset-boundary-event.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -73,7 +74,6 @@ import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenanc
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import {
   buildAgentMainSessionKey,
@@ -103,10 +103,10 @@ import {
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
   deliveryContextFromSession,
-  normalizeSessionDeliveryState,
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type {
@@ -132,7 +132,12 @@ import {
   createReplySessionEntryHandle,
   type ReplySessionEntryHandle,
 } from "./session-entry-handle.js";
-import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
+import {
+  buildSessionEndHookPayload,
+  buildSessionStartHookPayload,
+  resolveExplicitSessionEndReason,
+  resolveStaleSessionEndReason,
+} from "./session-hooks.js";
 import {
   ReplySessionInitConflictError,
   runWithSessionInitConflictRetry,
@@ -154,24 +159,6 @@ import {
 } from "./session-route-reset.js";
 
 const log = createSubsystemLogger("session-init");
-
-type ReplySessionEndReason = Extract<
-  PluginHookSessionEndReason,
-  "new" | "reset" | "idle" | "daily" | "unknown"
->;
-
-function resolveExplicitSessionEndReason(
-  matchedResetTriggerLower?: string,
-): Extract<ReplySessionEndReason, "new" | "reset"> {
-  return matchedResetTriggerLower === "/reset" ? "reset" : "new";
-}
-
-function resolveStaleSessionEndReason(params: {
-  entry: SessionEntry | undefined;
-  freshness?: SessionFreshness;
-}): ReplySessionEndReason | undefined {
-  return params.entry ? params.freshness?.staleReason : undefined;
-}
 
 function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
@@ -202,6 +189,7 @@ export type SessionInitResult = {
 };
 
 type InitSessionStateParams = {
+  providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
   ctx: FinalizedRuntimeMsgContext;
@@ -361,23 +349,6 @@ export function resolveReplySessionPreprocessingState(
   };
 }
 
-/** Initializes or reuses the reply session state for one inbound turn. */
-type SessionModelOverrideSelection = Pick<
-  SessionEntry,
-  "modelOverride" | "providerOverride" | "modelOverrideSource" | "modelOverrideRouteResolution"
->;
-
-function selectSessionModelOverride(
-  entry: Partial<SessionModelOverrideSelection>,
-): SessionModelOverrideSelection {
-  return {
-    modelOverride: entry.modelOverride,
-    providerOverride: entry.providerOverride,
-    modelOverrideSource: entry.modelOverrideSource,
-    modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
-  };
-}
-
 function resolveReplySessionRolloverState(
   entry: SessionEntry,
   sessionKey: string,
@@ -420,10 +391,14 @@ function resolveReplySessionRolloverState(
     createdVia: entry.createdVia,
     createdActor: entry.createdActor,
     createdAt: entry.createdAt,
+    // Chat preferences survive rollover; native-runtime consent belongs to the old incarnation.
+    permissionMode: entry.permissionMode,
+    sandboxMode: entry.sandboxMode,
     ...(entry.sandbox === "required" ? { sandbox: "required" } : {}),
   };
 }
 
+/** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
   prepareChannelParticipantObservation(params.ctx);
   return await runWithSessionInitConflictRetry(
@@ -697,6 +672,7 @@ async function initSessionStateAttemptLocked(
   });
   const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
     allowRestartTombstoneReplacement: restartTombstoneReset || restartTombstoneParentFork,
+    providerReviewAcknowledgment: params.providerReviewAcknowledgment,
   });
   if (archivedSessionError) {
     throw new Error(archivedSessionError);

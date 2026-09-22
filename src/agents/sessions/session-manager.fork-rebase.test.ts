@@ -7,12 +7,13 @@ import {
   appendTranscriptMessageSync,
   loadTranscriptEvents,
   replaceTranscriptEventsSync,
+  resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import type { AppendPersistenceOptions } from "./session-manager-types.js";
 import { SessionManager, type SessionEntry, type SessionMessageEntry } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -127,7 +128,7 @@ describe("SessionManager stale-parent rebase", () => {
       now: 2,
     });
 
-    const modelChangeId = manager.appendModelChange("openai", "gpt-5.6");
+    const modelChangeId = await manager.appendModelChange("openai", "gpt-5.6");
 
     expect(manager.getEntry(modelChangeId)?.parentId).toBe("out-of-band");
     expect(manager.getBranch().map((entry) => entry.id)).toEqual([
@@ -175,7 +176,7 @@ describe("SessionManager stale-parent rebase", () => {
       ),
     ).toBe(true);
 
-    const modelChangeId = manager.appendModelChange("openai", "gpt-5.6");
+    const modelChangeId = await manager.appendModelChange("openai", "gpt-5.6");
 
     expect(manager.getBranch().map((entry) => entry.id)).toEqual([base.messageId, modelChangeId]);
     const reloadedBase = manager.getEntry(base.messageId);
@@ -362,44 +363,41 @@ describe("SessionManager stale-parent rebase", () => {
       now: 2,
     });
     const branchBeforeRetry = manager.getBranch().map((entry) => entry.id);
-    const persistencePrototype = SessionManager.prototype as unknown as {
-      persist(
-        entry: SessionEntry,
-        options?: AppendPersistenceOptions & { expectedMutationAt?: number | null },
-      ): unknown;
-    };
-    // Preserve the unbound implementation so the spy can forward each concurrent manager receiver.
-    // oxlint-disable-next-line typescript/unbound-method
-    const originalPersist = persistencePrototype.persist;
-    let persistCalls = 0;
-    vi.spyOn(persistencePrototype, "persist").mockImplementation(
-      function (this: SessionManager, entry, options) {
-        persistCalls += 1;
-        if (persistCalls === 1) {
-          const concurrent = appendTranscriptMessageSync(target, {
-            appendIntent: "active-branch",
-            eventId: "new-user",
-            message: { role: "user", content: "new", timestamp: 3 },
-            now: 3,
-          });
-          expect(concurrent.ok).toBe(true);
-        }
-        return originalPersist.call(this, entry, options);
-      },
-    );
-
-    expect(() =>
-      manager.appendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "stale reply" }],
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.5",
-        usage: createZeroUsageFixture(),
-        stopReason: "stop",
-        timestamp: 4,
-      }),
-    ).toThrow("SQLite transcript changed while preparing rewrite");
+    const { db } = openOpenClawAgentDatabase({
+      agentId: target.agentId,
+      path: resolveSessionTranscriptDatabasePath(target),
+    });
+    const exec = db.exec.bind(db);
+    let injected = false;
+    const execSpy = vi.spyOn(db, "exec").mockImplementation((statement) => {
+      if (statement === "BEGIN IMMEDIATE" && !injected) {
+        injected = true;
+        const concurrent = appendTranscriptMessageSync(target, {
+          appendIntent: "active-branch",
+          eventId: "new-user",
+          message: { role: "user", content: "new", timestamp: 3 },
+          now: 3,
+        });
+        expect(concurrent.ok).toBe(true);
+      }
+      return exec(statement);
+    });
+    try {
+      expect(() =>
+        manager.appendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: "stale reply" }],
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.5",
+          usage: createZeroUsageFixture(),
+          stopReason: "stop",
+          timestamp: 4,
+        }),
+      ).toThrow("SQLite transcript changed while preparing rewrite");
+    } finally {
+      execSpy.mockRestore();
+    }
     expect(manager.getBranch().map((entry) => entry.id)).toEqual(branchBeforeRetry);
     const messages = (
       (await loadTranscriptEvents(target)) as Array<SessionMessageEntry & { type?: string }>

@@ -144,7 +144,8 @@ openclaw message send --channel discord \
 ```
 
 - `--media <path-or-url>`: attach image/audio/video/document (local path or
-  URL).
+  URL). Repeat to send multiple files in order; Telegram groups consecutive
+  photos into [albums](/channels/telegram/media#photo-albums).
 - `--presentation <json>`: shared payload with `text`, `context`, `divider`,
   `chart`, `table`, `buttons`, and `select` blocks, rendered per channel
   capability. See [Message Presentation](/plugins/message-presentation).
@@ -202,6 +203,11 @@ openclaw message send --channel telegram --target 123456789 --message "Open app:
 ```bash
 openclaw message send --channel telegram --target @mychat \
   --media ./diagram.png --force-document
+```
+
+```bash
+openclaw message send --channel telegram --target @mychat \
+  --message "Trip photos" --media ./photo-1.jpg --media ./photo-2.jpg
 ```
 
 ```bash

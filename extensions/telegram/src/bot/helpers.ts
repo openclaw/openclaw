@@ -1,10 +1,6 @@
 // Telegram helper module supports helpers behavior.
 import type { Chat, Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  resolveCommandAuthorization,
-  type CommandAuthorization,
-} from "openclaw/plugin-sdk/command-auth-native";
 import type {
   OpenClawConfig,
   DmPolicy,
@@ -571,34 +567,6 @@ export function isTelegramCommandsAllowFromConfigured(cfg: OpenClawConfig): bool
     typeof commandsAllowFrom === "object" &&
     (Array.isArray(commandsAllowFrom.telegram) || Array.isArray(commandsAllowFrom["*"]))
   );
-}
-
-export function resolveTelegramCommandAuthorization(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  chatId: number;
-  isGroup: boolean;
-  threadSpec: TelegramThreadSpec;
-  senderId?: string;
-  senderUsername?: string;
-  commandAuthorized?: boolean;
-}): CommandAuthorization {
-  return resolveCommandAuthorization({
-    ctx: {
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      AccountId: params.accountId,
-      ChatType: params.isGroup ? "group" : "direct",
-      From: params.isGroup
-        ? buildTelegramGroupFrom(params.chatId, params.threadSpec)
-        : `telegram:${params.chatId}`,
-      SenderId: params.senderId || undefined,
-      SenderUsername: params.senderUsername || undefined,
-    },
-    cfg: params.cfg,
-    commandAuthorized: params.commandAuthorized ?? false,
-  });
 }
 
 /**

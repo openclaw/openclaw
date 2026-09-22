@@ -2,6 +2,7 @@
   "id": "github",
   "name": "GitHub",
   "description": "Public GitHub link previews and document reader.",
+  "categories": ["developer-tools"],
   "enabledByDefault": true,
   "activation": {
     "onStartup": true

@@ -20,6 +20,7 @@ import {
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
+import { createCodexTestOAuthProfile } from "./test-support.js";
 
 /** Keeps native Codex bindings reusable while omitting OpenClaw tools and search. */
 function withPersistentCodexTestToolPolicy(
@@ -189,12 +190,48 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     tmpDir = tempDir;
   });
 
+  it.each(["selected", "bound"] as const)(
+    "rejects a missing %s auth profile before app-server startup",
+    async (selection) => {
+      const sessionFile = path.join(tmpDir, "session.jsonl");
+      const params = createParams(sessionFile, tmpDir);
+      const authProfileId = "openai:missing";
+      if (selection === "selected") {
+        params.authProfileId = authProfileId;
+      } else {
+        await writeCodexAppServerBinding(sessionFile, {
+          threadId: "thread-auth-contract",
+          cwd: tmpDir,
+          authProfileId,
+        });
+      }
+      const clientFactory = vi.fn(async () => {
+        throw new Error("unexpected app-server startup");
+      });
+      const rejection = await runCodexAppServerAttempt(params, { clientFactory }).catch(
+        (error: unknown) => error,
+      );
+      expect(rejection).toBeInstanceOf(Error);
+      expect(rejection).toMatchObject({
+        code: "selected_auth_profile_unavailable",
+        message: expect.stringContaining(
+          'auth profile "openai:missing" was not found in the OpenClaw credential store.',
+        ),
+      });
+      expect(rejection).not.toHaveProperty("status");
+      expect(clientFactory).not.toHaveBeenCalled();
+    },
+  );
+
   it("passes the exact OpenAI Codex auth profile into app-server startup", async () => {
     const harness = createCodexAuthProfileHarness({ startMethod: "thread/start" });
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const params = createParams(sessionFile, tmpDir);
     params.authProfileId = AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId;
     params.agentDir = tmpDir;
+
+    params.authProfileStore.profiles[AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId] =
+      createCodexTestOAuthProfile("synthetic-account");
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
@@ -225,6 +262,9 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     // authProfileId is intentionally omitted to exercise the resume-bound profile path.
     const params = createParams(sessionFile, tmpDir);
 
+    params.authProfileStore.profiles[AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId] =
+      createCodexTestOAuthProfile("synthetic-account");
+
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
       () =>
@@ -252,6 +292,9 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     });
     const params = createParams(sessionFile, tmpDir);
     params.authProfileId = AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId;
+
+    params.authProfileStore.profiles[AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId] =
+      createCodexTestOAuthProfile("synthetic-account");
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(

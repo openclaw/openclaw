@@ -89,6 +89,8 @@ export type SwarmCollectorStatus = "done" | "failed" | "killed" | "timeout";
 /** Persisted fields shared by compact registry reads and the full runtime record. */
 export type SubagentRunReadRecord = {
   runId: string;
+  /** Logical task ownership survives replacement of the physical execution run. */
+  taskRunId?: string;
   /** Stable public collector id; gateway execution ids can change across dispatch/recovery. */
   swarmRunId?: string;
   /** Collector-mode runs remain waitable and never announce to the requester. */

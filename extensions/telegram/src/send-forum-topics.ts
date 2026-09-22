@@ -119,12 +119,13 @@ export async function renameForumTopicTelegram(
 // Forum topic creation
 // ---------------------------------------------------------------------------
 
-type TelegramCreateForumTopicOpts = TelegramApiCallOpts & {
-  /** Icon color for the topic (must be one of 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F). */
-  iconColor?: TelegramCreateForumTopicParams["icon_color"];
-  /** Custom emoji ID for the topic icon. */
-  iconCustomEmojiId?: string;
-};
+type TelegramCreateForumTopicOpts = TelegramApiCallOpts &
+  Pick<TelegramMessageActionOpts, "assertPlatformSendAuthorized"> & {
+    /** Icon color for the topic (must be one of 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F). */
+    iconColor?: TelegramCreateForumTopicParams["icon_color"];
+    /** Custom emoji ID for the topic icon. */
+    iconCustomEmojiId?: string;
+  };
 
 type TelegramCreateForumTopicResult = {
   topicId: number;
@@ -145,6 +146,7 @@ export async function createForumTopicTelegram(
   name: string,
   opts: TelegramCreateForumTopicOpts,
 ): Promise<TelegramCreateForumTopicResult> {
+  const assertPlatformSendAuthorized = opts.assertPlatformSendAuthorized;
   if (!name?.trim()) {
     throw new Error("Forum topic name is required");
   }
@@ -153,53 +155,56 @@ export async function createForumTopicTelegram(
     throw new Error("Forum topic name must be 128 characters or fewer");
   }
 
-  return withTelegramApiContext(opts, async (context): Promise<TelegramCreateForumTopicResult> => {
-    const { cfg, account, api } = context;
-    // Accept topic-qualified targets (e.g. telegram:group:<id>:topic:<thread>)
-    // but createForumTopic must always target the base supergroup chat id.
-    const target = parseTelegramTarget(chatId);
-    const normalizedChatId = await resolveAndPersistChatId({
-      cfg,
-      api,
-      lookupTarget: target.chatId,
-      persistTarget: chatId,
-      verbose: opts.verbose,
-      gatewayClientScopes: opts.gatewayClientScopes,
-    });
+  return withTelegramApiContext(
+    { ...opts, assertPlatformSendAuthorized },
+    async (context): Promise<TelegramCreateForumTopicResult> => {
+      const { cfg, account, api } = context;
+      // Accept topic-qualified targets (e.g. telegram:group:<id>:topic:<thread>)
+      // but createForumTopic must always target the base supergroup chat id.
+      const target = parseTelegramTarget(chatId);
+      const normalizedChatId = await resolveAndPersistChatId({
+        cfg,
+        api,
+        lookupTarget: target.chatId,
+        persistTarget: chatId,
+        verbose: opts.verbose,
+        gatewayClientScopes: opts.gatewayClientScopes,
+      });
 
-    const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
-      cfg,
-      account,
-      retry: opts.retry,
-      verbose: opts.verbose,
-    });
+      const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
+        cfg,
+        account,
+        retry: opts.retry,
+        verbose: opts.verbose,
+      });
 
-    const extra: TelegramCreateForumTopicParams = {};
-    if (opts.iconColor != null) {
-      extra.icon_color = opts.iconColor;
-    }
-    if (opts.iconCustomEmojiId?.trim()) {
-      extra.icon_custom_emoji_id = opts.iconCustomEmojiId.trim();
-    }
+      const extra: TelegramCreateForumTopicParams = {};
+      if (opts.iconColor != null) {
+        extra.icon_color = opts.iconColor;
+      }
+      if (opts.iconCustomEmojiId?.trim()) {
+        extra.icon_custom_emoji_id = opts.iconCustomEmojiId.trim();
+      }
 
-    const hasExtra = Object.keys(extra).length > 0;
-    const result = await requestWithDiag(
-      () => api.createForumTopic(normalizedChatId, trimmedName, hasExtra ? extra : undefined),
-      "createForumTopic",
-    );
+      const hasExtra = Object.keys(extra).length > 0;
+      const result = await requestWithDiag(() => {
+        assertPlatformSendAuthorized?.();
+        return api.createForumTopic(normalizedChatId, trimmedName, hasExtra ? extra : undefined);
+      }, "createForumTopic");
 
-    const topicId = result.message_thread_id;
+      const topicId = result.message_thread_id;
 
-    recordChannelActivity({
-      channel: "telegram",
-      accountId: account.accountId,
-      direction: "outbound",
-    });
+      recordChannelActivity({
+        channel: "telegram",
+        accountId: account.accountId,
+        direction: "outbound",
+      });
 
-    return {
-      topicId,
-      name: result.name ?? trimmedName,
-      chatId: normalizedChatId,
-    };
-  });
+      return {
+        topicId,
+        name: result.name ?? trimmedName,
+        chatId: normalizedChatId,
+      };
+    },
+  );
 }

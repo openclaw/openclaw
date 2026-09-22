@@ -228,12 +228,15 @@ suite.define(() => {
               };
             },
             acquireTurnCredential: async () => ({ ...credential(), sessionId }),
-            acknowledgeCredentialDelivery: () => true,
+            acknowledgeCredentialDelivery: async () => true,
             startTunnel: async () => tunnel,
           },
           resolveWorkspace: async () => ({ kind: "local", path: workspace }),
           reconcileActivePlacement: async () => {
             throw new Error("unexpected recovery");
+          },
+          waitForAdmissionNode: async () => {
+            throw new Error("unexpected runtime refresh");
           },
           redispatchReclaimed: async () => {
             throw new Error("unexpected redispatch");

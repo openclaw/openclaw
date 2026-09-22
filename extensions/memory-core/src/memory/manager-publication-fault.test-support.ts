@@ -1,8 +1,6 @@
 import { writeFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
-import { mock } from "node:test";
 import type { MemoryPublicationConnection } from "./manager-publication-task.js";
-import { openExistingSqliteWorkerBackend as openBackend } from "./manager-publication.worker.js";
+import { bindSqliteWorkerBackend as bindBackend } from "./manager-publication.worker.js";
 
 export type PublicationFaultInput = MemoryPublicationConnection & {
   marker: string;
@@ -10,26 +8,15 @@ export type PublicationFaultInput = MemoryPublicationConnection & {
   failClose: boolean;
   throwResultFailure: boolean;
   failDiscard?: boolean;
+  failBindingClose?: boolean;
 };
 
-export function openExistingSqliteWorkerBackend(
+export function bindSqliteWorkerBackend(
   input: PublicationFaultInput,
-  context: { databasePath: string },
+  context: Parameters<typeof bindBackend>[1],
 ) {
-  const exec = mock.method(DatabaseSync.prototype, "exec");
-  let backend: ReturnType<typeof openBackend>;
-  try {
-    backend = openBackend(input, context);
-  } finally {
-    exec.mock.restore();
-  }
-  const calls = exec.mock.calls.filter((call) =>
-    call.arguments[0].includes("CREATE TEMP TABLE memory_publication_input"),
-  );
-  const db = calls[0]?.this;
-  if (!(db instanceof DatabaseSync) || calls.length !== 1) {
-    throw new Error("Expected the real publication database");
-  }
+  const backend = bindBackend(input, context);
+  const db = context.database;
   const originalExec = db.exec.bind(db);
   const originalClose = db.close.bind(db);
   db.exec = (sql) => {
@@ -64,7 +51,11 @@ export function openExistingSqliteWorkerBackend(
       db.exec = originalExec;
       db.close = originalClose;
       if (db.isOpen) {
-        return backend.close();
+        const closed = backend.close();
+        if (input.failBindingClose) {
+          throw new Error("injected binding cleanup failure");
+        }
+        return closed;
       }
     },
   };

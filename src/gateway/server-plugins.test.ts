@@ -691,8 +691,6 @@ describe("loadGatewayPlugins", () => {
       const { markPluginRegistryActive, markPluginRegistryRetired } =
         await import("../plugins/registry-lifecycle.js");
       const { createChannelTestPluginBase } = await import("../test-utils/channel-plugins.js");
-      const { resolveStableChannelMessageIngress } =
-        await import("../channels/message-access/runtime.js");
       const { readChannelContextGatewayContextResolver } =
         await import("../channels/message-access/admission-evidence.js");
       const { createDispatchReplyOperationCoordinator } =
@@ -756,7 +754,7 @@ describe("loadGatewayPlugins", () => {
         if (!channel) {
           throw new Error("Expected registered channel runtime");
         }
-        const ingress = await resolveStableChannelMessageIngress({
+        const ingress = await channel.inbound.ingress.resolveStable({
           channelId,
           accountId: "default",
           subject: { stableId: "person-a" },

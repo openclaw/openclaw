@@ -7,6 +7,10 @@ import type {
   AgentsListResult,
   ModelCatalogEntry,
 } from "../../api/types.ts";
+import {
+  renderDecisionModelPicker,
+  type DecisionModelEntry,
+} from "../../components/decision-model-picker.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import "../../components/multi-select-registration.ts";
@@ -62,6 +66,7 @@ export function renderAgentOverview(params: {
   configSaving: boolean;
   configDirty: boolean;
   modelCatalog: ModelCatalogEntry[];
+  decisionModels: DecisionModelEntry[];
   modelCatalogStatus: PanelRefreshStatus;
   onConfigReload: () => void;
   onConfigSave: () => void;
@@ -69,6 +74,7 @@ export function renderAgentOverview(params: {
   onIdentityAvatarSelect: (file: File) => void;
   onIdentitySave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
+  onDecisionModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
   onModelCatalogOpen: () => void;
   onSelectPanel: (panel: AgentsPanel) => void;
@@ -302,6 +308,27 @@ export function renderAgentOverview(params: {
             ],
             disabled,
             onChange: (value) => onModelChange(agent.id, value || null),
+            onOpen: params.onModelCatalogOpen,
+          }),
+        })}
+        ${renderSettingsRow({
+          title: t("chat.modelControls.decisionLabel"),
+          description: t("chat.modelControls.decisionAgentHelp"),
+          control: renderDecisionModelPicker({
+            id: "agent-decision-model",
+            models: params.decisionModels,
+            value:
+              typeof config.entry?.decisionModel === "string"
+                ? config.entry.decisionModel
+                : undefined,
+            inherit: {
+              model:
+                typeof config.defaults?.decisionModel === "string"
+                  ? config.defaults.decisionModel
+                  : undefined,
+            },
+            disabled,
+            onChange: (value) => params.onDecisionModelChange(agent.id, value),
             onOpen: params.onModelCatalogOpen,
           }),
         })}

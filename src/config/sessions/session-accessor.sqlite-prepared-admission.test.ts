@@ -26,6 +26,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
@@ -166,6 +167,12 @@ function fixture() {
 }
 
 type Fixture = ReturnType<typeof fixture>;
+
+function closeForIntegrityAdmission(f: Fixture) {
+  expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+}
 
 function observeAdmission(databasePath: string, hold = false) {
   let parentChecks = 0;
@@ -346,8 +353,7 @@ it.each(cases)(
   async ({ owner, mode }) => {
     const f = fixture();
     if (mode === "cold-preparation") {
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeForIntegrityAdmission(f);
     }
     const probe = observeAdmission(f.databasePath);
     const entered = createDeferred();
@@ -361,8 +367,7 @@ it.each(cases)(
       entered.resolve();
       await release.promise;
       if (mode === "cold-commit") {
-        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+        closeForIntegrityAdmission(f);
       }
     };
     const operation = own<string | SessionEntryLifecycleMutationResult>(
@@ -508,8 +513,7 @@ it.each(["selection", "stale", "denied"] as const)(
             updatedAt: Date.now(),
           });
         }
-        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+        closeForIntegrityAdmission(f);
         return {
           result: undefined,
           replacements: entries.map(({ entry, sessionKey }) => ({
@@ -557,8 +561,7 @@ it("keeps lifecycle commit denial before its stale-row check after admission", a
         label: "newer",
         updatedAt: Date.now(),
       });
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeForIntegrityAdmission(f);
       return { ...currentEntry!, label: "uncommitted" };
     },
   );
@@ -594,8 +597,7 @@ it("reacquires post-builder references before planning lifecycle transcript dele
   const probe = observeAdmission(f.databasePath);
   const builder = vi.fn(
     ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeForIntegrityAdmission(f);
       return { ...currentEntry!, usageFamilySessionIds: ["original"] };
     },
   );
@@ -631,8 +633,7 @@ it("reacquires the split lifecycle commit after real archive materialization", a
       },
       "session.transcript.batch",
     );
-    expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    closeForIntegrityAdmission(f);
   };
   const work = own(
     applySessionEntryLifecycleMutation({
@@ -694,8 +695,7 @@ it.each([false, true])(
         },
         "session.transcript.batch",
       );
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeForIntegrityAdmission(f);
     });
     const harness: AgentHarness = {
       id: "prepared-native",
@@ -813,8 +813,7 @@ it.each(
         "session.transcript.batch",
       );
       if (cold) {
-        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+        closeForIntegrityAdmission(f);
       }
     };
     const work = own<void | SessionEntryLifecycleMutationResult>(
@@ -896,8 +895,7 @@ it("rechecks maintenance lifetime after cold finalizer admission", async () => {
   const plan = maintenancePlan(f);
   const probe = observeWorkerAdmission(f.databasePath, true);
   hooks.afterMaterialize = async () => {
-    expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    closeForIntegrityAdmission(f);
   };
   let current = true;
   const work = own(
@@ -931,8 +929,7 @@ it.each([false, true])(
         throw new Error("unused test harness");
       },
       withSessionDeletion: async (params, run) => {
-        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+        closeForIntegrityAdmission(f);
         params.assertCurrent();
         return await run({ commit, rollback });
       },

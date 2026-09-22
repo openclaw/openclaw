@@ -1,9 +1,13 @@
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { isMainThread, threadId, Worker } from "node:worker_threads";
+import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import {
+  resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -29,25 +33,19 @@ import {
 } from "./session-accessor.sqlite-worker-request.js";
 import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
 
-function resolveSourceWorkerExecArgv(): string[] {
-  // Node 22 can strip the .ts entrypoint itself, but `--import tsx` does not
-  // register tsx's ESM resolver inside a Worker. Explicitly register the
-  // supported programmatic API so source-tree .js specifiers map back to .ts.
-  // Built .js workers do not use this development/test-only preload.
-  const tsxApiUrl = import.meta.resolve("tsx/esm/api");
-  const registerTsx = `import { register } from ${JSON.stringify(tsxApiUrl)}; register();`;
-  return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
-}
-
 export function createSqliteTranscriptArchiveWorker(workerData: object): Worker {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
-  return new Worker(workerUrl, {
+  return createCpuTrackedWorker(workerUrl, {
+    resourceLimits: { maxOldGenerationSizeMb: 512 },
     workerData,
-    execArgv: workerUrl.pathname.endsWith(".ts") ? resolveSourceWorkerExecArgv() : undefined,
+    execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
   });
 }
 
-type TranscriptArchiveWorkerOperation<Result> = { assertCurrent?: () => void } & (
+type TranscriptArchiveWorkerOperation<Result> = {
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
+} & (
   | { expectedMessageType: "done" | "published" | "sized"; workerData: object }
   | {
       expectedMessageType: "reclaimed";
@@ -172,11 +170,41 @@ const sqliteTranscriptArchiveWorkerQueue = resolveGlobalSingleton(
 );
 const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
 
-export function runExclusiveSqliteTranscriptArchiveWorker<T>(run: () => Promise<T>): Promise<T> {
-  return sqliteTranscriptArchiveWorkerQueue.enqueue(
-    SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
-    run,
-  );
+export function runExclusiveSqliteTranscriptArchiveWorker<T>(
+  run: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) {
+    return sqliteTranscriptArchiveWorkerQueue.enqueue(
+      SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY,
+      run,
+    );
+  }
+  return new Promise<T>((resolve, reject) => {
+    let pending: (() => Promise<T>) | undefined = run;
+    const cancel = () => {
+      // Drop execution before releasing the caller's claim; its FIFO slot remains inert.
+      pending = undefined;
+      reject(toStringifiedError(signal.reason));
+    };
+    if (signal.aborted) {
+      cancel();
+      return;
+    }
+    signal.addEventListener("abort", cancel, { once: true });
+    void sqliteTranscriptArchiveWorkerQueue
+      .enqueue(SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY, () => {
+        signal.removeEventListener("abort", cancel);
+        const admitted = pending;
+        pending = undefined;
+        if (!admitted) {
+          throw toStringifiedError(signal.reason);
+        }
+        // Once admitted, even a revoked request must join its physical settlement.
+        return admitted();
+      })
+      .then(resolve, reject);
+  });
 }
 
 export function runSqliteTranscriptArchiveWorkerOperation<Result>(
@@ -185,7 +213,7 @@ export function runSqliteTranscriptArchiveWorkerOperation<Result>(
   return runExclusiveSqliteTranscriptArchiveWorker(() => {
     params.assertCurrent?.();
     return spawnSqliteTranscriptArchiveWorkerOperation<Result>(params);
-  });
+  }, params.signal);
 }
 
 function runSqliteTranscriptArchiveWorker(

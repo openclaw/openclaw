@@ -11,6 +11,7 @@ import {
   measureGatewayCpuUsage,
   readGatewayCpuUsage,
   readGatewayHeapProfile,
+  readGatewayResources,
 } from "../../scripts/lib/gateway-bench-profile.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 
@@ -53,6 +54,25 @@ it("measures fixed CPU work including a retired Worker without starting the insp
     await closed;
   });
   await waitMessage(child, "ready");
+  const initialResources = await readGatewayResources(child, { initial: true });
+  const resources = await readGatewayResources(child);
+  expect(resources.pid).toBe(child.pid);
+  expect(initialResources.atMonotonicMicros).toBeLessThan(resources.atMonotonicMicros);
+  expect(resources.runtime).toMatchObject({ node: expect.any(String), platform: process.platform });
+  for (const value of Object.values(resources.memory)) {
+    expect(Number.isFinite(value)).toBe(true);
+    expect(value).toBeGreaterThanOrEqual(0);
+  }
+  const changeTimer = async (run: string) => {
+    const changed = once(child, "message");
+    child.send({ run });
+    expect((await changed)[0]).toEqual({ timerChanged: true });
+    return await readGatewayResources(child);
+  };
+  const held = await changeTimer("timer-start");
+  const released = await changeTimer("timer-stop");
+  expect(held.activeResources.Timeout).toBe((resources.activeResources.Timeout ?? 0) + 1);
+  expect(released.activeResources.Timeout ?? 0).toBe(resources.activeResources.Timeout ?? 0);
   const before = await readGatewayCpuUsage(child);
   const mainCompleted = once(child, "message");
   child.send({ run: "main" });

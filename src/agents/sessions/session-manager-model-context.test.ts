@@ -153,8 +153,8 @@ it.each([
         sender: { id: "synthetic-sender" },
         media: { type: "synthetic" },
       };
-      source.appendThinkingLevelChange("high");
-      source.appendModelChange("openai", "gpt-5.6-luna");
+      await source.appendThinkingLevelChange("high");
+      await source.appendModelChange("openai", "gpt-5.6-luna");
       const old = source.appendMessage({
         role: "user",
         content: "old",

@@ -14,33 +14,15 @@ import {
   prepareCompaction,
   shouldCompact,
 } from "./compaction.js";
+import {
+  createCompactionModel,
+  createContextUsage as createUsage,
+  createMessageEntry,
+} from "./compaction.test-support.js";
 import { createFileOps } from "./utils.js";
 
 function createSummaryModel(reasoning = false): Model {
-  return {
-    id: "summary-model",
-    name: "Summary Model",
-    api: "test-api",
-    provider: "test-provider",
-    baseUrl: "https://example.test",
-    reasoning,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 100_000,
-    maxTokens: 8_000,
-  };
-}
-
-function createUsage(totalTokens: number): Usage {
-  return {
-    input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    contextUsage: { state: "available", promptTokens: totalTokens, totalTokens },
-    totalTokens,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
+  return createCompactionModel({ reasoning });
 }
 
 function createAssistant(text: string, usage: Usage, timestamp: number): AssistantMessage {
@@ -70,16 +52,6 @@ function createBashMessage(
     truncated: false,
     timestamp,
     excludeFromContext,
-  };
-}
-
-function createMessageEntry(message: AgentMessage, index: number): SessionTreeEntry {
-  return {
-    type: "message",
-    id: `entry-${index}`,
-    parentId: index === 0 ? null : `entry-${index - 1}`,
-    timestamp: new Date(message.timestamp).toISOString(),
-    message,
   };
 }
 

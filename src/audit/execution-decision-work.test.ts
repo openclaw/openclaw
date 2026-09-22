@@ -9,7 +9,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import { pageExecutionDecisionFactsForContextInDatabase } from "./execution-decision-facts.js";
-import type { ExecutionDecisionWork } from "./execution-decision-work.js";
+import type { ExecutionDecisionWork } from "./execution-decision-work.types.js";
 import {
   configureExecutionIdentityAdmissionSink,
   createExecutionIdentityAdmissionToken,

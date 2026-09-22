@@ -97,7 +97,6 @@ describe("Apple app i18n catalogs", () => {
       "Connect a nearby Gateway",
       "Talk to Claw",
       "Expires in %@",
-      "Location Services are off in iOS Settings.",
       "Pending review",
       "Secure connection is required for this host.",
       "TLS required",

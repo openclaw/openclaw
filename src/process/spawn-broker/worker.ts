@@ -415,7 +415,10 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
   } else if (message.type === "cancel") {
     entry.execa?.cancel();
   } else if (message.type === "output-drained") {
-    entry.execa?.outputDrained(message.fd, message.error ? new Error(message.error) : undefined);
+    entry.execa?.outputDrained(
+      message.fd,
+      message.error ? Object.assign(new Error(message.error.message), message.error) : undefined,
+    );
     entry.openPipes.delete(message.fd);
     forget(message.id, entry);
   } else if (message.type === "disconnect" && entry.child.connected) {

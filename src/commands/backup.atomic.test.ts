@@ -1,5 +1,5 @@
 // Backup atomicity tests cover temp-file writes, rollback behavior, and backup archive consistency.
-import fsSync, { type Stats } from "node:fs";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +11,7 @@ import {
   createMockTarStream,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
-  tarCreateMock,
+  backupWalkMock,
 } from "./backup.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -32,7 +32,7 @@ describe("backupCreateCommand atomic archive write", () => {
 
   beforeEach(async () => {
     await resetBackupTempHome(tempHome);
-    tarCreateMock.mockReset();
+    backupWalkMock.mockReset();
     backupVerifyCommandMock.mockReset();
     sleepMock.mockClear();
   });
@@ -80,7 +80,7 @@ describe("backupCreateCommand atomic archive write", () => {
       archivePrefix: "openclaw-backup-failure-",
     });
     try {
-      tarCreateMock.mockReturnValueOnce(createMockTarStream({ error: new Error("disk full") }));
+      backupWalkMock.mockReturnValueOnce(createMockTarStream({ error: new Error("disk full") }));
 
       await expect(
         backupCreateCommand(runtime, {
@@ -103,7 +103,6 @@ describe("backupCreateCommand atomic archive write", () => {
     const volatilePath = path.join(tempHome.home, ".openclaw", "logs", "gateway.log");
     await fs.mkdir(path.dirname(volatilePath), { recursive: true });
     await fs.writeFile(volatilePath, "volatile log\n", "utf8");
-    const volatileStat = await fs.stat(volatilePath);
     const originalUnlinkSync = fsSync.unlinkSync.bind(fsSync);
     let blockedPartialPath: string | undefined;
     let blockedPartialCleanupAttempts = 0;
@@ -122,24 +121,23 @@ describe("backupCreateCommand atomic archive write", () => {
     });
     try {
       let tarAttempt = 0;
-      tarCreateMock.mockImplementation(
-        (options: { filter: (entryPath: string, entryStat: Stats) => boolean }) => {
-          tarAttempt += 1;
-          return createMockTarStream({
-            beforeRead: () => {
-              expect(options.filter(volatilePath, volatileStat)).toBe(false);
-            },
-            contents: `archive-attempt-${tarAttempt}`,
-            ...(tarAttempt < 3
-              ? {
-                  error: Object.assign(new Error("did not encounter expected EOF"), {
-                    path: path.join(tempHome.home, ".openclaw", "state.txt"),
-                  }),
-                }
-              : {}),
-          });
-        },
-      );
+      backupWalkMock.mockImplementation((options: { skip: (entryPath: string) => boolean }) => {
+        tarAttempt += 1;
+        return createMockTarStream({
+          beforeRead: () => {
+            expect(options.skip(volatilePath)).toBe(true);
+          },
+          contents: `archive-attempt-${tarAttempt}`,
+          ...(tarAttempt < 3
+            ? {
+                error: Object.assign(new Error("encountered unexpected EOF"), {
+                  code: "EOF",
+                  path: path.join(tempHome.home, ".openclaw", "state.txt"),
+                }),
+              }
+            : {}),
+        });
+      });
 
       const result = await backupCreateCommand(runtime, {
         output: outputPath,
@@ -163,7 +161,7 @@ describe("backupCreateCommand atomic archive write", () => {
     const publish = directoryDurability.publishFileExclusive;
     const publicationSpy = vi.spyOn(directoryDurability, "publishFileExclusive");
     try {
-      tarCreateMock.mockReturnValueOnce(createMockTarStream());
+      backupWalkMock.mockReturnValueOnce(createMockTarStream());
       publicationSpy.mockImplementationOnce(async (options) => {
         await fs.writeFile(options.targetPath, "concurrent-archive", {
           encoding: "utf8",
@@ -191,7 +189,7 @@ describe("backupCreateCommand atomic archive write", () => {
     });
     const publicationSpy = vi.spyOn(directoryDurability, "publishFileExclusive");
     try {
-      tarCreateMock.mockReturnValueOnce(createMockTarStream());
+      backupWalkMock.mockReturnValueOnce(createMockTarStream());
       publicationSpy.mockRejectedValueOnce(
         Object.assign(new Error("hard links not supported"), { code: "EOPNOTSUPP" }),
       );

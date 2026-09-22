@@ -1,4 +1,7 @@
 // Tests abort request handling, cutoff persistence, and active run cleanup.
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { registryPersistence } from "./abort-subagent-registry.test-support.js";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -8,7 +11,6 @@ import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -22,12 +24,8 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 import { stopSubagentsForRequester } from "./abort-operation.js";
-import {
-  getAbortMemory,
-  isAbortRequestText,
-  isAbortTrigger,
-  setAbortMemory,
-} from "./abort-primitives.js";
+import { getAbortMemory, isAbortRequestText, setAbortMemory } from "./abort-primitives.js";
+import { isAbortTrigger } from "./abort-trigger-text.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
 import { clearFollowupQueue } from "./queue/state.js";
@@ -252,14 +250,7 @@ describe("abort detection", () => {
   }
 
   beforeEach(() => {
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {},
-      restoreSubagentRunsFromDisk: () => 0,
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
-      ensureContextEnginesInitialized: () => {},
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-    });
+    registryPersistence.persistSubagentRunsToDiskOrThrow.mockReset();
     commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
   });
 
@@ -280,7 +271,6 @@ describe("abort detection", () => {
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReset().mockReturnValue(undefined);
     await settleSubagentRegistryPersistenceWork();
     resetSubagentRegistryForTests({ persist: false });
-    subagentRegistryTesting.setDepsForTest();
   });
 
   it("isAbortTrigger matches standalone abort trigger phrases", () => {
@@ -1290,8 +1280,8 @@ describe("abort detection", () => {
       addSubagentFixture(fixture);
     }
     let failedTombstone = false;
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
+    registryPersistence.persistSubagentRunsToDiskOrThrow.mockImplementation(
+      (runs, changedRunIds) => {
         const first = runs.get("run-persistence-failure-first");
         if (
           !failedTombstone &&
@@ -1303,7 +1293,7 @@ describe("abort detection", () => {
           throw new Error("sqlite busy");
         }
       },
-    });
+    );
 
     await expect(
       stopSubagentsForRequester({

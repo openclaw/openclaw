@@ -1,8 +1,5 @@
 // Sms plugin module implements inbound behavior.
-import {
-  resolveStableChannelMessageIngress,
-  type ChannelIngressContextBinding,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -34,7 +31,7 @@ async function authorizeSmsSender(params: {
     params.rawBody,
     params.cfg,
   );
-  return await resolveStableChannelMessageIngress({
+  return await params.channelRuntime.inbound.ingress.resolveStable({
     channelId: CHANNEL_ID,
     accountId: params.account.accountId,
     cfg: params.cfg,

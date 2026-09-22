@@ -14,7 +14,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
+import { findDeliveryIntentOwners } from "../../infra/outbound/delivery-queue-storage.js";
 import {
   getOwedHarnessCompletionTask,
   readAdmittedHarnessCompletionInput,
@@ -41,10 +41,8 @@ import {
   resumeMainSession,
 } from "./main-session-restart-dispatch.js";
 import {
-  hasCompletionReportUserTail,
-  hasOnlyAnnounceRecoveryRuns,
   markSessionCompletedAfterRecoveryCheckpoint,
-  reconcileInterruptedCompletionReport,
+  reconcileInvalidHarnessCompletion,
 } from "./main-session-restart-recovery-checkpoint.js";
 import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
 import { readMainSessionReplaySafeCheckpoint } from "./main-session-restart-recovery-replay-safety.js";
@@ -63,10 +61,10 @@ import {
 } from "./main-session-restart-recovery-shared.js";
 import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
 
-function pendingFinalRecoveryAction(
+async function pendingFinalRecoveryAction(
   pending: NonNullable<SessionEntry["pendingFinalDelivery"]>,
   stateDir?: string,
-): "complete" | "defer" | "fail" | "notice" | "retry" {
+): Promise<"complete" | "defer" | "fail" | "notice" | "retry"> {
   const deliveries = pending.deliveries;
   if (!deliveries?.length) {
     return "fail";
@@ -74,7 +72,10 @@ function pendingFinalRecoveryAction(
   if (deliveries.every(({ state }) => state === "delivered" || state === "suppressed")) {
     return "complete";
   }
-  const owners = deliveries.map(({ id }) => findDeliveryIntentOwner(id, stateDir));
+  const owners = await findDeliveryIntentOwners(
+    deliveries.map(({ id }) => id),
+    stateDir,
+  );
   if (owners.some((owner) => owner?.status === "pending" || owner?.settlementPending)) {
     return "defer";
   }
@@ -417,8 +418,11 @@ export async function recoverStore(params: {
     };
 
     const pendingAction = entry.pendingFinalDelivery
-      ? pendingFinalRecoveryAction(entry.pendingFinalDelivery, params.stateDir)
+      ? await pendingFinalRecoveryAction(entry.pendingFinalDelivery, params.stateDir)
       : undefined;
+    if (stopped()) {
+      return result;
+    }
     if (pendingAction === "defer") {
       // The exact durable queue owner is still responsible for settlement.
       // Dispatching a second recovery turn would duplicate that delivery.
@@ -541,15 +545,6 @@ export async function recoverStore(params: {
       continue;
     }
 
-    // Completion reports are delivery turns, not human work. Same-process
-    // rotation retains their announce run ids; a full restart can recover the
-    // same fact from the already-persisted user-message provenance.
-    const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
-    const completionSource = hasOnlyAnnounceRecoveryRuns(entry)
-      ? "announce_runs"
-      : !hasRecoveryRuns && hasCompletionReportUserTail(messages)
-        ? "transcript"
-        : undefined;
     const harnessCompletion = entry.restartRecoveryHarnessCompletion;
     let recoverableHarnessCompletion: boolean;
     try {
@@ -588,14 +583,13 @@ export async function recoverStore(params: {
       result.failed++;
       continue;
     }
-    if ((completionSource || harnessCompletion) && !recoverableHarnessCompletion) {
+    if (harnessCompletion && !recoverableHarnessCompletion) {
       if (stopped()) {
         return result;
       }
-      const reconciliation = await reconcileInterruptedCompletionReport({
+      const reconciliation = await reconcileInvalidHarnessCompletion({
         ...target,
         entry,
-        source: completionSource ?? "transcript",
       });
       if (reconciliation.outcome === "reconciled") {
         params.handledSessionKeys.add(resumeDedupeKey);

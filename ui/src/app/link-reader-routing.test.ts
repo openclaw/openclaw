@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiLinkReaderDescriptor } from "../../../src/shared/control-ui-link-reader.js";
-import { resolveLinkReaderTarget } from "../components/link-reader-target.ts";
+import { linkReaderResponseMatchesTarget } from "../components/link-reader-response.ts";
+import { linkReaderTargetKey, resolveLinkReaderTarget } from "../components/link-reader-target.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
@@ -131,6 +132,22 @@ describe("Plugin reader link routing", () => {
 });
 
 describe("Plugin reader destinations", () => {
+  it("keys canonical URLs without losing query identity when fragments change", () => {
+    const target = resolveLinkReaderTarget(
+      "HTTPS://FORGE.EXAMPLE:443/items/123?label=%23one#start",
+      [reader],
+    )!;
+    expect(linkReaderTargetKey(target)).toBe(
+      "forge:items:https://forge.example/items/123?label=%23one",
+    );
+    expect(
+      linkReaderResponseMatchesTarget(target, "https://forge.example/items/123?label=%23one#other"),
+    ).toBe(true);
+    expect(
+      linkReaderResponseMatchesTarget(target, "https://forge.example/items/123?label=%23two#start"),
+    ).toBe(false);
+  });
+
   it("only claims URLs declared by an enabled plugin, including a non-forge provider", () => {
     const notes: ControlUiLinkReaderDescriptor = {
       pluginId: "notes",

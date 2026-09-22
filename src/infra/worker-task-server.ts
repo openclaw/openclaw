@@ -1,8 +1,10 @@
-import { parentPort, type Transferable } from "node:worker_threads";
+import { parentPort, type MessagePort, type Transferable } from "node:worker_threads";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import {
   createWorkerTaskControl,
   observeWorkerTaskCancellation,
+  withWorkerTaskNativeSectionScope,
   type WorkerTaskControl,
 } from "./worker-task-native-sections.js";
 
@@ -33,11 +35,28 @@ export function serveWorkerTasks<Output>(
   ) => Output | Promise<Output>,
   options: { transferList?: (value: Output) => Transferable[] } = {},
 ): void {
+  serveOwnedWorkerTasks(handler, options);
+}
+
+/** Internal native owners additionally acknowledge resource cleanup between tasks. */
+export function serveOwnedWorkerTasks<Output>(
+  handler: (
+    input: unknown,
+    channel: WorkerTaskChannel | undefined,
+    control: WorkerTaskControl,
+  ) => Output | Promise<Output>,
+  options: {
+    transferList?: (value: Output) => Transferable[];
+    closeResource?: (key?: string) => void;
+  } = {},
+): void {
   const port = parentPort;
   if (!port) {
     return;
   }
   let active: WorkerConversation | undefined;
+  let execution = Promise.resolve();
+  let resourceClosures = Promise.resolve();
   let cancelledResponse: { taskId: number; responseId: number } | undefined;
   port.on(
     "message",
@@ -47,7 +66,40 @@ export function serveWorkerTasks<Output>(
       interactive?: boolean;
       responseId?: number;
       nativeSections: SharedArrayBuffer;
+      closeResource?: true;
+      key?: string;
+      resourcePort?: MessagePort;
     }) => {
+      cancelWorkerIdleGc();
+      if (message.closeResource && message.resourcePort) {
+        const receipt = message.resourcePort;
+        const precedingExecution = execution;
+        resourceClosures = resourceClosures
+          .then(() => precedingExecution)
+          .then(() => {
+            if (!options.closeResource) {
+              throw new Error("Worker does not own retained resources");
+            }
+            options.closeResource(message.key);
+            receipt.postMessage({ ok: true }, []);
+          })
+          .catch((error: unknown) => {
+            receipt.postMessage(
+              {
+                ok: false,
+                error: error instanceof Error ? error.message : String(error),
+              },
+              [],
+            );
+          })
+          .finally(() => {
+            receipt.close();
+            if (!active) {
+              scheduleWorkerIdleGc();
+            }
+          });
+        return;
+      }
       if (message.responseId !== undefined) {
         if (
           message.taskId === cancelledResponse?.taskId &&
@@ -144,11 +196,17 @@ export function serveWorkerTasks<Output>(
             },
           }
         : undefined;
-      void Promise.resolve()
+      const precedingClosures = resourceClosures;
+      execution = Promise.resolve()
         .then(async () => {
           try {
+            await precedingClosures;
             control.throwIfCancelled();
-            return await handler(message.input, channel, control);
+            return await withWorkerTaskNativeSectionScope(
+              nativeSections,
+              () => active === task,
+              () => handler(message.input, channel, control),
+            );
           } finally {
             await stopObserving?.();
             active = undefined;
@@ -166,7 +224,8 @@ export function serveWorkerTasks<Output>(
             taskId: task.taskId,
             error: error instanceof Error ? error.message : String(error),
           });
-        });
+        })
+        .finally(scheduleWorkerIdleGc);
     },
   );
 }

@@ -17,11 +17,11 @@ import {
   listSessionEntriesReadOnly,
   loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
-  recordSessionParticipant,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { captureSessionEntryRead } from "./session-accessor.sqlite-entry-read-lifetime.js";
 import { loadExactSessionEntryCandidates } from "./session-accessor.sqlite-exact-read.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,

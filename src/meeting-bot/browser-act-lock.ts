@@ -1,17 +1,18 @@
-import { MeetingSessionJoinLock } from "./session-join-lock.js";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 
-const browserActLock = new MeetingSessionJoinLock();
+const browserActLock = new KeyedAsyncQueue();
 const BROWSER_ACT_TIMEOUT_MESSAGE =
   "Meeting browser operation timed out waiting for browser tab control.";
 
 // Browser evaluate calls can await page APIs and interleave in one tab. Keep
 // ownership, audio, caption, transcript, and leave mutations process-serialized.
 export async function runMeetingBrowserAct<T>(params: {
+  /** Absolute deadline in the performance.now() clock domain. */
   deadline: number;
   operation: (remainingMs: number) => Promise<T>;
   targetId: string;
 }): Promise<T> {
-  const waitMs = Math.floor(params.deadline - Date.now());
+  const waitMs = Math.floor(params.deadline - performance.now());
   if (waitMs <= 0) {
     throw new Error(BROWSER_ACT_TIMEOUT_MESSAGE);
   }
@@ -21,8 +22,8 @@ export async function runMeetingBrowserAct<T>(params: {
     markAcquired = resolve;
   });
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const queued = browserActLock.run(params.targetId, async () => {
-    const remainingMs = Math.floor(params.deadline - Date.now());
+  const queued = browserActLock.enqueue(params.targetId, async () => {
+    const remainingMs = Math.floor(params.deadline - performance.now());
     if (remainingMs <= 0) {
       throw new Error(BROWSER_ACT_TIMEOUT_MESSAGE);
     }

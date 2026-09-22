@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -149,6 +150,7 @@ function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
   return {
     params,
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir: params.workspaceDir,
     modelId: params.model,
     normalizedModel: params.model,
@@ -204,6 +206,36 @@ afterEach(() => {
 });
 
 describe("runCliAgent before_agent_reply seam", () => {
+  it("waits for execution-start work and rechecks cancellation before preparing the runtime", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const abort = new AbortController();
+    const failure = new Error("run cancelled during execution-start work");
+    const operation = runCliAgent({
+      ...baseRunParams,
+      abortSignal: abort.signal,
+      onExecutionStarted: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    const outcome = operation.catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    } finally {
+      abort.abort(failure);
+      release.resolve();
+      await outcome;
+    }
+    expect(await outcome).toBe(failure);
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["claude-cli", "user"],
     ["google-gemini-cli", "cron"],
