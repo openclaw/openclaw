@@ -3,7 +3,6 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   loadSessionEntry,
-  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { mergeSessionEntry } from "../../config/sessions/types.js";
@@ -57,14 +56,30 @@ export function initializeSessionReadContext(context: GatewayRequestContext) {
       context,
       placementFactsReader: placements
         ? {
-            getProjectionFacts(sessionId) {
+            async readProjection(sessionIds) {
+              const records = placements.getMany(sessionIds);
+              const environments = new Map();
+              for (const placement of records.values()) {
+                const environmentId = placement.environmentId;
+                const environment = environmentId
+                  ? context.workerEnvironmentService?.get(environmentId)
+                  : undefined;
+                if (environmentId && environment) {
+                  environments.set(environmentId, {
+                    ...environment,
+                    environmentId,
+                    profileSnapshot: { settings: {} },
+                    nodeDeviceId: environment.nodeDeviceId ?? null,
+                    attachedSessionIds: [...(environment.attachedSessionIds ?? [])],
+                  });
+                }
+              }
               return {
-                placement: placements.getMany([sessionId]).get(sessionId),
-                move: placements.getPlacementMoves?.([sessionId]).get(sessionId),
-                workspaceResultReconciling:
-                  placements
-                    .getWorkspaceResultReconcilingSessionIds?.([sessionId])
-                    .has(sessionId) ?? false,
+                placements: records,
+                moves: placements.getPlacementMoves?.(sessionIds) ?? new Map(),
+                workspaceResultReconcilingSessionIds:
+                  placements.getWorkspaceResultReconcilingSessionIds?.(sessionIds) ?? new Set(),
+                environments,
               };
             },
           }
@@ -180,7 +195,7 @@ export async function seedSessionsWithActivityTimes() {
     if (!entry) {
       throw new Error(`Missing seeded session ${scope.sessionKey}`);
     }
-    await replaceSessionEntry(scope, { ...entry, updatedAt });
+    replaceSessionEntrySync(scope, { ...entry, updatedAt });
     expect(loadSessionEntry(scope)?.updatedAt).toBe(updatedAt);
   }
   return { clock, config };

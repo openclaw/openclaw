@@ -648,6 +648,12 @@ openclaw-pending-session-create {
   content-visibility: auto;
 }
 
+.chat-virtual-row:focus-within {
+  /* Footer controls use a -4px block margin. Paint containment must clear
+     that overhang plus the 2px focus outline and its 3px offset. */
+  overflow-clip-margin: 10px;
+}
+
 /* Message jumps need real mounted-row sizes before their target settles.
    Native reader takeover restores ordinary overscan layout skipping. */
 .chat-thread-inner[data-measuring-rows] .chat-virtual-row {
@@ -3191,4 +3197,28 @@ openclaw-chat-ci-details {
 .chat-annotation-editor .chat-annotation-editor__delete {
   margin-right: auto;
   padding: 4px;
+}
+
+.chat-provider-review-dialog__content {
+  overflow-y: auto;
+  max-height: 60dvh;
+}
+
+.chat-provider-review-dialog__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-provider-review-dialog h3 {
+  font-size: 13px;
+}
+
+.chat-provider-review-dialog blockquote {
+  margin-inline: 0;
+  padding-inline-start: 16px;
+  border-inline-start: 3px solid var(--border);
+}
+
+.chat-provider-review .chat-composer-neighbor-card__copy :is(strong, span) {
+  white-space: normal;
 }

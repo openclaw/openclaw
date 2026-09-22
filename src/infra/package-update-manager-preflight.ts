@@ -225,6 +225,7 @@ async function permissionFailure(
         { check: "package-install", code: UPDATE_GLOBAL_PERMISSION_REASON, message },
         env,
       ),
+      ...(step.failureFacts ?? []).slice(0, 4),
     ],
   };
 }

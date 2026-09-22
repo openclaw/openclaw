@@ -41,6 +41,7 @@ export type MeetingPluginRuntime<Request extends MeetingJoinRequest> =
     testListen(request: Request): Promise<unknown>;
     testSpeech(request: Request): Promise<unknown>;
     transcript(sessionId: string, options: { sinceIndex?: number }): Promise<unknown>;
+    reconcileTranscriptPolicy?(enabled: boolean): Promise<void>;
   };
 
 export type MeetingPluginEntryOptions<
@@ -211,15 +212,31 @@ export function createMeetingPluginEntryOptions<
     configSchema: options.configSchema,
     register(api: OpenClawPluginApi) {
       const config = options.configSchema.parse(api.pluginConfig) as Config;
+      let transcriptsEnabled = api.config.transcripts?.enabled !== false;
       let runtime: Runtime | undefined;
       const ensureRuntime = async () => {
         if (!config.enabled) {
           throw new Error(options.disabledMessage);
         }
-        runtime ??= options.createRuntime({ api, config });
+        if (!runtime) {
+          runtime = options.createRuntime({ api, config });
+          await runtime.reconcileTranscriptPolicy?.(transcriptsEnabled);
+        }
         return runtime;
       };
       if (options.transcriptSource) {
+        api.registerService({
+          id: `${options.id}-transcripts`,
+          reload: { configPrefixes: ["transcripts.enabled"] },
+          start: ({ config: current }) => {
+            transcriptsEnabled = current.transcripts?.enabled !== false;
+            return runtime?.reconcileTranscriptPolicy?.(transcriptsEnabled);
+          },
+          stop: () => {
+            transcriptsEnabled = false;
+            return runtime?.reconcileTranscriptPolicy?.(false);
+          },
+        });
         api.registerTranscriptSourceProvider(
           createMeetingTranscriptSourceProvider({
             ...options.transcriptSource,

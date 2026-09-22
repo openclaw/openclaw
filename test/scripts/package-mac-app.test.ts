@@ -25,6 +25,96 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/package-mac-app.sh";
 const swiftScriptPath = "scripts/lib/mac-swift-build.sh";
 
+describe.skipIf(process.platform === "win32")("cloud-worker app packaging identity", () => {
+  const script = readFileSync(scriptPath, "utf8");
+  const initialization = script.slice(
+    script.indexOf('CLOUD_WORKER_HOST="${OPENCLAW_MAC_CLOUD_WORKER_HOST:-0}"'),
+    script.indexOf("PKG_VERSION="),
+  );
+
+  function resolveVariant(overrides: NodeJS.ProcessEnv) {
+    return spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        `set -euo pipefail\nROOT_DIR="$1"\n${initialization}\nprintf '%s\\n' "$APP_DESTINATION" "$BUNDLE_ID"`,
+        "package-identity",
+        process.cwd(),
+      ],
+      { encoding: "utf8", env: { PATH: "/usr/bin:/bin", ...overrides } },
+    );
+  }
+
+  it.each([false, true])(
+    "keeps the cloud variant %s separate from the ordinary output",
+    (cloud) => {
+      const result = resolveVariant({ OPENCLAW_MAC_CLOUD_WORKER_HOST: cloud ? "1" : "0" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim().split("\n")).toEqual([
+        path.join(process.cwd(), "dist", cloud ? "OpenClawCloudWorker.app" : "OpenClaw.app"),
+        cloud ? "ai.openclaw.cloud-worker" : "ai.openclaw.mac.debug",
+      ]);
+    },
+  );
+
+  it.each([
+    { BUNDLE_ID: "ai.openclaw.mac" },
+    { ALLOW_ADHOC_SIGNING: "1" },
+    { SIGN_IDENTITY: "-" },
+    { DISABLE_LIBRARY_VALIDATION: "1" },
+    { SKIP_TEAM_ID_CHECK: "1" },
+    { OPENCLAW_PACKAGE_APP_ROOT: path.join(process.cwd(), "dist/OpenClaw.app") },
+  ])(
+    "rejects a cloud build that weakens its identity or replaces the ordinary app: %j",
+    (override) => {
+      const result = resolveVariant({ OPENCLAW_MAC_CLOUD_WORKER_HOST: "1", ...override });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ERROR:");
+    },
+  );
+
+  it.runIf(process.platform === "darwin").each([false, true])(
+    "stamps cloud capability only in its dedicated bundle: %s",
+    (cloud) => {
+      const app = tempDirs.make("openclaw-cloud-bundle-");
+      mkdirSync(path.join(app, "Contents"));
+      writeFileSync(
+        path.join(app, "Contents/Info.plist"),
+        readFileSync("apps/macos/Sources/OpenClaw/Resources/Info.plist"),
+      );
+      const stamp = script.slice(
+        script.indexOf(
+          'plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier',
+        ),
+        script.indexOf(
+          'plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionString',
+        ),
+      );
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          `set -euo pipefail\nsource "$1"\nAPP_ROOT="$2"\nBUNDLE_ID="$3"\nCLOUD_WORKER_HOST="$4"\n${stamp}\n/usr/bin/plutil -convert json -o - "$APP_ROOT/Contents/Info.plist"`,
+          "package-stamp",
+          path.resolve("scripts/lib/plistbuddy.sh"),
+          app,
+          cloud ? "ai.openclaw.cloud-worker" : "ai.openclaw.mac.debug",
+          cloud ? "1" : "0",
+        ],
+        { encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const plist = JSON.parse(result.stdout);
+      expect(plist.CFBundleIdentifier).toBe(
+        cloud ? "ai.openclaw.cloud-worker" : "ai.openclaw.mac.debug",
+      );
+      expect(plist.CFBundleName).toBe(cloud ? "OpenClaw Cloud Worker" : "OpenClaw");
+      expect(plist.OpenClawCloudWorkerHostVersion).toBe(cloud ? 1 : undefined);
+      expect(plist.CFBundleURLTypes).toEqual(cloud ? undefined : expect.any(Array));
+    },
+  );
+});
+
 describe.skipIf(process.platform === "win32" || availableParallelism() < 2)(
   "parallel macOS Swift build ownership",
   () => {
@@ -223,6 +313,7 @@ describe("packaged worker freshness", () => {
           `set -euo pipefail
 ROOT_DIR="$1"
 APP_DESTINATION="$ROOT_DIR/dist/OpenClaw.app"
+APP_BUNDLE_NAME=OpenClaw.app
 ${script.slice(allocationStart, allocationEnd)}
 printf '%s' "$APP_STAGE_DIR"
 `,
@@ -2437,7 +2528,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
   });
 
-  it("stages the pinned universal CUA driver before nested-code signing", () => {
+  it("stages the pinned CUA driver and thins single-architecture packages before signing", () => {
     const packageScript = readFileSync(scriptPath, "utf8");
     const stageScript = readFileSync("scripts/stage-cua-driver-macos.sh", "utf8");
     const codesignScript = readFileSync("scripts/codesign-mac-app.sh", "utf8");
@@ -2458,9 +2549,10 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
       "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa",
     );
-    expect(packageScript).toContain(
-      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
-    );
+    expect(packageScript).toContain('"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"');
+    expect(packageScript).toContain('if [[ "${#BUILD_ARCHS[@]}" -eq 1 ]]');
+    expect(packageScript).toContain('lipo "$CUA_DRIVER" -thin "$CUA_ARCH"');
+    expect(packageScript).toContain('[[ "$(lipo -archs "$CUA_DRIVER")" == "$CUA_ARCH" ]]');
     expect(packageScript.indexOf("Staging embedded CUA driver")).toBeLessThan(
       packageScript.indexOf('echo "🔏 Signing bundle'),
     );
@@ -2485,9 +2577,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     expect(cuaBlock).toContain("Omitting embedded CUA driver from elevation-host package");
     expect(cuaBlock).toContain("else");
     expect(cuaBlock).toContain("Staging embedded CUA driver");
-    expect(cuaBlock).toContain(
-      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
-    );
+    expect(cuaBlock).toContain('"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"');
   });
 
   it("does not mask required Info.plist stamp failures", () => {

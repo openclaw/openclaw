@@ -82,7 +82,12 @@ export const LAB_FEATURES = [
     onValue: "auto",
     offValue: false,
     activeValues: [true, "auto"],
-    readEnabled: null,
+    // Mirrors resolveCodeModeConfig: absence inherits auto; authored objects opt in.
+    readEnabled: (raw) =>
+      raw === undefined ||
+      raw === true ||
+      raw === "auto" ||
+      (isRecord(raw) && (raw.enabled === true || raw.enabled === "auto")),
     enableAlso: null,
     resetScope: "gate",
   },

@@ -208,7 +208,7 @@ describe("exhausted delivery producer recovery", () => {
 
       await recover(mode);
       expect(readQueuedEntry(tmpDir(), id)).toMatchObject({ deliveryCompletion: completion });
-      expect(queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
+      expect(await queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
         status: "failed",
         settlementPending: true,
       });
@@ -469,7 +469,7 @@ describe("exhausted delivery producer recovery", () => {
       const log = await recover("startup");
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("terminal cleanup failed"));
       expect(audits).toEqual(["failed"]);
-      expect(queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
+      expect(await queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
         status: "failed",
       });
       expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("settlement");

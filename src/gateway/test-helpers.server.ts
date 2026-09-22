@@ -14,6 +14,7 @@ import { WebSocket, type RawData } from "../../packages/gateway-client/src/webso
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { resetPreparedGatewayModelCatalogForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
   getRuntimeConfig,
   parseConfigJson5,
@@ -492,8 +493,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetGatewayMutableTestFixtures();
   resetSystemEventsForTest();
   resetAgentEventsForTest();
-  const mod = await getServerModule();
-  await mod.resetPreparedModelCatalogForTest();
+  await resetPreparedGatewayModelCatalogForTest();
   gatewayReplyRuntimePrepared = false;
 }
 

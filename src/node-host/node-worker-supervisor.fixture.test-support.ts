@@ -18,14 +18,16 @@ import {
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
 
-function writeSupervisorOwnerScript(root: string): string {
+function writeSupervisorOwnerScript(root: string, waitForCompletedTurn: boolean): string {
   const supervisorUrl = pathToFileURL(path.resolve("src/node-host/node-worker-supervisor.ts")).href;
+  const turnsUrl = pathToFileURL(path.resolve("src/node-host/node-worker-turn-store.ts")).href;
   const scriptPath = path.join(root, "supervisor-owner.mts");
   fs.writeFileSync(
     scriptPath,
     `
       import fs from "node:fs";
       import { createNodeWorkerSupervisor } from ${JSON.stringify(supervisorUrl)};
+      import { NodeWorkerTurnStore } from ${JSON.stringify(turnsUrl)};
       const [bundleRoot, stateDir, inputPath] = process.argv.slice(2);
       const supervisor = createNodeWorkerSupervisor({
         bundleRoot,
@@ -37,7 +39,21 @@ function writeSupervisorOwnerScript(root: string): string {
       };
       process.once("SIGTERM", () => void shutdown());
       const input = JSON.parse(fs.readFileSync(inputPath, "utf8"));
+      const completed = Promise.withResolvers();
+      void completed.promise.catch(() => undefined);
+      if (${waitForCompletedTurn}) {
+        const finish = NodeWorkerTurnStore.prototype.finish;
+        NodeWorkerTurnStore.prototype.finish = function (params) {
+          const finishing = finish.call(this, params);
+          if (params.expected.launchId === input.launchId) {
+            NodeWorkerTurnStore.prototype.finish = finish;
+            void finishing.then(completed.resolve, completed.reject);
+          }
+          return finishing;
+        };
+      }
       const receipt = await supervisor.launch(input, ${JSON.stringify({ kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" })});
+      if (${waitForCompletedTurn}) await completed.promise;
       process.stdout.write(JSON.stringify(receipt) + "\\n");
       setInterval(() => {}, 1000);
     `,
@@ -103,6 +119,7 @@ export function spawnSupervisorOwner(params: {
   env: NodeJS.ProcessEnv;
   input: ReturnType<typeof testWorkerLaunchInput>;
   root: string;
+  waitForCompletedTurn?: boolean;
 }): ChildProcess {
   const inputPath = path.join(params.root, `${params.input.launchId}.json`);
   fs.writeFileSync(inputPath, JSON.stringify(params.input));
@@ -111,7 +128,7 @@ export function spawnSupervisorOwner(params: {
     [
       "--import",
       "tsx",
-      writeSupervisorOwnerScript(params.root),
+      writeSupervisorOwnerScript(params.root, params.waitForCompletedTurn ?? false),
       params.bundleRoot,
       params.env.OPENCLAW_STATE_DIR!,
       inputPath,

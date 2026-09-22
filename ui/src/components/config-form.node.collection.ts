@@ -381,7 +381,8 @@ function renderArrayContent(
           }
           <button
             type="button"
-            class="btn btn--sm"
+            class=${params.compact ? "btn btn--sm btn--icon" : "btn btn--sm"}
+            aria-label=${t("configForm.add")}
             aria-controls=${draftId}
             ?disabled=${disabled || (!canAppend && atomicCandidate === undefined)}
             @click=${(event: Event) => {
@@ -402,7 +403,7 @@ function renderArrayContent(
               }
             }}
           >
-            ${t("configForm.add")}
+            ${params.compact ? icons.plus : t("configForm.add")}
           </button>
         </div>
       </div>

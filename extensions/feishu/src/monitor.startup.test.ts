@@ -1,4 +1,5 @@
 // Feishu tests cover monitor.startup plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -134,6 +135,11 @@ describe("Feishu monitor startup preflight", () => {
     expect(
       resolveStartupProbeTimeoutMs({ OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS: "90000" }),
     ).toBe(90_000);
+    expect(
+      resolveStartupProbeTimeoutMs({
+        OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
 
     for (const value of ["0x10", "1e3", "10.5"]) {
       expect(

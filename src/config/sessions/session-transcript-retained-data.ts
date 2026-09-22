@@ -7,6 +7,25 @@ import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SqliteTranscriptStorageRow } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readNextTranscriptSeq } from "./session-accessor.sqlite-transcript-state.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import {
+  transcriptEventJsonSql,
+  transcriptEventNavigationSql,
+  transcriptEventWithoutCustomDataBytesSql,
+} from "./transcript-payload.js";
+
+/** Admit suffix repairs against their projected bytes without decoding opaque bodies. */
+export function transcriptRetainedDataBytesSql(retainedIds: readonly string[]) {
+  if (retainedIds.length === 0) {
+    return transcriptEventReadBytesSql();
+  }
+  const event = transcriptEventNavigationSql();
+  return /* kysely-allow-raw: mirror the retained-data projection's SQLite-first member matching. */ sql<number>`CASE WHEN json_valid(${event}) THEN
+    CASE WHEN json_extract(${event}, '$.type') = 'custom'
+      AND json_extract(${event}, '$.id') IN (${sql.join(retainedIds)})
+      THEN ${transcriptEventWithoutCustomDataBytesSql()} ELSE ${transcriptEventReadBytesSql()} END
+    ELSE ${transcriptEventReadBytesSql()} END`;
+}
 
 /** Custom data is opaque to topology and indexing; cleanup keeps it in SQLite. */
 export function projectTranscriptRetainedDataSql(
@@ -98,19 +117,36 @@ export function copyRetainedTranscriptPayload(
     database.db,
     db
       .insertInto("transcript_events")
-      .columns(["session_id", "seq", "event_json", "created_at"])
+      .columns([
+        "session_id",
+        "seq",
+        "event_json",
+        "event_zstd",
+        "event_utf8_bytes",
+        "navigation_json",
+        "created_at",
+      ])
       .expression(
         db
           .selectFrom("transcript_events")
           .select((eb) => {
-            const eventJson: AliasableExpression<string> =
+            const eventJson: AliasableExpression<string | null> =
               parentId === undefined
                 ? eb.ref("event_json")
-                : /* kysely-allow-raw: reparent only the envelope; opaque data stays in SQLite. */ sql<string>`json_set(event_json, '$.parentId', ${parentId})`;
+                : /* kysely-allow-raw: reparent only the envelope; oversized identity data stays in SQLite. */ sql<string>`json_set(${transcriptEventJsonSql(database.db)}, '$.parentId', ${parentId})`;
             return [
               eb.val(sessionId).as("session_id"),
               eb.val(destinationSeq).as("seq"),
               eventJson.as("event_json"),
+              parentId === undefined
+                ? eb.ref("event_zstd").as("event_zstd")
+                : eb.val(null).as("event_zstd"),
+              parentId === undefined
+                ? eb.ref("event_utf8_bytes").as("event_utf8_bytes")
+                : eb.val(null).as("event_utf8_bytes"),
+              parentId === undefined
+                ? eb.ref("navigation_json").as("navigation_json")
+                : eb.val(null).as("navigation_json"),
               "created_at",
             ];
           })

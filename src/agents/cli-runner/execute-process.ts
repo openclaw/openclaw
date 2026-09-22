@@ -12,10 +12,10 @@ import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
+import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
 import type { FailoverError } from "../failover-error.js";
-import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveReplyExpectation } from "../reply-completion.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
@@ -98,6 +98,7 @@ export async function executeCliProcess(params: {
         parseJsonlEvent: context.backendResolved.parseJsonlEvent,
         parseJsonlLifecycleEvent: context.backendResolved.parseJsonlLifecycleEvent,
         onAssistantDelta: params.events.emitCliAssistantDelta,
+        onCompletedReply: params.events.emitCliCompletedReply,
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
         onCompaction: params.events.emitCliCompaction,
@@ -566,11 +567,9 @@ export async function executeCliProcess(params: {
     `cli turn: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - params.cliTurnStartedAt} ${formatCliBackendOutputDigest(rawText)}`,
   );
   return {
-    ...parsed,
+    ...transformCliResultText(parsed, context.backendResolved.textTransforms?.output),
     ...(terminalInterruption ? { terminalInterruption } : {}),
     diagnostics: { ...parsed.diagnostics, process: processDiagnostics },
-    rawText,
     finalPromptText: params.prompt,
-    text: applyPluginTextReplacements(rawText, context.backendResolved.textTransforms?.output),
   };
 }

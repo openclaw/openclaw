@@ -4,7 +4,7 @@ import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 export const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
 export const RECENT_HISTORY_CONTEXT_MARKER = "[Recent chat messages - for context]";
 export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
-export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
+export { DEFAULT_GROUP_HISTORY_LIMIT } from "./history-limit.js";
 
 /** Maximum number of group history keys to retain (LRU eviction when exceeded). */
 const MAX_HISTORY_KEYS = 1000;

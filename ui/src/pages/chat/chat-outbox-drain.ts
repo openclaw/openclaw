@@ -33,6 +33,7 @@ import {
   scheduleChatOutboxRetry,
   settleChatOutboxRetry,
 } from "./chat-outbox-retry.ts";
+import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import {
   anyChatOutboxPaneMatches,
   readQueuedMessageById,
@@ -252,6 +253,10 @@ async function drainStoredChatOutbox(
 ): Promise<"blocked" | "empty"> {
   while (true) {
     const host = lane.host;
+    if (chatProviderReviewRow(host, scope.sessionKey, scope.agentId)?.providerReview) {
+      holdProviderReviewQueuedInputs(host, scope.sessionKey, scope.agentId);
+      return "blocked";
+    }
     if (!host.connected || !host.client || chatSendHoldReason(host, scope.sessionKey)) {
       return "blocked";
     }
@@ -259,9 +264,12 @@ async function drainStoredChatOutbox(
     if (!outbox) {
       return "empty";
     }
-    // Explicit active-run sends may bypass older queued rows; other admissions keep FIFO.
+    // Fresh active-run sends bypass older rows, including when the Gateway resolves the mode.
     const freshActiveRunItem = outbox.queue.find(
-      (entry) => lane.freshAdmissions.has(entry.id) && Boolean(entry.queueMode),
+      (entry) =>
+        lane.freshAdmissions.has(entry.id) &&
+        (entry.queueMode ||
+          (!entry.intent && lane.pendingOptions.get(entry.id)?.allowActiveRunSend)),
     );
     const storedItem =
       freshActiveRunItem ??
@@ -285,6 +293,7 @@ async function drainStoredChatOutbox(
       // Browser input still belongs to the foreground submitter. Only its fresh
       // admission may deliver this version; passive wakes must not drop its fence.
       (!freshItem && chatOutboxOwner(host).hasPendingSubmission(outbox, storedItem)) ||
+      item.sendState === "held" ||
       (item.sendState === "unconfirmed" && (!item.sendRunId || item.localCommandName)) ||
       (item.sendState === "waiting-model" && !lane.pendingOptions.has(item.id)) ||
       // An open edit owns this row: sending the superseded text would deliver a

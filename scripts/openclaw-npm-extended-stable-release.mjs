@@ -203,12 +203,19 @@ export function validateActiveExtendedStableLine(releaseVersion, mainPackageVers
   }
   const mainCalendarMonth = mainVersion.year * 12 + mainVersion.month;
   const releaseCalendarMonth = releaseVersionParsed.year * 12 + releaseVersionParsed.month;
-  // Keep one active trailing-month line; advancing main another month retires the older line.
-  if (mainCalendarMonth - releaseCalendarMonth !== 1) {
-    const expectedYear = mainVersion.month === 1 ? mainVersion.year - 1 : mainVersion.year;
-    const expectedMonth = mainVersion.month === 1 ? 12 : mainVersion.month - 1;
+  // Keep both trailing completed months eligible so maintenance can finish shortly after
+  // main enters a new month. Advancing main a third month retires the older line.
+  const monthDifference = mainCalendarMonth - releaseCalendarMonth;
+  if (monthDifference < 1 || monthDifference > 2) {
+    const allowedMonths = [mainCalendarMonth - 1, mainCalendarMonth - 2]
+      .map((calendarMonth) => {
+        const year = Math.floor((calendarMonth - 1) / 12);
+        const month = ((calendarMonth - 1) % 12) + 1;
+        return `${year}.${month}`;
+      })
+      .join(" or ");
     throw new Error(
-      `Extended-stable publishes only the trailing completed month: protected main ${mainPackageVersion} allows ${expectedYear}.${expectedMonth}.PATCH, not ${releaseVersion}. Retire the older line; publishing a retired line requires an explicit maintainer decision.`,
+      `Extended-stable publishes only the two trailing completed months: protected main ${mainPackageVersion} allows ${allowedMonths}.PATCH, not ${releaseVersion}. Retire the older line; publishing a retired line requires an explicit maintainer decision.`,
     );
   }
   if (classifyReleaseTrain(mainVersion) !== "stable") {
@@ -377,8 +384,8 @@ export async function verifyExtendedStableRegistryReadback({
   expectedVersion,
   query,
   sleep,
-  // Initial read plus five minutes of replication waits.
-  attempts = 31,
+  // Initial read plus fifteen minutes of replication waits.
+  attempts = 91,
   delayMs = 10_000,
 }) {
   let exactVersion = "missing";

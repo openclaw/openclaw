@@ -448,6 +448,7 @@ export function createHarness(
           setEnvironment({
             ...attached,
             state: options.destroyFailureState,
+            attachedSessionIds: [],
             tunnelStatus: "stopped",
           });
         }

@@ -2,7 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import {
   formatUpdateActivationTimeoutGuidance,
   UPDATE_ACTIVATION_TIMEOUT_REASON,

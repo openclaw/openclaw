@@ -7,10 +7,11 @@ import {
 } from "../../infra/update-control-plane-sentinel.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
+import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
@@ -20,10 +21,10 @@ import {
   completePostUpdateMaintenance,
   resumePostUpdateWindowsAutoStart,
 } from "./update-command-post-update-maintenance.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   assertUpdateCommandPackageFinalization,
   createUpdateCommandFinalizationFence,
-  UpdateCommandRecoveryPendingError,
 } from "./update-command-recovery.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
@@ -38,7 +39,6 @@ import {
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
-import { isPendingUpdateServiceLoad } from "./update-command-service-load.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
   maybeRestartService,
@@ -65,10 +65,10 @@ export async function finishUpdate(
   { candidateRuntime = false } = {},
 ): Promise<UpdateRunResult> {
   const definitionRecovery: UpdateServiceDefinitionRecovery = {};
-  if (params.serviceLoadBoundary && process.platform !== "linux") {
-    throw new Error("Deferred native service loading is not supported on this platform.");
-  }
-  const assertCurrent = createUpdateCommandFinalizationFence(params);
+  const fence = createUpdateCommandFinalizationFence(params);
+  const assertCurrent = params.opts.run?.requesterAuthority
+    ? createUpdateCommandAuthority({ opts: params.opts, assertCurrent: fence }).assertCurrent
+    : fence;
   const parkForegroundOrigin = () => parkForegroundUpdateForActivation(params, assertCurrent);
 
   // Final publication follows restoration of the caller's environment. Retain
@@ -501,7 +501,6 @@ export async function finishUpdate(
           opts: params.opts,
           refreshServiceEnv: restartContext.refreshGatewayServiceEnv,
           definitionRecovery,
-          serviceLoadBoundary: params.serviceLoadBoundary,
           serviceUpdateVerdict: restartContext.serviceUpdateVerdict,
           serviceManagerUid: restartContext.serviceManagerUid,
           serviceRuntimeRefreshRequired: params.serviceRuntimeRefreshRequired,
@@ -650,12 +649,8 @@ export async function finishUpdate(
         cause: error,
       });
     }
-    if (
-      error instanceof UpdateCommandFailure ||
-      isPendingUpdateServiceLoad(error) ||
-      hasCommandProcessCleanupError(error)
-    ) {
-      // Staging may already have changed files. Keep intent/material for fenced reconciliation.
+    if (error instanceof UpdateCommandFailure || hasCommandProcessCleanupError(error)) {
+      // Unsettled commands may still change files. Keep intent/material for fenced reconciliation.
       throw error;
     }
     const { result, message } = createPostUpdateFailureResult(params, error);

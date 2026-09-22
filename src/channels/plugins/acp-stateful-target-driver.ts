@@ -72,6 +72,7 @@ function toAcpStatefulBindingTargetDescriptor(params: {
 }
 
 async function ensureAcpTargetReady(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
 }): Promise<StatefulBindingTargetReadyResult> {
@@ -85,6 +86,7 @@ async function ensureAcpTargetReady(params: {
     };
   }
   return await ensureConfiguredAcpBindingReadyCore({
+    ...(params.assertActive ? { assertActive: params.assertActive } : {}),
     cfg: params.cfg,
     configuredBinding: {
       spec: configuredBinding,

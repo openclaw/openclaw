@@ -6,6 +6,7 @@ import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { classifyRfbSecurity, connectRfbServer } from "../gateway/desktop/rfb-probe.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
+import { isWorkerDesktopArdPassword } from "../shared/worker-desktop-descriptor.js";
 import { parseNodeWorkerDesktopStreamInput } from "../worker/node-desktop-protocol.js";
 import { runNodeStreamTransport } from "./node-stream-transport.js";
 
@@ -162,6 +163,11 @@ async function runNodeDesktopStreamCommand(params: {
       auth === "vnc-password" || (auth === "ard-account" && params.username)
         ? await readVncPassword(params.passwordFile, params.signal)
         : undefined;
+    if (params.username && !isWorkerDesktopArdPassword(vncPassword)) {
+      throw new Error(
+        "lease-owned desktop ARD password must contain 1 through 63 UTF-8 bytes without NUL",
+      );
+    }
     if (params.signal.aborted) {
       return;
     }

@@ -44,10 +44,8 @@ import {
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
-import {
-  createSubagentRunManager,
-  type RegisterSubagentRunParams,
-} from "./subagent-registry-run-manager.js";
+import type { RegisterSubagentRunParams } from "./subagent-registry-run-launch-record.js";
+import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import { clearSubagentRunsReadCacheForTest } from "./subagent-registry-state.js";
 import { resolveSubagentTaskForRun } from "./subagent-registry-sweep-kill.js";
 import {
@@ -670,7 +668,7 @@ export const leasePendingAgentSteeringItems = publicApi.leasePendingAgentSteerin
 export const ackPendingAgentSteeringItems = publicApi.ackPendingAgentSteeringItems;
 export const releasePendingAgentSteeringItems = publicApi.releasePendingAgentSteeringItems;
 export const getSubagentRunByRunId = publicApi.getSubagentRunByRunId;
-export const getSubagentRunsByRunIds = publicApi.getSubagentRunsByRunIds;
+export const prepareSubagentRunsByRunIds = publicApi.prepareSubagentRunsByRunIds;
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
@@ -692,6 +690,8 @@ export function activateSubagentRegistry(resolveGatewayContext: GatewayContextRe
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;
+export const listUnsettledRequesterChildren = publicApi.listUnsettledRequesterChildren;
+export type { UnsettledRequesterChild } from "./subagent-registry-requester-yield.js";
 
 /** Attaches presentation to an existing wake without changing completion ownership. */
 export function attachRequesterProgressPresentation(params: {

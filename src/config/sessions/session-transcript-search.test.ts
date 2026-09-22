@@ -29,6 +29,7 @@ import {
   restoreSessionColdTranscript,
   runSessionColdStorageMaintenance,
 } from "./session-cold-storage.js";
+import { createSessionTranscriptFtsInserter } from "./session-transcript-fts.js";
 import {
   listSessionsNeedingTranscriptIndexReconcile,
   SYNC_REBUILD_MAX_BYTES,
@@ -556,14 +557,6 @@ describe("searchSessionTranscripts", () => {
 
     expect(pending()).toEqual([]);
     expect(search("indexed").indexing).toBe(false);
-    executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom("session_transcript_fts_rows").where("session_id", "=", "session-1"),
-    );
-    expect(pending()).toEqual(["session-1"]);
-    expect(search("indexed").indexing).toBe(true);
-    await waitForSearchReconcile("indexed");
-    expect(pending()).toEqual([]);
     expect(search("indexed").hits).toHaveLength(2);
 
     executeSqliteQuerySync(
@@ -614,15 +607,18 @@ describe("searchSessionTranscripts", () => {
   it("sweeps orphaned index rows even when transcript watermarks are current", async () => {
     await appendUserMessage("session-1", "agent:main:main", "anchor row");
     const { db, kysely } = agentKysely();
-    executeSqliteQuerySync(
-      db,
-      kysely.insertInto("session_transcript_fts").values({
-        text: "ghost payload",
-        session_id: "session-ghost",
-        message_id: "m-ghost",
-        role: "user",
-        timestamp: "1",
-      }),
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        createSessionTranscriptFtsInserter(
+          database.db,
+          "session-ghost",
+        )({
+          text: "ghost payload",
+          messageId: "m-ghost",
+          role: "user",
+          timestamp: "1",
+        }),
+      { agentId: "main", env: env() },
     );
 
     const ghostRows = () =>

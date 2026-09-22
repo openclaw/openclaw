@@ -800,20 +800,25 @@ describe("runDaemonRestart health checks", () => {
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
   });
 
-  it.each(["win32", "linux", "darwin"] as const)(
-    "uses targeted RPC for an unmanaged %s gateway restart",
-    async (platform) => {
+  it.each(
+    (["win32", "linux", "darwin"] as const).flatMap((platform) =>
+      [false, true].map((force) => ({ platform, force })),
+    ),
+  )(
+    "uses targeted RPC for an unmanaged $platform gateway restart (force=$force)",
+    async ({ platform, force }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       callGatewayCli.mockResolvedValueOnce({ ok: true, status: "emitted", pid: 4200 });
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
       mockUnmanagedRestart({ runPostRestartCheck: true });
 
-      await runDaemonRestart({ json: true });
+      await runDaemonRestart({ json: true, force });
 
       expect(callGatewayCli).toHaveBeenCalledWith({
         method: "gateway.restart.request",
         params: {
           reason: "gateway.restart",
+          ...(force ? { restartIntent: { force: true, drainBudgetMs: 300_000 } } : {}),
           target: {
             pid: 4200,
             ownerId: "gateway-owner-old",

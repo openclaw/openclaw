@@ -5,7 +5,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import type { CodexAsyncQuestion } from "./async-questions.js";
-import type { CodexProviderRefusal } from "./event-projector-values.js";
+import {
+  codexProviderRefusalDetails,
+  type CodexProviderRefusal,
+} from "./event-projector-values.js";
 import {
   resolveCodexLocalRuntimeAttribution,
   type CodexLocalRuntimeAttributionParams,
@@ -108,7 +111,7 @@ export function createAttributedCodexAssistantMessage(
             {
               type: "provider_refusal",
               timestamp: Date.now(),
-              details: { provider: "openai", category: refusal.category },
+              details: codexProviderRefusalDetails(refusal),
             },
           ],
         }

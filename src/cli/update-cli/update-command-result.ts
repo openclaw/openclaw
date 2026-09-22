@@ -2,6 +2,7 @@
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
+import { formatServiceInspectionReason } from "../../daemon/service-inspection-error.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import {
   attachErrorDiagnostic,
@@ -36,7 +37,7 @@ import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isVerifiedUpdateRollback, type UpdateRecoveryStep } from "../../shared/update-outcome.js";
@@ -112,7 +113,9 @@ export function collectServiceInspectionFailureFacts(
         createUpdateFailureFact({
           check: "managed-service",
           code: verdict.inspectionReason ?? "service-inspection-unavailable",
-          message: verdict.message,
+          message: verdict.inspectionReason
+            ? formatServiceInspectionReason(verdict.inspectionReason)
+            : verdict.message,
         }),
       ]
     : undefined;
@@ -365,7 +368,7 @@ export async function withUpdateAdmissionReporting<T>(
         durationMs: 0,
       }),
       opts,
-      { nextAction: message },
+      { readHistory: false, nextAction: message },
     );
     return exitCliAfterOutput(defaultRuntime, 1);
   }

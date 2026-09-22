@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 366336,
-  "reason": "Approved #152375 integration measurement: startup JS is 366291 B; 366336 B (357.75 KiB) provides a rounded baseline. The existing 512 B growth and 64 B build-variance allowances remain unchanged, giving an explicit 366912 B enforcement limit.",
+  "startupJsGzipBytes": 370300,
+  "reason": "Avatar-hat catalog measured 370,196 B locally against main baseline 369,600 B (enforcement 370,176 B); 370,300 B rounds up with Linux headroom, and the unchanged 512 B growth and 64 B build-variance allowances give a 370,876 B enforcement limit, 700 B (0.19 %) above the base limit.",
   "updatedAt": "2026-09-21"
 }

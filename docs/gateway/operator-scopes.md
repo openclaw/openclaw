@@ -45,8 +45,13 @@ read-only behavior: `users.github.*` requires `operator.read` plus the exact
 authenticated durable profile. That person can connect, poll, cancel,
 reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
-and per-agent GitHub changes remain `operator.admin`. Publication remains
-`operator.write` plus current session authorization. See
+and per-agent GitHub changes remain `operator.admin`.
+
+With `operator.sessions.write`, a requester can publish ordinary changes from
+sessions they created through the shared GitHub account. Workflow definition
+changes require the original requester's current full `operator.write`
+authority. Personal publication also requires `operator.write`. Every publication
+still requires current session authorization. See
 [GitHub connections](/concepts/user-model#github-connections).
 
 Unknown future `operator.*` scopes require an exact match unless the caller
@@ -56,12 +61,22 @@ RPCs, events, and background tools use the same scope rules. A continuation with
 `operator.write` can read its GitHub identity and session state without another
 interactive message. Session access and execution-lifetime checks still apply.
 
+`question.*` also accepts `operator.sessions.write` for ordinary questions
+bound to the caller's own admitted run and owned session. The Gateway records
+that binding from trusted run authority, never from caller-supplied session or
+run identifiers. The same ownership check filters question events and recovery
+reads. Session visibility or membership alone does not grant this access.
+`operator.sessions.read` alone cannot answer questions. Sessionless questions,
+secret prompts, and other privileged question workflows retain their existing
+`operator.questions` and administrative checks.
+
 ## Named operator roles
 
 Team Gateways can bind authenticated durable profiles to named operator roles.
-Each role combines four closed policies: access to other people's sessions,
+Each role controls access to other people's sessions,
 agents available for session creation and agent runs, a maximum set of operator
-scopes, and whether newly created sessions require sandboxing.
+scopes, and whether newly created sessions require sandboxing. It can also require
+an access policy supplied by a plugin.
 
 ```json5
 {
@@ -90,10 +105,31 @@ Use the administrator-scoped `users.setRole` Gateway method with
 `{ profileId, role }` to assign a configured role. Set `role: null` to clear an
 assignment. Assignment changes immediately invalidate and close that profile's
 active Gateway connections. Reconnecting applies the current role and scope
-ceiling. `gateway.roles.default` is required whenever roles are configured,
+ceiling. A committed change still retires the previous access if returning the
+result fails. An authorized self-downgrade receives its response before its
+connection closes. `gateway.roles.default` is required whenever roles are configured,
 must name an existing definition, and applies to profiles without a valid
 assigned role. Omitting `gateway.roles` entirely leaves solo and shared-secret
 deployments unchanged.
+
+Set a role's optional `accessPolicyPlugin` to the exact plugin ID when that plugin
+must confirm the person's current access. For example, the Visitor Access plugin
+requires `accessPolicyPlugin: "visitor-access"` on its restricted default role.
+The requirement belongs to Gateway configuration and remains enforced when the
+plugin or its manifest is missing, disabled, broken, or still starting. A loaded
+plugin must return current authority for the person; another plugin's policy
+cannot satisfy the requirement. Configuration validation permits an unavailable
+plugin reference so the Gateway can still start for repair. Independent staff
+roles without this binding and the Gateway owner retain their existing access.
+Restore the required plugin to admit the bound role. Removing or changing the
+binding applies through the same live role-policy update described below.
+
+With live configuration reload enabled, edits to `gateway.roles` and
+`gateway.auth.identityScopes` apply without restarting the Gateway. Existing
+Gateway clients reconnect to receive the current scope ceiling. Pending
+handshakes and mutations recheck the policy before acquiring authority;
+already-admitted runs retain their normal completion and cancellation lifecycle,
+including cancellation when their original access-policy grant expires or is revoked.
 
 When roles are configured, identity-authenticated operator connections do not
 receive reusable device or bootstrap tokens: those tokens are not bound to a
@@ -184,8 +220,14 @@ reject grants without a matching durable identity when roles are enabled.
 Include `operator.admin` explicitly only when that role should retain
 administrative connection authority.
 
-Named roles apply only to connections with an authenticated durable
-profile. They organize collaboration within one trusted Gateway domain and do
+An administrator-attested [channel identity link](/concepts/user-model#channel-identity-links)
+also lets a sender inherit channel-owner authority from their effective role's
+`operator.admin` scope. This does not require an additional identity-scope grant.
+When roles are absent, channel ownership uses a matching administrative
+identity-scope grant instead. Connection scope grants and ceilings are unchanged.
+
+Named roles apply to authenticated durable profiles and their attested channel
+identities. They organize collaboration within one trusted Gateway domain and do
 not replace separate Gateways when hostile-tenant isolation is required.
 Diagnostic audit methods, including `audit.run.inspect`, remain shared-domain
 `operator.read` surfaces and are not filtered by session role. Likewise,

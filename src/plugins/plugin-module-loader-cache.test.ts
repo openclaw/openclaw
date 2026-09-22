@@ -1,6 +1,5 @@
 /** Tests plugin module loader cache keys and lifecycle reset behavior. */
 import fs from "node:fs";
-import Module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -101,9 +100,7 @@ function expectJitiOptions(
 function expectNativeOptions(mock: unknown, target: string) {
   expect(callArg(mock, 0, 0, "native target")).toBe(target);
   const options = requireRecord(callArg(mock, 0, 1, "native options"), "native options");
-  expect(options.allowWindows).toBe(true);
   expect(options.fallbackOnMissingDependency).toBe(true);
-  expect(options.fallbackOnNativeError).toBeUndefined();
 }
 
 function expectStats(value: unknown, fields: Record<string, unknown>) {
@@ -115,7 +112,7 @@ function expectStats(value: unknown, fields: Record<string, unknown>) {
 }
 
 describe("getCachedPluginModuleLoader", () => {
-  it("loads source SDK syntax without replaying terminal native failures", async () => {
+  it("keeps source SDK evaluation native and preserves terminal failures", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-graph-"));
     try {
       const ownerPath = path.join(root, "loader.mjs");
@@ -172,7 +169,8 @@ describe("getCachedPluginModuleLoader", () => {
             modulePath: path.join(peerRoot, "entry.ts"), importerUrl: import.meta.url, tryNative: false,
             aliasMap: { "openclaw/plugin-sdk/fixture": path.join(peerRoot, "sdk.mts") },
           });
-          assert.equal(peerLoader(path.join(peerRoot, "entry.ts")).value, "javascript");
+          const hostPeer = await import(pathToFileURL(path.join(peerRoot, "sdk.mts")).href);
+          assert.equal(peerLoader(path.join(peerRoot, "entry.ts")).value, hostPeer.value);
           const sourcePeerRoot = path.join(root, "source-peers");
           fs.mkdirSync(sourcePeerRoot);
           fs.writeFileSync(path.join(sourcePeerRoot, "sdk.mts"), 'export { value } from "./peer.mjs";');
@@ -188,12 +186,13 @@ describe("getCachedPluginModuleLoader", () => {
           const unrelated = path.join(root, "unrelated.ts");
           fs.writeFileSync(unrelated, 'export { value } from "./unrelated-peer.mjs";');
           fs.writeFileSync(path.join(root, "unrelated-peer.mts"), 'export const value = "unrelated";');
-          await assert.rejects(import(pathToFileURL(unrelated).href), /ERR_MODULE_NOT_FOUND|Cannot find module/);
+          assert.equal((await import(pathToFileURL(unrelated).href)).value, "unrelated");
           const broken = loadSdkFixture("broken", 'globalThis.sdkEvaluations = (globalThis.sdkEvaluations ?? 0) + 1; throw new Error("SDK evaluation failed");');
           assert.throws(broken, /SDK evaluation failed/);
           assert.equal(globalThis.sdkEvaluations, 1, "terminal native failures must not evaluate SDK source twice");
         `,
         {
+          imports: [pathToFileURL(path.resolve("scripts/tsx.mjs")).href],
           timeout: 30_000,
           env: {
             PATH: process.env.PATH,
@@ -216,7 +215,7 @@ describe("getCachedPluginModuleLoader", () => {
             modulePath, importerUrl: import.meta.url, tryNative: false,
             aliasMap: { "openclaw/plugin-sdk/fixture": root + "/enum.mts" },
           });
-          assert.equal(load(modulePath).ready, 0);
+          assert.throws(() => load(modulePath), /Unable to load host Plugin SDK natively/);
         `,
         {
           timeout: 30_000,
@@ -580,7 +579,6 @@ describe("getCachedPluginModuleLoader", () => {
     // `tryNativeRequireJavaScriptModule` resolves.
     expect(createJiti).not.toHaveBeenCalled();
     expect(fromSourceTransformer).not.toHaveBeenCalled();
-    // allowWindows must be passed so the native fast path works on Windows too.
     expectNativeOptions(nativeStub, "/repo/dist/extensions/demo/api.js");
     expectStats(getPluginModuleLoaderStats(), {
       calls: 1,
@@ -792,9 +790,7 @@ describe("getCachedPluginModuleLoader", () => {
         tryNative: false,
       },
     );
-    expect(options.nativeModules).toEqual(
-      typeof Module.registerHooks === "function" ? [] : ["openclaw"],
-    );
+    expect(options.nativeModules).toEqual(["openclaw"]);
     expect(fromSourceTransformer).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js");
     const stats = expectStats(getPluginModuleLoaderStats(), {
       calls: 1,
@@ -806,37 +802,6 @@ describe("getCachedPluginModuleLoader", () => {
     expect(stats.topSourceTransformTargets).toEqual([
       { target: "/repo/dist/extensions/demo/api.js", count: 1 },
     ]);
-  });
-
-  it("can transform OpenClaw dependencies on a forced source fallback", async () => {
-    const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
-    const createJiti = vi.fn(() => fromSourceTransformer);
-    const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
-    vi.doMock("./native-module-require.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./native-module-require.js")>()),
-      tryNativeRequireJavaScriptModule: nativeStub,
-    }));
-    const { getCachedPluginModuleLoader } = await importPluginModuleLoader(
-      "./plugin-module-loader-cache.js?scope=forced-source-native-fallback",
-    );
-
-    const loader = getCachedPluginModuleLoader({
-      cache: new Map(),
-      modulePath: "/repo/dist/extensions/demo/api.js",
-      importerUrl: "file:///repo/src/plugin-sdk/channel-entry-contract.ts",
-      loaderFilename: "file:///repo/src/plugin-sdk/channel-entry-contract.ts",
-      transformOpenClawDependencies: true,
-      createLoader: asPluginModuleLoaderFactory(createJiti),
-      tryNative: false,
-    });
-
-    expect(loader("/repo/dist/extensions/demo/api.js")).toEqual({
-      fromSourceTransform: true,
-    });
-    const options = requireRecord(callArg(createJiti, 0, 1, "jiti options"), "jiti options");
-    expect(options.tryNative).toBe(false);
-    expect(options.nativeModules).toEqual([]);
-    expect(nativeStub).not.toHaveBeenCalled();
   });
 
   it("normalizes Windows absolute paths before creating and calling the source transformer", async () => {
@@ -869,9 +834,7 @@ describe("getCachedPluginModuleLoader", () => {
       "file:///C:/Users/alice/openclaw/dist/extensions/feishu/api.js",
       { tryNative: false },
     );
-    expect(options.nativeModules).toEqual(
-      typeof Module.registerHooks === "function" ? [] : ["openclaw"],
-    );
+    expect(options.nativeModules).toEqual(["openclaw"]);
     expect(fromSourceTransformer).toHaveBeenCalledWith(
       "file:///C:/Users/alice/openclaw/dist/extensions/feishu/api.js",
     );

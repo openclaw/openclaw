@@ -607,6 +607,28 @@ jobs:
               --jq '.content' | tr -d '\n' | base64 --decode > "$CLOSEOUT_DIR/published-appcast.xml"
             existing_manifest_args=(--existing-manifest "$CLOSEOUT_DIR/$closeout_asset"
               --published-appcast "$CLOSEOUT_DIR/published-appcast.xml")
+            if node --input-type=module -e '
+              import { requiresThinMacArtifacts } from "./.closeout-tooling/scripts/lib/stable-release-closeout.mjs";
+              process.exit(requiresThinMacArtifacts(process.argv[1]) ? 0 : 1);
+            ' "$RELEASE_TAG"; then
+              for appcast in appcast-arm64.xml appcast-x86_64.xml; do
+                published="$CLOSEOUT_DIR/published-${appcast}"
+                if gh_with_retry api "repos/$GITHUB_REPOSITORY/contents/${appcast}?ref=main" \
+                  --jq '.content' | tr -d '\n' | base64 --decode > "$published"; then
+                  case "$appcast" in
+                    appcast-arm64.xml)
+                      existing_manifest_args+=(--published-appcast-arm64 "$published")
+                      ;;
+                    appcast-x86_64.xml)
+                      existing_manifest_args+=(--published-appcast-x86-64 "$published")
+                      ;;
+                  esac
+                else
+                  rm -f "$published"
+                  echo "Thin appcast is not published yet: $appcast"
+                fi
+              done
+            fi
           fi
           recovery_args=()
           if [[ -f "$RUNNER_TEMP/stable-publish-recovery.json" ]]; then

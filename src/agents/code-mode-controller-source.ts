@@ -1,4 +1,4 @@
-/** Sandboxed guest globals and host bridge for Code Mode QuickJS cells. */
+/** Guest globals and host bridge shared by Code Mode JavaScript executors. */
 import { CODE_MODE_CONSOLE_SOURCE } from "./code-mode-console-source.js";
 import { CODE_MODE_SWARM_CONTROLLER_SOURCE } from "./code-mode-swarm-controller-source.js";
 import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";

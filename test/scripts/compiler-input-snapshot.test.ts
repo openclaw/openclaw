@@ -57,6 +57,29 @@ it("prepares the same ordered source and installed-alias namespace as synchronou
   }
 });
 
+it("ignores checkout scratch packages that disappear during preparation", async () => {
+  const f = fixture();
+  const original = f.signature(f.snapshot());
+  const scratch = path.join(f.root, ".tmp", "fixture-package");
+  f.write(".tmp/fixture-package/package.json", '{"name":"transient-fixture"}');
+  const read = fs.promises.readdir.bind(fs.promises);
+  const reader = vi.spyOn(fs.promises, "readdir").mockImplementation(async (...args) => {
+    const entries = await read(...args);
+    if (args[0] === scratch) {
+      fs.rmSync(scratch, { recursive: true });
+    }
+    return entries;
+  });
+  try {
+    const prepared = f.snapshot();
+    await prepared.prepare();
+    expect(f.signature(prepared)).toBe(original);
+    expect(f.signature(f.snapshot())).toBe(original);
+  } finally {
+    reader.mockRestore();
+  }
+});
+
 it("preserves signatures across checkout depths with one shared external dependency", async () => {
   const directory = roots.make("compiler-input-snapshot-portability-");
   const dependency = path.join(directory, "shared-dependency");
@@ -192,6 +215,7 @@ it("preloads sibling subtrees while the ordered visitor waits on a deeper direct
 it.each([
   ["source addition", "src/shadow.ts", "export const shadow = 1;\n"],
   ["package addition", "src/package.json", '{"type":"commonjs"}'],
+  ["nested workspace metadata", "packages/local/.tmp/package.json", '{"type":"commonjs"}'],
   [
     "installed package metadata",
     "packages/local/package.json",

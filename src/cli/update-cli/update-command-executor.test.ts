@@ -36,7 +36,7 @@ import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
@@ -344,12 +344,9 @@ describe("live update executor", () => {
                   process.execPath,
                   "--input-type=module",
                   "-e",
-                  `import {withDelegatedUpdateCommandExecutor,captureUpdateCommandExecutorAuthority} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)};
-               const chunks=[];
-               for await (const chunk of process.stdin) {
-                 chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
-               }
-               const grant=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+                  `import {json} from "node:stream/consumers";
+               import {withDelegatedUpdateCommandExecutor,captureUpdateCommandExecutorAuthority} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)};
+               const grant=await json(process.stdin);
                await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async(fence)=>{
                  fence.assertCurrent(); process.stdout.write(JSON.stringify(captureUpdateCommandExecutorAuthority(fence)));
                });`,
@@ -690,15 +687,16 @@ describe("candidate executor delegation", () => {
     import {spawn} from "node:child_process";
     import {once} from "node:events";
     import {setTimeout} from "node:timers/promises";
+    import {json} from "node:stream/consumers";
     import {withDelegatedUpdateCommandExecutor} from ${JSON.stringify(moduleUrl)};
-    const chunks=[];
-    for await (const chunk of process.stdin) {
-      chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
-    }
-    const input=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const input=await json(process.stdin);
     await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.root,async (fence)=>{
       process.stdout.write("admitted\\n");
-      while(!fs.existsSync(input.proceed)) await setTimeout(10);
+      while(!input.staleSpawnerAfterAdmission && !fs.existsSync(input.proceed)) await setTimeout(10);
+      if(input.staleSpawnerAfterAdmission){
+        await Promise.resolve();
+        input.grant.spawner.updatedAt+=1;
+      }
       fence.assertCurrent();
       fs.writeFileSync(input.output,"owned");
       const helper=spawn(process.execPath,['-e',"process.send('ready');setTimeout(()=>{},2000)"],{
@@ -872,9 +870,11 @@ describe("candidate executor delegation", () => {
     expect(createManagedHandoffLeaseStore().read(candidateRoot)).toEqual({ kind: "absent" });
   });
 
-  it.each([false, true])(
-    "rejects a changed parent grant and settles its child (changed root=%s)",
-    async (changedRoot) => {
+  it.each([false, true, "after"] as const)(
+    "rejects a changed grant snapshot and settles its child (scenario=%s)",
+    async (scenario) => {
+      const changedRoot = scenario === true;
+      const afterAdmission = scenario === "after";
       const candidateRoot = changedRoot ? path.join(root, "activated") : root;
       if (changedRoot) {
         fs.mkdirSync(candidateRoot);
@@ -888,20 +888,29 @@ describe("candidate executor delegation", () => {
           (grant, beforeInput) =>
             runUtf8CommandWithTimeout([process.execPath, "--input-type=module", "-e", program], {
               input: JSON.stringify({
-                grant: {
-                  ...grant,
-                  parent: { ...grant.parent, updatedAt: grant.parent.updatedAt + 1 },
-                },
+                grant: afterAdmission
+                  ? grant
+                  : {
+                      ...grant,
+                      parent: { ...grant.parent, updatedAt: grant.parent.updatedAt + 1 },
+                    },
+                staleSpawnerAfterAdmission: afterAdmission,
                 output,
                 root: candidateRoot,
               }),
               beforeInput,
               timeoutMs: 15_000,
               killProcessTree: true,
+              requireProcessTreeExtinction: true,
             }),
         );
         expect(result.code).not.toBe(0);
-        expect(result.stderr).toContain("does not match its parent");
+        expect(result.stderr).toContain(
+          afterAdmission ? "no longer has permission" : "does not match its parent",
+        );
+        if (afterAdmission) {
+          expect(result.stdout).toContain("admitted");
+        }
         expect(fs.existsSync(output)).toBe(false);
         fence.assertCurrent();
       });

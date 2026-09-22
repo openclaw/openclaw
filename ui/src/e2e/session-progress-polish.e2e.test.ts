@@ -30,6 +30,11 @@ async function openProgress(page: Page) {
     methodResponses: { "progressCard.get": { card } },
   });
   await page.goto(`${suite.server.baseUrl}chat`);
+  const disclosure = page.locator(".session-progress-card--composer");
+  await disclosure.waitFor();
+  if ((await disclosure.getAttribute("open")) === null) {
+    await disclosure.locator("summary").click();
+  }
   await page.locator(".session-progress-card__body").waitFor();
   await page.evaluate(() => document.fonts.ready);
   return { gateway, card };

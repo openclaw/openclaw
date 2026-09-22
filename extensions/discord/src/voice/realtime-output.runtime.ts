@@ -1,7 +1,7 @@
 import { PassThrough, pipeline } from "node:stream";
-import { createRealtimeVoiceOutputActivityTracker } from "openclaw/plugin-sdk/realtime-voice-provider";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createRealtimeVoiceOutputActivityTracker } from "openclaw/plugin-sdk/realtime-voice-playback";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   DISCORD_AUDIO_PLAYED_BYTES,
   DISCORD_AUDIO_STARTED,

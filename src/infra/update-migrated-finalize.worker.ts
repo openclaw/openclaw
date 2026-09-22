@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { finishUpdateRun } from "../cli/daemon-cli.js";
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import {
@@ -35,6 +34,7 @@ import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import {
   createManagedUpdateRequesterAuthority,
+  createManagedUpdateRequesterContinuationAuthority,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
 import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
@@ -46,6 +46,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
   // Validation imports this whole candidate graph before activation. The helper
   // also needs the stable recovery barrel's writer after an actual schema bump.
   if (process.argv[2] === "--check") {
+    const { finishUpdateRun } = await import("../cli/daemon-cli.js");
     routeLogsToStderr();
     if (typeof finishUpdateRun !== "function") {
       throw new Error("Update recovery writer is unavailable.");
@@ -204,9 +205,14 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
     input.runId,
     input.root,
     async (fence) => {
-      const requester = input.requester
-        ? await createManagedUpdateRequesterAuthority(input.requester)
-        : undefined;
+      const requester = input.requester?.authorizationSource?.startsWith("profile:")
+        ? await createManagedUpdateRequesterContinuationAuthority(input.requester, {
+            runId: input.runId,
+            executor: fence,
+          })
+        : input.requester
+          ? await createManagedUpdateRequesterAuthority(input.requester)
+          : undefined;
       const assertCurrent = () => {
         try {
           fence.assertCurrent();
@@ -287,17 +293,20 @@ async function finalizeInput(
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
   executorFence?.assertCurrent();
   adoptUpdateRun(runIdentity.runId, { env: runIdentity.env });
-  // Parent closures cannot cross JSON. Only the fresh installed runtime rebinds
-  // the captured requester to the same current installation policy.
+  // Parent closures cannot cross JSON. The fresh runtime retains identity checks
+  // under its validated original native update lineage.
   const run: NonNullable<UpdateCommandOptions["run"]> = {
     ...runIdentity,
     ...(executorFence ? { executorFence } : {}),
     ...(descriptor
       ? {
-          requesterAuthority: await createManagedUpdateRequesterAuthority(
-            descriptor.requester,
-            runIdentity.env,
-          ),
+          requesterAuthority: descriptor.requester.authorizationSource?.startsWith("profile:")
+            ? await createManagedUpdateRequesterContinuationAuthority(
+                descriptor.requester,
+                { runId: runIdentity.runId, executor: executorFence },
+                runIdentity.env,
+              )
+            : await createManagedUpdateRequesterAuthority(descriptor.requester, runIdentity.env),
         }
       : {}),
   };

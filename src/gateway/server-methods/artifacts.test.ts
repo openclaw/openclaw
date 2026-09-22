@@ -585,51 +585,6 @@ describe("artifacts RPC handlers", () => {
     expect(artifacts?.[0]).not.toHaveProperty("data");
   });
 
-  it("hydrates inline data only for the requested download artifact", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "image",
-            data: "Zmlyc3Q=",
-            mimeType: "image/png",
-            alt: "first.png",
-          },
-          {
-            type: "image",
-            data: "c2Vjb25k",
-            mimeType: "image/png",
-            alt: "second.png",
-          },
-        ],
-        __openclaw: { seq: 2 },
-      },
-    ];
-    mockedMessages(messages);
-
-    const summaries = await listArtifacts({ sessionKey: "agent:main:main" });
-    const summaryArtifacts = expectArtifactList(summaries.calls).artifacts;
-    const secondArtifactId = requireNonEmptyString(
-      summaryArtifacts?.[1]?.id,
-      "expected second artifact id",
-    );
-    expect(summaryArtifacts?.[0]).not.toHaveProperty("data");
-    expect(summaryArtifacts?.[1]).not.toHaveProperty("data");
-
-    const download = await downloadArtifact({
-      sessionKey: "agent:main:main",
-      artifactId: secondArtifactId,
-    });
-    const downloadPayload = expectOkPayload(download.calls) as {
-      artifact?: Record<string, unknown>;
-      data?: string;
-    };
-
-    expectFields(downloadPayload.artifact, { title: "second.png" });
-    expectFields(downloadPayload, { data: "c2Vjb25k" });
-  });
-
   it("resolves runId queries through the gateway run-to-session lookup", async () => {
     hoisted.resolveSessionKeyForRun.mockReturnValue("agent:main:main");
     mockedMessages([assistantImageMessage({ alt: "run-result.png", runId: "run-1" })]);

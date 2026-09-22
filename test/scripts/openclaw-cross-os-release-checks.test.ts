@@ -113,6 +113,8 @@ import {
 import * as candidateProcess from "../../scripts/lib/cross-os-release-checks/process.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 
+vi.mock("node:net", { spy: true });
+
 const rootPackageManager = (
   JSON.parse(readFileSync("package.json", "utf8")) as {
     packageManager: string;
@@ -2280,36 +2282,70 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(await canConnectToLoopbackPort(1234.5)).toBe(false);
 
     const server = createNetServer();
+    const closed = vi.fn();
+    server.on("close", closed);
     await new Promise<void>((resolvePromise) => {
       server.listen(0, "127.0.0.1", resolvePromise);
     });
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
-    expect(await canConnectToLoopbackPort(port)).toBe(true);
-    await new Promise<void>((resolvePromise) => {
-      server.close(() => resolvePromise());
-    });
-    // Preserve the 500 ms close budget while detecting port release sooner.
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      if (!(await canConnectToLoopbackPort(port, 100))) {
-        return;
-      }
-      await delay(5);
+    try {
+      expect(await canConnectToLoopbackPort(port)).toBe(true);
+    } finally {
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        server.close((error) => (error ? rejectPromise(error) : resolvePromise()));
+      });
     }
-    expect(await canConnectToLoopbackPort(port, 100)).toBe(false);
+    expect(closed).toHaveBeenCalledOnce();
+    expect(server.listening).toBe(false);
+    expect(server.address()).toBeNull();
+
+    // Refusal belongs to the observed socket, not a released port another listener can acquire.
+    const actualNet = await vi.importActual<typeof import("node:net")>("node:net");
+    const refused = new actualNet.Socket();
+    const connect = vi.mocked(createNetConnection).mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        refused.emit(
+          "error",
+          Object.assign(new Error("fixture connection refused"), {
+            code: "ECONNREFUSED",
+          }),
+        );
+      });
+      return refused;
+    });
+    try {
+      expect(await canConnectToLoopbackPort(port, 100)).toBe(false);
+      expect(refused.destroyed).toBe(true);
+    } finally {
+      connect.mockRestore();
+      refused.destroy();
+    }
   });
 
   it("keeps a release gateway port reserved until the lane is ready to start", async () => {
     const lane = { gatewayPort: 0 } as Parameters<typeof reserveGatewayPortForLane>[0];
     const reservation = await reserveGatewayPortForLane(lane);
+    let server: ReturnType<typeof createNetServer>;
+    const closed = vi.fn();
     try {
+      const created = vi.mocked(createNetServer).mock.results.at(-1);
+      if (created?.type !== "return") {
+        throw new Error("Gateway port reservation did not create its native listener");
+      }
+      server = created.value;
+      server.on("close", closed);
       expect(lane.gatewayPort).toBe(reservation.port);
+      expect(server.address()).toMatchObject({ port: reservation.port });
       expect(await canConnectToLoopbackPort(reservation.port)).toBe(true);
     } finally {
       await reservation.release();
     }
+    expect(closed).toHaveBeenCalledOnce();
+    expect(server.listening).toBe(false);
+    expect(server.address()).toBeNull();
     await reservation.release();
-    expect(await canConnectToLoopbackPort(reservation.port, 100)).toBe(false);
+    expect(closed).toHaveBeenCalledOnce();
   });
 
   it("writes Discord smoke config using the strict guild channel schema", () => {

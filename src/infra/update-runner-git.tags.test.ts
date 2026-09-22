@@ -80,11 +80,7 @@ describe("Git updater release tag refresh", () => {
     return { root, seed, oldTag, release, branch, releaseRemote };
   }
 
-  async function update(
-    setup: ReturnType<typeof fixture>,
-    inspect: boolean,
-    channel: "stable" | "beta" = "stable",
-  ) {
+  async function update(setup: ReturnType<typeof fixture>, channel: "stable" | "beta" = "stable") {
     const fetches: {
       argv: string[];
       code: number | null;
@@ -123,7 +119,21 @@ describe("Git updater release tag refresh", () => {
       defaultCommandEnv: undefined,
       timeoutMs: 5000,
       startedAt: Date.now(),
-      opts: { channel, ...(inspect ? { inspectGitTarget: async () => undefined } : {}) },
+      opts: {
+        channel,
+        inspectGitTarget: async () => {
+          throw new Error("A refused fetch or current release must not enter candidate admission");
+        },
+        validateCandidate: async () => {
+          throw new Error("A refused fetch or current release must not validate a candidate");
+        },
+        beforeGitMutation: async () => {
+          throw new Error("A refused fetch or current release must not mutate the checkout");
+        },
+        runGitDoctor: async () => {
+          throw new Error("A refused fetch or current release must not run Doctor");
+        },
+      },
     });
     return { result, fetches };
   }
@@ -139,90 +149,84 @@ describe("Git updater release tag refresh", () => {
     expect(git(setup.root, "rev-parse", "v2026.9.1")).toBe(setup.oldTag);
   });
 
-  for (const inspect of [false, true]) {
-    describe(inspect ? "private inspection" : "direct checkout", () => {
-      it.each(["stable", "beta"] as const)(
-        "keeps %s on regular stable when extended-stable tags sort newer",
-        async (channel) => {
-          const setup = fixture();
-          for (const tag of ["v2026.9.33", "v2026.9.34", "v2026.9.34-1"]) {
-            git(setup.seed, "tag", tag, setup.oldTag);
-          }
-          git(setup.seed, "push", "origin", "--tags");
-          const { result } = await update(setup, inspect, channel);
-          expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
-          expect(git(setup.root, "rev-parse", "HEAD")).toBe(setup.release);
-        },
-      );
+  it.each(["stable", "beta"] as const)(
+    "keeps %s on regular stable when extended-stable tags sort newer",
+    async (channel) => {
+      const setup = fixture();
+      for (const tag of ["v2026.9.33", "v2026.9.34", "v2026.9.34-1"]) {
+        git(setup.seed, "tag", tag, setup.oldTag);
+      }
+      git(setup.seed, "push", "origin", "--tags");
+      const { result } = await update(setup, channel);
+      expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
+      expect(git(setup.root, "rev-parse", "HEAD")).toBe(setup.release);
+    },
+  );
 
-      it.each([
-        { releaseRemote: "upstream", forkRemote: "afork", tracked: true },
-        { releaseRemote: "upstream", forkRemote: "zfork", tracked: true },
-        { releaseRemote: "upstream", forkRemote: "origin", tracked: true },
-        { releaseRemote: "origin", forkRemote: "fork", tracked: false },
-        { releaseRemote: "upstream", forkRemote: undefined, tracked: false },
-      ])(
-        "refreshes only $releaseRemote tags with fork $forkRemote",
-        async ({ releaseRemote, forkRemote, tracked }) => {
-          const setup = fixture(releaseRemote, forkRemote);
-          if (!tracked) {
-            git(setup.root, "config", "--unset", "branch.main.remote");
-          }
-          git(setup.root, "config", "fetch.prune", "true");
-          git(setup.root, "config", "fetch.pruneTags", "true");
-          const { result, fetches } = await update(setup, inspect);
-          expect(result, JSON.stringify(result)).toMatchObject({
-            status: "skipped",
-            reason: "already-current",
-          });
-          expect(fetches).toHaveLength(2);
-          expect(fetches[0]).toMatchObject({ code: 0, tag: setup.oldTag, branch: setup.branch });
-          expect(fetches[1]).toMatchObject({
-            code: 0,
-            tag: setup.release,
-            local: setup.oldTag,
-            branch: setup.branch,
-          });
-          expect(fetches[1]?.argv).toEqual([
-            "fetch",
-            "--no-tags",
-            "--no-prune",
-            "--no-prune-tags",
-            releaseRemote,
-            "+refs/tags/*:refs/tags/*",
-          ]);
-          expect(git(setup.root, "rev-parse", "v2026.9.1")).toBe(
-            inspect ? setup.oldTag : setup.release,
-          );
-          expect(git(setup.root, "rev-parse", "local-only")).toBe(setup.oldTag);
-          expect(git(setup.root, "rev-parse", "HEAD")).toBe(setup.release);
-        },
-      );
-
-      it("rejects a non-fast-forward protected branch before forcing tags", async () => {
-        const setup = fixture();
-        git(setup.root, "branch", "protected", setup.release);
-        git(setup.root, "config", "remote.upstream.fetch", "refs/heads/main:refs/heads/protected");
-        git(setup.seed, "push", "--force", "origin", `${setup.oldTag}:refs/heads/main`);
-        const { result, fetches } = await update(setup, inspect);
-        expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
-        expect(result.steps.find((step) => step.name.includes("fetch"))?.stderrTail).toContain(
-          "non-fast-forward",
-        );
-        expect(fetches).toHaveLength(1);
-        expect(fetches[0]?.tag).toBe(setup.oldTag);
-        expect(git(setup.root, "rev-parse", "protected")).toBe(setup.release);
-      });
-
-      it("requires an explicit authority for ambiguous non-origin remotes", async () => {
-        const setup = fixture("upstream", "fork");
+  it.each([
+    { releaseRemote: "upstream", forkRemote: "afork", tracked: true },
+    { releaseRemote: "upstream", forkRemote: "zfork", tracked: true },
+    { releaseRemote: "upstream", forkRemote: "origin", tracked: true },
+    { releaseRemote: "origin", forkRemote: "fork", tracked: false },
+    { releaseRemote: "upstream", forkRemote: undefined, tracked: false },
+  ])(
+    "refreshes only $releaseRemote tags with fork $forkRemote",
+    async ({ releaseRemote, forkRemote, tracked }) => {
+      const setup = fixture(releaseRemote, forkRemote);
+      if (!tracked) {
         git(setup.root, "config", "--unset", "branch.main.remote");
-        const { result, fetches } = await update(setup, inspect);
-        expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
-        expect(result.steps.at(-1)?.stderrTail).toContain("Set branch.main.remote");
-        expect(fetches).toHaveLength(1);
-        expect(git(setup.root, "rev-parse", "v2026.9.1")).toBe(setup.oldTag);
+      }
+      git(setup.root, "config", "fetch.prune", "true");
+      git(setup.root, "config", "fetch.pruneTags", "true");
+      const { result, fetches } = await update(setup);
+      expect(result, JSON.stringify(result)).toMatchObject({
+        status: "skipped",
+        reason: "already-current",
       });
-    });
-  }
+      expect(fetches).toHaveLength(2);
+      expect(fetches[0]).toMatchObject({ code: 0, tag: setup.oldTag, branch: setup.branch });
+      expect(fetches[1]).toMatchObject({
+        code: 0,
+        tag: setup.release,
+        local: setup.oldTag,
+        branch: setup.branch,
+      });
+      expect(fetches[1]?.argv).toEqual([
+        "fetch",
+        "--no-tags",
+        "--no-prune",
+        "--no-prune-tags",
+        releaseRemote,
+        "+refs/tags/*:refs/tags/*",
+      ]);
+      expect(git(setup.root, "rev-parse", "v2026.9.1")).toBe(setup.oldTag);
+      expect(git(setup.root, "rev-parse", "local-only")).toBe(setup.oldTag);
+      expect(git(setup.root, "rev-parse", "HEAD")).toBe(setup.release);
+    },
+  );
+
+  it("rejects a non-fast-forward protected branch before forcing tags", async () => {
+    const setup = fixture();
+    git(setup.root, "branch", "protected", setup.release);
+    git(setup.root, "config", "remote.upstream.fetch", "refs/heads/main:refs/heads/protected");
+    git(setup.seed, "push", "--force", "origin", `${setup.oldTag}:refs/heads/main`);
+    const { result, fetches } = await update(setup);
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(result.steps.find((step) => step.name.includes("fetch"))?.stderrTail).toContain(
+      "non-fast-forward",
+    );
+    expect(fetches).toHaveLength(1);
+    expect(fetches[0]?.tag).toBe(setup.oldTag);
+    expect(git(setup.root, "rev-parse", "protected")).toBe(setup.release);
+  });
+
+  it("requires an explicit authority for ambiguous non-origin remotes", async () => {
+    const setup = fixture("upstream", "fork");
+    git(setup.root, "config", "--unset", "branch.main.remote");
+    const { result, fetches } = await update(setup);
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(result.steps.at(-1)?.stderrTail).toContain("Set branch.main.remote");
+    expect(fetches).toHaveLength(0);
+    expect(git(setup.root, "rev-parse", "v2026.9.1")).toBe(setup.oldTag);
+  });
 });

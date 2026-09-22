@@ -423,7 +423,7 @@ describe("early startup task maintenance", () => {
     await maintenance.stopTaskRegistryMaintenance();
     vi.useRealTimers();
     resetDetachedTaskLifecycleRuntimeForTests();
-    maintenance.resetTaskRegistryMaintenanceRuntimeForTests();
+    maintenance.configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     await drainGlobalSingletonLifecycleState("close");

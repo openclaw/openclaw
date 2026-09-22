@@ -168,8 +168,13 @@ node scripts/test-macos-native.mts named \
 ```
 
 The ordinary CI invocation bounds Swift Testing parallelism to the runner's logical
-CPU count, capped at 12, and runs the default and named partitions sequentially with
-coverage. Local `scripts/prepush-ci.sh` runs Swift lint/format checks and a release
+CPU count, capped at 12. It runs three disjoint partitions sequentially with coverage
+instrumentation: the default-profile suite, rendered Quick Chat in a fresh default-profile
+process, and named-profile fixtures. The rendered partition preserves catalog, disclosure,
+and shortcut order without sharing process-wide executor changes from other tests.
+It starts an AppKit-owned run loop before exercising native menus. Historical targets
+with the launcher keep their original default- and named-profile partitions.
+Local `scripts/prepush-ci.sh` runs Swift lint/format checks and a release
 build, but does not run native tests. For native changes it exits nonzero with a
 requirement to obtain the exact commit's `macos-swift` CI result; local build
 success is not native test success.

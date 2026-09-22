@@ -18,7 +18,7 @@ import type { SkillCommandSpec } from "../../skills/types.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { isInternalMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   isAuthorizedTextSlashCommandTurn,

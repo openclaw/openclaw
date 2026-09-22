@@ -9,8 +9,12 @@ import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/ses
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { readTaskRegistryRevision, tasks as residentTasks } from "../tasks/task-registry-state.js";
 import { runTaskRegistryMaintenance } from "../tasks/task-registry.maintenance.js";
-import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
+import {
+  configureTaskRegistryRuntime,
+  getTaskRegistryStore,
+} from "../tasks/task-registry.store.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
@@ -102,9 +106,8 @@ test("expires task cursors when a profile merge changes the same caller's sessio
         );
       }
       resetTaskRegistryForTests({ persist: false });
-      configureTaskRegistryRuntime({
-        store: createInMemoryTaskRegistryStore({ tasks, deliveryStates: new Map() }),
-      });
+      const fixtureStore = createInMemoryTaskRegistryStore({ tasks, deliveryStates: new Map() });
+      configureTaskRegistryRuntime({ store: fixtureStore });
       const stateDir = process.env.OPENCLAW_STATE_DIR;
       if (!stateDir) {
         throw new Error("OPENCLAW_STATE_DIR is required for the Gateway proof");
@@ -135,6 +138,20 @@ test("expires task cursors when a profile merge changes the same caller's sessio
         const before = await rpcReq<UsersSelfResult>(viewer, "users.self", {});
         expect(before).toMatchObject({ ok: true, payload: { profile: { id: viewerProfile.id } } });
         const first = await rpcReq<TasksListResult>(viewer, "tasks.list", { limit: 1 });
+        if (first.ok && first.payload?.tasks.length === 0) {
+          try {
+            console.info("tasks.list empty-page post-response diagnostic", {
+              fixtureStoreStillSelected: getTaskRegistryStore() === fixtureStore,
+              fixtureTaskIds: [...fixtureStore.loadSnapshot().tasks.keys()],
+              residentTaskIds: [...residentTasks.keys()],
+              revision: readTaskRegistryRevision(),
+              callerProfileId: before.payload?.profile.id,
+              hasCursor: Boolean(first.payload.nextCursor),
+            });
+          } catch (error) {
+            console.info("tasks.list empty-page diagnostic failed", String(error));
+          }
+        }
         expect(first.ok, JSON.stringify(first.error)).toBe(true);
         expect(first.payload?.tasks.map((task) => task.id)).toEqual(["task-1"]);
         const cursor = first.payload?.nextCursor;

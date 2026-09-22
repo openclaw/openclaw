@@ -31,7 +31,7 @@ export function bindSqliteWorkerBackend(
         throw new Error("Board publication scope is closed");
       }
       const changes: SessionRowChange[] = [];
-      const unsubscribe = sessionChanges.subscribe((change) => {
+      const unsubscribe = sessionChanges.subscribeFacts((change) => {
         if (
           "sessionKey" in change &&
           change.sessionKey === command.input.sessionKey &&

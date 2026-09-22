@@ -24,8 +24,12 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { loadSessionPullRequestReferences } from "./control-ui-session-pr-references.js";
-import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
-import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
+import {
+  githubJson,
+  loadTestSessionPullRequests as loadControlUiSessionPullRequests,
+  pullListItem,
+  requestUrl,
+} from "./control-ui-session-prs.test-support.js";
 import * as transcriptReaders from "./session-transcript-readers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -164,46 +168,81 @@ describe("session pull request references", () => {
     await expect(loadSessionPullRequestReferences(scope, repository)).resolves.toEqual([301]);
   });
 
-  it("does not reuse references from a database replaced at the same path", async () => {
-    await writeMessages([{ role: "assistant", content: text(pr(300)) }]);
-    await expect(loadSessionPullRequestReferences(scope, repository)).resolves.toEqual([300]);
-    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
-    const replacementPath = path.join(
-      tempDirs.make("openclaw-pr-reference-replacement-"),
-      "agent.sqlite",
-    );
-    // Closing the isolated owner checkpoints its committed WAL before copying.
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    copyFileSync(database.path, replacementPath);
-    const replacement = new DatabaseSync(replacementPath);
-    try {
-      // A replacement file may carry the same logical watermarks as the old file.
-      const db = getNodeSqliteKysely<DB>(replacement);
-      executeSqliteQuerySync(
-        replacement,
-        db
-          .updateTable("transcript_events")
-          .set((eb) => ({
-            event_json: eb.fn<string>("replace", ["event_json", eb.val(pr(300)), eb.val(pr(301))]),
-          }))
-          .where("session_id", "=", scope.sessionId),
+  it.each(["references", "snapshots"] as const)(
+    "does not reuse %s from a database replaced at the same path",
+    async (surface) => {
+      await writeMessages([{ role: "assistant", content: text(pr(300)) }]);
+      let rateLimited = false;
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        const number = Number(new URL(requestUrl(input)).pathname.split("/").at(-1));
+        return rateLimited
+          ? githubJson({ message: "Rate limited" }, 429)
+          : githubJson(
+              pullListItem({
+                number,
+                html_url: pr(number),
+                state: "closed",
+                head: { sha: "a".repeat(40), ref: "physical-source-reference" },
+              }),
+            );
+      });
+      const read = async () =>
+        surface === "references"
+          ? await loadSessionPullRequestReferences(scope, repository)
+          : (
+              await loadControlUiSessionPullRequests(scope, {
+                fetchImpl,
+                resolveGitContext: async () => ({
+                  ...repository,
+                  branch: "main",
+                  defaultBranch: "main",
+                }),
+              })
+            ).pullRequests.map((pull) => pull.number);
+      await expect(read()).resolves.toEqual([300]);
+      const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const replacementPath = path.join(
+        tempDirs.make("openclaw-pr-reference-replacement-"),
+        "agent.sqlite",
       );
-      executeSqliteQuerySync(
-        replacement,
-        db
-          .updateTable("session_transcript_fts")
-          .set((eb) => ({
-            text: eb.fn<string>("replace", ["text", eb.val(pr(300)), eb.val(pr(301))]),
-          }))
-          .where("session_id", "=", scope.sessionId),
-      );
-    } finally {
-      replacement.close();
-    }
-    renameSync(replacementPath, database.path);
-    await expect(loadSessionPullRequestReferences(scope, repository)).resolves.toEqual([301]);
-  });
+      // Closing the isolated owner checkpoints its committed WAL before copying.
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+      copyFileSync(database.path, replacementPath);
+      const replacement = new DatabaseSync(replacementPath);
+      try {
+        // A replacement file may carry the same logical watermarks as the old file.
+        const db = getNodeSqliteKysely<DB>(replacement);
+        executeSqliteQuerySync(
+          replacement,
+          db
+            .updateTable("transcript_events")
+            .set((eb) => ({
+              event_json: eb.fn<string>("replace", [
+                "event_json",
+                eb.val(pr(300)),
+                eb.val(pr(301)),
+              ]),
+            }))
+            .where("session_id", "=", scope.sessionId),
+        );
+        executeSqliteQuerySync(
+          replacement,
+          db
+            .updateTable("session_transcript_fts")
+            .set((eb) => ({
+              text: eb.fn<string>("replace", ["text", eb.val(pr(300)), eb.val(pr(301))]),
+            }))
+            .where("session_id", "=", scope.sessionId),
+        );
+      } finally {
+        replacement.close();
+      }
+      renameSync(replacementPath, database.path);
+      rateLimited = true;
+      await expect(read()).resolves.toEqual(surface === "references" ? [301] : []);
+    },
+  );
 
   it("finds the latest assistant PRs across tool activity without promoting other sources", async () => {
     await writeMessages([

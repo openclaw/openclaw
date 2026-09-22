@@ -84,7 +84,7 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
         isCurrent() &&
         canCallGatewayMethod(this.gateway.snapshot, "config.patch", "operator.admin"),
       failed: () => t("cloudWorkersPage.errors.settingsSaveFailed"),
-      success: () => t("labsPage.restartRequired"),
+      success: () => t("cloudWorkersPage.settingsSaved"),
     });
   }
 
@@ -291,7 +291,7 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
       )}
       ${this.renderEditor()}
       ${this.configSave.state.error ? html`<div class="callout warning" role="alert">${this.configSave.state.error}</div>` : nothing}
-      ${this.configSave.state.notice ? html`<div class="callout warning" role="status">${this.configSave.state.notice}</div>` : nothing}
+      ${this.configSave.state.notice ? html`<div class="callout" role="status">${this.configSave.state.notice}</div>` : nothing}
     `;
   }
 }

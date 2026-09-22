@@ -72,7 +72,11 @@ must provide the restricted guest policy: `sessions.others: "view"`,
 `sandbox: "required"`, at least one permitted agent (or `"*"`), and
 `scopes: ["operator.sessions.write"]`. The optional `operator.sessions.read`
 scope is equivalent for reading; broader operator scopes do not meet this
-invitation policy. A missing or unsuitable default refuses the invitation before
+invitation policy. Set `accessPolicyPlugin: "visitor-access"` on that same role.
+This requirement remains in force if the plugin or its manifest is missing,
+disabled, broken, or still starting. Staff roles without this binding and the
+Gateway owner retain their independent access to repair the configuration.
+A missing or unsuitable default refuses the invitation before
 writing the grant or adding the email to Cloudflare. Keep existing staff roles
 and their assignments when configuring the guest default.
 
@@ -81,6 +85,12 @@ routes, required sandboxing, and shared-session read limits have been qualified.
 Visitor Access validates the configured role; the Gateway provides those
 capabilities. Preserve existing staff assignments and apply the guest
 configuration as the final rollout step.
+
+Guest admission is unsupported on Gateway versions that predate this role
+binding. Those versions reject `accessPolicyPlugin` and cannot enforce the local
+grant lifetime. Keep the binding and restricted Guest role intact when recovering
+access. Restoring older code or a stopped database backup does not establish safe
+Guest admission or restore authority for unfinished work.
 
 ## Invite, inspect, and revoke visitors
 
@@ -100,6 +110,11 @@ Invite results identify the visitor, email, grant expiry, Gateway access, and lo
 URL. A repeat invite for the same email refreshes its expiry rather than creating
 a second grant, and checks the current role again even when the email is already
 in the Access policy.
+Renewal before expiry preserves the grant attached to accepted shared GitHub
+publication requests. After expiry or revocation, a new invitation cannot revive
+those old requests, even if the person later receives a staff role. Request
+publication again with current access after checking any recorded or unconfirmed
+GitHub result; saved work and existing pull requests are retained.
 Permanent access requires `forever: true`. Invites beyond `maxVisitors` are
 refused; revoke an existing visitor or deliberately raise the configured cap.
 
@@ -126,27 +141,52 @@ verify or link a Gateway identity or grant GitHub authorship credit.
 ## Expiry and drift
 
 Grants are recorded by lowercased email in the Gateway's durable keyed store.
-Cloudflare Access controls admission; the Gateway role controls what the person
-can do after signing in. The store records who was invited and when the visitor
-grant expires. The store has a fixed cap of 500 records and does not
-automatically expire them: a record must remain until policy cleanup succeeds.
+The Gateway requires a current grant for the plugin-managed default visitor role,
+using the person's canonical email aliases. Known non-default staff roles and
+the Gateway owner remain independent of visitor grants. The store has a fixed
+cap of 500 records and does not automatically expire them: a record must remain
+until policy cleanup succeeds.
+Each uninterrupted grant has an internal UUID. Startup assigns one to active
+legacy grants before admitting visitors; expired grants do not acquire new
+authority. The UUID remains with continuously renewed access and changes after
+expiry or revocation. It is not a login credential.
 
-An invite records the grant before calling Cloudflare. If that call fails, the
-record remains so a later list can expose the drift and a sweep can clean up any
-expired grant. A failed response does not confirm whether Cloudflare admitted the
-email; `visitor_list` reads the policy again to reconcile that state. An explicit
-revoke records immediate expiry before contacting Cloudflare, so a later sweep
-retries cleanup after a failed or lost response. Once policy access is removed,
-the record is deleted. Re-invite to retry an unsuccessful invite, or revoke to
-clean up its record. Failure to read or qualify Gateway access refuses an
-invitation before creating or renewing its grant.
+Records from older versions need confirmed Cloudflare policy membership before
+they can admit a guest. Startup and the existing hourly sweep perform that check;
+missing membership or a failed read leaves the record non-authorizing. A later
+sweep or an explicit invite can qualify it. Once qualified, a grant keeps its
+recorded deadline across restart even while Cloudflare is unavailable.
 
-The plugin sweeps expired grants on Gateway startup and hourly while the Gateway
-runs. It removes each expired email from the named Access policy and the local
-record, then logs the removal. Expiry is best effort: the Gateway and Cloudflare
-API must be available, and a grant can remain allowed until a successful sweep.
-Use an explicit revoke to remove the email from the allow policy without waiting
-for the hourly sweep. This plugin does not separately revoke Access sessions.
+If an older Visitor writer renews a row without its grant ID, this version must
+confirm policy membership and assign a new ID again. Requalification preserves
+the recorded metadata and deadline; it does not revive an ended grant capture.
+
+An invite activates or extends its grant only after Cloudflare confirms the email
+is in the policy. Until then, an existing grant keeps its previous deadline. A
+new email receives an already-expired cleanup record before the provider write;
+that record cannot grant Gateway access, including after restart. If the provider
+rejects the write or its response is lost, the record remains so a sweep can clean
+up any admission Cloudflare may have accepted. `visitor_list` reads the policy
+again to report that drift. An explicit revoke records immediate expiry before
+contacting Cloudflare, so a later sweep retries cleanup after a failed or lost
+response. Once policy access is removed, the record is deleted. Re-invite to retry
+an unsuccessful invite, or revoke to clean up its record. Failure to read or
+qualify Gateway access refuses an invitation before writing a cleanup record or
+renewing its grant.
+
+Access ends at the recorded deadline, independently of Cloudflare availability.
+An explicit revoke ends it before attempting policy removal. Connections and
+work that depend on that grant lose their authority; unrelated staff work keeps
+its own authority, including work in a visitor-created session. Saved workspace
+changes, sessions, attribution, and existing PRs are retained. Renewing an active
+grant extends its lifetime; renewing after it ends requires fresh admission and
+does not revive canceled work.
+
+The plugin also removes expired emails from the named Cloudflare Access policy
+on Gateway startup and hourly. Provider cleanup is best effort and retries while
+its durable record remains. A failed cleanup or a still-valid Access login does
+not restore Gateway access after the grant ends. This plugin does not separately
+revoke Cloudflare login sessions or change independent staff admission policies.
 
 Both list and sweep compare policy emails with recorded grants. Emails added
 manually in the Cloudflare dashboard are reported as **unmanaged** and are never

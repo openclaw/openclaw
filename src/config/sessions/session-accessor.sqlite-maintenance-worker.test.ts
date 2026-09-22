@@ -370,7 +370,7 @@ it.each(
       });
       const withWorker = reclamationWorker.withSqliteReclamationWorker;
       vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
-        (options, claim, run, assertCurrent) =>
+        (options, claim, run, assertCurrent, signal) =>
           withWorker(
             options,
             claim,
@@ -407,6 +407,7 @@ it.each(
               }
             },
             assertCurrent,
+            signal,
           ),
       );
       const adoptedAfterMutation: Array<ageFacts.SessionEntryMaintenanceAgeFact | undefined> = [];

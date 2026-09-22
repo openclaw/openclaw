@@ -9,7 +9,6 @@ import { prepareSqliteReadOnlyLocation } from "../../infra/sqlite-snapshot-sourc
 import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
-  prepareStateDatabaseCanonicalMutation,
   prepareStateDatabaseSourceExclusion,
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "../../infra/state-database-coordinator.js";
@@ -82,7 +81,6 @@ export function prepareAgentAuthProfileRowsRead(options: {
   const captured: Result<
     {
       root: ReturnType<typeof captureOpenClawStateWorkerContext>;
-      mutation?: () => void;
       exclusion?: () => void;
     },
     unknown
@@ -92,7 +90,6 @@ export function prepareAgentAuthProfileRowsRead(options: {
         ok: true,
         value: {
           root: captureOpenClawStateWorkerContext({ env }),
-          mutation: prepareStateDatabaseCanonicalMutation(databasePath),
           exclusion: prepareStateDatabaseSourceExclusion(databasePath),
         },
       };
@@ -121,7 +118,6 @@ export function prepareAgentAuthProfileRowsRead(options: {
     }
     captured.value.root.admission.assertCurrent();
     captured.value.root.maintenanceScope?.assertAdmission();
-    captured.value.mutation?.();
     captured.value.exclusion?.();
     if (identity && inspectDatabasePathIdentitySync(databasePath)?.key !== identity.key) {
       throw new Error("Auth profile database file identity changed during its read");
@@ -213,12 +209,12 @@ export function prepareAgentAuthProfileRowsRead(options: {
       if (!captured.ok) {
         throw captured.error;
       }
-      const { root, mutation, exclusion } = captured.value;
+      const { root, exclusion } = captured.value;
       return withStateDatabaseCoordinatorRuntimeDirectory(root.coordinatorRuntime, async () => {
         let snapshot: PreparedSqliteReadOnlyLocation | undefined;
         let result: Result<AuthProfileRowRead, unknown>;
         try {
-          if (mutation || exclusion) {
+          if (exclusion) {
             assertCurrent();
             snapshot = await prepareSqliteReadOnlyLocation(databasePath, {
               preserveSourceArtifacts: true,

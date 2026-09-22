@@ -17,7 +17,8 @@ import {
   inertAgentFileControls,
   primaryModelPicker,
 } from "./agents-view.test-helpers.ts";
-import { renderAgentChannels, renderAgentFiles } from "./panels-status-files.ts";
+import { renderAgentFiles } from "./panels-files.ts";
+import { renderAgentChannels } from "./panels-status-files.ts";
 import { renderAgents } from "./view.ts";
 
 function createCronJob(id: string, overrides: Partial<CronJob> = {}): CronJob {

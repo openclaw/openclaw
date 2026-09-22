@@ -8,7 +8,7 @@ run_hosted_prepare_gates() {
   local recent_sha=""
   local remote_record="${4:-}" remote_head remote_head_ref remote_is_cross_repository
   if [ -z "$remote_record" ]; then
-    remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository") || return 1
+    remote_record=$(read_pr_observation "$pr") || return 1
   fi
   remote_head=$(pr_view_string_field "$remote_record" "headRefOid" "$pr" "Re-run prepare-init.") || return 1
   remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
@@ -30,13 +30,14 @@ run_hosted_prepare_gates() {
   fi
 
   local repo
-  repo=$(pr_gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+  repo=$(printf '%s\n' "$remote_record" | jq -er '.baseRepository.nameWithOwner | select(type == "string" and length > 0)') || return 1
   local scripts_dir="${script_parent_dir:-}"
   if [ -z "$scripts_dir" ]; then
     scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
   fi
+  # A directory argv[1] keeps the imported module's standalone entrypoint inactive.
   local args=(
-    "$scripts_dir/verify-pr-hosted-gates.mjs"
+    "$scripts_dir"
     --repo "$repo"
     --sha "$current_head"
     --pr "$pr"
@@ -49,7 +50,13 @@ run_hosted_prepare_gates() {
   if [ "$changelog_only" = "true" ]; then
     args+=(--changelog-only)
   fi
-  if run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"; then
+  if printf '%s\n' "$remote_record" | run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" \
+    node --input-type=module -e '
+      import { readFileSync } from "node:fs";
+      import { pathToFileURL } from "node:url";
+      const { main } = await import(pathToFileURL(process.argv[1] + "/verify-pr-hosted-gates.mts").href);
+      main(process.argv.slice(2), JSON.parse(readFileSync(0, "utf8")));
+    ' "${args[@]}"; then
     local reused_head
     reused_head=$(jq -er '.reusedFromSha // "" | strings' .local/gates-hosted-checks.json) || return 1
     if [ -n "$reused_head" ]; then
@@ -370,6 +377,7 @@ derive_prepare_gate_change_plan() {
 
 prepare_gates() {
   local pr="$1"
+  local remote_record="${2:-}"
   local gates_remote_mode
   gates_remote_mode=$(resolve_pr_gates_remote_mode) || return 1
   if [ "$gates_remote_mode" != "local" ] && [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
@@ -417,9 +425,9 @@ prepare_gates() {
     exit 1
   fi
 
-  local remote_record="" changelog_mode
+  local changelog_mode
   if [ "$has_changelog_update" = "true" ]; then
-    remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository,title,baseRefName") || return 1
+    [ -n "$remote_record" ] || remote_record=$(read_pr_observation "$pr") || return 1
     if ! changelog_mode=$(root_changelog_update_allowed_for_pr "$remote_record"); then
       echo "CHANGELOG.md is release-owned, along with CHANGELOG/<version>.md and matching records; normal PRs should put release-note context in the PR body or commit message."
       echo "Use release/<version>-main-closeout with the documented title and only that origin-tagged release's artifacts and necessary index update, or set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 for explicit release automation."

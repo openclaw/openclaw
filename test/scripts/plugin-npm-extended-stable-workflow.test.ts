@@ -480,7 +480,13 @@ describe("plugin npm extended-stable workflow", () => {
       toolingTrusted: true,
       candidateMoved: false,
       mainVersion: "2026.9.1",
-      expectedFailure: "only the trailing completed month",
+    },
+    {
+      publishTag: "extended-stable",
+      toolingTrusted: true,
+      candidateMoved: false,
+      mainVersion: "2026.10.1",
+      expectedFailure: "only the two trailing completed months",
     },
     {
       publishTag: "extended-stable",

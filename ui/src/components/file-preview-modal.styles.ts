@@ -33,8 +33,37 @@ export const filePreviewModalStyles = css`
     font-size: 16px;
     overflow-wrap: anywhere;
   }
+  .close-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    color: var(--muted);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: var(--cursor-action);
+  }
+  .close-button:hover {
+    color: var(--text-strong);
+    background: var(--bg-elevated);
+  }
+  .close-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .close-button svg {
+    width: 18px;
+    height: 18px;
+  }
   .body.tree {
     grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  }
+  .tree .item {
+    grid-template-columns: 16px minmax(0, 1fr);
   }
   .folder > summary {
     display: flex;

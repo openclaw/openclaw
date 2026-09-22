@@ -651,8 +651,7 @@ function validateFilesystemDescriptorShape(descriptor: CodexRuntimeFilesystemDes
   }
   if (
     descriptor.managedCommandOrder !== undefined &&
-    descriptor.managedCommandOrder !== "package-first" &&
-    descriptor.managedCommandOrder !== "desktop-first"
+    !["package-first", "package-only", "desktop-first"].includes(descriptor.managedCommandOrder)
   ) {
     throw new Error("Invalid Codex managed command order");
   }

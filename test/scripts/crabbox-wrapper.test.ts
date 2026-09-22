@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -44,10 +45,12 @@ import { withShimFixture } from "./direct-run-entrypoints.test-support.js";
 const tempDirs: string[] = [];
 const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const artifactTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const dependencyTempDirs = useAutoCleanupTempDirTracker(afterAll);
 const repoRoot = process.cwd();
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
 let bundledSetupPath: string;
+let preparedDependencyRoot: string | undefined;
 const fakeCrabboxBinDirs = new Map<string, string>();
 const fakeGitBinDirs = new Map<string, string>();
 const timingPreloads = new Map<string, string>();
@@ -245,6 +248,15 @@ async function main() {
     return;
   }
   const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
+  if (process.env.OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE) {
+    const git = (args) => execFileSync("git", args, { encoding: "utf8" }).trim();
+    const changed = git(["diff", "--name-only", "--no-renames", "main"]).split("\n").filter(Boolean);
+    fs.writeFileSync(process.env.OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE, JSON.stringify({
+      base: git(["rev-parse", "main"]), source: git(["rev-parse", "HEAD"]),
+      head: fs.readFileSync(".git/HEAD", "utf8").trim(),
+      changed,
+    }));
+  }
   if (process.env.OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO) fs.copyFileSync(bundlePath, process.env.OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO);
   process.stdout.write(JSON.stringify({ args, cwd: process.cwd(), scriptContent }) + "\n");
 }
@@ -4267,6 +4279,8 @@ process.on("uncaughtExceptionMonitor", (error) => {
         OPENCLAW_CRABBOX_SYNC_TMPDIR: path.join(root, "sync"),
         OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
         OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO: capturedBundle,
+        OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE:
+          provider === "blacksmith-testbox" ? path.join(root, "native-sync.json") : "",
         OPENCLAW_FAKE_CRABBOX_PRIVACY_PATHS: JSON.stringify([
           "private-canary.txt",
           "protected-deleted.ignored",
@@ -4419,6 +4433,16 @@ process.on("uncaughtExceptionMonitor", (error) => {
         );
         expect(result.status, failureDetail(result)).toBe(0);
         const run = expectSuccessfulWrapperRun(result);
+        let changed: string[] = [];
+        if (provider === "blacksmith-testbox") {
+          const native = JSON.parse(
+            readFileSync(env.OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE, "utf8"),
+          );
+          const source = git(producer, ["rev-parse", "HEAD"]);
+          expect(native).toMatchObject({ base, source, head: source });
+          expect(native.changed).toContain(".openclaw-crabbox-changed-gate.bundle");
+          changed = native.changed;
+        }
         expect(existsSync(run.output.cwd)).toBe(false);
         expect(readdirSync(path.join(root, "sync"))).toEqual([]);
         return {
@@ -4430,6 +4454,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
             ? run.output.args.slice(run.output.args.indexOf("--") + 1)
             : [],
           bundle: readFileSync(capturedBundle),
+          changed,
         };
       };
       const receive = (
@@ -4545,12 +4570,16 @@ process.on("uncaughtExceptionMonitor", (error) => {
         const { environment } = pnpmLockfileDocuments(
           readFileSync(path.join(repoRoot, "pnpm-lock.yaml"), "utf8"),
         );
+        const dependencyRoot =
+          preparedDependencyRoot ?? dependencyTempDirs.make("openclaw-capsule-dependencies-");
+        const hydratedSource = path.join(dependencyRoot, "a");
+        const selectedSource = path.join(dependencyRoot, "b");
         const dependencyEnv = {
           ...env,
           CI: "true",
           PATH: [path.dirname(process.execPath), env.PATH].join(path.delimiter),
-          PNPM_CONFIG_STORE_DIR: path.join(root, "dependency-store"),
-          PNPM_CONFIG_CACHE_DIR: path.join(root, "dependency-cache"),
+          PNPM_CONFIG_STORE_DIR: path.join(dependencyRoot, "store"),
+          PNPM_CONFIG_CACHE_DIR: path.join(dependencyRoot, "cache"),
         };
         const runPnpm = (directory: string, args: string[]) => {
           const runner = resolvePnpmRunner({ cwd: directory, env: dependencyEnv });
@@ -4606,10 +4635,20 @@ process.on("uncaughtExceptionMonitor", (error) => {
               "\nnode_modules/\n.capsule-proof/\n",
           );
         };
-        writeDependencySource(producer, "b");
-        const version = runPnpm(producer, ["--version"]);
-        expect("pnpm@" + version.stdout.trim()).toBe(packageManager.split("+")[0]);
-        runPnpm(producer, ["install", "--lockfile-only"]);
+        if (!preparedDependencyRoot) {
+          writeDependencySource(hydratedSource, "a");
+          writeDependencySource(selectedSource, "b");
+          const version = runPnpm(hydratedSource, ["--version"]);
+          expect("pnpm@" + version.stdout.trim()).toBe(packageManager.split("+")[0]);
+          runPnpm(hydratedSource, ["install", "--lockfile-only"]);
+          runPnpm(hydratedSource, ["install", "--frozen-lockfile"]);
+          runPnpm(selectedSource, ["install", "--lockfile-only"]);
+          preparedDependencyRoot = dependencyRoot;
+        }
+        // Copy relative package links verbatim; each receiver owns its modules while
+        // retaining the prepared store identity required by pnpm's install metadata.
+        const copyOptions = { recursive: true, verbatimSymlinks: true };
+        cpSync(selectedSource, producer, copyOptions);
         mkdirSync(path.dirname(path.join(producer, installOwner)), { recursive: true });
         writeFileSync(path.join(producer, installOwner), installer);
         writeFileSync(
@@ -4680,14 +4719,12 @@ process.on("uncaughtExceptionMonitor", (error) => {
           true,
           [],
           (receiver) => {
-            writeDependencySource(receiver, "a");
-            runPnpm(receiver, ["install", "--lockfile-only"]);
-            runPnpm(receiver, ["install", "--frozen-lockfile"]);
+            cpSync(hydratedSource, receiver, copyOptions);
             const probe = runCommand(
               process.execPath,
               [
                 "-e",
-                'process.stdout.write(require("node:module").createRequire(process.cwd() + "/packages/consumer/package.json")("capsule-proof-dep"))',
+                'const dependency = require("node:module").createRequire(process.cwd() + "/packages/consumer/package.json"); process.stdout.write(JSON.stringify({ graph: dependency("capsule-proof-dep"), file: dependency.resolve("capsule-proof-dep") }))',
               ],
               {
                 cwd: receiver,
@@ -4697,7 +4734,9 @@ process.on("uncaughtExceptionMonitor", (error) => {
             );
             expect(probe.error, failureDetail(probe)).toBeUndefined();
             expect(probe.status, failureDetail(probe)).toBe(0);
-            preparedGraph = probe.stdout;
+            const prepared: { graph: string; file: string } = JSON.parse(probe.stdout);
+            preparedGraph = prepared.graph;
+            expect(prepared.file.startsWith(receiver + path.sep)).toBe(true);
           },
         );
         expect(preparedGraph).toBe("graph-a");
@@ -4901,6 +4940,8 @@ process.on("uncaughtExceptionMonitor", (error) => {
 
       writeFileSync(path.join(producer, "owner.txt"), "committed\n");
       git(producer, ["add", "owner.txt"]);
+      writeFileSync(path.join(producer, "committed-only.txt"), "committed source\n");
+      git(producer, ["add", "committed-only.txt"]);
       if (replacedHistory) {
         rmSync(path.join(producer, "removed-kind.ignored"));
         mkdirSync(path.join(producer, "removed-kind.ignored"));
@@ -5005,6 +5046,23 @@ process.on("uncaughtExceptionMonitor", (error) => {
         ? readFileSync(path.join(producer, ".git", "shallow"))
         : undefined;
       const candidate = runSender();
+      if (provider === "blacksmith-testbox") {
+        expect(candidate.changed).toEqual(
+          expect.arrayContaining([
+            "committed-only.txt",
+            "owner.txt",
+            "deleted.txt",
+            "rename-before.txt",
+            "renamed.txt",
+            "staged.ignored",
+            "untracked.txt",
+          ]),
+        );
+        expect(candidate.changed).not.toContain("unchanged.bin");
+        for (const file of privatePaths) {
+          expect(candidate.changed).not.toContain(file);
+        }
+      }
       // A change must not resend the unchanged, incompressible base blob.
       expect(candidate.bundle.length).toBeLessThan(unchanged.length);
       expect(git(producer, ["rev-parse", "HEAD"])).toBe(headBefore);
@@ -6034,6 +6092,7 @@ cp.spawnSync = (command, args, options) => {
         expect(failure.message).toContain(
           "wrapper readiness not observed within 8 s; last observed phase loading wrapper",
         );
+        expect(failure.message).not.toContain("fixture teardown could not be verified");
         expect(failure.message).not.toContain("fixture writers did not settle");
         expect(failure.message).not.toContain("fixture ownership receipts are incomplete");
         expect(existsSync(path.join(retained, "run.spawned"))).toBe(false);

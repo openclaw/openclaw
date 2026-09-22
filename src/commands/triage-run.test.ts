@@ -203,7 +203,7 @@ describe("triage --run", () => {
     expect(output).toContain("openclaw update repair");
     expect(output).not.toContain("already resolved");
     if (pendingMigration) {
-      expect(output).toContain('Plugin "codex" state migration is pending');
+      expect(output).toContain('Plugin "codex" data/settings upgrade is unfinished');
     }
     expect(getUpdateRun(run.runId)?.status).toBe("failed");
     expect(await readRestartSentinelReadOnly()).toBeNull();

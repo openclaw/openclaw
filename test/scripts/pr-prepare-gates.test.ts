@@ -192,7 +192,6 @@ function prepareSyncHeadStubs(): string[] {
     "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
     "hosted_sha=$(cat .local/hosted-sha)",
     'pr_gh() { printf "%s\\n" "$hosted_sha"; }',
-    "verify_pr_head_branch_matches_expected() { :; }",
     'verify_prep_head_extends_hosted_head() { git merge-base --is-ancestor "$1" HEAD; }',
     "push_prep_head_to_pr_branch() {",
     '  local result_env="$5"',
@@ -241,6 +240,26 @@ function makePublisherRepo() {
   git("--git-dir", remote, "symbolic-ref", "refs/pull/4242/head", "refs/heads/topic");
   const local = join(repoDir, ".local");
   mkdirSync(local);
+  const observation = {
+    number: 4242,
+    url: "https://github.com/fixture/repo/pull/4242",
+    state: "OPEN",
+    baseRefName: "main",
+    baseRepository: {
+      id: "R_fixture",
+      databaseId: 1,
+      nameWithOwner: "fixture/repo",
+      url: "https://github.com/fixture/repo",
+    },
+    headRefName: "topic",
+    headRefOid: source,
+    headRepository: { nameWithOwner: "fixture/repo" },
+    headRepositoryOwner: { login: "fixture" },
+    isCrossRepository: false,
+  };
+  writeFileSync(join(local, "pr-meta.json"), JSON.stringify(observation));
+  writeFileSync(join(local, "remote-observation.json"), JSON.stringify(observation));
+  writeFileSync(join(local, "github-reads"), "");
   writeFileSync(
     join(local, "pr-meta.env"),
     `PR_NUMBER=4242\nPR_AUTHOR=fixture\nPR_HEAD=topic\nPR_HEAD_SHA=${source}\n`,
@@ -255,7 +274,19 @@ function makePublisherRepo() {
   );
   writeFileSync(join(local, "prep.md"), "# Prepare\n");
   writeFileSync(join(local, "events"), "");
-  return { repoDir, remote, local, env, git, base, source, candidate, sameTree, advance };
+  return {
+    repoDir,
+    remote,
+    local,
+    env,
+    git,
+    base,
+    source,
+    candidate,
+    sameTree,
+    advance,
+    observation,
+  };
 }
 
 function runPublisher(
@@ -272,14 +303,14 @@ function runPublisher(
       'resolve_contributor_coauthor_email() { printf "fixture@example.invalid\\n"; }',
       'remote_head() { command git --git-dir="$remote" rev-parse refs/heads/topic; }',
       "pr_gh() {",
+      '  echo "$*" >> .local/github-reads',
       '  case "$*" in',
-      '    *headRepository*) jq -nc --arg sha "$(remote_head)" \'{headRefName:"topic",headRefOid:$sha,headRepository:{nameWithOwner:"fixture/repo"},headRepositoryOwner:{login:"fixture"}}\';;',
+      '    *headRepository*) jq -c --arg sha "$(remote_head)" ".headRefOid = \\$sha" .local/remote-observation.json;;',
       '    *headRefName*) printf \'{"headRefName":"topic"}\\n\';;',
       "    *headRefOid*) remote_head;;",
       '    *) echo "unexpected GitHub request" >&2; return 98;;',
       "  esac",
       "}",
-      'wait_for_pr_head_sha() { test "$(remote_head)" = "$2"; }',
       "run_prepare_push_retry_gates() { echo retry-gates >> .local/events; }",
       "pr_git() {",
       '  case "$1" in',
@@ -340,6 +371,59 @@ describe("PR publication ownership", () => {
       );
       expect(readFileSync(join(f.local, "prep.md"), "utf8")).toContain("GitHub gates deferred");
       expect(readFileSync(join(f.local, "prep.md"), "utf8")).not.toContain("Gates passed");
+    },
+  );
+
+  it.each(["git", "graphql"])(
+    "revalidates identity after %s publication planning and before the write",
+    (transport) => {
+      const f = makePublisherRepo();
+      const result = runPublisher(f, "prepare_sync_head 4242", [
+        `OPENCLAW_PR_PUSH_MODE=${transport}`,
+        "PR_HEAD_OWNER=fixture",
+        "PR_HEAD_REPO_NAME=repo",
+        "pr_git() {",
+        `  if [ "$1" = verify-commit ] || [ "$*" = 'log -1 --format=%b HEAD' ]; then`,
+        "    jq '.headRepository.nameWithOwner = \"replacement/repo\"' .local/remote-observation.json > .local/changed-observation.json",
+        "    mv .local/changed-observation.json .local/remote-observation.json",
+        '    [ "$1" != verify-commit ] || return 0',
+        "  fi",
+        '  [ "$1" != push ] || echo push >> .local/events',
+        '  command git "$@"',
+        "}",
+      ]);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain("PR identity changed");
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+    },
+  );
+
+  it.each(["head-repository", "base-repository", "base-branch", "closed"])(
+    "refuses changed %s identity before publication without relying on a matching head",
+    (movement) => {
+      const f = makePublisherRepo();
+      const remote = structuredClone(f.observation);
+      if (movement === "head-repository") {
+        remote.headRepository.nameWithOwner = "foreign/repo";
+      }
+      if (movement === "base-repository") {
+        remote.baseRepository.id = "R_replacement";
+      }
+      if (movement === "base-branch") {
+        remote.baseRefName = "release";
+      }
+      if (movement === "closed") {
+        remote.state = "CLOSED";
+      }
+      writeFileSync(join(f.local, "remote-observation.json"), JSON.stringify(remote));
+      const result = runPublisher(f);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain("PR identity changed");
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
     },
   );
 
@@ -408,6 +492,7 @@ describe("PR publication ownership", () => {
           ? [
               "wait_for_pr_head_sha() {",
               '  test "$(remote_head)" = "$2" || return 1',
+              '  pr_observe "$1" || return 1',
               `  command git --git-dir="$remote" update-ref refs/heads/topic ${f.sameTree}`,
               "}",
             ]
@@ -438,7 +523,7 @@ describe("PR publication ownership", () => {
       [
         `PRHEAD_REMOTE_URL='${f.remote}'`,
         'pr_git() { if [ "$1" = push ]; then echo "transport failed" >&2; return 73; fi; command git "$@"; }',
-        `if oid=$(push_prep_head_once topic ${f.source} ${f.candidate}); then exit 99; else status=$?; fi`,
+        `if oid=$(push_prep_head_once topic ${f.source} ${f.candidate} 4242 "$(cat .local/pr-meta.json)"); then exit 99; else status=$?; fi`,
         'test -z "$oid"',
         'exit "$status"',
       ].join("\n"),
@@ -460,6 +545,7 @@ describe("PR publication ownership", () => {
       f.git("commit", "-qm", "another reviewed fixup", "--allow-empty");
     }
     expect(readFileSync(join(f.local, "events"), "utf8")).toBe("push\npush\n");
+    expect(readFileSync(join(f.local, "github-reads"), "utf8").trim().split("\n")).toHaveLength(6);
     expect(f.git("merge-base", f.source, "HEAD")).toBe(f.source);
   });
 
@@ -469,6 +555,7 @@ describe("PR publication ownership", () => {
     const result = runPublisher(f);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+    expect(readFileSync(join(f.local, "github-reads"), "utf8").trim().split("\n")).toHaveLength(3);
     expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
       `PREP_HEAD_SHA=${f.candidate}\n`,
     );
@@ -912,10 +999,10 @@ describe("prepare author access snapshot", () => {
     const result = runGatesBash(
       [
         "pr_gh() {",
-        `  if [ "$1 $2" = "repo view" ]; then printf '{"nameWithOwner":"fixture/repo","url":"https://github.com/fixture/repo"}\\n';`,
-        `  else printf '{"permission":"${permission}"}\\n'; fi`,
+        '  test "$*" = "author-permission fixture/repo github.com fixture" || return 99',
+        `  printf '{"permission":"${permission}"}\\n'`,
         "}",
-        "resolve_pr_author_access_at_prepare fixture",
+        "resolve_pr_author_access_at_prepare fixture fixture/repo github.com",
       ].join("\n"),
       { sourcePrepareCore: true },
     );
@@ -928,10 +1015,10 @@ describe("prepare author access snapshot", () => {
     const result = runGatesBash(
       [
         "pr_gh() {",
-        `  if [ "$1 $2" = "repo view" ]; then printf '{"nameWithOwner":"fixture/repo","url":"https://github.com/fixture/repo"}\\n';`,
-        mode === "error" ? "  else return 1; fi" : "  else printf '{}\\n'; fi",
+        '  test "$*" = "author-permission fixture/repo github.com fixture" || return 99',
+        mode === "error" ? "  return 1" : "  printf '{}\\n'",
         "}",
-        "resolve_pr_author_access_at_prepare fixture",
+        "resolve_pr_author_access_at_prepare fixture fixture/repo github.com",
       ].join("\n"),
       { sourcePrepareCore: true },
     );
@@ -993,7 +1080,6 @@ describe("prepare push head drift", () => {
         "enter_worktree() { refresh_main_snapshot; }",
         `reviewed_head='${reviewedHead}'`,
         'pr_gh() { printf "%s\\n" "$reviewed_head"; }',
-        "verify_pr_head_branch_matches_expected() { :; }",
         "prepare_gates() {",
         "  touch .local/gates-reran",
         "  printf 'DOCS_ONLY=false\\nGATES_MODE=fresh\\n' > .local/gates.env",
@@ -1069,7 +1155,8 @@ describe("GraphQL fork publication", () => {
     const result = runGatesBash(
       [
         'pr_gh_plain() { cp "$4" .local/graphql-payload.json; printf \'%s\\n\' \'{"data":{"createCommitOnBranch":{"commit":{"oid":"signed-head","url":"https://example.test/commit"}}}}\'; }',
-        `graphql_push_to_fork example/repo topic ${headSha}`,
+        "revalidate_pr_publication() { :; }",
+        `graphql_push_to_fork example/repo topic ${headSha} 42 '{}' HEAD`,
         'test "$(jq -r .variables.input.message.headline .local/graphql-payload.json)" = "reviewed fixup"',
         'test "$(jq -r .variables.input.message.body .local/graphql-payload.json)" = "Co-authored-by: Helper <helper@example.com>"',
       ].join("\n"),
@@ -1099,7 +1186,7 @@ describe("GraphQL fork publication", () => {
     const result = runGatesBash(
       [
         "pr_gh_plain() { touch .local/gh-called; return 99; }",
-        `graphql_push_to_fork example/repo topic ${headSha}`,
+        `graphql_push_to_fork example/repo topic ${headSha} 42 '{}' HEAD`,
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
     );
@@ -1138,7 +1225,7 @@ describe("GraphQL fork publication", () => {
     const result = runGatesBash(
       [
         "pr_gh_plain() { touch .local/gh-called; return 99; }",
-        `graphql_push_to_fork example/repo topic ${headSha}`,
+        `graphql_push_to_fork example/repo topic ${headSha} 42 '{}' HEAD`,
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
     );
@@ -1178,7 +1265,8 @@ describe("fork publication transport", () => {
         "PRHEAD_REMOTE_URL=https://github.com/contributor/repo.git",
         "pr_git() { printf '%s\\n' \"$*\" >> .local/git-calls; case \"$1\" in rev-list) printf '%s\\n' prepared;; esac; return 0; }",
         "graphql_push_to_fork() { touch .local/graphql-called; return 99; }",
-        "push_prep_head_once topic hosted prepared",
+        "revalidate_pr_publication() { :; }",
+        "push_prep_head_once topic hosted prepared 42 '{}'",
         "grep -F 'verify-commit prepared' .local/git-calls",
         "grep -F 'push --force-with-lease=refs/heads/topic:hosted https://github.com/contributor/repo.git prepared:refs/heads/topic' .local/git-calls",
         "test ! -e .local/graphql-called",
@@ -1199,7 +1287,7 @@ describe("fork publication transport", () => {
         "PRHEAD_REMOTE_URL=https://github.com/contributor/repo.git",
         "pr_git() { case \"$1\" in rev-list) printf '%s\\n' prepared;; verify-commit) return 1;; esac; return 0; }",
         "graphql_push_to_fork() { touch .local/graphql-called; printf '%s\\n' signed-head; }",
-        "push_prep_head_once topic hosted prepared",
+        "push_prep_head_once topic hosted prepared 42 '{}'",
         "test -e .local/graphql-called",
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
@@ -1285,7 +1373,12 @@ describe("prepare gate stamp transitions", () => {
       const reusedBase = "3".repeat(40);
       const mainSha = "4".repeat(40);
       const currentBase = incorporated ? "5".repeat(40) : reusedBase;
-      const remote = { headRefName: "topic", headRefOid: currentHead, isCrossRepository: false };
+      const remote = {
+        headRefName: "topic",
+        headRefOid: currentHead,
+        isCrossRepository: false,
+        baseRepository: { nameWithOwner: "example/project" },
+      };
       writeFileSync(
         join(dir, ".local", "gates-hosted-checks.json"),
         JSON.stringify({
@@ -1301,8 +1394,8 @@ describe("prepare gate stamp transitions", () => {
         `
 source '${repoRoot}/scripts/pr-lib/merge.sh'
 PR_MAIN_SHA=${mainSha}
-pr_gh() { printf '%s\\n' 'example/project'; }
-run_quiet_logged() { return 0; }
+pr_gh() { echo 'carried observation must avoid another GitHub lookup' >&2; return 99; }
+run_quiet_logged() { cat >/dev/null; }
 pr_git() {
   case "$*" in
     "rev-parse ${currentHead}^") return 1 ;;
@@ -1388,8 +1481,8 @@ fi
     );
     const result = runGatesBash(
       [
-        `pr_gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${currentHead}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
-        "run_quiet_logged() { printf 'ARG:%s\\n' \"$@\"; }",
+        `pr_gh() { test "$1" = pr || return 99; printf '{"headRefName":"topic","headRefOid":"${currentHead}","isCrossRepository":false,"baseRepository":{"nameWithOwner":"openclaw/openclaw"}}\\n'; }`,
+        "run_quiet_logged() { cat >/dev/null; printf 'ARG:%s\\n' \"$@\"; }",
         "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${currentHead} false`,
       ].join("\n"),
@@ -1408,9 +1501,9 @@ fi
     const { repoDir, headSha } = makeRetryRepo();
     const result = runGatesBash(
       [
-        `pr_gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
+        `pr_gh() { test "$1" = pr || return 99; printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":false,"baseRepository":{"nameWithOwner":"openclaw/openclaw"}}\\n'; }`,
         'rg() { command grep -F -q "$3" "$4"; }',
-        `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        `run_quiet_logged() { cat >/dev/null; printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
         "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${headSha} false`,
       ].join("\n"),
@@ -1428,9 +1521,9 @@ fi
     const { repoDir, headSha } = makeRetryRepo();
     const result = runGatesBash(
       [
-        `pr_gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":true}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
+        `pr_gh() { test "$1" = pr || return 99; printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":true,"baseRepository":{"nameWithOwner":"openclaw/openclaw"}}\\n'; }`,
         'rg() { command grep -F -q "$3" "$4"; }',
-        `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        `run_quiet_logged() { cat >/dev/null; printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
         "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${headSha} false`,
       ].join("\n"),

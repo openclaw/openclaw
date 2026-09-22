@@ -11,6 +11,8 @@ import { parseCompactSplitTimingKey } from "./vitest-shard-metadata.mts";
 export type CiTimingRun = {
   id: number;
   createdAt: string;
+  /** Failed workflows supply positive samples, never evidence that absent keys disappeared. */
+  completeInventory: boolean;
   logs: (
     | { kind: "uiE2e" | "repoE2e"; text: string }
     | { kind: "compact" | "tooling"; text: string; labels: string[] }
@@ -378,6 +380,7 @@ export function refitTestTimings(
     const retained = uniqueRuns.get(run.id);
     if (retained) {
       retained.logs.push(...run.logs);
+      retained.completeInventory = retained.completeInventory && run.completeInventory;
     } else {
       uniqueRuns.set(run.id, { ...run, logs: [...run.logs] });
     }
@@ -433,6 +436,12 @@ export function refitTestTimings(
     }
   }
 
+  const completeInventoryRuns = new Set(
+    [...uniqueRuns.values()].filter((run) => run.completeInventory).map((run) => run.id),
+  );
+  const pruningRunCount = (profile: keyof typeof contributingRuns) =>
+    [...contributingRuns[profile]].filter((id) => completeInventoryRuns.has(id)).length;
+
   const measuredOverhead =
     overhead.length >= 2 ? Math.max(0, Math.min(5, median(overhead))) : undefined;
   const oldOverhead = previous?.uiE2e.perFileOverheadSeconds;
@@ -445,7 +454,7 @@ export function refitTestTimings(
       refitMap(
         runtimeSamples[profile],
         runtimePlacementSecondsMap(previous?.runtimePlacementTimings[profile]),
-        contributingRuns[profile].size,
+        pruningRunCount(profile),
       ),
     ).map(([identity, measuredSeconds]) =>
       Object.assign({}, runtimeDescriptors.get(identity)!, { seconds: measuredSeconds }),
@@ -456,20 +465,20 @@ export function refitTestTimings(
       blacksmith: refitMap(
         samples.blacksmith,
         previous?.compactGroupSeconds.blacksmith,
-        contributingRuns.blacksmith.size,
+        pruningRunCount("blacksmith"),
         observedParents.blacksmith,
       ),
       github: refitMap(
         samples.github,
         previous?.compactGroupSeconds.github,
-        contributingRuns.github.size,
+        pruningRunCount("github"),
         observedParents.github,
       ),
     },
     repoE2eFileSeconds: refitMap(
       samples.repoE2e,
       previous?.repoE2eFileSeconds,
-      contributingRuns.repoE2e.size,
+      pruningRunCount("repoE2e"),
     ),
     runtimePlacementTimings: {
       blacksmith: refitRuntime("blacksmith"),
@@ -477,7 +486,7 @@ export function refitTestTimings(
     },
     source: options.seedTooling
       ? `tooling seed from successful pull_request CI merge-ref runs: ${runIds.join(", ")}; retained other timings: ${previous?.source ?? "none"}`
-      : `median of ${runIds.length} successful CI and release-check runs: ${runIds.join(", ")}`,
+      : `median of successful timing jobs from ${runIds.length} CI and release-check runs: ${runIds.join(", ")}`,
     // PR plans may select only part of tooling. Absence is not evidence that
     // a file disappeared; preserve unobserved measurements across those windows.
     toolingFileSeconds: {
@@ -497,11 +506,7 @@ export function refitTestTimings(
       ),
     },
     uiE2e: {
-      fileSeconds: refitMap(
-        samples.uiE2e,
-        previous?.uiE2e.fileSeconds,
-        contributingRuns.uiE2e.size,
-      ),
+      fileSeconds: refitMap(samples.uiE2e, previous?.uiE2e.fileSeconds, pruningRunCount("uiE2e")),
       perFileOverheadSeconds: keepOverhead
         ? (oldOverhead ?? 0)
         : Math.round(measuredOverhead * 10) / 10,

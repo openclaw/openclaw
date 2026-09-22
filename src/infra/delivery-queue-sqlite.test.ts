@@ -14,13 +14,15 @@ import {
   countPendingDeliveryQueueEntries,
   deleteDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
-  getDeliveryQueueEntryOwners,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   pruneExpiredDeliveryQueueTombstones,
   updateDeliveryQueueEntry,
 } from "./delivery-queue-sqlite.js";
-import { completeDeliveryQueueEntryInDatabase } from "./delivery-queue-sqlite.kernel.js";
+import {
+  completeDeliveryQueueEntryInDatabase,
+  getDeliveryQueueEntryOwnersInDatabase,
+} from "./delivery-queue-sqlite.kernel.js";
 import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
 import {
   claimDeliveryQueueEntryForTest,
@@ -149,14 +151,14 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       };
       seedDeliveryQueueEntry({ queueName: status, entry, status, stateDir });
     }
-    const { db } = openOpenClawStateDatabase({
+    const database = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
-    const reads = trackSqliteStatementExecutions(db, ["owners"], (sql) =>
+    const reads = trackSqliteStatementExecutions(database.db, ["owners"], (sql) =>
       sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"') ? "owners" : null,
     );
     try {
-      expect(getDeliveryQueueEntryOwners(["pending", "failed"], id, stateDir)).toEqual(
+      expect(getDeliveryQueueEntryOwnersInDatabase(database, ["pending", "failed"], id)).toEqual(
         new Map([
           ["failed", { status: "failed", settlementPending: true }],
           ["pending", { status: "pending" }],
@@ -574,9 +576,20 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         completeDeliveryQueueEntryInDatabase(database, QUEUE, id);
 
         vi.setSystemTime(Date.now() + boundedCronRetention.maxAgeMs - 1);
-        expect(getDeliveryQueueEntryStatus(QUEUE, id, stateDir)).toBe("completed");
-        vi.setSystemTime(Date.now() + 2);
-        expect(getDeliveryQueueEntryStatus(QUEUE, id, stateDir)).toBeUndefined();
+        const reads = trackSqliteStatementExecutions(database.db, ["owners"], (sql) =>
+          sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"')
+            ? "owners"
+            : null,
+        );
+        try {
+          expect(getDeliveryQueueEntryStatus(QUEUE, id, stateDir)).toBe("completed");
+          expect(reads.counts.owners).toBeLessThanOrEqual(1);
+          expect(reads.rowCounts.owners).toBe(1);
+          vi.setSystemTime(Date.now() + 2);
+          expect(getDeliveryQueueEntryStatus(QUEUE, id, stateDir)).toBeUndefined();
+        } finally {
+          reads.restore();
+        }
       } finally {
         vi.useRealTimers();
       }

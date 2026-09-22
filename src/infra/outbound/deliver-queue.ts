@@ -59,7 +59,7 @@ import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 const log = createSubsystemLogger("outbound/deliver");
 
 function isReusablePreparedDeliveryOwner(
-  owner: ReturnType<typeof findDeliveryIntentOwner>,
+  owner: Awaited<ReturnType<typeof findDeliveryIntentOwner>>,
 ): boolean {
   // Pending recovery or a retained completion receipt already owns the effect.
   // A replaying producer accepts that custody instead of creating another send.
@@ -170,12 +170,14 @@ async function runOutboundDeliveryWithIntent(
       return claim.value;
     }
     const owner = params.reusePendingDeliveryIntent
-      ? findDeliveryIntentOwner(
+      ? await findDeliveryIntentOwner(
           stableIntentId,
           params.deliveryQueueStateDir,
           params.deliveryQueueStateContext,
         )
       : null;
+    throwIfAborted(params.abortSignal);
+    params.deliveryQueueStateContext?.workerContext.admission.assertCurrent();
     if (isReusablePreparedDeliveryOwner(owner)) {
       return [];
     }
@@ -335,11 +337,14 @@ async function runOutboundDeliveryWithQueue(
       )
     : null;
   if (params.deliveryIntentId && !existingStableDelivery && !stablePreparationOwner) {
-    const owner = findDeliveryIntentOwner(
+    const owner = await findDeliveryIntentOwner(
       params.deliveryIntentId,
       params.deliveryQueueStateDir,
       params.deliveryQueueStateContext,
     );
+    throwIfAborted(params.abortSignal);
+    params.deliveryQueueOwner?.signal?.throwIfAborted();
+    params.deliveryQueueStateContext?.workerContext.admission.assertCurrent();
     if (owner) {
       if (params.reusePendingDeliveryIntent && isReusablePreparedDeliveryOwner(owner)) {
         return [];

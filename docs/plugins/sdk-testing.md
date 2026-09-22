@@ -260,6 +260,11 @@ the plugin's manifest metadata once, installs and clears that snapshot around
 each test, and rejects Jiti loading during assertions. This keeps cold runtime
 discovery out of catalog test deadlines without changing provider behavior.
 
+Pass additional manifest roots when a case exercises another provider's endpoints,
+for example `useProviderCatalogMetadata(new URL(".", import.meta.url), new URL("../google/", import.meta.url))`.
+Assert the endpoint class in route-specific cases so missing metadata cannot turn
+a provider route into an unintended custom-endpoint case.
+
 ```typescript
 import { describe, it, expect } from "vitest";
 

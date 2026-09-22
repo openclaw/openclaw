@@ -9,6 +9,9 @@ describe("resolveTelegramDmHistoryLimit", () => {
   it("honors and clamps the account limit", () => {
     expect(resolveTelegramDmHistoryLimit({ config: { dmHistoryLimit: 4 } })).toBe(4);
     expect(resolveTelegramDmHistoryLimit({ config: { dmHistoryLimit: -1 } })).toBe(0);
+    expect(
+      resolveTelegramDmHistoryLimit({ config: { dmHistoryLimit: Number.MAX_SAFE_INTEGER } }),
+    ).toBe(10);
   });
 
   it("prefers the sender override over the account limit", () => {

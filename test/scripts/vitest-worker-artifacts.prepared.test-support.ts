@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import { verifyVitestWorkerArtifacts } from "../../scripts/lib/vitest-worker-artifacts.mts";
+import { formatErrorMessage } from "../../src/infra/errors.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../vitest/vitest.timeouts.js";
@@ -58,8 +59,17 @@ export function createPreparedWorkerCompiler() {
         `import fs from 'node:fs';
 import {registerHooks} from 'node:module';
 const compiler = ${JSON.stringify(pathToFileURL(compiler).href)};
+const buildEntries = ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/vitest-worker-build-entries.mts")).href)};
 registerHooks({load(url,context,nextLoad) {
   const narrow = globalThis[Symbol.for('openclaw.fixture.realCompiler')];
+  // These tests inspect only the declaration in the unbundled legacy graph.
+  // The CLI finalizer fixture owns the unbundled updater execution proof.
+  if(url===buildEntries && process.argv[1]===${JSON.stringify(compiler)} && process.argv[2]===${JSON.stringify(template)}) {
+    const original=JSON.stringify(buildEntries+'?fixture-original');
+    return {format:'module',shortCircuit:true,source:
+      'export * from '+original+';import * as original from '+original+';'+
+      'export const preservedModuleBuildSources=original.preservedModuleBuildSources.filter(source=>source==="src/infra/runtime-process-entrypoints.ts");'};
+  }
   if(url===${JSON.stringify(tsdown)} && process.argv[1]===${JSON.stringify(compiler)} && !narrow) {
     fs.appendFileSync(${JSON.stringify(receipt)},JSON.stringify({kind:'full',directory:process.argv[2]})+'\\n');
   }
@@ -84,7 +94,11 @@ registerHooks({load(url,context,nextLoad) {
           },
         ),
       );
-      expect(result.status, result.stderr + result.stdout).toBe(0);
+      const preparationError = result.error === undefined ? "" : formatErrorMessage(result.error);
+      expect(
+        result.status,
+        [preparationError, result.stderr, result.stdout].filter(Boolean).join("\n"),
+      ).toBe(0);
       await verifyVitestWorkerArtifacts(template);
       const manifest = JSON.parse(fs.readFileSync(path.join(template, "manifest.json"), "utf8"));
       console.log(`file compiler prepared in ${Math.round(manifest.durationMs)}ms`);
@@ -112,7 +126,7 @@ export function interceptCompilerBuild(directory: string, source: string): strin
 export const vitestWorkerBuildEntries = {
   "infra/sqlite-readonly-location.worker": original.vitestWorkerBuildEntries["infra/sqlite-readonly-location.worker"],
 };
-export const legacyFinalizerBuildSources = original.legacyFinalizerBuildSources.filter(
+export const preservedModuleBuildSources = original.preservedModuleBuildSources.filter(
   source => source === "src/infra/runtime-process-entrypoints.ts",
 );
 `,

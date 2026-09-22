@@ -27,7 +27,6 @@ import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.j
 import { deleteTaskRecordById } from "./task-registry-query.js";
 import { markTaskRunningByRunId } from "./task-registry-record-api.js";
 import { ensureTaskRegistryReadyAsync, taskFlowSyncOwner } from "./task-registry-state.js";
-import { runTaskRecordTransitionOperation } from "./task-registry-transition.operation.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import { bindTaskRunOwner, getTaskRunOwner } from "./task-run-owner.js";
@@ -100,31 +99,17 @@ async function fixture(
         | TaskInitialWorkerOperations[Key]["output"]
         | Promise<TaskInitialWorkerOperations[Key]["output"]>;
     } = {
+      "tasks.acknowledgeStateChange": (input) =>
+        originalCreate(
+          context,
+          { type: "tasks.acknowledgeStateChange", input },
+          assertCurrent,
+          onGranted,
+        ),
       "tasks.createRecord": (input) =>
         originalCreate(context, { type: "tasks.createRecord", input }, assertCurrent, onGranted),
       "tasks.settleUnstarted": (input) =>
-        runTaskRecordTransitionOperation(
-          {
-            kind: "state",
-            taskId: input.taskId,
-            now: input.now,
-            expectedTask: input.expectedTask,
-            params: { ...input.terminal, runId: input.expectedTask.runId },
-          },
-          {
-            readCurrent: () => store.loadSnapshot().tasks.get(input.taskId),
-            // The fixture uses CLI records; no ACP or subagent backing is involved.
-            hasAuthoritativeBacking: (task) => task.runtime === "cli",
-            write: (write) => write(),
-            assertCurrent,
-            upsertTask: (task) => {
-              store.upsertTaskWithDeliveryState({ task });
-              return true;
-            },
-            deferCommit: (publish) => publish(),
-            onCommitted() {},
-          },
-        ),
+        originalCreate(context, { type: "tasks.settleUnstarted", input }, assertCurrent, onGranted),
       "flows.finalizeTaskCancellation": (input) => {
         beforeFinalize(input);
         const task = store.loadSnapshot().tasks.get(input.taskId) ?? null;

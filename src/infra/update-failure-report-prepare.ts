@@ -25,6 +25,7 @@ import {
   isPublicUpdateFailureCode,
   projectPublicUpdateFailureIdentifiers,
 } from "./update-failure-public-identifiers.js";
+import { formatNpmFailureFacts } from "./update-npm-failure.js";
 import { updatePreflightDetailMessage } from "./update-preflight-details.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
@@ -39,8 +40,8 @@ import {
   updateRunReportInputFromResult,
 } from "./update-run-report.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
-import { isFailedUpdateStep } from "./update-run-step.js";
-import type { UpdateRunResult, UpdateStepResult } from "./update-runner.js";
+import { isFailedUpdateStep, updateRunWarningMessages } from "./update-run-step.js";
+import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
 import { resolvePublicUpdateStepId } from "./update-step-identity.js";
 
 const UPDATE_REPORT_BODY_MAX_BYTES = 16_000;
@@ -300,24 +301,27 @@ async function renderBoundedDiagnostics(
           ? diagnostic
           : `${exit} (${diagnostic})`;
     diagnostics.push(`Failed phase ${phase}: ${detail}${termination}`);
+    diagnostics.push(...formatNpmFailureFacts(step.failureFacts ?? [], context));
     diagnostics.push(
       ...(await Promise.all(
-        normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env).map(async (fact) =>
-          formatUpdateFailureFact({
-            ...(await projectPublicUpdateFailureIdentifiers(fact)),
-            ...(fact.location ? { location: fact.location } : {}),
-            ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
-            ...(fact.message
-              ? {
-                  message:
-                    updatePreflightDetailMessage(fact.code) ??
-                    (fact.errorName
-                      ? redactSupportDiagnosticLine(fact.message, context)
-                      : redactPublicSupportDiagnosticLine(fact.message, context)),
-                }
-              : {}),
-          }),
-        ),
+        normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env)
+          .filter((fact) => fact.check !== "npm")
+          .map(async (fact) =>
+            formatUpdateFailureFact({
+              ...(await projectPublicUpdateFailureIdentifiers(fact)),
+              ...(fact.location ? { location: fact.location } : {}),
+              ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
+              ...(fact.message
+                ? {
+                    message:
+                      updatePreflightDetailMessage(fact.code) ??
+                      (fact.errorName
+                        ? redactSupportDiagnosticLine(fact.message, context)
+                        : redactPublicSupportDiagnosticLine(fact.message, context)),
+                  }
+                : {}),
+            }),
+          ),
       )),
     );
   }
@@ -369,6 +373,30 @@ export async function prepareUpdateFailureReport(
   const currentHealth = verification
     ? await readUpdateRunReportHealth(verification, { env })
     : undefined;
+  const warnings = [
+    ...new Set([
+      ...(await Promise.all(
+        (input.result.postUpdate?.plugins?.warnings ?? []).slice(-3).map(async (warning) => {
+          const { code, pluginId } = await projectPublicUpdateFailureIdentifiers({
+            check: "plugin-convergence",
+            code: warning.reason,
+            pluginId: warning.pluginId,
+          });
+          const diagnostic = redactPublicSupportDiagnosticLine(
+            [warning.errorCode, warning.message].filter(Boolean).join("\n"),
+            context,
+          );
+          return `Plugin convergence (${code})${pluginId ? `; plugin ${pluginId}` : ""}: ${diagnostic}`;
+        }),
+      )),
+      ...updateRunWarningMessages([
+        ...(recordedRun?.steps ?? []),
+        ...updateRunReportInputFromResult(input.result).steps,
+      ])
+        .slice(-3)
+        .map((message) => redactPublicSupportDiagnosticLine(message, context)),
+    ]),
+  ];
   const bodyWithoutMarker = [
     "# OpenClaw update failure report",
     "",
@@ -405,6 +433,7 @@ export async function prepareUpdateFailureReport(
           "- Recovery and verification above describe the update attempt, not a current instruction to stop or restart the Gateway.",
         ]
       : []),
+    ...(warnings.length ? ["", "## Warnings", "", ...warnings.map((line) => `- ${line}`)] : []),
     "",
     "## Bounded diagnostics",
     "",

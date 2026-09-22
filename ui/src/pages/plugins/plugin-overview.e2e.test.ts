@@ -74,6 +74,7 @@ describeControlUiE2e("Plugin overview", () => {
                             },
                             hooks: {
                               type: "object",
+                              additionalProperties: false,
                               properties: {
                                 allowPromptInjection: {
                                   type: "boolean",
@@ -108,16 +109,18 @@ describeControlUiE2e("Plugin overview", () => {
         } else {
           await page.goto(`${overviewUrl}?view=settings`);
         }
-        await page.getByRole("heading", { name: "Calendar Plus settings", exact: true }).waitFor();
+        await page
+          .locator(".plugin-editor")
+          .getByRole("searchbox", { name: "Search settings", exact: true })
+          .waitFor();
         await page.getByRole("heading", { name: "Permissions", exact: true }).waitFor();
         await captureScreenshot(page, `direct-settings-${entry}.png`, "viewport");
         const timeZone = page.getByRole("textbox", { name: "Time zone", exact: true });
         await timeZone.waitFor();
         expect(await timeZone.inputValue()).toBe("Europe/Paris");
         expect(await timeZone.isEnabled()).toBe(true);
-        await page.locator("summary").getByText("Hooks", { exact: true }).click();
         const permission = page.getByRole("checkbox", {
-          name: "Allow prompt changes",
+          name: "Add context to prompts",
           exact: true,
         });
         expect(await permission.isEnabled()).toBe(true);
@@ -146,8 +149,34 @@ describeControlUiE2e("Plugin overview", () => {
           .toBe("saved");
         await page.reload();
         await page.getByRole("textbox", { name: "Time zone", exact: true }).waitFor();
-        await page.locator("summary").getByText("Hooks", { exact: true }).click();
         await expect.poll(() => permission.isChecked()).toBe(true);
+        const permissionRow = page.locator('[data-setting="hooks.allowPromptInjection"]');
+        await permissionRow.hover();
+        await permissionRow
+          .getByRole("button", { name: "Actions for Add context to prompts", exact: true })
+          .click();
+        await permissionRow.locator('wa-dropdown-item[value="reset"]').click();
+        await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(1);
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                document.querySelector<HTMLElement & { context: ApplicationContext }>(
+                  "openclaw-plugins-page",
+                )?.context.runtimeConfig.state.configAutoSaveStatus,
+            ),
+          )
+          .toBe("saved");
+        const writes = await gateway.getRequests("config.set");
+        const saved = JSON.parse((writes.at(-1)!.params as { raw: string }).raw);
+        expect(saved.plugins.entries[plugin.id].hooks).toEqual({});
+        expect(saved.plugins.entries[plugin.id].config).toEqual({ timeZone: "Europe/Paris" });
+        await page.reload();
+        await permission.waitFor();
+        await expect.poll(() => permission.isChecked()).toBe(true);
+        expect(
+          await permissionRow.locator('wa-dropdown-item[value="reset"]').getAttribute("disabled"),
+        ).not.toBeNull();
         await captureScreenshot(page, `direct-settings-${entry}-permissions.png`, "viewport");
         expect(new URL(page.url()).pathname).toBe(`/plugins/${plugin.catalogId}`);
         expect(new URL(page.url()).search).toBe("?view=settings");
@@ -207,7 +236,18 @@ describeControlUiE2e("Plugin overview", () => {
         ...pluginMethodResponses(),
         "plugins.list": inventory([calendarPlugin]),
         "plugins.catalog.get": catalog,
-        "plugins.inspect": { ...calendarInspection, catalog },
+        "plugins.inspect": {
+          ...calendarInspection,
+          catalog,
+          components: {
+            ...calendarInspection.components,
+            skills: ["Calendar planning"],
+            mcpServers: ["calendar-mcp"],
+            commands: ["calendar-command"],
+            hooks: ["calendar-hook"],
+            lspServers: ["calendar-lsp"],
+          },
+        },
         "tools.catalog": {
           agentId: "main",
           profiles: [],
@@ -235,7 +275,7 @@ describeControlUiE2e("Plugin overview", () => {
     });
     try {
       await page.goto(`${server.baseUrl}plugins/ch_Y2FsZW5kYXI`);
-      await page.getByRole("button", { name: "Reload Calendar Plus", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
       expect(new URL(page.url()).pathname).toBe("/plugins/ch_Y2FsZW5kYXI");
       expect(await page.locator(".plugin-catalog-detail [role=tablist]").count()).toBe(0);
       expect(
@@ -248,6 +288,11 @@ describeControlUiE2e("Plugin overview", () => {
       expect(await page.locator(".plugin-catalog-detail__readme").textContent()).toContain(
         "README_TAIL",
       );
+      expect(await page.locator(".plugin-capabilities h2").allTextContents()).toEqual([
+        "Skills1",
+        "Tools2",
+        "MCP servers1",
+      ]);
       await page.getByRole("button", { name: /calendar_search/ }).click();
       await page.getByRole("dialog", { name: "calendar_search" }).waitFor();
       expect(await page.locator(".plugin-tool-preview p").textContent()).toBe(description);

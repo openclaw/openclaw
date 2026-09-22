@@ -30,6 +30,30 @@ export type TelegramThreadBindingRecord = {
   metadata?: Record<string, unknown>;
 };
 
+export type TelegramThreadBindingManager = {
+  accountId: string;
+  shouldPersistMutations: () => boolean;
+  getIdleTimeoutMs: () => number;
+  getMaxAgeMs: () => number;
+  getByConversationId: (conversationId: string) => TelegramThreadBindingRecord | undefined;
+  listBySessionKey: (targetSessionKey: string) => TelegramThreadBindingRecord[];
+  listBindings: () => TelegramThreadBindingRecord[];
+  touchConversation: (conversationId: string, at?: number) => TelegramThreadBindingRecord | null;
+  unbindConversation: (params: {
+    conversationId: string;
+    reason?: string;
+    sendFarewell?: boolean;
+    throwOnPersistError?: boolean;
+  }) => TelegramThreadBindingRecord | null;
+  unbindBySessionKey: (params: {
+    targetSessionKey: string;
+    reason?: string;
+    sendFarewell?: boolean;
+    throwOnPersistError?: boolean;
+  }) => TelegramThreadBindingRecord[];
+  stop: () => void;
+};
+
 type StoredTelegramBindingState = {
   version: number;
   bindings: TelegramThreadBindingRecord[];

@@ -75,10 +75,8 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
-import {
-  deliveryContextFromSession,
-  normalizeSessionDeliveryState,
-} from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { getAgentAttemptExecutionMocks } from "./agent-command-state.test-mocks.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
@@ -563,7 +561,7 @@ describe("agentCommand", () => {
         ];
         await replaceTranscriptEvents(priorScope, transcript);
         const priorEntry = loadSessionEntry(priorScope);
-        const { member } = addSessionMember(priorScope, {
+        const { member } = await addSessionMember(priorScope, {
           identityId: "boot-history-reader",
           addedBy: "operator",
         });

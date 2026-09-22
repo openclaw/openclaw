@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -9,6 +9,8 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { coreGatewayHandlers } from "../../gateway/server-methods/core-handlers.js";
+import { prepareGatewayRequestHandler } from "../../gateway/server-methods/lazy-core-handlers.js";
 import {
   disposeSessionReadContexts,
   identifiedClient,
@@ -47,6 +49,12 @@ const second = {
   sessionId: "pending",
 };
 const bufferedText = "SYNTHETIC_BUFFERED_TRANSCRIPT_TEXT";
+beforeAll(async () => {
+  // Source transformation belongs to fixture setup, outside the privacy probe's RPC deadline.
+  await prepareGatewayRequestHandler(
+    expectDefined(coreGatewayHandlers["chat.history"], "registered chat.history handler"),
+  );
+});
 afterEach(() => vi.restoreAllMocks());
 
 async function withInventory(

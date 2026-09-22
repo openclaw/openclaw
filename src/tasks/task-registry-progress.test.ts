@@ -32,6 +32,7 @@ import {
   createTaskProgressContinuation,
   withTaskProgressRequesterContinuation,
 } from "./task-progress-requester.js";
+import type { sendMessage as SendMessage } from "./task-registry-delivery-runtime.js";
 import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
 import {
   registerTaskProgressAuthorityTests,
@@ -40,7 +41,6 @@ import {
 import type * as ProgressRuntime from "./task-registry-progress-runtime.js";
 import type { TaskProgressPublication } from "./task-registry-progress-runtime.js";
 import { updateTaskStateByRunId } from "./task-registry-record-api.js";
-import type { TaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
 import { runTaskRegistryWorkerMutation, tasks } from "./task-registry-state.js";
 import {
   createTaskRecord,
@@ -53,9 +53,7 @@ import type { TaskNotifyPolicy } from "./task-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
 } from "./task-runtime.test-helpers.js";
 
 vi.mock("../utils/message-channel.js", () => ({
@@ -82,8 +80,12 @@ const origin = {
 };
 const receipts = new Map<string, ProgressContinuationReceipt>();
 const publications: Array<TaskProgressPublication & { messageId: string }> = [];
-const sendMessage = vi.fn<TaskRegistryDeliveryRuntime["sendMessage"]>();
-const notifications: Array<Parameters<TaskRegistryDeliveryRuntime["sendMessage"]>[0]> = [];
+const sendMessage = vi.hoisted(() => vi.fn<typeof SendMessage>());
+vi.mock("./task-registry-delivery-runtime.js", () => ({
+  sendMessage,
+  resolveTaskControlUiSessionUrl: () => undefined,
+}));
+const notifications: Array<Parameters<typeof SendMessage>[0]> = [];
 const runContextClaims: Array<{ runId: string; claim: string }> = [];
 
 function receipt(messageId = "existing-parent-card"): ProgressContinuationReceipt {
@@ -244,7 +246,6 @@ beforeEach(async () => {
       deliveryStatus: "sent",
     };
   });
-  setTaskRegistryDeliveryRuntimeForTests({ sendMessage });
   runtime.adoptTaskProgressMessage.mockReset().mockImplementation(async (params) => {
     params.assertCurrent();
     receipts.set(params.operationId, structuredClone(params.receipt));
@@ -285,7 +286,6 @@ beforeEach(async () => {
 afterEach(() => {
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
-  resetTaskRegistryDeliveryRuntimeForTests();
   for (const { runId, claim } of runContextClaims) {
     releaseAgentRunContext(runId, claim);
   }

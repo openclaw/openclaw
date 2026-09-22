@@ -10,6 +10,10 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
+  readTranscriptStatsSync,
+  readTranscriptStorageRows,
+} from "./session-accessor.sqlite-read.js";
+import {
   readTranscriptGenerationInTransaction,
   readTranscriptMutationStateInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
@@ -46,6 +50,7 @@ async function withRewriteFixture(
     db: ReturnType<typeof openOpenClawAgentDatabase>["db"];
     snapshot: () => {
       raw: Array<Record<string, unknown>>;
+      storage: Array<Record<string, unknown>>;
       identities: unknown[];
       active: unknown[];
       search: unknown[];
@@ -69,7 +74,13 @@ async function withRewriteFixture(
       appendTranscriptEventsInTransaction(database, scope, events);
     }, scope);
     const snapshot = () => ({
-      raw: db
+      raw: readTranscriptStorageRows(owner, scope.sessionId).map((row) => ({
+        session_id: scope.sessionId,
+        seq: row.seq,
+        event_json: row.eventJson,
+        created_at: row.createdAt,
+      })),
+      storage: db
         .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
         .all(scope.sessionId),
       identities: db
@@ -95,6 +106,7 @@ function replaceTranscriptSuffixForTest(
   expectedEvents: readonly TranscriptEvent[],
   nextEvents: readonly TranscriptEvent[],
   persistedPrefixLength = 0,
+  retainedCustomDataIds: readonly string[] = [],
 ): void {
   const owner = openOpenClawAgentDatabase(scope);
   const plan = prepareSqliteTranscriptSuffixMutation(
@@ -103,6 +115,9 @@ function replaceTranscriptSuffixForTest(
     expectedEvents,
     nextEvents,
     persistedPrefixLength,
+    undefined,
+    false,
+    retainedCustomDataIds,
   );
   runOpenClawAgentWriteTransaction((database) => {
     replaceSqliteTranscriptSuffixInTransaction(database, scope, plan);
@@ -406,26 +421,83 @@ describe("SQLite exact transcript suffix replacement", () => {
     }, events);
   });
 
-  it("replaces a retained suffix without routing rows through forward indexing", async () => {
-    await withRewriteFixture(({ db, snapshot, scope }) => {
-      const retainedAnswer = {
-        ...rewriteEvents[2],
-        parentId: "root",
-      };
-      replaceTranscriptSuffixForTest(scope, rewriteEvents, [rewriteEvents[0], retainedAnswer]);
+  it.each([
+    { name: "message", data: undefined, compressed: false },
+    { name: "opaque identity", data: { payload: "retained" }, compressed: false },
+    {
+      name: "opaque compressed",
+      data: { payload: "opaque retained 🦞 ".repeat(4096) },
+      compressed: true,
+    },
+  ])(
+    "reparents a retained $name suffix while preserving payload and rollback",
+    async ({ data, compressed }) => {
+      const tail =
+        data === undefined
+          ? rewriteEvents[2]
+          : { type: "custom", id: "opaque", parentId: "user", data };
+      const events = [rewriteEvents[0], rewriteEvents[1], tail];
+      const plannedTail =
+        data === undefined ? rewriteEvents[2] : { type: "custom", id: "opaque", parentId: "user" };
+      const expected = [rewriteEvents[0], rewriteEvents[1], plannedTail];
+      const next = [rewriteEvents[0], { ...plannedTail, parentId: "root" }];
+      const retainedIds = data === undefined ? [] : [tail.id];
+      await withRewriteFixture(({ db, snapshot, scope }) => {
+        const before = snapshot();
+        const beforeStats = readTranscriptStatsSync(scope);
+        expect(before.storage[2]?.event_json === null).toBe(compressed);
+        expect(before.storage[2]?.event_zstd instanceof Uint8Array).toBe(compressed);
+        if (retainedIds.length > 0) {
+          const plan = prepareSqliteTranscriptSuffixMutation(
+            openOpenClawAgentDatabase(scope),
+            scope,
+            expected,
+            next,
+            1,
+            undefined,
+            false,
+            retainedIds,
+          );
+          expect(() =>
+            runOpenClawAgentWriteTransaction((database) => {
+              replaceSqliteTranscriptSuffixInTransaction(database, scope, plan);
+              throw new Error("rollback retained suffix");
+            }, scope),
+          ).toThrow("rollback retained suffix");
+          expect(snapshot()).toEqual(before);
+          expect(readTranscriptStatsSync(scope)).toEqual(beforeStats);
+        }
+        replaceTranscriptSuffixForTest(scope, expected, next, 1, retainedIds);
 
-      expect(snapshot()).toMatchObject({
-        raw: [expect.objectContaining({ seq: 0 }), expect.objectContaining({ seq: 1 })],
-        identities: [expect.objectContaining({ seq: 0 }), expect.objectContaining({ seq: 1 })],
-        active: [
-          expect.objectContaining({ event_seq: 0 }),
-          expect.objectContaining({ event_seq: 1 }),
-        ],
-        search: [expect.objectContaining({ message_id: "answer", text: "answer" })],
-      });
-      expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
-    });
-  });
+        const result = snapshot();
+        const retainedJson = JSON.stringify({ ...tail, parentId: "root" });
+        expect(result.raw).toEqual([
+          before.raw[0],
+          { ...before.raw[2], seq: 1, event_json: retainedJson },
+        ]);
+        expect(result).toMatchObject({
+          identities: [
+            expect.objectContaining({ seq: 0 }),
+            expect.objectContaining({ seq: 1, event_id: tail.id, parent_id: "root" }),
+          ],
+          active: [
+            expect.objectContaining({ event_seq: 0 }),
+            expect.objectContaining({ event_seq: 1 }),
+          ],
+          search:
+            data === undefined
+              ? [expect.objectContaining({ message_id: "answer", text: "answer" })]
+              : [],
+        });
+        expect(result.generation).not.toBe(before.generation);
+        expect(readTranscriptStatsSync(scope)).toMatchObject({
+          eventCount: 2,
+          sizeBytes: Buffer.byteLength(`${JSON.stringify(rewriteEvents[0])}\n${retainedJson}`),
+        });
+        expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
+      }, events);
+    },
+  );
 
   it("validates only the unchanged projection prefix for same-length suffix replacement", async () => {
     await withRewriteFixture(({ db, snapshot, scope }) => {
@@ -883,7 +955,7 @@ describe("SQLite exact transcript suffix replacement", () => {
         const before = snapshot();
         const deletePlans: string[] = [];
         const work = trackSqliteStatementExecutions(db, ["ftsDeletes"], (sql) => {
-          if (!/^delete from "session_transcript_fts"/i.test(sql)) {
+          if (!/^delete from "session_transcript_fts_rows"/i.test(sql)) {
             return null;
           }
           const placeholders = sql.match(/\?/g)?.length ?? 0;
@@ -892,7 +964,9 @@ describe("SQLite exact transcript suffix replacement", () => {
               .prepare(`EXPLAIN QUERY PLAN ${sql}`)
               .all(...Array.from({ length: placeholders }, () => 0))
               .map((row) => String(row.detail))
-              .filter((detail) => detail.includes("VIRTUAL TABLE INDEX")),
+              .filter((detail) =>
+                detail.includes("idx_session_transcript_fts_rows_session_message"),
+              ),
           );
           return "ftsDeletes";
         });
@@ -912,7 +986,7 @@ describe("SQLite exact transcript suffix replacement", () => {
         expect(work.counts.ftsDeletes).toBeGreaterThan(0);
         expect(deletePlans.length).toBeGreaterThan(0);
         for (const plan of deletePlans) {
-          expect(plan).toMatch(/VIRTUAL TABLE INDEX .*:=/);
+          expect(plan).toContain("idx_session_transcript_fts_rows_session_message");
         }
         expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
       }, events);

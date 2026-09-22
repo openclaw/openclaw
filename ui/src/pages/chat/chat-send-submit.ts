@@ -25,6 +25,7 @@ import {
 } from "./chat-commands.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import {
   admitQueuedMessageForSession,
   admitQueuedMessageForSessionResult,
@@ -87,6 +88,7 @@ import { scheduleChatScroll } from "./scroll.ts";
 registerChatGoalsEnglish();
 
 export type ChatSendSubmitOptions = {
+  asyncQuestionItemId?: string;
   intent?: ChatSendIntent;
   attachmentsOverride?: readonly ChatAttachment[];
   mentionsOverride?: readonly HumanMention[];
@@ -115,6 +117,13 @@ export async function handleSendChat(
   opts?: ChatSendSubmitOptions,
   submissionAction?: Event,
 ) {
+  if (
+    chatProviderReviewRow(host)?.providerReview &&
+    !isChatStopCommand(messageOverride ?? host.chatMessage)
+  ) {
+    setChatError(host, t("chat.providerReview.pausedBody"));
+    return undefined;
+  }
   if (
     isInitialChatHistoryUnavailable(host) &&
     (opts?.intent ||
@@ -577,6 +586,8 @@ export async function handleSendChat(
       return;
     }
     let queued = submission.item;
+    queued.asyncQuestionItemId =
+      resumedEdit?.source.asyncQuestionItemId ?? opts?.asyncQuestionItemId;
     if (queued.attachments?.length) {
       const payload = await prepareOutboxPayload(host, queued);
       const currentEdit = activeQueuedMessageEdit(host);

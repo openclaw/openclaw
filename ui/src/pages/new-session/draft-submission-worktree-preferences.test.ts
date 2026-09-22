@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 it.each([false, true])(
-  "consumes the accepted name while preserving a newer model and thinking selection, identity=%s",
+  "consumes the accepted name while preserving newer model controls, identity=%s",
   async (identified) => {
     const prefs = identityPreferences(identified, async () => ({
       models: [
@@ -56,7 +56,10 @@ it.each([false, true])(
     )!;
     thinking.value = "1";
     thinking.dispatchEvent(new Event("change", { bubbles: true }));
-    const selected = { model: "openai/gpt-5.6-sol", thinkingLevel: "high" };
+    renderControl(control, next.context)
+      .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")!
+      .click();
+    const selected = { model: "openai/gpt-5.6-sol", thinkingLevel: "high", fastMode: true };
     await vi.waitFor(() => expect(prefs.stored()).toMatchObject(selected));
     admitted.resolve({
       key: "agent:main:dashboard:first",
@@ -68,6 +71,7 @@ it.each([false, true])(
     expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
     expect(control.selected).toBe(selected.model);
     expect(control.thinkingLevel).toBe(selected.thinkingLevel);
+    expect(control.fastMode).toBe(selected.fastMode);
   },
 );
 

@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -14,9 +10,9 @@ import {
   inspectGatewayCrashLoopBreaker,
   recordGatewayBootStart,
 } from "./gateway-boot-lifecycle.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
+import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -29,18 +25,7 @@ describe("media persistence gateway lifecycle recovery", () => {
   it("leaves maintenance completion to Doctor after a successful media migration", async () => {
     const stateDir = tempDirs.make("media-persistence-startup-recovery-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    removeCanonicalValidationFromHistoricalAgentFixture(database);
-    database.exec(`
-      DROP TABLE session_participants;
-      PRAGMA user_version = 14;
-      UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
-    `);
-    database.close();
+    createLegacyDatabaseFixture({ env, eventsBySession: {}, schemaVersion: 14 });
 
     const nowMs = 1_000_000;
     for (let index = 0; index < 3; index += 1) {

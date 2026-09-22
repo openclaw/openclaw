@@ -38,6 +38,13 @@ export type AgentFilesViewState = Pick<
   agentFileActive: string | null;
 };
 
+export function hasAgentFileContent(
+  state: Pick<AgentFilesState, "agentFileContents" | "agentFileDrafts">,
+  name: string,
+): boolean {
+  return Object.hasOwn(state.agentFileContents, name) || Object.hasOwn(state.agentFileDrafts, name);
+}
+
 export type RetainedAgentFileDrafts = {
   drafts: Record<string, string>;
   hashes: Record<string, string>;
@@ -92,7 +99,7 @@ async function requestAgentFile(
   const busy = saving ? "agentFileSaving" : "agentFilesLoading";
   const client = state.client;
   const agents = state.agents;
-  if (!client || !state.connected || state[busy]) {
+  if (!client || !state.connected || state[busy] || (saving && !hasAgentFileContent(state, name))) {
     return false;
   }
   if (
@@ -206,6 +213,9 @@ export function saveAgentFile(
 }
 
 export function resetAgentFile(state: AgentFilesState, name: string): void {
+  if (!Object.hasOwn(state.agentFileContents, name)) {
+    return;
+  }
   state.agentFileDrafts = {
     ...state.agentFileDrafts,
     [name]: state.agentFileContents[name] ?? "",

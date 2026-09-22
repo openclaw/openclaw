@@ -15,7 +15,7 @@ import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import type { VectorKnnRequest } from "./manager-search-knn.js";
-import { searchVector } from "./manager-search.js";
+import { searchVector } from "./manager-search-vector.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
 import { vectorToBlob } from "./vector-blob.js";
 
@@ -39,6 +39,8 @@ beforeEach(() => {
 
 function useFixtureChild() {
   const children: childProcess.ChildProcessWithoutNullStreams[] = [];
+  const closedChildren = new Set<childProcess.ChildProcessWithoutNullStreams>();
+  const liveChildCounts: number[] = [];
   const stdinWriteSpies: MockInstance<
     childProcess.ChildProcessWithoutNullStreams["stdin"]["write"]
   >[] = [];
@@ -49,11 +51,13 @@ function useFixtureChild() {
       stdio: ["pipe", "pipe", "pipe"],
     });
     children.push(child);
+    liveChildCounts.push(children.length - closedChildren.size);
+    child.once("close", () => closedChildren.add(child));
     stdinWriteSpies.push(vi.spyOn(child.stdin, "write"));
     ready.push(once(child.stderr, "data"));
     return child;
   });
-  return { children, ready, stdinWriteSpies };
+  return { children, closedChildren, liveChildCounts, ready, stdinWriteSpies };
 }
 
 function request(limit: number): VectorKnnRequest {
@@ -275,17 +279,30 @@ describe("memory vector KNN subprocess boundary", () => {
     expect(fixture.children[0]!.killed).toBe(false);
   });
 
-  it("evicts idle children when another database needs the two-child capacity", async () => {
-    const fixture = useFixtureChild();
-    for (const databasePath of ["fixture:first", "fixture:second", "fixture:third"]) {
-      await runVectorKnnInSubprocess({ databasePath, request: request(1) });
-    }
-    expect(fixture.children).toHaveLength(3);
-    expect(fixture.children[0]!.signalCode).toBe("SIGKILL");
-    expect(
-      fixture.children.filter((child) => child.exitCode === null && child.signalCode === null),
-    ).toHaveLength(2);
-  });
+  it.each(["default signaling", "stdin EOF"])(
+    "evicts idle children that exit through %s before reusing the two-child capacity",
+    async (exitMode) => {
+      const fixture = useFixtureChild();
+      for (const databasePath of ["fixture:first", "fixture:second"]) {
+        await runVectorKnnInSubprocess({ databasePath, request: request(1) });
+      }
+      if (exitMode === "stdin EOF") {
+        // Make EOF win the idle retirement race without changing the real close event.
+        vi.spyOn(fixture.children[0]!, "kill").mockReturnValueOnce(true);
+      }
+      await runVectorKnnInSubprocess({ databasePath: "fixture:third", request: request(1) });
+      expect(fixture.children).toHaveLength(3);
+      expect(fixture.closedChildren.has(fixture.children[0]!)).toBe(true);
+      expect(fixture.liveChildCounts).toEqual([1, 2, 2]);
+      if (exitMode === "stdin EOF") {
+        expect(fixture.children[0]!.exitCode).toBe(0);
+        expect(fixture.children[0]!.signalCode).toBeNull();
+      }
+      expect(
+        fixture.children.filter((child) => child.exitCode === null && child.signalCode === null),
+      ).toHaveLength(2);
+    },
+  );
 
   it("admits another database after both busy children finish", async () => {
     const fixture = useFixtureChild();
@@ -295,7 +312,10 @@ describe("memory vector KNN subprocess boundary", () => {
       ),
     );
     expect(fixture.children).toHaveLength(3);
-    expect(fixture.children.slice(0, 2).some((child) => child.signalCode === "SIGKILL")).toBe(true);
+    expect(fixture.children.slice(0, 2).some((child) => fixture.closedChildren.has(child))).toBe(
+      true,
+    );
+    expect(Math.max(...fixture.liveChildCounts)).toBe(2);
   });
 
   it("evicts an idle child for each waiting database while an earlier query is busy", async () => {
@@ -415,9 +435,19 @@ describe("memory vector KNN subprocess boundary", () => {
           return false;
         }),
     );
+    const settled = vi.fn();
+    for (const result of results) {
+      void result.then(settled, settled);
+    }
     try {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       controller.abort(new Error("terminal cleanup test"));
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toHaveBeenCalledTimes(2);
       await Promise.all(rejected);
+      vi.useRealTimers();
       killMocks.forEach((mock) => expect(mock).toHaveBeenCalledTimes(1));
       const queuedController = new AbortController();
       const queued = runVectorKnnInSubprocess({
@@ -433,6 +463,7 @@ describe("memory vector KNN subprocess boundary", () => {
       queuedController.abort(new Error("queued KNN deadline"));
       await queuedRejection;
     } finally {
+      vi.useRealTimers();
       killMocks.forEach((mock) => mock.mockRestore());
       realKills.forEach((kill) => kill("SIGKILL"));
       await Promise.all(closed);
@@ -577,12 +608,9 @@ describe("memory vector KNN subprocess boundary", () => {
   });
 
   it("fails vector recall closed when the subprocess is unavailable", async () => {
-    const prepare = vi.fn(() => {
-      throw new Error("same-thread SQLite must not run");
-    });
+    const runFallback = vi.fn(async () => []);
     await expect(
       searchVector({
-        db: { prepare } as unknown as DatabaseSync,
         vectorTable: "memory_index_chunks_vec",
         providerModel: "test-model",
         queryVec: [1, 0],
@@ -592,10 +620,10 @@ describe("memory vector KNN subprocess boundary", () => {
         runVectorKnn: async () => {
           throw new Error("subprocess unavailable");
         },
+        runFallback,
         sourceFilterVec: { sql: "", params: [] },
-        sourceFilterChunks: { sql: "", params: [] },
       }),
     ).rejects.toThrow("subprocess unavailable");
-    expect(prepare).not.toHaveBeenCalled();
+    expect(runFallback).not.toHaveBeenCalled();
   });
 });

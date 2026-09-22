@@ -1752,7 +1752,8 @@ openclaw-settings-save-indicator:empty {
   color: var(--text);
 }
 
-.sidebar-session-catalog-load-more:disabled {
+.sidebar-session-catalog-load-more:disabled,
+.sidebar-session-pagination__button:disabled {
   cursor: wait;
   opacity: 0.55;
 }
@@ -1963,11 +1964,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-session-tree__children {
   margin-left: var(--sidebar-lead);
-  background: linear-gradient(
-      color-mix(in srgb, var(--border-strong) 52%, transparent),
-      color-mix(in srgb, var(--border-strong) 52%, transparent)
-    )
-    calc(var(--sidebar-inset) + 10px) 0 / 1px 100% no-repeat;
 }
 
 .sidebar-session-tree__loading {
@@ -2131,10 +2127,6 @@ openclaw-settings-save-indicator:empty {
 .sidebar-session-pagination__button:hover:not(:disabled),
 .sidebar-session-pagination__button:focus-visible {
   color: var(--text);
-}
-
-.sidebar-session-pagination__button:disabled {
-  opacity: 0.55;
 }
 
 .sidebar-session-empty-hint {
@@ -4639,9 +4631,9 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   max-height: 80px;
 }
 
-/* Page toolbar row. Outside chat, settings, and mobile drawers every page
-   header is one row: the title (or a hub's tabs) centered like a window title,
-   the trailing cell (actions, counts) at the right edge, intro text below. The
+/* Page toolbar row. Outside chat, settings, and mobile drawers, headers
+   without a stacked layout use one row: title (or hub tabs) centered like a
+   window title, trailing actions at the right edge, intro text below. The
    row matches the Mac app titlebar (52px injected by DashboardWindowController;
    50px mirrors .macos-titlebar-controls for older builds) so the traffic lights
    and hosted buttons share its centerline; the collapsed-sidebar web cluster in
@@ -4656,11 +4648,11 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   --page-toolbar-clearance: 0px;
   --page-toolbar-reserve: 0px;
 
-  &:has(.content-header):not(:has(> .connection-action-block)) {
+  &:has(.content-header:not(.content-header--stacked)):not(:has(> .connection-action-block)) {
     padding-top: 0;
   }
 
-  .content-header {
+  .content-header:not(.content-header--stacked) {
     position: relative;
     display: grid;
     /* Equal side columns center the middle cell; the leading one cannot
@@ -4674,51 +4666,51 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
     margin-top: 0;
     padding-top: 0;
     max-height: none;
-  }
 
-  /* The title block only wraps title and intro; its children become row cells. */
-  .content-header > :first-child:not(.page-title) {
-    display: contents;
-  }
+    /* The title block only wraps title and intro; its children become row cells. */
+    > :first-child:not(.page-title) {
+      display: contents;
+    }
 
-  .content-header .page-title,
-  .content-header .hub-page-header__tabs {
-    grid-area: 1 / 2;
-    justify-self: center;
-  }
+    .page-title,
+    .hub-page-header__tabs {
+      grid-area: 1 / 2;
+      justify-self: center;
+    }
 
-  .content-header .page-title {
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    line-height: 1;
-    color: var(--text);
-    white-space: nowrap;
-  }
+    .page-title {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      line-height: 1;
+      color: var(--text);
+      white-space: nowrap;
+    }
 
-  /* Hub tabs are the page identity in the row; the heading stays for
-     assistive tech (same recipe as .sr-only). */
-  .content-header.hub-page-header .page-title {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    clip-path: inset(50%);
-  }
+    /* Hub tabs are the page identity in the row; the heading stays for
+       assistive tech (same recipe as .sr-only). */
+    &.hub-page-header .page-title {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      clip-path: inset(50%);
+    }
 
-  .content-header :is(.page-subtitle, .page-sub) {
-    grid-area: 3 / 1 / 4 / -1;
-    margin-top: 8px;
-  }
+    :is(.page-subtitle, .page-sub) {
+      grid-area: 3 / 1 / 4 / -1;
+      margin-top: 8px;
+    }
 
-  .content-header > :last-child:not(:first-child) {
-    grid-area: 1 / 3;
-    justify-self: end;
-    display: flex;
-    flex-wrap: nowrap;
-    align-items: center;
-    gap: 10px;
+    > :last-child:not(:first-child) {
+      grid-area: 1 / 3;
+      justify-self: end;
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 10px;
+    }
   }
 }
 
@@ -4734,7 +4726,7 @@ html.openclaw-native-macos
 html[dir="rtl"]
   .shell:not(.shell--mobile-nav):not(.shell--settings)
   .content:not(.content--chat)
-  .content-header {
+  .content-header:not(.content-header--stacked) {
   grid-template-columns: minmax(max-content, 1fr) auto minmax(var(--page-toolbar-reserve), 1fr);
 
   > :last-child:not(:first-child) {
@@ -4747,7 +4739,7 @@ html[dir="rtl"]
 html.openclaw-native-desktop
   .shell:not(.shell--mobile-nav):not(.shell--settings)
   .content:not(.content--chat)
-  .content-header {
+  .content-header:not(.content-header--stacked) {
   padding-right: calc(var(--openclaw-native-window-controls-width, 0px) + 8px);
 }
 
@@ -4763,8 +4755,8 @@ html.openclaw-native-desktop
     margin-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance));
   }
 
-  /* Pages without a header (plugin panels) clear the chrome with padding. */
-  &:not(:has(.content-header, > .connection-action-block)) {
+  /* Stacked headers and pages without a toolbar clear floating chrome with padding. */
+  &:not(:has(.content-header:not(.content-header--stacked), > .connection-action-block)) {
     padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 }

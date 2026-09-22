@@ -135,11 +135,10 @@ it("rechecks a terminal receipt when confirming an older pending read", async ()
         throw new Error("Pending read completed before its held-result boundary.");
       }),
     ]);
-    const execution = claimRepositoryGitHubPublication(
-      row,
-      "concurrent-publisher",
-      fixture.action.assertCurrent,
-    );
+    const execution = claimRepositoryGitHubPublication(row, "concurrent-publisher", {
+      assertCustody: fixture.action.assertCurrent,
+      assertCurrent: fixture.action.assertCurrent,
+    });
     execution.complete({
       requestId: row.request_id,
       status: "failed",

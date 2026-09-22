@@ -39,7 +39,7 @@ import type {
   UpdateRunResult,
   UpdateStepProgress,
   UpdateStepResult,
-} from "../../infra/update-runner.js";
+} from "../../infra/update-runner-types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
@@ -277,10 +277,11 @@ export async function runUpdateStep(params: {
   name: string;
   argv: string[];
   cwd?: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
   runCommand?: Parameters<typeof runStep>[0]["runCommand"];
+  results?: UpdateStepResult[];
 }): Promise<UpdateStepResult> {
   return await runStep({
     ...params,

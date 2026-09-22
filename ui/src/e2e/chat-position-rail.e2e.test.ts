@@ -139,24 +139,57 @@ suite.define(() => {
             page.evaluate(() => document.activeElement?.getAttribute("data-position-marker-id"));
           const currentMarkerId = () =>
             rail.locator('[aria-current="true"]').getAttribute("data-position-marker-id");
+          const tabIntoCurrentPosition = async () => {
+            // Layout can publish a new reader position between host-side browser calls.
+            const entry = await rail.evaluateHandle((element) => {
+              let currentIds: Array<string | null> = [];
+              let tabStopIds: Array<string | null> = [];
+              const captureEntry = (event: KeyboardEvent) => {
+                if (event.key !== "Tab" || event.shiftKey) {
+                  return;
+                }
+                currentIds = [...element.querySelectorAll('[aria-current="true"]')].map((marker) =>
+                  marker.getAttribute("data-position-marker-id"),
+                );
+                tabStopIds = [...element.querySelectorAll('[tabindex="0"]')].map((marker) =>
+                  marker.getAttribute("data-position-marker-id"),
+                );
+              };
+              element.ownerDocument.addEventListener("keydown", captureEntry, true);
+              return {
+                read: () => ({ currentIds, tabStopIds }),
+                dispose: () =>
+                  element.ownerDocument.removeEventListener("keydown", captureEntry, true),
+              };
+            });
+            try {
+              await page.keyboard.press("Tab");
+              const { currentIds, tabStopIds } = await entry.evaluate((probe) => probe.read());
+              expect(currentIds).toHaveLength(1);
+              expect(currentIds[0]).not.toBeNull();
+              expect(tabStopIds).toEqual(currentIds);
+              await expect.poll(focusedMarkerId).toBe(currentIds[0]);
+            } finally {
+              await entry.evaluate((probe) => probe.dispose());
+              await entry.dispose();
+            }
+          };
           await expect.poll(() => rail.locator('[aria-current="true"]').count()).toBe(1);
           await transcript.focus();
-          const entryId = await currentMarkerId();
-          await page.keyboard.press("Tab");
-          await expect.poll(focusedMarkerId).toBe(entryId);
+          await tabIntoCurrentPosition();
           await page.keyboard.press("Home");
           await page.keyboard.press("ArrowDown");
           await expect.poll(focusedMarkerId).toBe("position-rail-1");
           await expect.poll(() => preview.count()).toBe(1);
           await page.keyboard.press("ArrowUp");
           await expect.poll(focusedMarkerId).toBe("position-rail-0");
+          await captureUiProof(suite, page, "chat-position-rail", "keyboard-exploration.png");
           await expect.poll(() => rail.locator('[tabindex="0"]').count()).toBe(1);
           await page.keyboard.press("Tab");
           expect(await focusedMarkerId()).toBeNull();
           await transcript.focus();
-          const reentryId = await currentMarkerId();
-          await page.keyboard.press("Tab");
-          await expect.poll(focusedMarkerId).toBe(reentryId);
+          await tabIntoCurrentPosition();
+          await captureUiProof(suite, page, "chat-position-rail", "native-tab-reentry.png");
           await page.keyboard.press("Shift+Tab");
           expect(await transcript.evaluate((element) => element === document.activeElement)).toBe(
             true,

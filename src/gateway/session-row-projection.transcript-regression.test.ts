@@ -9,6 +9,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
+import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { seedSessionRowProjectionTranscriptFixture } from "./session-row-projection.transcript-fixture.test-support.js";
@@ -78,20 +79,28 @@ it("serves describe during a 2,048-session drain without transcript reads in row
     const started = performance.now();
     const initializing = createSessionRowProjection({ cfg });
     await nextTurn();
-    const requestStarted = performance.now();
     const projection = await initializing;
     bindSessionRowProjection(context, () => projection);
     const startupMs = performance.now() - started;
     const respond = vi.fn();
+    const describe = async (id: string, includeDerivedTitles?: boolean) => {
+      const releaseForeground = retainSessionListForegroundWork();
+      try {
+        await sessionByKeyReadHandlers["sessions.describe"]!({
+          req: { type: "req", id, method: "sessions.describe" },
+          params: { key: "agent:main:legacy-2047", includeDerivedTitles },
+          context,
+          client: null,
+          isWebchatConnect: () => false,
+          respond,
+        });
+      } finally {
+        releaseForeground();
+      }
+    };
     try {
-      await sessionByKeyReadHandlers["sessions.describe"]!({
-        req: { type: "req", id: "under-drain", method: "sessions.describe" },
-        params: { key: "agent:main:legacy-2047", includeDerivedTitles: true },
-        context,
-        client: null,
-        isWebchatConnect: () => false,
-        respond,
-      });
+      const requestStarted = performance.now();
+      await describe("under-drain", true);
       const describeMs = performance.now() - requestStarted;
       const remainingAtResponse = projection.dirtyRowCount;
       await projection.ensureMaterialized();
@@ -100,14 +109,7 @@ it("serves describe during a 2,048-session drain without transcript reads in row
       expect(indexBuilds).toHaveBeenCalledTimes(1);
       sessionChanges.emit({ all: true, scope: "config" });
       const dirtyRequestStarted = performance.now();
-      await sessionByKeyReadHandlers["sessions.describe"]!({
-        req: { type: "req", id: "dirty-drain", method: "sessions.describe" },
-        params: { key: "agent:main:legacy-2047" },
-        context,
-        client: null,
-        isWebchatConnect: () => false,
-        respond,
-      });
+      await describe("dirty-drain");
       const dirtyDescribeMs = performance.now() - dirtyRequestStarted;
       console.log(
         JSON.stringify({

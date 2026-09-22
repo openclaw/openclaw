@@ -354,7 +354,7 @@ describe("embedded run retry dispatch", () => {
     try {
       await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toBe(afterTurnError);
       expect(onContextAccountingEvent.mock.calls).toEqual([
-        [{ kind: "model", contextTokens: undefined }],
+        [{ kind: "model", contextTokens: undefined, successful: false }],
         [{ kind: "compaction", tokensAfter: 40 }],
       ]);
     } finally {

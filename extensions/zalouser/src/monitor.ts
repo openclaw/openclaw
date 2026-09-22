@@ -8,10 +8,7 @@ import {
   logInboundDrop,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  resolveStableChannelMessageIngress,
-  type ChannelIngressContextBinding,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
@@ -24,11 +21,8 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-na
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
-import {
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  type HistoryEntry,
-  createChannelHistoryWindow,
-} from "openclaw/plugin-sdk/reply-history";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import { type HistoryEntry, createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
@@ -346,7 +340,7 @@ async function processMessage(
     config,
   );
   const resolveAccessDecision = async (contextBinding?: ChannelIngressContextBinding) =>
-    await resolveStableChannelMessageIngress({
+    await core.channel.inbound.ingress.resolveStable({
       channelId: "zalouser",
       accountId: account.accountId,
       identity: {
@@ -812,11 +806,8 @@ export async function monitorZalouserProvider(
   });
 
   const core = getZalouserRuntime();
-  const historyLimit = Math.max(
-    0,
-    account.config.historyLimit ??
-      config.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
+  const historyLimit = resolvePromptHistoryLimit(
+    account.config.historyLimit ?? config.messages?.groupChat?.historyLimit,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
 

@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Darwin
 import Testing
 
 @MainActor
@@ -20,6 +21,25 @@ enum AppKitTestSupport {
 
     static var didSetActivationPolicy: Bool {
         self.initializedApplication.didSetActivationPolicy
+    }
+
+    static func startApplication() async throws {
+        let application = self.application
+        guard !application.isRunning else { return }
+        await withCheckedContinuation { continuation in
+            // Start outside a Swift task so AppKit owns nested menu run loops.
+            // Otherwise macOS 27 can stop Swift's outer loop and exit before test completion.
+            RunLoop.main.perform(inModes: [.common]) {
+                MainActor.assumeIsolated {
+                    let started = Timer(timeInterval: 0, repeats: false) { _ in
+                        continuation.resume()
+                    }
+                    RunLoop.main.add(started, forMode: .common)
+                    application.run()
+                }
+            }
+        }
+        try #require(application.isRunning)
     }
 
     static func accessibilityElements(in root: AnyObject) async throws -> [AnyObject] {
@@ -43,6 +63,20 @@ enum AppKitTestSupport {
         return elements
     }
 
+    static func accessibilityTitle(of element: AnyObject) -> String? {
+        // SwiftUI menu titles may be attributed strings; the typed String getter raises an ObjC exception.
+        let selector = NSSelectorFromString("accessibilityTitle")
+        guard let object = element as? NSObject, object.responds(to: selector),
+              let value = object.perform(selector)?.takeUnretainedValue() else { return nil }
+        if let attributed = value as? NSAttributedString { return attributed.string }
+        return value as? String
+    }
+
+    static func accessibilityName(of element: AnyObject) -> String? {
+        if let label = element.accessibilityLabel?(), !label.isEmpty { return label }
+        return self.accessibilityTitle(of: element)
+    }
+
     static func waitForAccessibilityElement(
         in window: NSWindow,
         description: String,
@@ -64,7 +98,7 @@ enum AppKitTestSupport {
         }.joined(separator: "\n")
         let accessibility: String = observedElements.map {
             let role = String(describing: $0.accessibilityRole?())
-            let title = String(describing: $0.accessibilityTitle?())
+            let title = String(describing: self.accessibilityTitle(of: $0))
             let label = String(describing: $0.accessibilityLabel?())
             let value: Any? = $0.accessibilityValue?()
             let identifier = String(describing: $0.accessibilityIdentifier?())
@@ -108,7 +142,7 @@ enum AppKitTestSupport {
         print("""
         Before menu dispatch at \(file):\(line)
         node=\(ObjectIdentifier(button)) type=\(text(controlType)) role=\(String(describing: role))
-        identifier=\(text(button.accessibilityIdentifier?())) title=\(text(button.accessibilityTitle?())) label=\(text(button.accessibilityLabel?())) value=\(text(valueText))
+        identifier=\(text(button.accessibilityIdentifier?())) title=\(text(self.accessibilityTitle(of: button))) label=\(text(button.accessibilityLabel?())) value=\(text(valueText))
         enabled=\(String(describing: enabled)) frame=\(String(describing: frame)) window=\(window.windowNumber) windowMatches=\(windowMatches)
         pressAllowed=\(String(describing: pressAllowed)) showMenuAllowed=\(String(describing: showMenuAllowed)) remaining=\(ContinuousClock.now.duration(to: tracking.expiresAt)) appRunning=\(NSApp.isRunning)
         """)

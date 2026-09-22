@@ -72,27 +72,39 @@ export async function resolveGatewayShutdownBudget(
 export function resolveGatewayShutdownDrainBudget(params: {
   budget: { nativeStopBudget: boolean; timeoutMs: number; reserveMs: number };
   isRestart: boolean;
+  forceRestart: boolean;
   restartWithoutSupervisor: boolean;
+  acceptedAtMs: number;
   requestedRestartDrainTimeoutMs?: number;
 }) {
   const { budget, isRestart } = params;
   const requested = params.requestedRestartDrainTimeoutMs;
+  const elapsedMs = performance.now() - params.acceptedAtMs;
+  const remaining = requested === undefined ? undefined : Math.max(0, requested - elapsedMs);
   const restartDrainTimeoutMs = budget.nativeStopBudget
-    ? Math.min(requested ?? Infinity, Math.max(0, budget.timeoutMs - budget.reserveMs))
-    : requested;
+    ? Math.min(remaining ?? Infinity, Math.max(0, budget.timeoutMs - budget.reserveMs))
+    : remaining;
   const restartDrainDeadlineAt =
     isRestart && restartDrainTimeoutMs !== undefined
       ? Date.now() + restartDrainTimeoutMs
       : undefined;
-  const restartTimeoutMs = (drainTimeoutMs: number) =>
+  const forcedRestartDeadlineAt =
+    params.forceRestart && restartDrainDeadlineAt !== undefined
+      ? restartDrainDeadlineAt + budget.reserveMs
+      : undefined;
+  const restartTimeoutMs = (drainTimeoutMs: number) => {
+    if (forcedRestartDeadlineAt !== undefined) {
+      return Math.max(0, forcedRestartDeadlineAt - Date.now());
+    }
     // A containing service can bound an in-process restart without replacing it.
-    budget.nativeStopBudget && params.restartWithoutSupervisor
+    return budget.nativeStopBudget && params.restartWithoutSupervisor
       ? budget.timeoutMs
       : drainTimeoutMs + (budget.nativeStopBudget ? budget.reserveMs : GATEWAY_SHUTDOWN_TIMEOUT_MS);
+  };
   return {
     restartDrainDeadlineAt,
     restartTimeoutMs: () =>
-      budget.nativeStopBudget
+      budget.nativeStopBudget || params.forceRestart
         ? restartTimeoutMs(Math.max(0, (restartDrainDeadlineAt ?? Date.now()) - Date.now()))
         : GATEWAY_SHUTDOWN_TIMEOUT_MS,
     closeDrainTimeoutMs: () =>

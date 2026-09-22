@@ -27,6 +27,76 @@ pnpm test:perf:profile:runner -- --output-dir .artifacts/profiles -- --config te
 
 Native imports also need the plugin's declared dependencies and a resolvable `openclaw` host package. The profiler does not install or link dependencies: missing dependencies remain import failures in the JSON report and cause a nonzero exit.
 
+### Kitchen Sink Gateway resource comparison
+
+The existing Kitchen Sink RPC walk can compare a fresh Gateway with plugins
+disabled against a fresh Gateway with only Kitchen Sink `conformance` active:
+
+```bash
+OPENCLAW_KITCHEN_SINK_NPM_SPEC=npm-pack:/fixtures/kitchen-sink.tgz \
+  pnpm test:plugins:kitchen-sink-rpc -- --resource-profile /out/resources.json
+```
+
+This mode requires Linux Node with `process.threadCpuUsage`, a built OpenClaw
+entry in the current package root, `dist/build-info.json` with a full source
+commit, and a local npm-pack fixture. It does not download a floating fixture.
+The normal RPC walk, including its Bun command, is unchanged.
+
+Run only in a prepared secretless container or remote runner. For example, bake
+the frozen built host, its dependencies and the pinned fixture into a reviewed
+image, then execute with explicit limits and networking disabled:
+
+```bash
+docker run --rm --network none --memory 4g --cpus 2 --pids-limit 512 \
+  -v "$PWD/proof-output:/out" -w /app \
+  -e OPENCLAW_KITCHEN_SINK_NPM_SPEC=npm-pack:/fixtures/kitchen-sink.tgz \
+  <prepared-image> \
+  node --import ./scripts/tsx.mjs scripts/e2e/kitchen-sink-rpc-walk.mts \
+  --resource-profile /out/resources.json
+```
+
+Prepare any managed npm installation prerequisites in the image; an offline
+install failure is blocked proof, not permission to copy credentials or enable
+network access. The harness supplies a minimal child environment, but does not
+enforce container isolation itself. Preserve the image digest and runner limits
+alongside the report.
+
+Each case records startup from the initialized measurement preload to HTTP
+readiness, one unmeasured health warmup, a 250 ms idle window, 20 completed
+`health` RPCs, and a 250 ms post-work window. The conformance case additionally
+creates a session and runs 20 asserted `kitchen_sink_text` calls with unique
+idempotency keys, followed by another observation window. Setup and package
+installation are outside measured phases; failed measured calls are not retried.
+
+After those matched phases, the conformance case uses `kitchen.resources` to
+verify ten million CPU iterations and a fixed checksum, hold a 16 MiB Buffer,
+and start a referenced 10 ms timer. Timer progress is observed with bounded
+status probes. Each calibration operation counts one asserted control step,
+including its probes; it is not an RPC throughput count. The fixture must include
+the calibration controls from Kitchen Sink commit `051db418820c2f0a73f8d349c88eb002b3c2d6e2`
+or later. Older fixtures fail visibly instead of skipping calibration.
+
+The harness resets the controls, asserts empty owner state, then reacquires the
+Buffer and timer before `plugins.setEnabled` disables the fixture. It requires
+an applied runtime receipt, no restart or cleanup warnings, an inactive catalog,
+and before/after samples from the same Gateway PID. This gives an in-process
+retirement observation before normal Gateway shutdown. Forced termination or a
+nonzero Gateway exit fails the report even when the process group is gone.
+
+The report preserves raw phase-boundary snapshots, completed/failed operation
+counts, provenance hashes and signed conformance-minus-empty deltas. CPU counters
+cover the Gateway process and main thread, excluding separate child processes.
+RSS is process-wide; other memory fields describe the main isolate. ArrayBuffers
+overlap external memory. Boundary samples are not peaks, and no forced GC occurs.
+Active-resource histograms count the types keeping the event loop alive, not
+plugin ownership or all live objects. The report labels CPU, held-memory and timer
+signals as observed or inconclusive; unrelated collection or host timers can
+obscure them. Reset proves owner-state release, not immediate RSS reclamation.
+The fixed post-work window is not a plugin drain receipt. Host shutdown is checked
+separately; post-process-exit sampling and guaranteed reclamation remain unsupported.
+These observations establish neither a leak nor a budget violation. Repeat comparable pairs through the campaign owner before drawing
+performance conclusions; do not sum individual plugin costs.
+
 ### Zod schema compilation
 
 Compile individual schemas only after measuring a repeated validation path.
@@ -181,12 +251,36 @@ paired-node wire tests provide the full Gateway dispatch and reconciliation proo
 Runs synthetic streaming agent turns in parallel sessions on one isolated
 Gateway. Add tool calls, session history, observers, and control-plane probes to
 reproduce allocation pressure from a busy Gateway. Build with `pnpm build`
-first; no provider key is required.
+first. The default mock provider needs no key. Dreaming is disabled in this
+isolated benchmark; ordinary indexing, recaps, and database idle retention keep
+their normal settings.
 
 ```bash
 pnpm test:gateway:concurrency -- --concurrency 16 --tool-events --workspace-fanout --session-count 100 --history-messages 20 --history-clients 4 --subscribers 4 --visible-observer --control-plane --heap-prof-dir .artifacts/gateway-heap --output .artifacts/gateway-concurrency.json
 pnpm test:gateway:concurrency -- --concurrency 64 --turns-per-session 8 --tool-events --timeout-ms 600000 --heap-prof-dir .artifacts/gateway-sustained-heap --output .artifacts/gateway-sustained.json
 ```
+
+Use `--provider openai` with `OPENAI_API_KEY` supplied in the environment for
+real OpenAI turns:
+
+```bash
+pnpm test:gateway:concurrency -- --provider openai --runs 1 --warmup 0 \
+  --agent-warmup-turns 0 --agent-count 32 --concurrency 32 --turns-per-session 3 \
+  --session-count 1000 --history-messages 20 --history-message-chars 1024 \
+  --probe-rounds 64 --cadence-ms 100 --session-updates 100 \
+  --session-update-clients 2 --history-clients 2 --history-burst 2 \
+  --subscribers 4 --control-plane --timeout-ms 120000 \
+  --load-cpu-prof-dir .artifacts/gateway-live-cpu \
+  --output .artifacts/gateway-live.json
+```
+
+Live mode uses a fixed OpenAI model, denies tools, and limits output to 128
+tokens. It permits one run with no warmups and at most 96 turns, and checks
+streamed replies, terminal receipts, history, and persisted replies after
+shutdown. It does not report synthetic provider request counts. CPU profiles
+are instrumented observations; keep them separate from unprofiled latency
+measurements. The [manual workflow](/ci/scheduled-workflows#gateway-concurrency-benchmark)
+runs this workload with repository-managed credentials.
 
 `--concurrency` controls parallel sessions; `--turns-per-session` controls serial
 turns in each session (default 1, maximum 100). The second example completes 512

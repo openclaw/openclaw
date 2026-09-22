@@ -1,4 +1,7 @@
-import { buildActiveNodeContextText } from "../../infra/active-node-context.js";
+import {
+  buildActiveNodeContextText,
+  prepareActiveNodeContext,
+} from "../../infra/active-node-context.js";
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
@@ -18,6 +21,7 @@ export async function buildCliTurnAppendContext(
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
+  await prepareActiveNodeContext();
   return [
     ...params.context,
     buildRuntimeContextCustomMessage(mediaTaskContext)?.content,
@@ -64,5 +68,6 @@ export async function prepareCliSystemPrompt(
       });
     }
   }
+  await prepareActiveNodeContext();
   return buildCliAgentSystemPrompt({ ...params, preparedModelRuntime });
 }

@@ -364,11 +364,14 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     const startedAt = Date.parse("2026-07-09T18:30:00.000Z");
     let now = startedAt;
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    const readFlags = vi.fn(() => []);
     const assistant = { role: "assistant", stopReason: "stop", content: [] };
     async function* stream() {
       for (const offset of [0, 1, 29_999, 30_000, 30_001]) {
         now = startedAt + offset;
-        yield { type: "thinking_delta", delta: "", partial: {} };
+        for (let index = 0; index < 1000; index += 1) {
+          yield { type: "thinking_delta", delta: "", partial: {} };
+        }
       }
       yield { type: "done", message: assistant };
     }
@@ -376,6 +379,13 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       (() => original) as unknown as StreamFn,
       {
+        config: {
+          diagnostics: {
+            get flags() {
+              return readFlags();
+            },
+          },
+        },
         runId: "run-activity",
         provider: "synthetic",
         model: "synthetic-model",
@@ -405,6 +415,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     expect(
       events.every((event) => event.runId === "run-activity" && event.spanId === "call-activity"),
     ).toBe(true);
+    // Configuration resolution scales with heartbeats, not the 5,000 chunks.
+    expect(readFlags.mock.calls.length).toBeLessThan(100);
   });
 
   it.each(["unset", "override"] as const)(

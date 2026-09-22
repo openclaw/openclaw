@@ -193,9 +193,22 @@ describe("Codex tool response fidelity", () => {
     },
   );
 
-  it.each(["before", "after"])(
-    "preserves the complete response %s the terminal item",
-    async (order) => {
+  it.each([
+    {
+      order: "before",
+      aggregate: "available",
+      aggregatedOutput: "raw execution output is not the response",
+    },
+    {
+      order: "after",
+      aggregate: "available",
+      aggregatedOutput: "raw execution output is not the response",
+    },
+    { order: "before", aggregate: "null", aggregatedOutput: null },
+    { order: "after", aggregate: "null", aggregatedOutput: null },
+  ])(
+    "preserves the complete response $order the terminal item with $aggregate aggregate",
+    async ({ order, aggregatedOutput }) => {
       const projector = await createProjector();
       const output = " \n" + "transcript 😀\n".repeat(2_700) + "END OF TRANSCRIPT\n ";
       const command = {
@@ -203,7 +216,7 @@ describe("Codex tool response fidelity", () => {
         id: "call-long",
         command: "transcript",
         status: "completed",
-        aggregatedOutput: "raw execution output is not the response",
+        aggregatedOutput,
         exitCode: 0,
       };
       await projector.handleNotification(

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
-import type { testing } from "./agents.js";
 
 type IdentityUpdateHarness = {
   mocks: {
@@ -11,19 +10,21 @@ type IdentityUpdateHarness = {
     ensureAgentWorkspace: Mock<
       (params?: { dir?: string }) => Promise<{ dir: string; identityPathCreated: boolean }>
     >;
-    rootRead: unknown;
+    rootRead: Mock<
+      (params: { rootDir: string; relativePath: string }) => Promise<{
+        buffer: Buffer;
+        realPath: string;
+        stat: { size: number; mtimeMs: number };
+      }>
+    >;
     rootWrite: Mock<(params?: unknown) => Promise<void>>;
     writeConfigFile: Mock<(nextConfig?: unknown, writeOptions?: unknown) => Promise<void>>;
     fsMkdir: unknown;
   };
-  agentsTesting: Pick<typeof testing, "setDepsForTests">;
   makeCall: (
     method: "agents.update",
     params: Record<string, unknown>,
   ) => { respond: Mock; promise: Promise<void> | void };
-  makeRootForTest: (overrides: {
-    read: (params: Record<string, unknown>) => Promise<unknown>;
-  }) => NonNullable<Parameters<typeof testing.setDepsForTests>[0]["root"]>;
   makeFileStat: () => import("node:fs").Stats;
   createEnoentError: () => Error;
   mockCallArg: (mock: Mock, callIndex?: number, argIndex?: number) => unknown;
@@ -41,9 +42,7 @@ type IdentityUpdateHarness = {
 export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness): void {
   const {
     mocks,
-    agentsTesting,
     makeCall,
-    makeRootForTest,
     makeFileStat,
     createEnoentError,
     mockCallArg,
@@ -126,21 +125,17 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
         dir: destination,
         identityPathCreated: false,
       });
-      agentsTesting.setDepsForTests({
-        root: makeRootForTest({
-          read: async ({ rootDir, relativePath }) => {
-            expect(rootDir).toBe("/workspace/test-agent");
-            releaseOld();
-            releaseReplacement = registerAgentWorkspaceAccess(destination, {
-              bridge: { readFile: vi.fn(), writeFile: replacementWrite, stat: vi.fn() },
-            });
-            return {
-              buffer: Buffer.from("# Identity\n\n- Name: Current Agent\n\nOriginal notes.\n"),
-              realPath: `${String(rootDir)}/${String(relativePath)}`,
-              stat: makeFileStat(),
-            };
-          },
-        }),
+      mocks.rootRead.mockImplementation(async ({ rootDir, relativePath }) => {
+        expect(rootDir).toBe("/workspace/test-agent");
+        releaseOld();
+        releaseReplacement = registerAgentWorkspaceAccess(destination, {
+          bridge: { readFile: vi.fn(), writeFile: replacementWrite, stat: vi.fn() },
+        });
+        return {
+          buffer: Buffer.from("# Identity\n\n- Name: Current Agent\n\nOriginal notes.\n"),
+          realPath: `${rootDir}/${relativePath}`,
+          stat: makeFileStat(),
+        };
       });
       try {
         const { promise } = makeCall("agents.update", { agentId: "test-agent", workspace });
@@ -249,53 +244,49 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
         dir: "/resolved/new/workspace",
         identityPathCreated: true,
       });
-      agentsTesting.setDepsForTests({
-        root: makeRootForTest({
-          read: async ({ rootDir, relativePath }) => {
-            const filePath = `${String(rootDir)}/${String(relativePath)}`;
-            if (filePath === "/workspace/test-agent/IDENTITY.md") {
-              return {
-                buffer: Buffer.from(
-                  [
-                    "# IDENTITY.md - Agent Identity",
-                    "",
-                    "- **Name:** Current Agent",
-                    "- **Creature:** Steady Turtle",
-                    "- **Vibe:** Calm and methodical",
-                    "- **Emoji:** 🐢",
-                    "",
-                    "## Role",
-                    "",
-                    "Protect the queue.",
-                    "",
-                  ].join("\n"),
-                ),
-                realPath: filePath,
-                stat: makeFileStat(),
-              };
-            }
-            if (filePath === "/resolved/new/workspace/IDENTITY.md") {
-              return {
-                buffer: Buffer.from(
-                  [
-                    "# IDENTITY.md - Agent Identity",
-                    "",
-                    "- **Name:** C-3PO (Clawd's Third Protocol Observer)",
-                    "- **Creature:** Flustered Protocol Droid",
-                    "",
-                    "## Role",
-                    "",
-                    "Debug agent for `--dev` mode.",
-                    "",
-                  ].join("\n"),
-                ),
-                realPath: filePath,
-                stat: makeFileStat(),
-              };
-            }
-            throw createEnoentError();
-          },
-        }),
+      mocks.rootRead.mockImplementation(async ({ rootDir, relativePath }) => {
+        const filePath = `${rootDir}/${relativePath}`;
+        if (filePath === "/workspace/test-agent/IDENTITY.md") {
+          return {
+            buffer: Buffer.from(
+              [
+                "# IDENTITY.md - Agent Identity",
+                "",
+                "- **Name:** Current Agent",
+                "- **Creature:** Steady Turtle",
+                "- **Vibe:** Calm and methodical",
+                "- **Emoji:** 🐢",
+                "",
+                "## Role",
+                "",
+                "Protect the queue.",
+                "",
+              ].join("\n"),
+            ),
+            realPath: filePath,
+            stat: makeFileStat(),
+          };
+        }
+        if (filePath === "/resolved/new/workspace/IDENTITY.md") {
+          return {
+            buffer: Buffer.from(
+              [
+                "# IDENTITY.md - Agent Identity",
+                "",
+                "- **Name:** C-3PO (Clawd's Third Protocol Observer)",
+                "- **Creature:** Flustered Protocol Droid",
+                "",
+                "## Role",
+                "",
+                "Debug agent for `--dev` mode.",
+                "",
+              ].join("\n"),
+            ),
+            realPath: filePath,
+            stat: makeFileStat(),
+          };
+        }
+        throw createEnoentError();
       });
 
       const { respond, promise } = makeCall("agents.update", {
@@ -319,51 +310,47 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
         dir: "/resolved/new/workspace",
         identityPathCreated: false,
       });
-      agentsTesting.setDepsForTests({
-        root: makeRootForTest({
-          read: async ({ rootDir, relativePath }) => {
-            const filePath = `${String(rootDir)}/${String(relativePath)}`;
-            if (filePath === "/workspace/test-agent/IDENTITY.md") {
-              return {
-                buffer: Buffer.from(
-                  [
-                    "# IDENTITY.md - Agent Identity",
-                    "",
-                    "- **Name:** Current Agent",
-                    "- **Creature:** Old Turtle",
-                    "",
-                    "## Role",
-                    "",
-                    "Old workspace role.",
-                    "",
-                  ].join("\n"),
-                ),
-                realPath: filePath,
-                stat: makeFileStat(),
-              };
-            }
-            if (filePath === "/resolved/new/workspace/IDENTITY.md") {
-              return {
-                buffer: Buffer.from(
-                  [
-                    "# IDENTITY.md - Agent Identity",
-                    "",
-                    "- **Name:** Destination Agent",
-                    "- **Creature:** Destination Fox",
-                    "",
-                    "## Role",
-                    "",
-                    "Destination workspace role.",
-                    "",
-                  ].join("\n"),
-                ),
-                realPath: filePath,
-                stat: makeFileStat(),
-              };
-            }
-            throw createEnoentError();
-          },
-        }),
+      mocks.rootRead.mockImplementation(async ({ rootDir, relativePath }) => {
+        const filePath = `${rootDir}/${relativePath}`;
+        if (filePath === "/workspace/test-agent/IDENTITY.md") {
+          return {
+            buffer: Buffer.from(
+              [
+                "# IDENTITY.md - Agent Identity",
+                "",
+                "- **Name:** Current Agent",
+                "- **Creature:** Old Turtle",
+                "",
+                "## Role",
+                "",
+                "Old workspace role.",
+                "",
+              ].join("\n"),
+            ),
+            realPath: filePath,
+            stat: makeFileStat(),
+          };
+        }
+        if (filePath === "/resolved/new/workspace/IDENTITY.md") {
+          return {
+            buffer: Buffer.from(
+              [
+                "# IDENTITY.md - Agent Identity",
+                "",
+                "- **Name:** Destination Agent",
+                "- **Creature:** Destination Fox",
+                "",
+                "## Role",
+                "",
+                "Destination workspace role.",
+                "",
+              ].join("\n"),
+            ),
+            realPath: filePath,
+            stat: makeFileStat(),
+          };
+        }
+        throw createEnoentError();
       });
 
       const { respond, promise } = makeCall("agents.update", {
@@ -399,13 +386,9 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
     });
 
     it("treats unsafe IDENTITY.md reads as invalid update requests", async () => {
-      agentsTesting.setDepsForTests({
-        root: makeRootForTest({
-          read: async () => {
-            throw new FsSafeError("invalid-path", "path is not a regular file under root");
-          },
-        }),
-      });
+      mocks.rootRead.mockRejectedValue(
+        new FsSafeError("invalid-path", "path is not a regular file under root"),
+      );
 
       const { respond, promise } = makeCall("agents.update", {
         agentId: "test-agent",
@@ -419,10 +402,7 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
     });
 
     it("uses non-blocking reads for IDENTITY.md during agents.update", async () => {
-      const rootRead = vi.fn(async () => {
-        throw new FsSafeError("not-found", "file not found");
-      });
-      agentsTesting.setDepsForTests({ root: makeRootForTest({ read: rootRead }) });
+      mocks.rootRead.mockRejectedValue(new FsSafeError("not-found", "file not found"));
 
       const { promise } = makeCall("agents.update", {
         agentId: "test-agent",
@@ -430,7 +410,7 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
       });
       await promise;
 
-      expectRecordFields(mockCallArg(rootRead), {
+      expectRecordFields(mockCallArg(mocks.rootRead), {
         relativePath: "IDENTITY.md",
         nonBlockingRead: true,
       });

@@ -307,6 +307,7 @@
 .agent-chat__capability-menu-item {
   --wa-color-text-normal: var(--text);
 
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--chat-composer-menu-row-gap);
@@ -2835,11 +2836,70 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 26px;
   margin: 0;
   padding: 0;
+  border-radius: var(--radius-full);
   background: transparent;
+}
+
+.chat-controls__reasoning-slider:has([data-effort-boost="max"], [data-effort-boost="ultra"]) {
+  --reasoning-track-background: transparent;
+  --reasoning-boost-highlight: color-mix(in srgb, var(--accent) 60%, white);
+  border-radius: var(--radius-full);
+  background-image: linear-gradient(
+    105deg,
+    color-mix(in srgb, var(--accent) 70%, var(--card)) 0%,
+    var(--accent) 25%,
+    var(--reasoning-boost-highlight) 50%,
+    var(--accent) 75%,
+    color-mix(in srgb, var(--accent) 70%, var(--card)) 100%
+  );
+  background-position: 50% 50%;
+  background-size: 220% 100%;
+}
+
+.chat-controls__reasoning-range[data-effort-boost="max"] {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent),
+    0 0 12px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.chat-controls__reasoning-slider:has([data-effort-boost="ultra"]) {
+  --reasoning-boost-highlight: color-mix(in srgb, var(--accent-2) 70%, white);
+}
+
+.chat-controls__reasoning-range[data-effort-boost="ultra"] {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 75%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent) 48%, transparent),
+    inset 0 0 12px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+@keyframes chat-effort-flow {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 100% 50%;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-controls__reasoning-slider:has(
+    [data-effort-boost="max"]:not(:disabled),
+    [data-effort-boost="ultra"]:not(:disabled)
+  ) {
+    animation: chat-effort-flow 6s ease-in-out infinite alternate;
+  }
+
+  .chat-controls__reasoning-slider:has([data-effort-boost="ultra"]:not(:disabled)) {
+    animation-duration: 4s;
+  }
 }
 
 .chat-controls__reasoning-range:disabled {
   cursor: not-allowed;
+}
+
+.chat-controls__reasoning-slider:has(.chat-controls__reasoning-range:disabled) {
   opacity: 0.5;
 }
 
@@ -2851,10 +2911,13 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 26px;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-full);
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--text) 18%, transparent) var(--reasoning-fill, 0%),
-    color-mix(in srgb, var(--text) 7%, transparent) var(--reasoning-fill, 0%)
+  background: var(
+    --reasoning-track-background,
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--text) 18%, transparent) var(--reasoning-fill, 0%),
+      color-mix(in srgb, var(--text) 7%, transparent) var(--reasoning-fill, 0%)
+    )
   );
 }
 
@@ -2885,13 +2948,13 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 26px;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 7%, transparent);
+  background: var(--reasoning-track-background, color-mix(in srgb, var(--text) 7%, transparent));
 }
 
 .chat-controls__reasoning-range::-moz-range-progress {
   height: 24px;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 18%, transparent);
+  background: var(--reasoning-track-background, color-mix(in srgb, var(--text) 18%, transparent));
 }
 
 .chat-controls__reasoning-range::-moz-range-thumb {

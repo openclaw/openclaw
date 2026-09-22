@@ -90,6 +90,33 @@ export function selectTaskRecordsForOwnerTree(
   return [...tasks.values()].filter((task) => selected.has(task.taskId));
 }
 
+/** Selected rows and every possible parent edge; callers still enforce identity and visibility. */
+export function selectTaskRecordsWithAncestors(
+  tasks: ReadonlyMap<string, TaskRecord>,
+  taskIdsByChildSessionKey: ReadonlyMap<string, ReadonlySet<string>>,
+  taskIds: readonly string[],
+  isRootTask: (task: Readonly<TaskRecord>) => boolean,
+): TaskRecord[] {
+  const selected = new Set(taskIds);
+  const owners = new Set<string>();
+  const records: TaskRecord[] = [];
+  for (const taskId of selected) {
+    const task = tasks.get(taskId);
+    if (!task || task.scopeKind !== "session") {
+      continue;
+    }
+    records.push(task);
+    if (isRootTask(task) || owners.has(task.ownerKey)) {
+      continue;
+    }
+    owners.add(task.ownerKey);
+    for (const parentId of taskIdsByChildSessionKey.get(task.ownerKey) ?? []) {
+      selected.add(parentId);
+    }
+  }
+  return records;
+}
+
 /** Build the derived flow index in snapshot order to retain the latest-task tie break. */
 export function findLatestTaskForFlowInSnapshot(
   tasks: ReadonlyMap<string, TaskRecord>,

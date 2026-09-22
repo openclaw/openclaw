@@ -74,19 +74,32 @@ export default defineConfig({
       maxBytes: 4 * 1024 * 1024,
       signal,
     });
-    expect(result.code, result.stdout + result.stderr).toBe(0);
+    expect(result.code, result.stdout + result.stderr).toBe(1);
     const output = result.stdout + result.stderr;
-    for (const file of Object.keys(files)) {
+    for (const file of Object.keys(files).filter((name) => !name.startsWith("13-"))) {
       const owner = file.startsWith("12-") ? "stateReadWorkers" : "sharedStateWorkerOwner";
       expect(output).toContain(`[sqlite-test-lifecycle] ${file}: retiring openclaw.${owner}`);
     }
     expect(output).toContain(
       "[sqlite-test-lifecycle] 11-a-sqlite-owner.test.ts: draining agent database custody",
     );
+    expect(output).toContain("Synthetic independent singleton cleanup refused");
+    expect(output.match(/retained-lease-independent-reset: \d+/gu)).toEqual([
+      "retained-lease-independent-reset: 1",
+      "retained-lease-independent-reset: 2",
+    ]);
+    expect(output.match(/retained-lease-failed-reset: \d+/gu)).toEqual([
+      "retained-lease-failed-reset: 1",
+    ]);
+    const identityMatch = output.match(/retained-lease-identity: (.+)/u);
+    expect(identityMatch, output).not.toBeNull();
+    const identity: { leaseId: string; path: string } = JSON.parse(identityMatch![1]!);
+    expect(identity.leaseId).toMatch(/\S/u);
+    expect(identity.path).toContain(path.join(root, "retained-agent-state"));
     const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));
     expect(report).toMatchObject({
-      numTotalTests: 5,
-      numPassedTests: 5,
+      numTotalTests: 7,
+      numPassedTests: 7,
       numFailedTests: 0,
       numPendingTests: 0,
       numTodoTests: 0,
@@ -95,7 +108,15 @@ export default defineConfig({
       Object.keys(files).toSorted(),
     );
     for (const file of report.testResults) {
-      expect(file.status).toBe("passed");
+      const failedTeardown = path.basename(file.name) === "13-a-retained-lease.test.ts";
+      expect(file.status, file.name).toBe(failedTeardown ? "failed" : "passed");
+      if (failedTeardown) {
+        expect(file.message).toContain("Synthetic retired lease cleanup refused");
+        expect(file.message).toContain(`leaseId=${identity.leaseId}`);
+        expect(file.message).toContain(`path=${identity.path}`);
+      } else {
+        expect(file.message, file.name).toBe("");
+      }
       expect(file.assertionResults).toHaveLength(1);
       expect(file.assertionResults[0]).toMatchObject({ status: "passed", failureMessages: [] });
     }
@@ -104,7 +125,7 @@ export default defineConfig({
     );
     expect(capture).toMatchObject({
       processTimedOut: false,
-      ended: { reason: "passed", unhandledErrors: 0, failedModules: 0, suiteErrors: 0 },
+      ended: { reason: "failed", unhandledErrors: 0, failedModules: 1, suiteErrors: 2 },
     });
     await fs.rm(root, { recursive: true, force: true });
   } catch (error) {
@@ -115,7 +136,7 @@ export default defineConfig({
   }
 }
 
-it("retires SQLite owners and their callbacks before the next file installs its transport", (context) => {
+it("retires settled SQLite owners and attributes retained custody without poisoning the next file", (context) => {
   const run = verifySqliteOwnerRetirement(context.signal);
   context.onTestFinished(() => run);
   return run;

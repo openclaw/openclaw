@@ -31,7 +31,7 @@ import { getVitestWorkerDescriptor } from "./lib/vitest-worker-bootstrap.mts";
 import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "./run-vitest.mts";
 import {
-  applyDefaultMultiSpecVitestCachePaths,
+  applyDefaultVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
   applyFullExtensionsHeapBudget,
   applyParallelVitestCachePaths,
@@ -252,7 +252,7 @@ async function runVitestSpecs(
   let stopScheduling = false;
   const failures: FailedVitestShard[] = [];
   const timings: ShardTiming[] = [];
-  const withCacheSlot = createVitestCacheSlots(concurrency);
+  const withCacheSlot = createVitestCacheSlots();
   await pMap(
     specs,
     async (spec, index) => {
@@ -359,7 +359,7 @@ export async function runTestProjects(
       spec.timingIncludePatterns = inheritedIncludePatterns;
     }
   }
-  const runSpecs: VitestRunSpec[] = applyDefaultMultiSpecVitestCachePaths(
+  const runSpecs: VitestRunSpec[] = applyDefaultVitestCachePaths(
     applyDefaultVitestNoOutputTimeout(
       applyFullExtensionsHeapBudget(rawRunSpecs, { env: baseEnv }),
       {

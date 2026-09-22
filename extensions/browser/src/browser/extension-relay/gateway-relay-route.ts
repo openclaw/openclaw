@@ -15,7 +15,7 @@ import {
 } from "../../control-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { describeBrowserControlUnavailable } from "../../plugin-enabled.js";
-import { resolveProfile } from "../config.js";
+import { resolveFirstExtensionProfileName, resolveProfile } from "../config.js";
 import { getProfileLifecycle } from "../server-context.lifecycle.js";
 import {
   BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
@@ -51,15 +51,6 @@ function requestedProfileName(resource: string, fallback: string): string {
   return new URL(resource, "http://127.0.0.1").searchParams.get("profile") ?? fallback;
 }
 
-function defaultExtensionProfileName(profiles: Record<string, { driver?: string }>): string {
-  for (const [name, profile] of Object.entries(profiles)) {
-    if (profile.driver === "extension") {
-      return name;
-    }
-  }
-  return "chrome";
-}
-
 async function resolveGatewayRelay(resource: string) {
   let state = getBrowserControlState();
   if (!state) {
@@ -70,7 +61,7 @@ async function resolveGatewayRelay(resource: string) {
   }
   const profileName = requestedProfileName(
     resource,
-    defaultExtensionProfileName(state.resolved.profiles),
+    resolveFirstExtensionProfileName(state.resolved) ?? "chrome",
   );
   const resolved = resolveProfile(state.resolved, profileName);
   if (!resolved || resolved.driver !== "extension") {
@@ -106,7 +97,9 @@ async function resolveGatewayRelay(resource: string) {
 async function prepareGatewayIngress(
   access: Awaited<ReturnType<typeof resolveGatewayRelay>>,
   ws: WebSocket,
+  assertAuthenticated: () => void,
 ): Promise<() => void> {
+  assertAuthenticated();
   access.assertCurrent();
   const relay = access.relay;
   const attach =
@@ -114,6 +107,7 @@ async function prepareGatewayIngress(
       ? await relay.client.prepareIngress(ws)
       : () => attachExtensionWebSocket(relay.bridge, ws);
   return () => {
+    assertAuthenticated();
     access.assertCurrent();
     attach();
     log.info(`extension connected over gateway for profile "${access.profileName}"`);
@@ -150,8 +144,17 @@ export async function handleGatewayExtensionUpgrade(
     rejectWebSocketUpgrade(socket, { status: 401 });
     return true;
   }
+  const isV2 = protocols.length === 1 && protocols[0] === BROWSER_RELAY_EXTENSION_SUBPROTOCOL;
+  const assertAuthenticated = () => {
+    if (
+      readExtensionRelayToken() !== token ||
+      (!isV2 && getRuntimeConfig().browser?.extensionRelay?.allowLegacyAuth === false)
+    ) {
+      throw new Error("browser relay authentication changed");
+    }
+  };
 
-  if (protocols.length === 1 && protocols[0] === BROWSER_RELAY_EXTENSION_SUBPROTOCOL) {
+  if (isV2) {
     const authority = getBrowserRelayAuthV2Authority(token);
     if (
       !handlePreAuthWebSocketUpgrade({
@@ -169,16 +172,12 @@ export async function handleGatewayExtensionUpgrade(
             prepareAuthenticated: async () => {
               // The proof may finish while an operator rotates the host key. Never
               // let an old authenticated socket lazy-start or claim a new bridge.
-              if (readExtensionRelayToken() !== token) {
-                throw new Error("browser relay key rotated during authentication");
-              }
-              const attach = await prepareGatewayIngress(await resolveGatewayRelay(resource), ws);
-              return () => {
-                if (readExtensionRelayToken() !== token) {
-                  throw new Error("Relay key rotated");
-                }
-                attach();
-              };
+              assertAuthenticated();
+              return await prepareGatewayIngress(
+                await resolveGatewayRelay(resource),
+                ws,
+                assertAuthenticated,
+              );
             },
           });
         },
@@ -210,6 +209,7 @@ export async function handleGatewayExtensionUpgrade(
   let resolved;
   try {
     resolved = await resolveGatewayRelay(resource);
+    assertAuthenticated();
   } catch (err) {
     log.warn(`failed to start Browser control for legacy extension relay: ${String(err)}`);
     rejectWebSocketUpgrade(socket, { status: 503 });
@@ -231,7 +231,7 @@ export async function handleGatewayExtensionUpgrade(
       return;
     }
     ws.once("close", () => authority.releaseConnection(ws));
-    void prepareGatewayIngress(resolved, ws)
+    void prepareGatewayIngress(resolved, ws, assertAuthenticated)
       .then((attach) => {
         if (ws.readyState === 1) {
           attach();

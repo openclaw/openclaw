@@ -354,7 +354,7 @@ vi.mock("../../sessions/index.js", () => {
     ModelRegistry,
     SessionManager: {
       inMemory: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
-      open: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
+      openAsync: async (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
     },
   };
 });
@@ -691,7 +691,6 @@ vi.mock("../../transcript-policy.js", () => ({
     allowSyntheticToolResults: false,
     repairToolUseResultPairing: true,
   }),
-  shouldAllowProviderOwnedThinkingReplay: () => false,
 }));
 
 vi.mock("../cache-ttl.js", () => ({

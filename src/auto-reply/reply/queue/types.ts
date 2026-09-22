@@ -111,6 +111,8 @@ export function isFollowupRunDeferredError(error: unknown): error is FollowupRun
 }
 
 export type FollowupRun = {
+  /** External-turn eligibility; queued execution refreshes the session-selected profile. */
+  personalBootstrapEligible?: boolean;
   prompt: string;
   /** Original operator capability retained by this turn's queue/run lifecycle. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -192,6 +194,7 @@ export type FollowupRun = {
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: {
+    providerReviewAcknowledgment?: import("../../../sessions/provider-review.js").ProviderReviewAcknowledgment;
     agentId: string;
     agentDir: string;
     sessionId: string;
@@ -201,6 +204,7 @@ export type FollowupRun = {
     /** Prepared source delivery ownership; a lost source must not restore host media reads. */
     mediaNormalizationOwner?: "gateway";
     clientCaps?: string[];
+    bootstrapUserProfileId?: string;
     gatewayUiCommandTarget?: GatewayUiCommandTarget;
     toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;

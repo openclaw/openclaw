@@ -67,6 +67,44 @@ the unchanged lifecycle assertions and cleanup must pass on the actual runner.
 Cleanup and diagnostic upload still run after failure, and retained evidence is
 removed only after cleanup and upload succeed.
 
+#### Exact Windows test replay
+
+For an ordered diagnostic from a recorded CI failure, set `windows_ci_replay`
+to a JSON object with `nodeVersion`, `packageManager`, `vitestVersion`,
+`maxWorkers`, `files`, and `projects`. Use an exact Node 24 patch and the
+checkout's complete pnpm integrity pin and Vitest version. `maxWorkers` is an
+integer from 1 through 4. `files` is the original ordered array of literal,
+tracked test paths; `projects` is the original ordered array of
+`test/vitest/vitest.<name>.config.ts` paths. Globs, shell text, arbitrary CLI
+arguments, and environment overrides are not accepted.
+
+Set `target_ref` to the exact source SHA, select the original `runner_label`,
+set `keepalive_minutes=0`, and leave all other proof modes off. This runs only
+the existing `scripts/test-projects.mts` entrypoint with `--fileParallelism`,
+one project process at a time, the requested worker count, and the original
+Windows CI heap and extension-shard settings. Normal CI worker policy is
+unchanged. Runtime preparation and process lifetime stay with the frozen
+source's dispatcher; the workflow does not copy current test tooling into it.
+
+Run baseline and failing sources as separate, serialized workflow invocations
+at the same reviewed workflow revision. Each gets its own runner checkout and
+frozen install; never switch sources in an active checkout. Record actual
+CPU/RAM from both runs rather than inferring capacity from the runner label.
+
+The `windows-ci-replay-<runId>-<attempt>` artifact retains the input, source and
+workflow identities, dependency hashes, native runtime/resources, exact argv,
+combined output, process status, observed project order, and retained-namespace
+diagnostics. A successful test command without the complete expected project
+sequence fails qualification. An earlier failure retains its partial sequence
+and remains failed. No replay retries or pass/fail waivers are added.
+
+There is no persistent Testbox lease, SSH setup, or keepalive. The existing test
+owner handles ordinary lifetime; Actions owns final job/runner teardown. A
+frozen Windows runner can retain temporary namespaces when descendant settlement
+is unverified. Do not delete them during the run or infer settlement from a
+zero process status. Preserve that diagnostic, inspect final runner cleanup,
+and report any missing teardown evidence separately from the test result.
+
 #### Installed Gateway startup measurements
 
 The same workflow can measure one immutable npm package on the selected Windows

@@ -97,8 +97,15 @@ Retries and read-only checks reuse the verified receipt, including transcripts
 discovered outside `sessions.json`. Doctor reports one pending-plugin warning
 for these retained inputs; they do not fail the completed core migration or
 require `doctor --session-sqlite recover`. Warning-only results exit successfully.
-Changed originals and active files
-outside the receipt still need inspection.
+An active legacy JSONL outside that receipt is an advisory awaiting verification.
+`doctor --fix` and `--session-sqlite recover` compare its ordered entries against
+the owning agent's SQLite transcript. Already imported history, including a
+prefix of a longer SQLite transcript, is archived with a verified migration
+receipt. Missing events go through the existing importer before verification;
+current session settings and its active generation remain unchanged. Original
+bytes stay in the migration archive for recovery. A changed, malformed, or
+conflicting source that cannot be verified stays in place with a finding naming
+that agent and file; a healthy agent does not inherit another agent's failure.
 When the legacy index and live transcript inputs are gone, verified historical
 archives keep their existing receipts. They do not require a new legacy-index
 receipt or block post-session plugin repair. The plugin's completion releases
@@ -146,6 +153,41 @@ history explicitly deleted by the user. Diagnostic trajectory envelopes, deleted
 artifacts, unsupported files, conflicting identities, and ambiguous ownership are
 not converted into conversations. Deferred files remain available for recovery.
 
+Repeated imports can leave multiple archived copies of one primary transcript.
+Doctor treats copies of the same original path with the same verified size and
+SHA-256 as one historical claim. It keeps one verified original and retires identical duplicates through
+the existing recovery receipts, updating every retained
+manifest. `--session-sqlite recover` also settles these archives even when the
+latest failed run moved no files. Copies with different bytes stay protected and
+are named in the warning; retained historical conflicts do not block update's
+post-session plugin repair. Preserve the originals and migration manifests while
+resolving those conflicts, then rerun `openclaw doctor --fix`.
+
+### Changed archived registry
+
+`historical_transcript_deferred` can report that an archived session registry no
+longer matches its migration receipt. The receipt identifies the original file by
+device, inode, modification time, size, and SHA-256; it is not an agent or install
+ID. Copying, replacing, touching, or editing an archive can invalidate that receipt.
+The identity format is the same in 2026.9.4 and 2026.9.5; 2026.9.5 added historical
+archive discovery that checks these older receipts.
+
+Doctor skips historical transcript import for that store and retains the originals.
+This warning alone does not indicate SQLite corruption or require a rollback.
+If all expected conversations are visible, no action is needed. You can inspect
+current SQLite state with
+`openclaw doctor --session-sqlite inspect --session-sqlite-all-agents`.
+
+If history is missing, preserve the named archive and
+`<state-dir>/session-sqlite-migration-runs/`, make a verified backup, and seek
+recovery help with the warning and inspection output. Keep transcript contents
+and raw manifests private. `doctor --fix` does not reset an unverified fingerprint;
+do not delete or edit receipts to silence the warning. Import attempts record the
+skipped outcome in their migration manifest and leave existing SQLite sessions
+intact.
+
+### Import staging and validation
+
 The public Doctor migration path stages transcript payloads and performs branch
 and provider repairs in a private, temporary SQLite database instead of retaining
 complete histories in memory. It keeps the raw transcript untouched until archiving it through an
@@ -187,7 +229,7 @@ Modes:
 | `import`   | Import legacy entries and transcript events into SQLite for the selected targets.                                      |
 | `validate` | Compare the selected legacy sources against SQLite rows and transcript event counts.                                   |
 | `compact`  | Checkpoint and VACUUM selected agent SQLite databases to reclaim free pages after large deletes or archive cleanup.    |
-| `recover`  | Restore the latest failed migration run, validate its targets, and prepare a sanitized GitHub issue report.            |
+| `recover`  | Restore a failed migration run, verify and archive leftover active JSONL files, and prepare a sanitized issue report.  |
 | `restore`  | Restore archived transcript artifacts from recorded migration manifests without deleting SQLite data.                  |
 
 Selectors:
@@ -253,9 +295,18 @@ run recovery:
 openclaw doctor --session-sqlite recover --github-issue
 ```
 
+Use `--yes` to authorize issue creation during noninteractive recovery. Without
+it, redirected input, `--non-interactive`, and JSON output skip the prompt and
+record why issue creation was skipped.
+
 Recovery selects the latest failed migration manifest, restores only the
 manifest's archived artifacts, validates the affected targets, and prepares
-sanitized `.failure.md` and `.failure.json` reports. The GitHub issue body avoids
+sanitized `.failure.md` and `.failure.json` reports. Reports separate current
+recovery findings from recorded migration and recovery evidence. A successful
+recovery can have zero current issues while preserving earlier failures for
+diagnosis; a target not inspected by this recovery is labeled accordingly.
+The JSON report keeps the combined `issues` evidence and adds `recoveryIssues`
+for inspected targets. The GitHub issue body avoids
 transcript contents, raw environment, secrets, and unbounded config. Once an
 issue or browser handoff may have published a report, doctor preserves that
 private report artifact and its marker receipt. When no failed migration

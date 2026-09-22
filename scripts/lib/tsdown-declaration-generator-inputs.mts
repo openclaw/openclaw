@@ -195,5 +195,6 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       .map(([, file]) => file),
     ...STATE_SCHEMA_GENERATOR_INPUTS,
     ...resolveWorkerDeployGeneratorInputs(root),
+    fs.realpathSync(path.resolve(root, "node_modules/tree-sitter-bash/LICENSE")),
   ];
 }

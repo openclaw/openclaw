@@ -150,9 +150,9 @@ export type ChannelIngressContextBinding = {
   agentId: string;
   /** Final dispatch or route session selected by the channel producer. */
   sessionKey: string;
-  /** Stable transport message id when the event has one. */
+  /** Final message id used by the host context, after any transport ID mapping. */
   messageId?: string;
-  /** Native transport conversation id when it differs from the canonical conversation id. */
+  /** Match the host context's reply or conversation nativeChannelId, including when it equals id. */
   nativeChannelId?: string;
   /** Final inbound event classification used by the host context. */
   inboundEventKind: InboundEventKind;

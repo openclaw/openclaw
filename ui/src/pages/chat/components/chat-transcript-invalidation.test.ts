@@ -3,6 +3,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
+import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
@@ -35,6 +37,48 @@ import {
 describe("chat transcript invalidation", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it.each(["ready", "delayed"])(
+    "updates settled avatars when only the theme hat changes with a %s palette",
+    (palette) => {
+      const branding = { mascot: "claw" as const, critters: [], avatarHat: "fedora" as const };
+      const agentId = Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
+        resolveAvatarHat(id, branding),
+      )!;
+      const props = threadProps("pane-avatar-hat", `agent:${agentId}:main`, [
+        { role: "assistant", content: "Ready.", timestamp: 1_000 },
+      ]);
+      props.currentAgentId = agentId;
+      props.selectedSession = { key: props.sessionKey, kind: "group", updatedAt: 1 };
+      props.branding = { ...branding, avatarHat: undefined };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => render(renderChatThread(props, transcript), container);
+      const previousBranding = currentThemeBranding();
+      try {
+        setCurrentThemeBranding(props.branding);
+        rerender();
+        expect(container.querySelector(".identity-avatar--agent")).not.toBeNull();
+        expect(container.querySelector(".identity-avatar__hat")).toBeNull();
+        props.branding = branding;
+        setCurrentThemeBranding(branding);
+        rerender();
+        expect(container.querySelector(".identity-avatar__hat--fedora")).not.toBeNull();
+        props.branding = { ...branding, avatarHat: undefined };
+        if (palette === "delayed") {
+          rerender();
+          expect(container.querySelector(".identity-avatar__hat--fedora")).not.toBeNull();
+        }
+        setCurrentThemeBranding(props.branding);
+        rerender();
+        expect(container.querySelector(".identity-avatar__hat")).toBeNull();
+      } finally {
+        setCurrentThemeBranding(previousBranding);
+        render(nothing, container);
+        transcript.hostDisconnected();
+      }
+    },
+  );
 
   it.each(["session participants", "history", "pending input"] as const)(
     "shows your name when a peer arrives through %s and keeps it while search hides the peer",

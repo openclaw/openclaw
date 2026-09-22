@@ -35,7 +35,7 @@ import {
   resolveUnmanagedUpdateInstallReason,
   resolveUpdateInstallSurface,
 } from "../../infra/update-runner-install-surface.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../../process/exec.js";

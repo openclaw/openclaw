@@ -138,7 +138,7 @@ describe("LabsPage", () => {
     const introLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
     expect(introLink?.textContent?.trim()).toBe("Learn more");
     expect(introLink?.href).toBe("https://docs.openclaw.ai/concepts/experimental-features");
-    expect(page.querySelectorAll(".settings-row")).toHaveLength(LAB_FEATURES.length);
+    expect(page.querySelectorAll(".settings-row wa-switch")).toHaveLength(LAB_FEATURES.length);
     expect(page.textContent).toContain("Code Mode");
     for (const title of [
       "Swarm",
@@ -170,6 +170,45 @@ describe("LabsPage", () => {
     const { page } = await mountPage({ tools: { codeMode: { enabled: "auto" } } });
 
     expect(codeModeToggle(page).checked).toBe(true);
+  });
+
+  it.each([
+    ...[true, false, "auto"].map((enabled) => ({
+      name: `${enabled} shorthand`,
+      config: enabled,
+      executor: "quickjs",
+      expectedPatch: { enabled, executor: "quickjs" },
+    })),
+    {
+      name: "inherited auto",
+      config: undefined,
+      executor: "quickjs",
+      expectedPatch: { enabled: "auto", executor: "quickjs" },
+    },
+    {
+      name: "authored limits without activation",
+      config: { timeoutMs: 5000 },
+      executor: "quickjs",
+      expectedPatch: { executor: "quickjs" },
+    },
+    {
+      name: "explicit auto and limits when restoring Node",
+      config: { enabled: "auto", executor: "quickjs", timeoutMs: 5000 },
+      executor: "node",
+      expectedPatch: { executor: null },
+    },
+  ])("preserves $name when choosing an executor", async ({ config, executor, expectedPatch }) => {
+    const { page, runtimeConfig } = await mountPage({ tools: { codeMode: config } });
+    const select = page.querySelector<HTMLSelectElement>('select[aria-label="Code Mode executor"]');
+    expect(select).not.toBeNull();
+    select!.value = executor;
+    select!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { codeMode: expectedPatch } },
+      note: "labs: update codeModeExecutor",
+    });
   });
 
   it.each([
@@ -246,6 +285,12 @@ describe("LabsPage", () => {
       note: "labs: update codeMode",
     },
     {
+      label: "Code Mode",
+      sourceConfig: { tools: { codeMode: false } },
+      expectedPatch: { tools: { codeMode: null } },
+      note: "labs: update codeMode",
+    },
+    {
       label: "Custom plugin UI",
       sourceConfig: {},
       expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
@@ -294,10 +339,9 @@ describe("LabsPage", () => {
 });
 
 describe("LabsPage code mode enablement", () => {
-  // Mirrors resolveCodeModeConfig: omitted `enabled` is off for every object
-  // shape, while explicit `true` and `"auto"` remain opt-ins.
+  // An absent global node inherits auto; authored objects remain opt-in.
   it.each([
-    ["unset", false, {}],
+    ["unset", true, {}],
     ["empty object", false, { tools: { codeMode: {} } }],
     ["object with options", false, { tools: { codeMode: { timeoutMs: 5000 } } }],
     ["explicit true", true, { tools: { codeMode: { enabled: true } } }],
@@ -311,16 +355,17 @@ describe("LabsPage code mode enablement", () => {
     provider.remove();
   });
 
-  it("writes the auto tier when enabling the shipped default", async () => {
+  it("writes explicit false when disabling the automatic default", async () => {
     const { page, runtimeConfig } = await mountPage({});
     const toggle = codeModeToggle(page);
 
-    toggle.checked = true;
+    expect(toggle.checked).toBe(true);
+    toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: { enabled: "auto" } } },
+      raw: { tools: { codeMode: { enabled: false } } },
       note: "labs: update codeMode",
     });
   });
