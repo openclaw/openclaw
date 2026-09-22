@@ -1419,7 +1419,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"채팅 확인 필요"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw는 페어링된 OpenClaw Gateway의 요청이 있을 때 이 휴대전화에서 볼 수 있는 앱의 이름, 패키지 ID 및 상태를 수집하고 전송합니다. 이를 통해 어시스턴트가 설치된 앱을 사용하여 질문에 답하고 작업을 수행할 수 있습니다."</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway가 연결되지 않았습니다"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"결과 없음"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"정책"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 교체 — 마지막 업데이트 %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"보낸 메시지를 확인하는 동안 시간이 초과되었습니다; 새로 고침하여 전달 여부를 확인하세요."</string>

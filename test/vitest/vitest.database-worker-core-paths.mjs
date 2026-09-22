@@ -413,6 +413,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/projects/project-registry.test.ts",
   "src/commands/doctor-project-clone-shape.test.ts",
   "src/auto-reply/reply/commands-plugins.install.test.ts",
+  "src/auto-reply/reply/agent-runner-node-authority.test.ts",
   "src/auto-reply/reply/commands-plugins.install-clawhub-spec.test.ts",
   "src/system-agent/setup-inference-credentials.lifecycle.test.ts",
   "src/system-agent/setup-inference.provider-install-owner.test.ts",
