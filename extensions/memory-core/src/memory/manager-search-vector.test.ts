@@ -28,7 +28,7 @@ function searchVectorFixture(db: DatabaseSync, options: Partial<VectorSearchOpti
     limit: 5,
     snippetMaxChars: 200,
     ensureVectorReady: async () => false,
-    runVectorKnn: async (request) => runVectorKnnQuery(db, request),
+    runVectorKnn: async (knnRequest) => runVectorKnnQuery(db, knnRequest),
     sourceFilterVec: { sql: "", params: [] },
     ...overrides,
   };

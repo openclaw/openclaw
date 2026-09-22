@@ -181,9 +181,10 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected async ensureEmbeddingProviderForSearch(
-    indexState: MemoryRetrievalIndexState,
+    initialIndexState: MemoryRetrievalIndexState,
     onDebug?: (debug: MemorySearchRuntimeDebug) => void,
   ): Promise<boolean> {
+    let indexState = initialIndexState;
     const failure = this.embeddingBootstrapFailure;
     if (failure) {
       const cached = this.getCachedEmbeddingAvailability();
