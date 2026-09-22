@@ -11,6 +11,7 @@ import { prepareTelegramTestGroup } from "./telegram-test-group.mjs";
 
 const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const USER_DRIVER_PATH = path.join(SKILL_DIR, "scripts", "user-driver.py");
+const MISSING_GROUP_DIAGNOSTIC = "[credential_state_missing_group]";
 
 export async function runTelegramTestDoctor({
   acquireCredential = acquireTelegramTestCredential,
@@ -45,19 +46,27 @@ export async function checkTelegramTestCredential({
     if (dm && requireForum) throw new Error("Forum-topic proof requires a forum group target.");
     lease.assertHealthy();
     const driverEnv = { ...sanitizeChildEnvironment(), ...credential.driverEnv };
-    const status = await runCommandImpl(
-      "uv",
-      ["run", USER_DRIVER_PATH, "status", "--json", "--require-chat", credential.groupId],
-      {
-        cwd: process.cwd(),
-        env: driverEnv,
-        timeoutMs: 30_000,
-      },
-    );
+    const requiredChat = dm || chat ? "" : credential.groupId;
+    const statusArgs = ["run", USER_DRIVER_PATH, "status", "--json"];
+    if (requiredChat) statusArgs.push("--require-chat", requiredChat);
+    const status = await runCommandImpl("uv", statusArgs, {
+      cwd: process.cwd(),
+      env: driverEnv,
+      timeoutMs: 30_000,
+    });
     lease.assertHealthy();
+    if (
+      status.status !== 0 &&
+      !status.timedOut &&
+      status.stderr.includes(MISSING_GROUP_DIAGNOSTIC)
+    ) {
+      throw new Error(
+        "TDLib Test Server configured group is missing from cold-restored state. Disable and republish this credential.",
+      );
+    }
     if (status.status !== 0 || status.timedOut) {
       throw new Error(
-        "TDLib Test Server credential is unauthorized or its configured group is missing from cold-restored state. Disable and republish this credential.",
+        "TDLib readiness failed. Check the existing uv launcher and TDLib runtime before requesting session repair.",
       );
     }
     const driver = JSON.parse(status.stdout);
@@ -70,7 +79,7 @@ export async function checkTelegramTestCredential({
     ) {
       throw new Error("TDLib Test Server user identity does not match the lease.");
     }
-    if (String(driver.chatId) !== credential.groupId) {
+    if (requiredChat && String(driver.chatId) !== requiredChat) {
       throw new Error("TDLib Test Server group identity does not match the lease.");
     }
     proxy = scope.ownProxy(await startProxy({ leaseHealth }));
