@@ -51,6 +51,7 @@ function fixture() {
                 testDc: true,
                 tdlibVersion: "1.8.67",
                 user: { id: 123 },
+                chatId: -1001,
               },
       ),
     }),
