@@ -22,7 +22,7 @@ export async function verifyGatewayStartReadiness(params: {
   const { deadlineMs } = resolveGatewayStartupTiming();
   const context = await params.resolveContext();
   const port = params.expectedPort ?? context.port;
-  const deadlineAt = Date.now() + deadlineMs;
+  const deadlineAt = performance.now() + deadlineMs;
   const attempts = Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS);
   const healthDeadline = createGatewayRestartDeadline({ timeoutMs: deadlineMs });
   const [health, readiness] = await Promise.all([

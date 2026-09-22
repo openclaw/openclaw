@@ -101,7 +101,7 @@ export async function observeInterruptedUpdateGateway(
         config: context.config,
         port,
         attempts: 1,
-        deadlineAt: Date.now() + deadline.remainingMs(),
+        deadlineAt: performance.now() + deadline.remainingMs(),
         probeTimeoutMs: deadline.remainingMs(),
         delayMs: 0,
         signal: deadline.signal,
