@@ -68,7 +68,7 @@ it("retains files by hard link so the inodes outlive package replacement", async
   await fs.rename(f.source, displaced);
   await fs.rm(displaced, { recursive: true });
   expect(await fs.readFile(retainedWorker, "utf8")).toBe("export const generation = 'retained';\n");
-  expect(Number((await fs.stat(retainedWorker)).mode & 0o777)).toBe(0o444);
+  expect((await fs.stat(retainedWorker)).mode & 0o777).toBe(0o444);
 });
 
 it("copies bytes when the filesystem refuses hard links", async () => {
