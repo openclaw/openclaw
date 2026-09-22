@@ -2698,7 +2698,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [320, 568],
     [1366, 900],
   ] as const)(
-    "keeps short assistant footer actions below the bubble at %sx%s",
+    "keeps short assistant names and actions compact below the bubble at %sx%s",
     async (width, height) => {
       await withBrowserPage(openBrowserPage(width, height), async (page) => {
         await page.setContent(
@@ -2729,6 +2729,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const text = await getTextContentRect(page, ".chat-text p");
         const actions = await getRect(page, ".chat-group-footer-actions");
         expect(text.bottom).toBeLessThanOrEqual(actions.top - 1);
+        const bubble = await getRect(page, ".chat-bubble");
+        const name = await getRect(page, ".chat-sender-name");
+        const icon = await getRect(page, ".chat-group-footer-actions button svg");
+        // Turn spacing belongs after this whole set, not above its metadata.
+        expect(name.top - bubble.bottom).toBeLessThanOrEqual(10);
+        expect(icon.top - bubble.bottom).toBeLessThanOrEqual(10);
       });
     },
   );

@@ -74,6 +74,8 @@
 .chat-group.chat-group--with-footer > .chat-group-messages {
   grid-column: var(--chat-group-content-column);
   grid-row: 1;
+  /* A taller avatar may grow this row, but never the bubble-to-footer gap. */
+  align-self: end;
   max-width: none;
 }
 
@@ -135,10 +137,10 @@
    instead of painting over the next message. */
 .chat-group-footer {
   display: flex;
-  align-self: stretch;
+  align-self: start;
   flex-wrap: wrap;
   gap: 8px;
-  align-items: center;
+  align-items: flex-start;
   width: 100%;
   min-width: 0;
   min-height: 24px;
@@ -781,9 +783,7 @@ img.chat-avatar {
   }
 
   .chat-group.user.chat-group--peer .chat-group-footer {
-    align-self: start;
     flex-wrap: nowrap;
-    align-items: center;
     width: fit-content;
     max-width: 100%;
   }
@@ -806,6 +806,8 @@ img.chat-avatar {
   .chat-message-actions-row .chat-reply-btn {
     min-width: 44px;
     min-height: 44px;
+    /* Grow touch targets downward without pushing labels away from bubbles. */
+    align-items: flex-start;
   }
 }
 
