@@ -329,6 +329,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
           busyTimeoutMs,
           lockFailureReporting,
           existingSchema,
+          initializationAgentPaths: options.initializationAgentPaths,
           ensureSchema: (database, initialization) =>
             ensureSchema(database, pathname, env, initialization, busyTimeoutMs),
           recordOpenFailure: recordOpenClawStateDatabaseOpenFailure,

@@ -21,7 +21,7 @@ import { resolveSessionStorePathCore } from "./sessions/paths.js";
 import { listSqliteTargetCandidatePathsForSessionStorePath } from "./sessions/session-sqlite-target-paths.js";
 import { listConfiguredSessionStoreAgentIds } from "./sessions/targets-configured-agents.js";
 
-/** Inspect authored storage locators without runtime config, plugin loading, or state access. */
+/** Inspect authored SQLite locators without runtime config, plugin loading, or state access. */
 export function readAgentStorePathsFromConfig(env: NodeJS.ProcessEnv, stateDir: string): string[] {
   const readEnv = cloneEnvWithPlatformSemantics(env);
   readEnv.OPENCLAW_STATE_DIR = stateDir;
@@ -101,7 +101,6 @@ export function readAgentStorePathsFromConfig(env: NodeJS.ProcessEnv, stateDir: 
     ),
   );
   for (const store of stores) {
-    paths.add(store);
     for (const candidate of listSqliteTargetCandidatePathsForSessionStorePath(store)) {
       paths.add(candidate);
     }

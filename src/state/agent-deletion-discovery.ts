@@ -10,6 +10,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import {
   readAgentDatabaseDeletionSnapshot,
   type AgentDeletionJournalDisposition,
+  type AgentDeletionJournalPurpose,
 } from "./agent-deletion-journal.read.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
@@ -163,10 +164,11 @@ export function createRetainedAgentDatabaseMatcher(
         kind: "agent-directory" | "legacy-database";
         readDatabasePaths: () => readonly string[];
       } = "database",
+  purpose: AgentDeletionJournalPurpose = "maintenance",
 ) {
-  const snapshot = readAgentDatabaseDeletionSnapshot(env);
+  const snapshot = readAgentDatabaseDeletionSnapshot(env, purpose);
   const agentDirectories = namespace !== "database" && namespace.kind === "agent-directory";
-  if (!snapshot && namespace !== "database") {
+  if (!snapshot && namespace !== "database" && purpose === "maintenance") {
     // Legacy inputs can predate SQLite; any surviving family still has unknown history.
     const unavailable =
       [resolveOpenClawStateSqlitePath(env), ...namespace.readDatabasePaths()].some(
@@ -180,7 +182,8 @@ export function createRetainedAgentDatabaseMatcher(
   const retainedDeletions = snapshot?.retainedDeletions;
   if (!retainedDeletions || retainedDeletions.status !== "present") {
     return (_pathname: string, _agentId?: string) =>
-      !retainedDeletions || retainedDeletions.status === "unavailable";
+      purpose === "maintenance" &&
+      (!retainedDeletions || retainedDeletions.status === "unavailable");
   }
   const configured = readConfiguredTargets();
   return createAgentDatabaseDeletionClassifier({

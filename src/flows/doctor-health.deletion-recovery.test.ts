@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
-import * as prompters from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
@@ -57,12 +56,6 @@ it("refreshes supplied missing-history discovery after maintenance admits a newe
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.runContributions.mockReset();
     mocks.emulateNativeInstall = false;
-    const actual = await vi.importActual<typeof import("../commands/doctor-prompter.js")>(
-      "../commands/doctor-prompter.js",
-    );
-    const prompter = vi
-      .spyOn(prompters, "createDoctorPrompter")
-      .mockImplementation(actual.createDoctorPrompter);
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     try {
       await runDoctorHealthFlow(
@@ -80,7 +73,6 @@ it("refreshes supplied missing-history discovery after maintenance admits a newe
       ).toEqual([mainPath, latePath].toSorted());
       expect([mainPath, latePath].map((file) => fs.readFileSync(file))).toEqual(bytes);
     } finally {
-      prompter.mockRestore();
       mocks.emulateNativeInstall = true;
       closeOpenClawStateDatabaseForTest();
     }

@@ -244,7 +244,7 @@ export function isAgentDeletionBlocked(
   return Boolean(
     database
       ? readAgentDeletionJournalInDatabase({ db: database }, agentId)
-      : readAgentDeletionJournal(agentId, options),
+      : readAgentDeletionJournal(agentId, options, "runtime"),
   );
 }
 

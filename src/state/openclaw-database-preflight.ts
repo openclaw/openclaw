@@ -24,6 +24,7 @@ import { getAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
   readRetainedAgentDeletionsFromDatabase,
   type AgentDeletionJournalDisposition,
+  type AgentDeletionJournalPurpose,
 } from "./agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { readAgentDatabasePreflightTargets } from "./openclaw-agent-db-registry.read.js";
@@ -96,27 +97,32 @@ export async function assertOpenClawDatabasesReady(
     | { operation: "gateway-startup"; config: OpenClawConfig }
   ),
 ): Promise<void> {
-  const schemas = await preflightOpenClawDatabaseSchemas({
-    env: options.env,
-    onAgentInspection: options.onAgentInspection,
-    verifyCurrentSchemaShape: true,
-    ...(options.config
-      ? {
-          agentAdmissionConfig: options.config,
-          // Inspect candidate owners from preserved snapshots: runtime target
-          // resolution opens custom stores directly and can create WAL sidecars.
-          configuredAgentDatabaseTargets: [],
-          configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
-            options.config,
-            { env: options.env },
-          ),
-        }
-      : {}),
-    ...(options.operation === "gateway-startup" ? { requireStartupMigrationReadiness: true } : {}),
-    ...(options.operation === "doctor"
-      ? { configuredAgentDatabaseTargets: options.configuredAgentDatabaseTargets }
-      : {}),
-  });
+  const schemas = await preflightOpenClawDatabaseSchemas(
+    {
+      env: options.env,
+      onAgentInspection: options.onAgentInspection,
+      verifyCurrentSchemaShape: true,
+      ...(options.config
+        ? {
+            agentAdmissionConfig: options.config,
+            // Inspect candidate owners from preserved snapshots: runtime target
+            // resolution opens custom stores directly and can create WAL sidecars.
+            configuredAgentDatabaseTargets: [],
+            configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
+              options.config,
+              { env: options.env },
+            ),
+          }
+        : {}),
+      ...(options.operation === "gateway-startup"
+        ? { requireStartupMigrationReadiness: true }
+        : {}),
+      ...(options.operation === "doctor"
+        ? { configuredAgentDatabaseTargets: options.configuredAgentDatabaseTargets }
+        : {}),
+    },
+    options.operation === "doctor" ? "maintenance" : "runtime",
+  );
   for (const refusal of schemas.agentRefusals ?? []) {
     if (
       !options.config ||
@@ -249,6 +255,7 @@ export async function preflightOpenClawStateDatabasePath(
 /** Read schema headers and optionally verify current schema shape without repairing it. */
 export async function preflightOpenClawDatabaseSchemas(
   options: OpenClawDatabasePreflightOptions,
+  purpose: AgentDeletionJournalPurpose = "maintenance",
 ): Promise<OpenClawDatabaseSchemaPreflight> {
   options.signal?.throwIfAborted();
   const {
@@ -274,6 +281,7 @@ export async function preflightOpenClawDatabaseSchemas(
   let registeredDatabases: ReturnType<typeof readAgentDatabasePreflightTargets> = [];
   let deletionJournal: AgentDeletionJournalDisposition = {
     status: "unavailable",
+    cause: "missing",
     reason: "shared state database missing",
   };
   let stateDatabase: DatabaseSync | undefined;
@@ -391,7 +399,7 @@ export async function preflightOpenClawDatabaseSchemas(
       }
       try {
         registeredDatabases = readAgentDatabasePreflightTargets(stateDatabase, statePath);
-        deletionJournal = readRetainedAgentDeletionsFromDatabase(stateDatabase, statePath);
+        deletionJournal = readRetainedAgentDeletionsFromDatabase(stateDatabase, statePath, purpose);
       } catch (error) {
         stateInspectionErrors.push(error);
         result.indeterminate.push({
@@ -432,6 +440,7 @@ export async function preflightOpenClawDatabaseSchemas(
       ...options,
       registeredDatabases,
       deletionJournal,
+      purpose,
       inspectCandidateOwners: Boolean(
         options.requireStartupMigrationReadiness || options.agentAdmissionConfig,
       ),

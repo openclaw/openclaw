@@ -6,14 +6,20 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { detectSharedAuthStoreMigration } from "../infra/state-migrations.shared-auth-store.js";
-import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
+} from "../state/agent-deletion-journal.js";
+import {
+  claimOpenClawAgentDatabaseLease,
+  releaseOpenClawAgentDatabaseLease,
+} from "../state/openclaw-agent-db-lease.js";
+import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { repairDoctorAgentDeletionJournal } from "./doctor-agent-deletion-journal.js";
@@ -31,6 +37,52 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("reports unreadable journal history without replacing it or silently clearing the holds", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("doctor-unreadable-journal-") };
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } }, plugins: { enabled: false } };
+  const pathname = createLegacyDatabaseFixture({
+    agentId: "retired",
+    env,
+    eventsBySession: {},
+    schemaVersion: 19,
+  });
+  beginAgentDeletionJournal(
+    {
+      agentId: "retired",
+      operationId: "retained-unreadable",
+      agentDir: path.dirname(pathname),
+      workspaceDir: path.join(env.OPENCLAW_STATE_DIR, "workspace-retired"),
+      sessionsDir: path.join(env.OPENCLAW_STATE_DIR, "agents", "retired", "sessions"),
+      deleteFiles: false,
+    },
+    { env },
+  );
+  const state = openOpenClawStateDatabase({ env });
+  runOpenClawStateWriteTransaction(
+    (database) =>
+      completeAgentDeletionJournalInDatabase(database, "retired", "retained-unreadable"),
+    { env },
+  );
+  state.db.exec("UPDATE agent_deletion_journal SET database_paths_json = '[1]'");
+  const before = fs.readFileSync(pathname);
+  for (const shouldRepair of [false, true]) {
+    const preflight = await prepareDoctorDatabasePreflight({ cfg });
+    const result = await repairDoctorAgentDeletionJournal({ preflight, shouldRepair, env });
+    expect(result.changes).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("deletion journal unreadable");
+    expect(result.warnings.join("\n")).toContain(pathname);
+    expect(result.warnings.join("\n")).toContain("openclaw doctor --fix");
+    expect(
+      state.db.prepare("SELECT database_paths_json FROM agent_deletion_journal").get(),
+    ).toEqual({
+      database_paths_json: "[1]",
+    });
+    expect(state.db.prepare("SELECT * FROM migration_sources").all()).toEqual([]);
+    expect(fs.readFileSync(pathname)).toEqual(before);
+  }
+});
 
 it.each(["default", "custom-unregistered", "external-registered", "canonical-custom-lost-state"])(
   "reconstructs with a receipt and keeps %s stores held on the next Doctor pass",
@@ -114,9 +166,8 @@ it.each(["default", "custom-unregistered", "external-registered", "canonical-cus
     );
     expect(report.held).toHaveLength(2);
     for (const [index, agentId] of ["main", "retired"].entries()) {
-      expect(() => openOpenClawAgentDatabase({ agentId, env, path: stores[index] })).toThrow(
-        /held after deletion journal reconstruction/,
-      );
+      const leaseId = claimOpenClawAgentDatabaseLease({ agentId, env, path: stores[index]! });
+      releaseOpenClawAgentDatabaseLease(leaseId, { env }, "read-only");
     }
     stores.forEach((file, index) => expect(fs.readFileSync(file)).toEqual(bytes[index]));
     if (lostState) {
@@ -374,13 +425,12 @@ it.each([
         repairedStores: 0,
         repairedSessions: 0,
       });
-      expect(() =>
-        openOpenClawAgentDatabase({
-          agentId: "retired",
-          path: retiredPath,
-          env,
-        }),
-      ).toThrow(/held after deletion journal reconstruction/);
+      const leaseId = claimOpenClawAgentDatabaseLease({
+        agentId: "retired",
+        path: retiredPath,
+        env,
+      });
+      releaseOpenClawAgentDatabaseLease(leaseId, { env }, "read-only");
       expect(protectedPaths.map((file) => fs.readFileSync(file))).toEqual(bytes);
     }
   },

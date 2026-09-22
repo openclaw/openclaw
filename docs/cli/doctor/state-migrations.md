@@ -72,10 +72,15 @@ Doctor repairs continue. Restore an intended agent before migrating its retained
 store. Pending file deletion keeps the deletion owner's existing safety checks.
 
 When deletion history is missing, Doctor reports the number of unverified stores
-held back. Runtime does not recreate an empty journal on existing state.
+held back from repair. Ordinary session creation and database leases record unknown
+deletion history and continue; a missing row or reconstruction receipt does not
+make an agent deleted or unusable. Runtime does not recreate an empty journal on existing state.
+Verified fresh SQLite setup initializes the journal normally, without a missing-history
+warning. Legacy JSON session files alone do not require journal reconstruction.
 `openclaw doctor --fix` reconstructs the journal and records a receipt listing the
 held database paths in the existing migration tables. Reconstruction preserves
-those stores; it does not activate or migrate them. Review the paths and use the
+those stores; it does not migrate or retire them. Runtime admission remains separate
+from Doctor's repair holds. Review the paths and use the
 noninteractive `openclaw agents add` command printed by Doctor to restore the
 intended agent, or `openclaw agents delete` to confirm deletion. An unconfigured
 agent must be restored before deletion. For a custom database filename, restore

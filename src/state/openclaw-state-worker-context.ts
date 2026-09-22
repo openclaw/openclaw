@@ -18,9 +18,11 @@ export function captureOpenClawStateWorkerContext(
   options: { path?: string; env?: NodeJS.ProcessEnv } = {},
 ): OpenClawStateWorkerContext {
   const env = options.env ?? process.env;
+  // First native open must resolve storage references against this caller's selected environment.
   const environment: SqliteWorkerStateContext["environment"] = {
+    ...env,
     OPENCLAW_STATE_DIR: resolveStateDir(env),
-    ...(isGatewayExternallySupervised(env) ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
+    OPENCLAW_SUPERVISOR_MODE: isGatewayExternallySupervised(env) ? "external" : undefined,
   };
   const databasePath = path.resolve(options.path ?? resolveOpenClawStateSqlitePath(environment));
   isExistingOpenClawStateSchema(databasePath);

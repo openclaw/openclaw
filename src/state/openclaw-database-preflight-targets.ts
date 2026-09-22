@@ -5,7 +5,11 @@ import {
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "../infra/state-migrations.media-persistence-targets.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
-import type { AgentDeletionJournalDisposition } from "./agent-deletion-journal.read.js";
+import { createAgentDatabaseDeletionClassifier } from "./agent-deletion-discovery.js";
+import type {
+  AgentDeletionJournalDisposition,
+  AgentDeletionJournalPurpose,
+} from "./agent-deletion-journal.read.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
   isPersistentOpenClawAgentDatabasePath,
@@ -48,6 +52,7 @@ export function collectAgentDatabasePreflightTargets(options: {
   env: NodeJS.ProcessEnv;
   registeredDatabases: readonly AgentTarget[];
   deletionJournal: AgentDeletionJournalDisposition;
+  purpose: AgentDeletionJournalPurpose;
   configuredAgentDatabaseTargets?:
     | readonly AgentTarget[]
     | ((registered: readonly AgentTarget[]) => readonly AgentTarget[]);
@@ -55,7 +60,7 @@ export function collectAgentDatabasePreflightTargets(options: {
   inspectCandidateOwners: boolean;
   onAgentDatabaseDiscovery?: (prepared: PreparedAgentDatabaseMigrationDiscovery) => void;
 }) {
-  const { registeredDatabases, deletionJournal } = options;
+  const { registeredDatabases, deletionJournal, purpose } = options;
   const retainedDeletions = deletionJournal.status === "present" ? deletionJournal.entries : [];
   let agentTargets = registeredDatabases;
   let configuredTargets: readonly AgentTarget[] = [];
@@ -70,6 +75,8 @@ export function collectAgentDatabasePreflightTargets(options: {
       typeof options.configuredAgentDatabaseTargets === "function"
         ? options.configuredAgentDatabaseTargets(registeredDatabases)
         : options.configuredAgentDatabaseTargets;
+  }
+  if (purpose === "maintenance" && options.configuredAgentDatabaseTargets !== undefined) {
     const discovery = discoverAgentDatabaseMigrationTargets({
       env: options.env,
       configuredAgentDatabaseTargets: configuredTargets,
@@ -110,28 +117,38 @@ export function collectAgentDatabasePreflightTargets(options: {
   ];
   const samePath = createOpenClawAgentDatabasePathMatcher();
   const retained = [...retainedPaths];
+  const classifyDeletion = createAgentDatabaseDeletionClassifier({
+    env: options.env,
+    retainedDeletions: deletionJournal,
+    configuredAgentDatabaseTargets: configuredTargets,
+    registeredAgentDatabases: registeredDatabases,
+  });
   return {
     candidates:
-      deletionJournal.status === "unavailable"
-        ? preparedDiscovery && options.onAgentDatabaseDiscovery
-          ? (options.configuredAgentDatabaseCandidatePaths ?? [])
-              .filter((pathname) => !retained.some((candidate) => samePath(candidate, pathname)))
-              .map((pathname) => ({
-                agentId: undefined,
-                path: pathname,
-                holdForDeletionRecovery: true as const,
-              }))
-          : []
-        : candidates.filter(
-            (row) =>
-              (row.agentId === undefined || !retainedAgentIds.has(row.agentId)) &&
-              !(
-                deletionJournal.status === "present" &&
-                deletionJournal.held.some((target) => samePath(target.path, row.path))
-              ),
-          ),
+      purpose === "runtime"
+        ? candidates.filter((row) => typeof classifyDeletion(row.path, row.agentId) !== "object")
+        : deletionJournal.status === "unavailable"
+          ? preparedDiscovery && options.onAgentDatabaseDiscovery
+            ? (options.configuredAgentDatabaseCandidatePaths ?? [])
+                .filter((pathname) => !retained.some((candidate) => samePath(candidate, pathname)))
+                .map((pathname) => ({
+                  agentId: undefined,
+                  path: pathname,
+                  holdForDeletionRecovery: true as const,
+                }))
+            : []
+          : candidates.filter(
+              (row) =>
+                (row.agentId === undefined || !retainedAgentIds.has(row.agentId)) &&
+                !(
+                  deletionJournal.status === "present" &&
+                  deletionJournal.held.some((target) => samePath(target.path, row.path))
+                ),
+            ),
     isRetainedPath: (pathname: string) =>
-      retained.some((candidate) => samePath(candidate, pathname)),
+      purpose === "runtime"
+        ? typeof classifyDeletion(pathname) === "object"
+        : retained.some((candidate) => samePath(candidate, pathname)),
     failures,
     preparedDiscovery,
   };

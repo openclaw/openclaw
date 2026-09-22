@@ -77,9 +77,14 @@ export function openUnpublishedStateDatabase(params: {
   ensureSchema: (database: DatabaseSync, initialization: StateDatabaseInitialization) => void;
   recordOpenFailure: (pathname: string, error: Error) => void;
   existingSchema?: boolean;
+  initializationAgentPaths?: readonly string[];
 }): OpenClawStateDatabase {
   const { busyTimeoutMs, lockFailureReporting } = params;
-  const initialization = prepareStateDatabaseInitialization(params.pathname, params.env);
+  const initialization = prepareStateDatabaseInitialization(
+    params.pathname,
+    params.env,
+    params.initializationAgentPaths,
+  );
   const runtimeDirectory = resolveStateLifecycleRuntimeDirectory();
   const original = params.existingSchema ? statSync(params.pathname) : undefined;
   if (original && !original.isFile()) {

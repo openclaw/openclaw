@@ -12,6 +12,7 @@ export type StateDatabaseInitialization = { kind: "fresh" | "existing" | "unavai
 export function prepareStateDatabaseInitialization(
   pathname: string,
   env: NodeJS.ProcessEnv,
+  initializationAgentPaths: readonly string[] = [],
 ): StateDatabaseInitialization {
   try {
     if (
@@ -22,7 +23,10 @@ export function prepareStateDatabaseInitialization(
       return { kind: "existing" };
     }
     const stateDir = resolveOpenClawStateDirForDatabasePath(pathname);
-    const candidates = new Set(readAgentStorePathsFromConfig(env, stateDir));
+    const candidates = new Set([
+      ...initializationAgentPaths,
+      ...readAgentStorePathsFromConfig(env, stateDir),
+    ]);
     const agentsDir = path.join(stateDir, "agents");
     if (fs.lstatSync(agentsDir, { throwIfNoEntry: false })?.isSymbolicLink()) {
       return { kind: "unavailable" };
@@ -50,13 +54,14 @@ export function prepareStateDatabaseInitialization(
       for (const candidate of listSqliteTargetCandidatePathsInDirectory(agentDir)) {
         candidates.add(candidate);
       }
-      candidates.add(path.join(agentsDir, entry.name, "sessions", "sessions.json"));
     }
     for (const candidate of candidates) {
+      const family = resolveSqliteDatabaseFilePaths(candidate);
+      const main = fs.lstatSync(candidate, { throwIfNoEntry: false });
+      // Empty regular placeholders have no history; sidecars can still contain committed data.
       if (
-        resolveSqliteDatabaseFilePaths(candidate).some((file) =>
-          fs.lstatSync(file, { throwIfNoEntry: false }),
-        )
+        (main && (!main.isFile() || main.size > 0)) ||
+        family.slice(1).some((file) => fs.lstatSync(file, { throwIfNoEntry: false }))
       ) {
         return { kind: "existing" };
       }

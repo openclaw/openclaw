@@ -9,8 +9,10 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { createConfigIO } from "../config/io.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
+import { prepareStateDatabaseInitialization } from "../state/openclaw-state-db-initialization.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
 
 /** Doctor alone reconstructs lost deletion history and records the stores it cannot verify. */
@@ -24,7 +26,34 @@ export async function repairDoctorAgentDeletionJournal(params: {
   if (!discovery) {
     return { changes, warnings: [] };
   }
+  if (
+    discovery.deletionJournal.status === "unavailable" &&
+    discovery.deletionJournal.cause === "unreadable"
+  ) {
+    return {
+      changes,
+      warnings: [
+        sanitizeForLog(
+          `${resolveOpenClawStateSqlitePath(params.env)}: ${discovery.deletionJournal.reason}. Stores remain held; restore verified deletion history, then rerun openclaw doctor --fix.`,
+        ),
+        ...discovery.unverifiedTargets.map(({ agentId, path: pathname }) =>
+          sanitizeForLog(
+            `Held agent ${agentId} database ${pathname}; deletion history needs repair.`,
+          ),
+        ),
+      ],
+    };
+  }
   const missing = discovery.deletionJournal.status === "unavailable";
+  if (
+    missing &&
+    discovery.unverifiedTargets.length === 0 &&
+    discovery.failures.length === 0 &&
+    prepareStateDatabaseInitialization(resolveOpenClawStateSqlitePath(params.env), params.env)
+      .kind === "fresh"
+  ) {
+    return { changes, warnings: [] };
+  }
   let held = discovery.unverifiedTargets.map(({ agentId, path: pathname }) => ({
     agentId,
     path: pathname,

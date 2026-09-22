@@ -6,8 +6,12 @@ import {
   recordLegacyMigrationReceipt,
 } from "../infra/state-migrations.receipts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { createOpenClawAgentDatabasePathMatcher } from "./openclaw-agent-db.paths.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
-import { reconstructAgentDeletionJournalSchema } from "./openclaw-state-db-schema-additive.js";
+import {
+  assertAgentDeletionJournalAvailable,
+  reconstructAgentDeletionJournalSchema,
+} from "./openclaw-state-db-schema-additive.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import {
   resolveOpenClawAgentDatabaseStoredPath,
@@ -58,6 +62,23 @@ function decodeHolds(database: RecoveryDatabase, held: readonly HeldAgentDatabas
 /** Read recovery facts from this exact shared-state generation without opening another database. */
 export function readAgentDeletionRecoveryHolds(database: RecoveryDatabase): HeldAgentDatabase[] {
   return decodeHolds(database, readReport(database)?.held ?? []);
+}
+
+/** Schema and Doctor producers cannot infer permission to repair an unverified store. */
+export function assertAgentDeletionRecoveryAllowsMutation(
+  database: RecoveryDatabase,
+  pathname: string,
+): void {
+  assertAgentDeletionJournalAvailable(database.db);
+  const samePath = createOpenClawAgentDatabasePathMatcher();
+  const held = readAgentDeletionRecoveryHolds(database).find((entry) =>
+    samePath(entry.path, pathname),
+  );
+  if (held) {
+    throw new Error(
+      `Agent database ${held.path} is held after deletion journal reconstruction. Run openclaw doctor --fix for explicit restoration guidance before repairing agent ${held.agentId}.`,
+    );
+  }
 }
 
 /** The caller's transaction commits canonical reconstruction and its receipt together. */

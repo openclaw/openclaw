@@ -143,7 +143,11 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
     { databasePath: pathname, env },
     "startup migration checkpoint database operation",
     () => {
-      const initialization = prepareStateDatabaseInitialization(pathname, env);
+      const initialization = prepareStateDatabaseInitialization(
+        pathname,
+        env,
+        options.initializationAgentPaths,
+      );
       ensureOpenClawStatePermissions(pathname, env);
       const db = openNodeSqliteDatabase(pathname);
       try {

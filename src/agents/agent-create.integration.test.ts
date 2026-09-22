@@ -117,7 +117,7 @@ it("restores only the configured held store after explicit creation, never throu
     await fs.link(recovery.held[0]!.path, aliasPath);
     expect(() =>
       openOpenClawAgentDatabase({ agentId: "alias", path: aliasPath, env: state.env }),
-    ).toThrow("held after deletion journal reconstruction");
+    ).toThrow("belongs to agent main; requested agent alias");
     const params = { name: "main", workspace: state.workspaceDir };
     expect(
       await createAgent({ ...params, agentDir: path.dirname(recovery.held[1]!.path) }),
@@ -161,13 +161,10 @@ it("restores only the configured held store after explicit creation, never throu
     );
     expect(readAgentDeletionJournal("main", { env: state.env })).toBeUndefined();
     expect(isAgentDeletionBlocked("main", { env: state.env })).toBe(false);
-    expect(
-      openOpenClawAgentDatabase({ agentId: "main", path: recovery.held[0]!.path, env: state.env })
-        .path,
-    ).toBe(recovery.held[0]!.path);
-    expect(() =>
-      openOpenClawAgentDatabase({ agentId: "main", path: recovery.held[1]!.path, env: state.env }),
-    ).toThrow("held after deletion journal reconstruction");
+    for (const target of recovery.held.slice(0, 2)) {
+      expect(openOpenClawAgentDatabase({ ...target, env: state.env }).path).toBe(target.path);
+    }
+    expect(recovery.readHolds()).toEqual(recovery.held.slice(1));
   } finally {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();

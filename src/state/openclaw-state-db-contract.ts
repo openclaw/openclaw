@@ -132,6 +132,8 @@ export type OpenClawStateDatabaseOptions = {
   path?: string;
   database?: OpenClawStateDatabase;
   readOnly?: boolean;
+  /** Additional known agent stores can only make first-use classification more conservative. */
+  initializationAgentPaths?: readonly string[];
 };
 export type OpenClawStateDatabaseSchemaMigration = {
   kind:

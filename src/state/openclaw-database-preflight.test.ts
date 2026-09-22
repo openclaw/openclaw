@@ -397,6 +397,7 @@ describe("OpenClaw database schema preflight", () => {
             targets: [],
             deletionJournal: {
               status: "unavailable",
+              cause: "missing",
               reason: "shared state database missing",
             },
             retainedTargets: [],

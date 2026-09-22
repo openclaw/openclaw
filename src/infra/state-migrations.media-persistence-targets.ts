@@ -60,6 +60,7 @@ export function prepareAgentDatabaseMigrationDiscovery(params: {
   const deletionJournal: AgentDeletionJournalDisposition = preparedJournal ??
     snapshot?.retainedDeletions ?? {
       status: "unavailable",
+      cause: "missing",
       reason: "shared state database missing",
     };
   return {
@@ -86,6 +87,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
   const deletionJournal: AgentDeletionJournalDisposition = params.deletionJournal ??
     readAgentDatabaseDeletionSnapshot(params.env)?.retainedDeletions ?? {
       status: "unavailable",
+      cause: "missing",
       reason: "shared state database missing",
     };
   const retainedDeletions = deletionJournal.status === "present" ? deletionJournal.entries : [];
@@ -340,6 +342,7 @@ export function resolveAgentDatabaseMigrationTargets(params: {
       ? params.preparedDiscovery.discovery.deletionJournal
       : (snapshot?.retainedDeletions ?? {
           status: "unavailable",
+          cause: "missing",
           reason: "shared state database missing",
         });
   const discovery = discoverAgentDatabaseMigrationTargets({

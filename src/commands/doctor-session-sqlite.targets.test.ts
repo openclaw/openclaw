@@ -222,18 +222,19 @@ describe("runDoctorSessionSqlite", () => {
       expect(fs.existsSync(storePath)).toBe(true);
       expect(fs.existsSync(mainTranscriptPath)).toBe(true);
       expect(fs.existsSync(workTranscriptPath)).toBe(true);
+      const readScope = { env, storePath };
       expect(
         loadExactSessionEntry({
+          ...readScope,
           agentId: "main",
           sessionKey: "agent:main:main",
-          storePath,
         })?.entry.sessionId,
       ).toBe("main-session");
       expect(
         loadExactSessionEntry({
+          ...readScope,
           agentId: "work",
           sessionKey: "agent:work:main",
-          storePath,
         }),
       ).toBeUndefined();
     } finally {
@@ -298,18 +299,17 @@ describe("runDoctorSessionSqlite", () => {
       ["ops", "ops-session"],
     ] as const) {
       const agentStorePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+      const readScope = { agentId, env, storePath: agentStorePath };
       expect(
         loadExactSessionEntry({
-          agentId,
+          ...readScope,
           sessionKey: `agent:${agentId}:main`,
-          storePath: agentStorePath,
         })?.entry.sessionId,
       ).toBe(sessionId);
       expect(
         loadExactSessionEntry({
-          agentId,
+          ...readScope,
           sessionKey: "voice:ambiguous",
-          storePath: agentStorePath,
         }),
       ).toBeUndefined();
     }
@@ -393,22 +393,22 @@ describe("runDoctorSessionSqlite", () => {
           sqliteEntries: 2,
         });
         expect(report.totals).toHaveProperty("reclaimedBytes");
-        const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
-        for (const target of manifest.targets) {
+        for (const target of readMigrationManifest(report.migrationRun?.manifestPath).targets) {
           expect(target.completedMoves.some((move) => move.kind === "legacy-store")).toBe(true);
         }
+        const readScope = { env, storePath };
         expect(
           loadExactSessionEntry({
+            ...readScope,
             agentId: "main",
             sessionKey: "agent:main:main",
-            storePath,
           })?.entry.sessionId,
         ).toBe("main-session");
         expect(
           loadExactSessionEntry({
+            ...readScope,
             agentId: "work",
             sessionKey: "agent:work:main",
-            storePath,
           })?.entry.sessionId,
         ).toBe("work-session");
         expect(fs.existsSync(mainTranscriptPath)).toBe(false);

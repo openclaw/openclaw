@@ -388,7 +388,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       }
       beforePersistentApply();
       // Held bootstrap can still be a no-op; never claim its journal before that decision.
-      const deletion = hasBootstrapHold() ? undefined : readAgentDeletionJournal(agentId);
+      const deletion = hasBootstrapHold()
+        ? undefined
+        : readAgentDeletionJournal(agentId, {}, "runtime");
       if (deletion && !deletion.cleanupCompleted) {
         return createError(
           "deletion-pending",

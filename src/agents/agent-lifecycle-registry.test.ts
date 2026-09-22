@@ -13,6 +13,10 @@ import {
 } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
 import {
+  claimOpenClawAgentDatabaseLease,
+  releaseOpenClawAgentDatabaseLease,
+} from "../state/openclaw-agent-db-lease.js";
+import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -149,9 +153,9 @@ describe("agent lifecycle registry", () => {
     expect(readAgentDeletionJournal(target.agentId, options)).toBeUndefined();
     expect(readHolds()).toEqual(held);
     expect(isAgentDeletionBlocked(target.agentId, options)).toBe(false);
-    expect(() =>
-      openOpenClawAgentDatabase({ ...options, agentId: target.agentId, path: target.path }),
-    ).toThrow("held after deletion journal reconstruction");
+    const leaseId = claimOpenClawAgentDatabaseLease({ ...target, ...options });
+    releaseOpenClawAgentDatabaseLease(leaseId, options, "read-only");
+    expect(readHolds()).toEqual(held);
 
     await expect(
       withAgentDeletion(

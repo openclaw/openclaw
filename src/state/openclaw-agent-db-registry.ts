@@ -129,7 +129,7 @@ export function unregisterOpenClawAgentDatabase(params: {
       invalidateRegisteredAgentDatabasesMemo({ env: params.env });
       sessionChanges.emit({ all: true, scope: "stores" }, database.db);
     },
-    { env: params.env },
+    { env: params.env, initializationAgentPaths: [params.path] },
   );
   invalidateOpenClawAgentDatabaseValidation(params.path);
 }
