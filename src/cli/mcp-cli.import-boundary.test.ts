@@ -42,14 +42,15 @@ async function runImportBoundaryChild(forbidden: RegExp, workload: string) {
       const result = await runCliProcessChild({
         nodeExecutable: resolveTestNodeExecPath(),
         nodeArgs: ["--import", "tsx", "--input-type=module", "--eval", script],
-        // state.env inherits Vitest and operator flags; only fixture paths cross this boundary.
+        // Keep the child environment explicit; state.env includes Vitest and operator flags.
         env: {
           PATH: process.env.PATH,
           ESBUILD_WORKER_THREADS: process.env.ESBUILD_WORKER_THREADS,
           ...state.envVars,
-          TMPDIR: state.root,
-          TMP: state.root,
-          TEMP: state.root,
+          // TSX's compiler cache belongs to the runner, not the disposable app state.
+          TMPDIR: process.env.TMPDIR,
+          TMP: process.env.TMP,
+          TEMP: process.env.TEMP,
         },
         timeoutMs: 30_000,
       });
