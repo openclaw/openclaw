@@ -227,7 +227,7 @@ async function withWorkboardSqliteDatabase(
 
 describe("WorkboardStore", () => {
   it("emits one monotonic change after each visible mutation", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const changes = vi.fn();
     store.subscribeChanges(changes);
 
@@ -241,7 +241,7 @@ describe("WorkboardStore", () => {
   });
 
   it("does not emit for no-op commands and isolates listener failures", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const changes = vi.fn(() => {
       throw new Error("listener failed");
     });
@@ -259,7 +259,7 @@ describe("WorkboardStore", () => {
     const {
       store,
       stores: { subscriptions },
-    } = createWorkboardSqliteTestHarness();
+    } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
     subscriptions.entries = async () => {
       throw new Error("subscription cleanup failed");
     };
@@ -3525,7 +3525,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps archived cards out of diagnostics without rewriting their history", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const card = await store.create({ title: "Archived completed work", status: "done" });
     const now = Date.now();
 
@@ -4454,7 +4454,7 @@ describe("WorkboardStore", () => {
   );
 
   it("does not mutate archived ready cards during repeated dispatch", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const card = await store.create({
       title: "Archived ready work",
       status: "ready",

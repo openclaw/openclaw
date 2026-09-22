@@ -367,12 +367,24 @@ describe("pw-session getPageForTargetId", () => {
   });
 
   it("does not add an extra top-level retry for non-recoverable connect failures", async () => {
-    connectOverCdpSpy.mockRejectedValue(new Error("connectOverCDP exploded"));
-    getChromeWebSocketEndpointSpy.mockResolvedValue(null);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const discoveryStarted = createDeferred<void>();
+      connectOverCdpSpy.mockRejectedValue(new Error("connectOverCDP exploded"));
+      getChromeWebSocketEndpointSpy.mockImplementation(async () => {
+        discoveryStarted.resolve();
+        return null;
+      });
 
-    await expect(getPageForTargetId({ cdpUrl: "http://127.0.0.1:9555" })).rejects.toThrow(
-      "connectOverCDP exploded",
-    );
-    expect(connectOverCdpSpy).toHaveBeenCalledTimes(3);
+      await Promise.all([
+        expect(getPageForTargetId({ cdpUrl: "http://127.0.0.1:9555" })).rejects.toThrow(
+          "connectOverCDP exploded",
+        ),
+        discoveryStarted.promise.then(() => vi.runAllTimersAsync()),
+      ]);
+      expect(connectOverCdpSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

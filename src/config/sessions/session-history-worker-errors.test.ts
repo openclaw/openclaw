@@ -4,11 +4,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readChatHistoryDelta } from "../../gateway/server-methods/chat-history-delta.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions } from "../../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
+import type { SessionTranscriptDisplayDeltaResult } from "./session-accessor.sqlite-history-query.js";
+import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-row.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { readSessionHistoryPageInWorker } from "./session-history-worker-runtime.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence.js";
@@ -20,7 +24,7 @@ type Request = {
   interactive?: boolean;
   nativeSections: SharedArrayBuffer;
 };
-type Resource = { close: () => Promise<void> };
+type Resource = { close: () => Promise<void>; revoke: () => void };
 type QuarantineDatabase = {
   isOpen: boolean;
   exec: () => void;
@@ -32,11 +36,14 @@ const observed = vi.hoisted(() => ({
   receive: undefined as ((message: Request) => void) | undefined,
   post: vi.fn<(message: unknown) => void>(),
   read: vi.fn<() => unknown>(),
+  delta: vi.fn<() => SessionTranscriptDisplayDeltaResult>(),
+  lookup: vi.fn<() => boolean>(),
   close: vi.fn<() => void>(),
   run: vi.fn<(input: unknown, options: WorkerTaskOptions<unknown>) => Promise<unknown>>(),
   quarantineRead: vi.fn<() => unknown>(),
   quarantineClose: vi.fn<() => void>(),
   quarantineOpen: vi.fn<() => QuarantineDatabase>(),
+  quarantinePaths: new Set<string>(),
   hydrate: vi.fn<() => unknown>(),
   rotate: vi.fn<() => Promise<void>>(),
   unregister: vi.fn<() => void>(),
@@ -102,9 +109,22 @@ vi.mock("../../state/openclaw-agent-db-readonly-scope.js", () => ({
     }
   },
 }));
-vi.mock("../../infra/node-sqlite.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/node-sqlite.js")>()),
-  openNodeSqliteDatabase: observed.quarantineOpen,
+vi.mock("../../infra/node-sqlite.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/node-sqlite.js")>();
+  return {
+    ...actual,
+    openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) =>
+      observed.quarantinePaths.has(args[0])
+        ? observed.quarantineOpen()
+        : actual.openNodeSqliteDatabase(...args),
+  };
+});
+// Keep the history fixture's fake pool out of the process-wide disk-scan singleton.
+vi.mock("./disk-budget-runtime.js", () => ({
+  measureSessionPhysicalDiskUsage: () => {
+    throw new Error("Disk scans are forbidden in these pure controls");
+  },
+  drainSessionDiskBudgetWorkers: async () => {},
 }));
 vi.mock("./session-transcript-hydration.worker.js", () => ({
   streamSessionTranscriptHydration: observed.hydrate,
@@ -117,6 +137,25 @@ vi.mock("./session-sharing-store.js", () => ({
     throw new Error("Native membership reads are forbidden in these pure controls");
   },
 }));
+vi.mock("../../gateway/session-history-readonly-reader.js", () => ({
+  createReadonlySessionHistoryReader: () => ({
+    readTranscriptDisplayDelta: observed.delta,
+    subagentCoordination: {
+      isSubagentSession: observed.lookup,
+      isSubagentRunMessage: observed.lookup,
+    },
+  }),
+}));
+vi.mock("./session-cold-storage-read.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-cold-storage-read.js")>();
+  return {
+    ...actual,
+    readRestoredSessionTranscript: (
+      ...args: Parameters<typeof actual.readRestoredSessionTranscript>
+    ) =>
+      args[0].sessionId === "delta" ? args[1]() : actual.readRestoredSessionTranscript(...args),
+  };
+});
 
 await import("./session-transcript.worker.js");
 let sequence = 0;
@@ -172,10 +211,13 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   observed.post.mockReset();
   observed.read.mockReset();
+  observed.delta.mockReset();
+  observed.lookup.mockReset();
   observed.close.mockReset();
   observed.run.mockReset();
   observed.rotate.mockReset().mockResolvedValue(undefined);
   observed.unregister.mockReset();
+  observed.quarantinePaths.clear();
   observed.quarantineRead.mockReset().mockReturnValue({ user_version: 0 });
   observed.quarantineClose.mockReset();
   observed.quarantineOpen.mockReset().mockImplementation(() => {
@@ -209,6 +251,160 @@ it("preserves the worker read failure through transfer when closing succeeds", a
   });
   await expect(readThroughWorker()).rejects.toMatchObject({ message: primary.message });
   expect(observed.close).toHaveBeenCalledTimes(1);
+});
+
+function failingVisibilityDelta(resetFirst: boolean) {
+  const request = input();
+  const mirror = {
+    role: "assistant",
+    provider: "openclaw",
+    model: "delivery-mirror",
+    content: "Mirror",
+    openclawDeliveryMirror: { kind: "channel-final", sourceAssistantMessageId: "before-cursor" },
+  };
+  const coordination = {
+    role: "user",
+    content: "Internal coordination",
+    provenance: {
+      kind: "inter_session",
+      sourceTool: "sessions_send",
+      sourceSessionKey: "agent:main:acp:source",
+    },
+  };
+  observed.delta.mockReturnValue({
+    kind: "page",
+    cursor: "cursor",
+    activeLeafEntryId: "message-1",
+    hasMore: false,
+    serializedBytes: 512,
+    events: (resetFirst ? [mirror, coordination] : [coordination, mirror]).map(
+      (message, index) => ({
+        seq: index + 1,
+        messageSeq: index + 1,
+        event: { type: "message", id: `message-${index}`, message },
+      }),
+    ),
+  });
+  observed.lookup.mockImplementation(() => {
+    throw canonicalSessionKeyMigrationRequiredError("invalid source metadata");
+  });
+  installWorkerTransport();
+  return () =>
+    readChatHistoryDelta({
+      agentId: "main",
+      sessionKey: request.scope.sessionKey,
+      cursor: "cursor",
+      sessionSnapshot: {},
+      scope: {
+        ...request.scope,
+        sessionId: "delta",
+        sessionEntry: { sessionId: "delta" },
+      },
+    });
+}
+
+it.each([true, false])(
+  "preserves lazy visibility error ordering after retirement (reset first: %s)",
+  async (resetFirst) => {
+    const read = failingVisibilityDelta(resetFirst);
+    if (resetFirst) {
+      await expect(read()).resolves.toEqual({ kind: "reset" });
+    } else {
+      await expect(read()).rejects.toThrow("openclaw doctor --fix");
+    }
+    expect(observed.close).toHaveBeenCalledOnce();
+    expect(observed.rotate).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["revocation", "retirement-failure", "auxiliary-close"])(
+  "settles failed visibility before reset and preserves %s",
+  async (failure) => {
+    const read = failingVisibilityDelta(true);
+    if (failure === "auxiliary-close") {
+      observed.lookup.mockImplementation(() => {
+        throw new Error("shared-state reader close failed");
+      });
+    }
+    const entered = createDeferredCore();
+    const retirement = createDeferredCore();
+    observed.rotate.mockImplementation(() => {
+      entered.resolve();
+      return retirement.promise;
+    });
+    let settled = false;
+    const pending = read()
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      )
+      .finally(() => {
+        settled = true;
+      });
+    try {
+      expect(
+        await Promise.race([entered.promise.then(() => "retiring"), pending.then(() => "settled")]),
+      ).toBe("retiring");
+      expect(settled).toBe(false);
+      if (failure === "revocation") {
+        expect(observed.resources).toHaveLength(1);
+        observed.resources[0]!.revoke();
+      }
+      if (failure === "retirement-failure") {
+        retirement.reject(new Error("retirement failed"));
+      } else {
+        retirement.resolve();
+      }
+      const result = await pending;
+      if (failure === "auxiliary-close") {
+        expect(result).toEqual({ value: { kind: "reset" } });
+      } else {
+        assert("error" in result);
+        expect(result.error).toMatchObject({
+          message: expect.stringContaining(
+            failure === "revocation" ? "revoked" : "retirement failed",
+          ),
+        });
+      }
+    } finally {
+      retirement.resolve();
+      await pending;
+    }
+  },
+);
+
+it("keeps primary close failures fatal even when an earlier delta row resets", async () => {
+  const read = failingVisibilityDelta(true);
+  observed.close.mockImplementation(() => {
+    throw new Error("primary close failed");
+  });
+  await expect(read()).rejects.toMatchObject({
+    message: expect.stringContaining("primary close failed"),
+  });
+  expect(observed.rotate).toHaveBeenCalledOnce();
+});
+
+it("rejects primary revocation between delta acquisition and consumption", async () => {
+  failingVisibilityDelta(true);
+  observed.lookup.mockReturnValue(false);
+  const request = input();
+  const prepared = await readSessionHistoryPageInWorker({
+    kind: "delta",
+    params: {
+      target: {
+        ...request.scope,
+        sessionId: "delta",
+        sessionEntry: { sessionId: "delta" },
+      },
+      limits: { cursor: "cursor", maxEvents: 200, maxBytes: 1_000_000 },
+    },
+  });
+  expect(prepared.assertCurrent).not.toThrow();
+  expect(observed.resources).toHaveLength(1);
+  const resource = observed.resources[0]!;
+  resource.revoke();
+  expect(prepared.assertCurrent).toThrow("revoked");
+  await resource.close();
 });
 
 it("retains both worker errors through transfer when the read and close fail", async () => {
@@ -425,7 +621,9 @@ it.each(typedFailures)(
 function hydrateThroughWorker() {
   const root = tempDirs.make("openclaw-hydration-quarantine-cleanup-");
   fs.mkdirSync(path.join(root, "state"));
-  fs.writeFileSync(path.join(root, "state", "openclaw-quarantine.sqlite"), "mock quarantine");
+  const quarantinePath = path.join(root, "state", "openclaw-quarantine.sqlite");
+  observed.quarantinePaths.add(quarantinePath);
+  fs.writeFileSync(quarantinePath, "mock quarantine");
   installWorkerTransport();
   return prepareSessionTranscriptHydration({
     agentId: "main",
