@@ -5,6 +5,7 @@ import {
   patchSessionEntryCore,
   recordSessionParticipant,
   replaceSessionEntry,
+  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -45,7 +46,7 @@ test("projects recap eligibility from current sharing authority, including cappe
     ["member", foreignId, "read-only"],
     ["viewer", foreignId, "shared"],
   ] as const) {
-    await replaceSessionEntry(
+    replaceSessionEntrySync(
       { agentId: "main", sessionKey: `agent:main:recap-${name}`, storePath },
       {
         sessionId: `recap-${name}`,

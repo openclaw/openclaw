@@ -14,21 +14,10 @@ import {
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
 import type {
-  SessionBranchSummaryWorkerInput,
-  SessionEntryWorkerInput,
-  SessionEntryListWorkerInput,
-  SessionTargetInventoryWorkerInput,
-  SessionIdentityEvidenceWorkerInput,
-  SessionMembersWorkerInput,
-  SessionPreviewWorkerInput,
-  SessionTitleFieldsWorkerInput,
-  SessionModelContextWorkerInput,
-  SessionRowPresenceWorkerInput,
   SessionTranscriptHistoryWorkerInput,
+  SessionTranscriptWorkerInput,
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
-  SessionUsageCacheWorkerInput,
-  SessionTranscriptSearchWorkerInput,
 } from "./session-transcript-worker.types.js";
 
 // Keep target switching within the existing serialized worker; no read snapshot survives a task.
@@ -88,21 +77,7 @@ serveWorkerTasks(
     SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues> | UsageCostWorkerReply
   > => {
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
-    const request = input as
-      | SessionModelContextWorkerInput
-      | SessionEntryWorkerInput
-      | SessionEntryListWorkerInput
-      | SessionTargetInventoryWorkerInput
-      | SessionIdentityEvidenceWorkerInput
-      | SessionTranscriptHistoryWorkerInput
-      | SessionPreviewWorkerInput
-      | SessionTitleFieldsWorkerInput
-      | SessionRowPresenceWorkerInput
-      | SessionMembersWorkerInput
-      | SessionUsageCacheWorkerInput
-      | SessionTranscriptSearchWorkerInput
-      | SessionBranchSummaryWorkerInput
-      | UsageCostWorkerInput;
+    const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
     if (request.kind === "usage-cost") {
       const { executeUsageCostWorker, usageCostWorkerFailure } =
         await import("../../infra/session-cost-usage-worker.js");
@@ -145,6 +120,29 @@ serveWorkerTasks(
               env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
             }),
           }))),
+        };
+      }
+      if (request.kind === "session-store-target") {
+        const { readSessionStoreTarget } = await import("./session-store-target-inventory.js");
+        return { ok: true, value: readSessionStoreTarget(request.request) };
+      }
+      if (request.kind === "session-exact-entries") {
+        const { readExactSessionEntriesWithLifecycle } =
+          await import("./session-entry-read.worker.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () =>
+            readExactSessionEntriesWithLifecycle(request),
+          )),
+        };
+      }
+      if (request.kind === "session-row-facts") {
+        const { readSessionRowDatabaseFacts } = await import("./session-entry-read.worker.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () =>
+            readSessionRowDatabaseFacts(request),
+          )),
         };
       }
       if (request.kind === "session-target-inventory") {
@@ -254,19 +252,13 @@ serveWorkerTasks(
             };
           }
           if (request.kind === "session-preview") {
-            const { readSessionPreviewItemsFromTranscript } =
-              await import("../../gateway/session-transcript-preview.js");
+            const { readSessionPreviewItemsReadOnly } =
+              await import("../../gateway/session-transcript-preview-reader.js");
             return {
               ok: true,
               ...(await withHistoryDatabase(request.database, () => ({
                 kind: "session-preview" as const,
-                items: readSessionPreviewItemsFromTranscript(
-                  request.scope,
-                  request.maxItems,
-                  request.maxChars,
-                  "display",
-                  { readOnly: true },
-                ),
+                items: readSessionPreviewItemsReadOnly(request),
               }))),
             };
           }

@@ -1,16 +1,5 @@
-import type {
-  ManagedServiceManagerBoundaryOptions,
-  ManagedServiceManagerBoundaryResult,
-} from "./update-managed-service-handoff-lifecycle.test-support.js";
+import type { ManagedServiceManagerBoundaryOptions } from "./update-managed-service-handoff-lifecycle.test-support.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
-
-export type ManagedRepairBoundary = {
-  phase: "validating" | "verifying";
-  baseUrl: string;
-  revoke: boolean;
-  inferencePending: Promise<void>;
-  releaseInference: () => void;
-};
 
 export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions & {
   trigger?: "cli" | "api" | "campaign";
@@ -30,11 +19,6 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
   revokeWhileValidating?: boolean;
   replaceLedgerWriter?: boolean;
   finalizationWorkMs?: number;
-  beforeParkNotice?: "acknowledged" | "stalled" | "rejected";
-  repair?: ManagedRepairBoundary;
+  beforeParkNotice?: "acknowledged" | "stalled" | "rejected" | "disconnected";
+  profileRequester?: true;
 };
-
-export type ManagedServiceManagerBoundaryRunner = (
-  kind: "systemd" | "launchd",
-  options?: ManagedServiceBoundaryOptions,
-) => Promise<ManagedServiceManagerBoundaryResult>;

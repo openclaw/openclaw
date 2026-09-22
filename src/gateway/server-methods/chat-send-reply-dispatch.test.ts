@@ -194,6 +194,31 @@ describe("buildTranscriptReplyTextFromInputs", () => {
 });
 
 describe("buildAssistantReplyContentFromInputs", () => {
+  it("keeps fallback status text separate from the terminal answer", async () => {
+    const notice =
+      "Model Fallback: backup/model (selected primary/model; selected model unavailable)";
+    const answer = "The workspace check is complete.";
+
+    const content = await buildAssistantReplyContentFromInputs({
+      sessionKey: "agent:main:main",
+      inputs: [
+        { kind: "raw", payload: { text: notice, isFallbackNotice: true } },
+        { kind: "raw", payload: { text: answer } },
+      ],
+    });
+
+    expect(content).toEqual({
+      assistantContent: [
+        { type: "text", text: notice, openclawStatusNotice: true },
+        { type: "text", text: answer },
+      ],
+      persistedAssistantContent: [
+        { type: "text", text: notice, openclawStatusNotice: true },
+        { type: "text", text: answer },
+      ],
+    });
+  });
+
   it.each([
     { kind: "raw", withAnswer: false },
     { kind: "prepared", withAnswer: false },

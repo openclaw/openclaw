@@ -324,7 +324,7 @@ async function exercise(
       };
       expect(readsBeforeRelease).toEqual(
         secondPreparation
-          ? { session: 1, sharing: 1, transcript: 1 }
+          ? { session: 2, sharing: 2, transcript: 1 }
           : { session: 0, sharing: 0, transcript: 0 },
       );
       changeAuthority();

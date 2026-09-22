@@ -159,7 +159,7 @@ export function isShellLikeCodeModeSource(source: string): boolean {
     return false;
   }
 
-  // An unbound executable with flags or a path would only become a QuickJS
+  // An unbound executable with flags or a path would only become a guest
   // ReferenceError and trigger another model retry.
   return true;
 }

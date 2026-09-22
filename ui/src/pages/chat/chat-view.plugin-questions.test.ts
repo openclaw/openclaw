@@ -133,13 +133,17 @@ it.each([
       .click();
     await vi.waitFor(() => {
       if (action === "submit") {
-        expect(submit).toHaveBeenCalledExactlyOnceWith("> Which audience?\n\nNew contributors");
+        expect(submit).toHaveBeenCalledExactlyOnceWith(
+          "> Which audience?\n\nNew contributors",
+          "audience",
+          undefined,
+        );
       } else {
         expect(submit).not.toHaveBeenCalled();
       }
       expect(provider.querySelector("openclaw-chat-question-panel")).toBeNull();
       expect(provider.querySelector(".chat-question-summary")?.textContent).toContain(
-        action === "submit" ? "New contributors" : "Skipped",
+        action === "submit" ? "New contributors" : "Dismissed",
       );
     });
     if (mode === "nondelegating") {

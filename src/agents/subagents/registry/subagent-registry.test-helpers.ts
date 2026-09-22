@@ -1,7 +1,5 @@
 export * from "./subagent-registry.js";
 export {
-  buildLatestSubagentRunReadIndex,
-  buildSubagentRunReadIndex,
   buildSubagentSessionListReadIndex,
   countActiveDescendantRuns,
   countPendingDescendantRuns,

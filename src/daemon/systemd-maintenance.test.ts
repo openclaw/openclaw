@@ -250,9 +250,14 @@ it.each([
   expect(await fs.readFile(`${f.sourcePath}.bak`, "utf8")).toBe("previous backup\n");
 });
 
-it.each([false, true])(
-  "preserves old-marked custom base policy during maintenance (stopping: %s)",
-  async (stopping) => {
+it.each([
+  { stopping: false, stopSeconds: 30 },
+  { stopping: true, stopSeconds: 30 },
+  { stopping: false, stopSeconds: 600 },
+  { stopping: true, stopSeconds: 600 },
+])(
+  "refreshes native budgets while retaining custom values ($stopSeconds, stopping=$stopping)",
+  async ({ stopping, stopSeconds }) => {
     const f = await fixture("linux");
     f.command.environment = {
       ...f.command.environment,
@@ -263,15 +268,20 @@ it.each([false, true])(
     };
     const original = buildSystemdUnit(f.command)
       .replace("TimeoutStartSec=30", "TimeoutStartSec=45")
-      .replace("TimeoutStopSec=330", "TimeoutStopSec=600")
-      .replace("KillMode=mixed\n", "");
+      .replace("TimeoutStopSec=330", `TimeoutStopSec=${stopSeconds}`)
+      .replace("KillMode=mixed", "KillMode=control-group");
     await fs.writeFile(f.sourcePath, original);
-    native.identity.mockResolvedValue({
-      code: 0,
-      stdout:
-        "LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=600s\n",
-      stderr: "",
-      termination: "exit",
+    let loadedStop = stopSeconds;
+    native.identity.mockImplementation(async (_command, args) => {
+      if (args.includes("daemon-reload")) {
+        loadedStop = stopSeconds === 30 ? 330 : stopSeconds;
+      }
+      return {
+        code: 0,
+        stdout: `LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=${loadedStop}s\n`,
+        stderr: "",
+        termination: "exit",
+      };
     });
     const warnings: string[] = [];
     const result = await withGatewayServiceOperationLock(f.env, async (assertCurrent) =>
@@ -290,12 +300,15 @@ it.each([false, true])(
         warn: (warning) => warnings.push(warning),
       }),
     );
-    expect(result).toBe(false);
-    expect(await fs.readFile(f.sourcePath, "utf8")).toBe(original);
+    expect(result).toBe(true);
+    const refreshed = await fs.readFile(f.sourcePath, "utf8");
+    expect(refreshed).toContain("TimeoutStartSec=45");
+    expect(refreshed).toContain(`TimeoutStopSec=${stopSeconds === 30 ? 330 : stopSeconds}`);
+    expect(refreshed).toContain("KillMode=mixed");
     expect(warnings.join(" ")).toContain("Service.TimeoutStartSec");
-    expect(warnings.join(" ")).toContain("Service.TimeoutStopSec");
+    expect(warnings.join(" ")).toContain("not changed");
     expect(native.identity.mock.calls.some(([, args]) => args.includes("daemon-reload"))).toBe(
-      false,
+      true,
     );
   },
 );

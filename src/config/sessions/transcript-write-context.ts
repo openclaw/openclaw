@@ -2,8 +2,42 @@
 // through nested session-manager callbacks.
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import type {
+  ModelChangeEntry,
+  ThinkingLevelChangeEntry,
+} from "../../agents/sessions/session-manager-types.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
-import type { TranscriptAppendRefusal } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionTranscriptContextVersion,
+  TranscriptAppendRefusal,
+} from "./session-accessor.sqlite-contract.js";
+import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+
+export type SessionMetadataChange =
+  | Pick<ModelChangeEntry, "type" | "provider" | "modelId">
+  | Pick<ThinkingLevelChangeEntry, "type" | "thinkingLevel">;
+
+type MetadataTarget = Pick<
+  SessionTranscriptRuntimeTarget,
+  "agentId" | "sessionId" | "sessionKey" | "storePath"
+>;
+type MetadataPublicationOwner = {
+  getSessionId(): string;
+  getSessionTarget(): MetadataTarget | undefined;
+};
+export type SessionMetadataCommit = {
+  entry: ModelChangeEntry | ThinkingLevelChangeEntry;
+  version: SessionTranscriptContextVersion | undefined;
+  target: MetadataTarget | undefined;
+};
+type MetadataPublication = {
+  owner: MetadataPublicationOwner;
+  sessionId: string;
+  target: MetadataTarget | undefined;
+  change: SessionMetadataChange;
+  publish: (commit: SessionMetadataCommit) => undefined;
+};
 
 export type SessionTranscriptWriterFence = Readonly<{
   expectedLifecycleRevision: string | undefined;
@@ -36,9 +70,118 @@ export type OwnedSessionTranscriptWriteContext = {
   /** Revalidate the captured owner, including an absent writer, inside each commit. */
   assertCommitAllowed?: () => void;
   withTranscriptWrite: <T>(run: () => Promise<T> | T) => Promise<T>;
+  metadataPublication?: { current?: MetadataPublication };
 };
 
 const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscriptWriteContext>();
+
+function sameMetadataTarget(left: MetadataTarget | undefined, right: MetadataTarget | undefined) {
+  return left && right
+    ? (["agentId", "sessionId", "sessionKey", "storePath"] as const).every(
+        (key) => left[key] === right[key],
+      )
+    : left === right;
+}
+
+function sameMetadataChange(left: SessionMetadataChange, right: SessionMetadataChange): boolean {
+  return left.type === "model_change"
+    ? right.type === left.type && left.provider === right.provider && left.modelId === right.modelId
+    : right.type === left.type && left.thinkingLevel === right.thinkingLevel;
+}
+
+/** Couple one metadata append to its caller's synchronous state publication. */
+export async function withSessionMetadataPublication<T>(
+  owner: MetadataPublicationOwner,
+  change: SessionMetadataChange,
+  publish: (commit: SessionMetadataCommit) => undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const parent = ownedTranscriptWriteContext.getStore();
+  const target = owner.getSessionTarget();
+  const publication: MetadataPublication = {
+    owner,
+    sessionId: owner.getSessionId(),
+    target: target
+      ? {
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          storePath: target.storePath,
+        }
+      : undefined,
+    change,
+    publish,
+  };
+  const metadataPublication: { current?: MetadataPublication } = { current: publication };
+  try {
+    return await ownedTranscriptWriteContext.run(
+      {
+        ...parent,
+        withTranscriptWrite: parent ? (write) => parent.withTranscriptWrite(write) : trackAsyncWork,
+        metadataPublication,
+      },
+      run,
+    );
+  } finally {
+    metadataPublication.current = undefined;
+  }
+}
+
+/** Claim before the append yields, so a reentrant observer cannot take its publisher. */
+export function captureSessionMetadataPublication(
+  owner: MetadataPublicationOwner,
+  change: SessionMetadataChange,
+): {
+  sessionId: string;
+  target: MetadataTarget | undefined;
+  publish: (commit: SessionMetadataCommit) => undefined;
+} {
+  const currentTarget = owner.getSessionTarget();
+  const captured = {
+    sessionId: owner.getSessionId(),
+    target: currentTarget
+      ? {
+          agentId: currentTarget.agentId,
+          sessionId: currentTarget.sessionId,
+          sessionKey: currentTarget.sessionKey,
+          storePath: currentTarget.storePath,
+        }
+      : undefined,
+  };
+  const slot = ownedTranscriptWriteContext.getStore()?.metadataPublication;
+  if (!slot?.current) {
+    return { ...captured, publish: () => undefined };
+  }
+  const publication = slot.current;
+  if (
+    publication.owner !== owner ||
+    publication.sessionId !== owner.getSessionId() ||
+    !sameMetadataTarget(publication.target, owner.getSessionTarget()) ||
+    !sameMetadataChange(publication.change, change)
+  ) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
+  slot.current = undefined;
+  return {
+    ...captured,
+    publish: (commit) => {
+      if (
+        publication.sessionId !== owner.getSessionId() ||
+        !sameMetadataTarget(publication.target, owner.getSessionTarget())
+      ) {
+        return undefined;
+      }
+      if (
+        !sameMetadataTarget(publication.target, commit.target) ||
+        !sameMetadataChange(publication.change, commit.entry)
+      ) {
+        throw new Error("Committed metadata differs from its publication owner");
+      }
+      publication.publish(commit);
+      return undefined;
+    },
+  };
+}
 
 // Compare concrete files when available; SQLite markers fall back to session
 // identity because they are storage references rather than filesystem paths.
@@ -122,6 +265,30 @@ export async function withOwnedSessionTranscriptWrites<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   return await ownedTranscriptWriteContext.run(context, run);
+}
+
+/** Add a caller's live capability without replacing its admitted writer or settlement owner. */
+export function withSessionTranscriptWriteAssertion<T>(
+  scope: SessionTranscriptWriteTarget,
+  assertCurrent: () => void,
+  run: () => T,
+): T {
+  const parent = ownedTranscriptWriteContext.getStore();
+  const target = { ...scope };
+  assertTranscriptWriteContext(parent, target);
+  assertCurrent();
+  return ownedTranscriptWriteContext.run(
+    {
+      ...parent,
+      sessionTarget: parent?.sessionTarget ?? target,
+      assertCommitAllowed: () => {
+        parent?.assertCommitAllowed?.();
+        assertCurrent();
+      },
+      withTranscriptWrite: parent ? (write) => parent.withTranscriptWrite(write) : trackAsyncWork,
+    },
+    run,
+  );
 }
 
 /** Runs detached work without retaining an attempt-owned transcript context. */

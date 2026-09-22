@@ -227,6 +227,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
   });
 
   it("aborts ACP dispatch promptly when the caller abort signal fires", async () => {
+    const turnStarted = createDeferred();
     const releaseTurn = createDeferred();
     const runtime = {
       ensureSession: vi.fn(
@@ -238,6 +239,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
           }) as AcpRuntimeHandle,
       ),
       runTurn: vi.fn(async function* (params: { signal?: AbortSignal }) {
+        turnStarted.resolve();
         await new Promise<void>((resolve) => {
           if (params.signal?.aborted) {
             resolve();
@@ -302,24 +304,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
 
     let operation: ReturnType<typeof createReplyOperation> | undefined;
     try {
-      await vi.waitFor(
-        () => {
-          expect(runtime.runTurn).toHaveBeenCalledTimes(1);
-        },
-        // Import-bound dispatch startup can exceed 5s on contended CI runners
-        // (flaked on shard reruns); waitFor returns immediately once satisfied.
-        { timeout: 15_000 },
-      );
+      await Promise.race([turnStarted.promise, dispatchPromise]);
+      expect(runtime.runTurn).toHaveBeenCalledTimes(1);
       operation = replyRunRegistry.get("agent:codex-acp:session-1");
       expect(operation?.ownerSettlement).toBeDefined();
       abortController.abort();
-      const outcome = await raceWithTimeoutResult(
-        dispatchPromise.then(() => "settled" as const),
-        100,
-        "pending" as const,
-      );
-
-      expect(outcome).toBe("settled");
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get("agent:codex-acp:session-1")).toBe(operation);
       expect(operation?.abortSignal.aborted).toBe(true);
       expect(runtime.runTurn.mock.calls[0]?.[0].signal?.aborted).toBe(true);

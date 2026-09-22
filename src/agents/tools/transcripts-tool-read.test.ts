@@ -11,7 +11,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
 import { activeSessions } from "../../transcripts/capture.js";
-import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptSourceProvider,
+} from "../../transcripts/provider-types.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import {
@@ -37,6 +40,19 @@ const session = {
   source: { providerId: "voice", guildId: "team" },
   metadata: { agentId: "capture-agent" },
 };
+function registerActiveCapture(descriptor: TranscriptSessionDescriptor = session) {
+  activeSessions.set(descriptor.sessionId, {
+    appends: createTranscriptCaptureAppends(() => {}),
+    session: descriptor,
+    providerId: descriptor.source.providerId,
+    stopProvider: async () => {
+      throw new Error("Reading notes must not stop capture");
+    },
+    releaseProvider: async () => {},
+    phase: "active",
+  });
+}
+
 function tool(channel = false) {
   return createTranscriptsTool({
     stateDir,
@@ -125,13 +141,7 @@ describe("transcripts read actions", () => {
         descriptor,
       );
       if (state === "active") {
-        activeSessions.set(session.sessionId, {
-          appends: createTranscriptCaptureAppends(() => {}),
-          session: descriptor,
-          providerId: "voice",
-          provider: {},
-          phase: "active",
-        });
+        registerActiveCapture(descriptor);
       }
       const entered = createDeferred();
       const release = createDeferred();
@@ -263,13 +273,7 @@ describe("transcripts read actions", () => {
         authorize,
       },
     });
-    activeSessions.set(session.sessionId, {
-      appends: createTranscriptCaptureAppends(() => {}),
-      session,
-      providerId: "voice",
-      provider: {},
-      phase: "active",
-    });
+    registerActiveCapture();
     await store.writeSession({ ...session, source: { providerId: "voice", guildId: "other" } });
     await store.writeSummary(
       summarizeTranscripts({ session, utterances: [{ text: "Other guild notes" }] }),
@@ -323,13 +327,7 @@ describe("transcripts read actions", () => {
   });
 
   it("bounds model-facing notes and reports active captures without summaries", async () => {
-    activeSessions.set(session.sessionId, {
-      appends: createTranscriptCaptureAppends(() => {}),
-      session,
-      providerId: "voice",
-      provider: {},
-      phase: "active",
-    });
+    registerActiveCapture();
     await expect(
       readThroughCatalog({ action: "show", sessionId: "meeting" }),
     ).resolves.toMatchObject({

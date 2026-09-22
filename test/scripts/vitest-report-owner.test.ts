@@ -5,7 +5,11 @@ import { parseCLI, type JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../../scripts/lib/vitest-report-capture.mts";
 import { isPidDefinitelyDead } from "../../src/shared/pid-alive.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createVitestReportFixture, type ReportFixtureMode } from "./vitest-report-fixture.js";
+import {
+  createVitestReportFixture,
+  reportChunkTestFiles,
+  type ReportFixtureMode,
+} from "./vitest-report-fixture.js";
 
 const json = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
 const serialized = (values: unknown[]) => values.map((value) => JSON.stringify(value)).toSorted();
@@ -744,15 +748,16 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     const result = await run("chunks");
     expect(result.code, result.stderr).toBe(0);
     expect(inventory(json(result.output))).toEqual(
-      Array.from({ length: 2 }, (_, i) => [`chunk/${i}`, "passed"]),
+      reportChunkTestFiles.map((_, index) => [`chunk/${String(index).padStart(2, "0")}`, "passed"]),
     );
+    expect(result.reportSet).toBeTypeOf("string");
     const index = json(path.join(result.reportSet!, "index.json"));
-    expect(
-      index.entries.map((entry: { includePatterns: string[] }) => entry.includePatterns),
-    ).toEqual([
-      ["extensions/telegram/src/owned-one.test.ts"],
-      ["extensions/telegram/src/owned-two.test.ts"],
-    ]);
+    const chunks: string[][] = index.entries.map(
+      (entry: { includePatterns: string[] }) => entry.includePatterns,
+    );
+    expect(chunks.map((chunk) => chunk.length)).toEqual([6, 5]);
+    expect(chunks.flat().toSorted()).toEqual(reportChunkTestFiles);
+    expect(index.complete).toBe(true);
     expect(new Set(index.entries.map((entry: { config: string }) => entry.config)).size).toBe(1);
   });
 });

@@ -123,6 +123,9 @@ export function renderNewSessionDraftComposer(options: {
       .mode=${resolveLobsterPetMode(!gateway?.snapshot.offlineStable, options.context?.sessions.state.result?.sessions)}
       .runOutcome=${resolveLobsterRunOutcome(options.context?.sessions.state.result?.sessions)}
       .visitsEnabled=${options.context?.theme.settings.lobsterPetVisits !== false}
+      .residentEnabled=${options.context?.theme.branding.mascot !== "none"}
+      .critters=${options.context?.theme.branding.critters}
+      .critterArtwork=${options.context?.theme.branding.artwork?.critters}
       .soundsEnabled=${options.context?.theme.settings.lobsterPetSounds === true}
       .gatewayVersion=${options.context?.config.current.serverVersion ?? gateway?.snapshot.hello?.server?.version ?? null}
       .onVisitsDisabled=${() => options.context?.theme.refresh()}

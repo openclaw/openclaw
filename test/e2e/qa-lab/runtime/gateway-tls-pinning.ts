@@ -20,9 +20,12 @@ import { resolveGatewayConnectionTlsFingerprint } from "../../../../src/gateway/
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { loadGatewayTlsServerRuntime } from "../../../../src/infra/tls/gateway.js";
 import { flushLogger, resetLogger } from "../../../../src/logging/logger.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../../../src/state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../../../src/state/openclaw-state-db.paths.js";
 import { getDeterministicFreePortBlock, getFreePort } from "../../../../src/test-utils/ports.js";
 import { waitForFile } from "../../../helpers/process-wait.js";
 import { createDeferred } from "../../../helpers/promise.js";
+import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "gateway-tls-pinning";
@@ -321,6 +324,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
   const restoreEnvironment = captureEnvironment();
   const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tls-pinning-"));
   const stateDir = path.join(runtimeRoot, "state");
+  const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
   const configPath = path.join(stateDir, "openclaw.json");
   const certPath = path.join(runtimeRoot, "tls", "gateway-cert.pem");
   const keyPath = path.join(runtimeRoot, "tls", "gateway-key.pem");
@@ -331,7 +335,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
   const symlinkRenewal = process.platform !== "win32";
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 
-  try {
+  async function runProof(): Promise<GatewayTlsPinningProof> {
     process.env.HOME = runtimeRoot;
     process.env.OPENCLAW_CONFIG_PATH = configPath;
     process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -680,15 +684,22 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
       coldProbeRejectedUnknownPin: true,
       missedRenewalRejectedUnknownPin: true,
     };
-  } finally {
-    await server?.close({ reason: "Gateway TLS pinning proof complete" }).catch(() => undefined);
-    clearConfigCache();
-    clearRuntimeConfigSnapshot();
-    restoreEnvironment();
-    await flushLogger();
-    resetLogger();
-    await fs.rm(runtimeRoot, { force: true, recursive: true });
   }
+  return await runQaGatewayFixture(
+    runProof,
+    async () => {
+      await server?.close({ reason: "Gateway TLS pinning proof complete" });
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      await flushLogger();
+      resetLogger();
+      await fs.rm(runtimeRoot, { force: true, recursive: true });
+    },
+    () => {
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      restoreEnvironment();
+    },
+  );
 }
 
 export async function runGatewayTlsPinningProducer(

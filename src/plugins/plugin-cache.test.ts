@@ -37,8 +37,79 @@ import { PluginInstance } from "./plugin-instance.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  getPluginLoaderCacheState,
+  markPluginRegistryActive,
+  markPluginRegistryRetired,
+} from "./registry-lifecycle.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each(["success", "plugin failure", "module failure", "host failure"] as const)(
+  "keeps adopted instance custody through physical disposal (%s)",
+  async (outcome) => {
+    const originalCache = createPluginCache();
+    const successorCache = createPluginCache();
+    const record = createPluginRecord({ id: "cache-custody" });
+    const original = createEmptyPluginRegistry();
+    original.plugins.push(record);
+    const successor = { ...createEmptyPluginRegistry(), plugins: [record] };
+    const instance = new PluginInstance(record.id, { record, registry: original });
+    const callback = instance.wrap(() => "adopted");
+    markPluginRegistryActive(original);
+    getPluginLoaderCacheState(originalCache).set("original", original);
+    markPluginRegistryActive(successor);
+    getPluginLoaderCacheState(successorCache).set("successor", successor);
+
+    await retirePluginCache(originalCache);
+    expect(originalCache.instances.size).toBe(0);
+    expect(callback()).toBe("adopted");
+    expect(successorCache.instances.has(instance)).toBe(true);
+
+    const failure = new Error(outcome);
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
+    if (outcome === "plugin failure") {
+      instance.lifecycle.onDispose(() => {
+        throw failure;
+      });
+    }
+    instance.onModuleDispose(async () => {
+      entered.resolve();
+      await finish.promise;
+      if (outcome === "module failure") {
+        throw failure;
+      }
+    });
+    markPluginRegistryRetired(successor);
+    const disposal = instance.dispose(
+      outcome === "host failure"
+        ? () => {
+            throw failure;
+          }
+        : undefined,
+    );
+    void disposal.catch(() => {});
+    try {
+      await entered.promise;
+      expect(successorCache.instances.has(instance)).toBe(true);
+      finish.resolve();
+      if (outcome === "host failure") {
+        await expect(disposal).rejects.toBe(failure);
+      } else {
+        await expect(disposal).resolves.toEqual({
+          errors: outcome === "success" ? [] : [failure],
+        });
+      }
+      expect(successorCache.instances.has(instance)).toBe(outcome !== "success");
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([disposal, retirePluginCache(successorCache)]);
+    }
+  },
+);
 
 afterEach(() => {
   vi.restoreAllMocks();

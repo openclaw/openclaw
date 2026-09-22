@@ -6,7 +6,16 @@ import {
   getPreparedModelRuntimePluginGeneration,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import * as taskRuntime from "../../tasks/runtime-internal.js";
+import { readTaskRegistryRevision } from "../../tasks/task-registry-state.js";
+import {
+  createTaskFixture,
+  withTaskRegistryTempDir,
+} from "../../tasks/task-registry.test-support.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import * as sessionChange from "../server-methods/session-change-event.js";
+import { identifiedClient, runTaskHandler } from "../server-methods/tasks.test-helpers.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import type { AgentTurnPrincipal } from "./types.js";
@@ -99,8 +108,119 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
   };
 }
 
+function createVisibleExecution() {
+  const execution = createExecution();
+  const sessionKey = "agent:main:task-access-liveness";
+  Object.assign(execution.params, {
+    suppressVisibleSessionEffects: false,
+    requestedSessionKey: sessionKey,
+    resolvedSessionKey: sessionKey,
+  });
+  Object.assign(execution.params.context, {
+    getRuntimeConfig: () => ({}),
+    getSessionEventSubscriberConnIds: () => new Set(),
+  });
+  execution.params.prepared.activeRunAbort.markExecutionStarted = vi.fn(() => true);
+  execution.params.prepared.userTurn.recorder = {
+    finishPendingInput: vi.fn(),
+  } as unknown as NonNullable<typeof execution.params.prepared.userTurn.recorder>;
+  return execution;
+}
+
 describe("startAgentRunExecution Gateway ownership", () => {
-  beforeEach(() => dispatchAgentRunFromGateway.mockReset());
+  beforeEach(() => {
+    dispatchAgentRunFromGateway.mockReset();
+  });
+
+  it.each([false, true])(
+    "preserves access across liveness and invalidates creation (new session: %s)",
+    async (isNewSession) => {
+      const execution = createVisibleExecution();
+      execution.params.isNewSession = isNewSession;
+      const publish = sessionChange.emitSessionsChanged;
+      const notices: Array<{ reason: string; accessChanges: number }> = [];
+      const publisher = vi
+        .spyOn(sessionChange, "emitSessionsChanged")
+        .mockImplementation((...args) => {
+          const before = readGatewayAccessRevision();
+          publish(...args);
+          notices.push({
+            reason: args[1].reason,
+            accessChanges: readGatewayAccessRevision() - before,
+          });
+        });
+      dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
+        await dispatch.ingressOpts.onExecutionStarted();
+        dispatch.cleanupAbortController();
+      });
+
+      try {
+        await startAgentRunExecution(execution.params);
+
+        expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
+        expect(notices).toEqual([
+          ...(isNewSession ? [{ reason: "create", accessChanges: expect.any(Number) }] : []),
+          { reason: "send", accessChanges: 0 },
+          { reason: "agent.run.started", accessChanges: 0 },
+          { reason: "agent.input.settled", accessChanges: 0 },
+        ]);
+        if (isNewSession) {
+          expect(notices[0]?.accessChanges).toBeGreaterThan(0);
+        }
+      } finally {
+        publisher.mockRestore();
+      }
+    },
+  );
+
+  it("serves a held Tasks page despite ordinary agent progress before the final response", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("cli", {
+        requesterSessionKey: "agent:main:task-access-liveness",
+        task: "Stable task",
+        notifyPolicy: "silent",
+      });
+      dispatchAgentRunFromGateway.mockImplementation(async (dispatch) => {
+        dispatch.ingressOpts.onExecutionStarted();
+        dispatch.cleanupAbortController();
+      });
+      const select = taskRuntime.listTaskRecordPage;
+      const selection = vi
+        .spyOn(taskRuntime, "listTaskRecordPage")
+        .mockImplementation(async (params) => {
+          const page = await select(params);
+          if (page.ok) {
+            const revision = readTaskRegistryRevision();
+            // Every old-code retry sees only liveness, never a task creation or row update.
+            await startAgentRunExecution(createVisibleExecution().params);
+            expect(readTaskRegistryRevision()).toBe(revision);
+          }
+          return page;
+        });
+      try {
+        const result = await runTaskHandler(
+          "tasks.list",
+          {},
+          {},
+          identifiedClient(["operator.admin"]),
+        );
+        expect({
+          selections: selection.mock.calls.length,
+          ok: result.calls[0]?.[0],
+          error: result.calls[0]?.[2],
+        }).toEqual({
+          selections: 1,
+          ok: true,
+          error: undefined,
+        });
+        expect(result.payload?.tasks).toMatchObject([{ id: task.taskId }]);
+        expect(selection).toHaveBeenCalledOnce();
+        expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
+      } finally {
+        selection.mockRestore();
+      }
+    });
+  });
 
   it.each<{
     name: string;

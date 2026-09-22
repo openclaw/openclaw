@@ -3,6 +3,7 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { showToast } from "../../lib/toast.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
@@ -53,6 +54,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   constructor(
     private readonly host: ReactiveControllerHost,
     private readonly onStateChange?: () => void,
+    private readonly onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
   ) {
     this.attachmentReads = new ChatAttachmentReadLifecycle(() =>
       this.stateValue?.requestUpdate?.(),
@@ -131,7 +133,13 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.previousRealtimeConversation = state.realtimeTalkConversation;
     const renderLifecycle = state.renderLifecycle;
     state.requestUpdate = () => renderLifecycle.invalidate();
-    this.cleanups.push(subscribeChatOutboxProjection(state));
+    this.cleanups.push(
+      subscribeChatOutboxProjection(state, (item) => {
+        if (this.stateValue === state) {
+          this.onQueuedMessageDiscarded?.(item);
+        }
+      }),
+    );
     // Retained and hidden panes still own corrections; transport availability
     // must not release their reload protection before Save or Cancel does.
     this.cleanups.push(
@@ -417,6 +425,10 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   composerScopeForEviction(): StoredChatOutboxScope | null {
     return this.composerPersistence.scopeForRouteSwitch();
+  }
+
+  get durableComposerScope() {
+    return this.composerPersistence.durableScope;
   }
 
   get composerDraftRevision(): number {

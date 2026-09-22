@@ -1,6 +1,6 @@
 import type { MessagePort } from "node:worker_threads";
+import { isRealtimeVoiceAudioAudible } from "openclaw/plugin-sdk/realtime-voice-playback";
 import {
-  isRealtimeVoiceAudioAudible,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceAudioOutputMessage,
 } from "openclaw/plugin-sdk/realtime-voice-provider";

@@ -1,14 +1,17 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { mkdirSync, realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { NodeWorkerJournalWorker } from "../node-host/node-worker-journal-worker.js";
 import type { NodeWorkerLaunchReceipt } from "../node-host/node-worker-launch-store.js";
 import {
@@ -18,11 +21,21 @@ import {
 } from "../node-host/node-worker-process-identity.js";
 import { createNodeWorkerSupervisor } from "../node-host/node-worker-supervisor.js";
 import { NodeWorkerTurnStore } from "../node-host/node-worker-turn-store.js";
+import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import type { NodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
+import { workerBackgroundExecEntrypoints } from "./worker-runtime-background-exec-entrypoints.test-support.js";
+
+const workerProcessUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.worker);
+const supervisorUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.supervisor);
+const moduleLoaderUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.moduleLoader);
+const sdkEntrypoints = [
+  workerBackgroundExecEntrypoints.providerModelMetadata,
+  workerBackgroundExecEntrypoints.stringCoerceRuntime,
+] as const;
 
 type WorkerCrashFixture = {
   setup: (options: {
@@ -68,6 +81,24 @@ export function registerWorkerBackgroundExecLifecycleTests({
           'setInterval(() => fs.appendFileSync("heartbeat.txt", "tick\\n"), 25);',
         ].join("\n"),
       );
+      const sdkHost = createCompiledSdkHost(
+        sdkEntrypoints,
+        (prefix) => {
+          const directory = path.join(workspaceDir, prefix);
+          mkdirSync(directory);
+          return directory;
+        },
+        { mode: "link" },
+      );
+      if (sdkHost) {
+        expect(realpathSync(path.join(sdkHost, "dist"))).toBe(
+          realpathSync(path.dirname(path.dirname(fileURLToPath(workerProcessUrl)))),
+        );
+      }
+      const sdkWitness = path.join(workspaceDir, "native-sdk.json");
+      const expectedSdkModules = sdkEntrypoints.map((entry) =>
+        realpathSync(fileURLToPath(resolveRuntimeWorkerUrl(entry))),
+      );
       const root = path.join(workspaceDir, "node-host");
       const bundle = path.join(root, "worker-lifetime", "bundles", BUNDLE_HASH);
       const home = path.join(workspaceDir, "home");
@@ -77,9 +108,32 @@ export function registerWorkerBackgroundExecLifecycleTests({
         path.join(bundle, "worker.mjs"),
         [
           'import { writeFileSync } from "node:fs";',
+          'import { createRequire } from "node:module";',
           "globalThis.WORKER_DEPLOY_BUILD = true;",
-          `await import(${JSON.stringify(new URL("../../scripts/tsx.mjs", import.meta.url).href)});`,
-          `const { runWorkerProcess } = await import(${JSON.stringify(new URL("./worker-process.ts", import.meta.url).href)});`,
+          ...(sdkHost
+            ? [`process.env.OPENCLAW_DEV_SOURCE_ROOT = ${JSON.stringify(sdkHost)};`]
+            : []),
+          ...(workerProcessUrl.pathname.endsWith(".ts")
+            ? [
+                `await import(${JSON.stringify(new URL("../../scripts/tsx.mjs", import.meta.url).href)});`,
+              ]
+            : []),
+          `const { runWorkerProcess } = await import(${JSON.stringify(workerProcessUrl.href)});`,
+          `const { getPluginModuleLoaderStats } = await import(${JSON.stringify(moduleLoaderUrl.href)});`,
+          "const nativeRequire = createRequire(import.meta.url);",
+          `const sdkTargets = new Set(${JSON.stringify(expectedSdkModules)});`,
+          "const write = process.stdout.write.bind(process.stdout);",
+          "process.stdout.write = (chunk, ...args) => {",
+          "  let frame;",
+          "  try { frame = JSON.parse(chunk.toString()); } catch {}",
+          '  if (frame?.type === "result") {',
+          `    writeFileSync(${JSON.stringify(sdkWitness)}, JSON.stringify({`,
+          "      policyTargets: getPluginModuleLoaderStats().topSourceTransformTargets.map(({ target }) => target),",
+          "      sdkModules: Object.keys(nativeRequire.cache).filter((file) => sdkTargets.has(file)),",
+          "    }));",
+          "  }",
+          "  return write(chunk, ...args);",
+          "};",
           `writeFileSync(${JSON.stringify(path.join(workspaceDir, "runtime.pid"))}, String(process.pid));`,
           ...(crashed === "anchor"
             ? [
@@ -130,8 +184,12 @@ export function registerWorkerBackgroundExecLifecycleTests({
           await writeFile(
             entry,
             [
-              `await import(${JSON.stringify(new URL("../../scripts/tsx.mjs", import.meta.url).href)});`,
-              `const { createNodeWorkerSupervisor } = await import(${JSON.stringify(new URL("../node-host/node-worker-supervisor.ts", import.meta.url).href)});`,
+              ...(supervisorUrl.pathname.endsWith(".ts")
+                ? [
+                    `await import(${JSON.stringify(new URL("../../scripts/tsx.mjs", import.meta.url).href)});`,
+                  ]
+                : []),
+              `const { createNodeWorkerSupervisor } = await import(${JSON.stringify(supervisorUrl.href)});`,
               `const supervisor = createNodeWorkerSupervisor({ ...${JSON.stringify(supervisorOptions)}, onCapacityChanged: (capacity) => process.send?.({ type: "capacity", capacity }) });`,
               'process.once("SIGTERM", () => { void supervisor.close().then(() => process.exit(0)); });',
               `const receipt = await supervisor.launch(${JSON.stringify(input)}, ${JSON.stringify(connectionEndpoint)});`,
@@ -192,6 +250,12 @@ export function registerWorkerBackgroundExecLifecycleTests({
             .filter((message) => message.role === "toolResult" && message.toolName === "exec"),
         ).toHaveLength(1);
         expect(capacity).toEqual({ total: 1, available: 0 });
+        expect(JSON.parse(await readFile(sdkWitness, "utf8"))).toMatchObject({
+          policyTargets: expect.arrayContaining([
+            path.resolve("extensions/openai/provider-policy-api.ts"),
+          ]),
+          sdkModules: expect.arrayContaining(expectedSdkModules),
+        });
         expect(inspectNodeWorkerProcessIdentity(command!)).toBe("live");
 
         if (crashed === "environment-stop") {

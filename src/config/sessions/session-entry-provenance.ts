@@ -27,6 +27,14 @@ export type SessionOwnerAssignment = {
   assignedBy?: SessionActor;
   assignedAt?: number;
 };
+/** Personal preferences follow the assigned human, otherwise the authenticated human creator. */
+export function sessionPersonalProfileId(
+  entry: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
+): string | undefined {
+  const assigned = entry?.owner?.actor;
+  return assigned?.type === "human" ? assigned.id : sessionCreatorProfileId(entry?.createdActor);
+}
+
 export type SessionCreatedVia =
   | "operator" // gateway sessions.create (Control UI / operator clients)
   | "spawn" // sessions_spawn native or ACP subagent spawn

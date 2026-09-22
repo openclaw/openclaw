@@ -1,6 +1,7 @@
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { VERSION } from "../version.js";
 import { runPluginRegistration } from "./api-lifecycle.js";
+import { tryNativeRequireModule } from "./native-module-require.js";
 import { getPluginCache, withPluginCache } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
@@ -11,6 +12,7 @@ import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-reso
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
+import { prepareGatewayContextBindingOwner } from "./runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -24,6 +26,7 @@ import type {
 import {
   type PluginRuntimeModuleResolution,
   type PluginSdkResolutionPreference,
+  preparePluginLoaderAliases,
   resolvePluginRuntimeModulePathWithDiagnostics,
 } from "./sdk-alias.js";
 import type { OpenClawPluginDefinition } from "./types.js";
@@ -191,17 +194,12 @@ export function createLazyPluginRuntime(params: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   runtimeOptions?: CreatePluginRuntimeOptions;
-  loadPluginModule: ReturnType<typeof createPluginModuleLoader>;
 }): PluginRuntime {
   const cache = getPluginCache();
   type RuntimeModule = {
     createPluginRuntime?: PluginRuntimeFactory;
   };
-  let runtimeModule: RuntimeModule | undefined;
   const resolveRuntimeModule = (): RuntimeModule => {
-    if (runtimeModule) {
-      return runtimeModule;
-    }
     const resolution = resolvePluginRuntimeModulePathWithDiagnostics({
       devSourceRoot: params.devSourceRoot,
       pluginSdkResolution: params.pluginSdkResolution,
@@ -215,14 +213,24 @@ export function createLazyPluginRuntime(params: {
       );
     }
     const resolvedPath = resolution.resolvedPath;
-    runtimeModule = withPluginCache(cache, () =>
-      withProfile(
-        { source: resolvedPath },
-        "runtime-module",
-        () => params.loadPluginModule(resolvedPath) as RuntimeModule,
-      ),
+    return withPluginCache(cache, () =>
+      withProfile({ source: resolvedPath }, "runtime-module", () => {
+        const native = tryNativeRequireModule(resolvedPath, {
+          aliasMap: preparePluginLoaderAliases({
+            modulePath: resolvedPath,
+            moduleUrl: import.meta.url,
+            devSourceRoot: params.devSourceRoot,
+            pluginSdkResolution: params.pluginSdkResolution,
+          }).resolveAlias,
+        });
+        if (!native.ok) {
+          throw new Error(
+            `Unable to load host plugin runtime natively: ${resolvedPath}. Use a supported native TypeScript loader for a source host, or rebuild the host runtime.`,
+          );
+        }
+        return native.moduleExport as RuntimeModule;
+      }),
     );
-    return runtimeModule;
   };
 
   const base = createRuntimeBase();
@@ -284,30 +292,53 @@ export function createLazyPluginRuntime(params: {
     }
     return descriptor;
   };
+  let preparingOwner = true;
   const runtime = new Proxy({} as PluginRuntime, {
-    get: (_target, prop, receiver) => getRuntimeProperty(prop, receiver),
-    set(_target, prop, value, receiver) {
-      return Reflect.set(resolveRuntime(), prop, value, receiver);
+    get: (target, prop, receiver) =>
+      Object.hasOwn(target, prop)
+        ? Reflect.get(target, prop, receiver)
+        : getRuntimeProperty(prop, receiver),
+    set(target, prop, value, receiver) {
+      return Reflect.set(
+        Object.hasOwn(target, prop) ? target : resolveRuntime(),
+        prop,
+        value,
+        receiver,
+      );
     },
-    has(_target, prop) {
-      return Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop) || Reflect.has(resolveRuntime(), prop);
+    has(target, prop) {
+      return (
+        Object.hasOwn(target, prop) ||
+        Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop) ||
+        Reflect.has(resolveRuntime(), prop)
+      );
     },
-    ownKeys() {
-      return Object.keys(LAZY_RUNTIME_PROPERTIES);
+    ownKeys(target) {
+      return [...Object.keys(LAZY_RUNTIME_PROPERTIES), ...Reflect.ownKeys(target)];
     },
-    getOwnPropertyDescriptor(_target, prop) {
-      return resolveLazyRuntimeDescriptor(prop);
+    getOwnPropertyDescriptor(target, prop) {
+      return (
+        Reflect.getOwnPropertyDescriptor(target, prop) ??
+        (preparingOwner ? undefined : resolveLazyRuntimeDescriptor(prop))
+      );
     },
-    defineProperty(_target, prop, attributes) {
-      return Reflect.defineProperty(resolveRuntime() as object, prop, attributes);
+    defineProperty(target, prop, attributes) {
+      return Reflect.defineProperty(
+        preparingOwner || Object.hasOwn(target, prop) ? target : resolveRuntime(),
+        prop,
+        attributes,
+      );
     },
-    deleteProperty(_target, prop) {
-      return Reflect.deleteProperty(resolveRuntime() as object, prop);
+    deleteProperty(target, prop) {
+      return Reflect.deleteProperty(Object.hasOwn(target, prop) ? target : resolveRuntime(), prop);
     },
     getPrototypeOf() {
       return Reflect.getPrototypeOf(resolveRuntime() as object);
     },
   });
+  // Reserve this proxy's private owner slot without initializing its broad runtime.
+  prepareGatewayContextBindingOwner(runtime);
+  preparingOwner = false;
   // Injected accessors remain deferred. A plain host facet can carry its owner
   // without reading a lazy runtime surface or initializing broad services.
   const subagent: unknown = params.runtimeOptions

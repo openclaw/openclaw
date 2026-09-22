@@ -22,15 +22,6 @@ export function listSecretsDotEnvPaths(params: { configPath: string; stateDir: s
   return [...new Map(candidates.map((candidate) => [path.resolve(candidate), candidate])).values()];
 }
 
-function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
-  if (override) {
-    return resolveUserPath(override, env);
-  }
-  // Storage scans must include the implicit main agent even before config has agent entries.
-  return path.join(resolveUserPath(stateDir), "agents", "main", "agent");
-}
-
 /**
  * Lists deduplicated models.json paths that may contain materialized provider credentials.
  * Includes active env override, implicit main agent, discovered state dirs, and configured agents.
@@ -40,10 +31,13 @@ export function listAgentModelsJsonPaths(
   stateDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  const resolvedStateDir = resolveUserPath(stateDir);
+  const resolvedStateDir = resolveUserPath(stateDir, env);
   const paths = new Set<string>();
   paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
-  paths.add(path.join(resolveActiveAgentDir(stateDir, env), "models.json"));
+  const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
+  if (override) {
+    paths.add(path.join(resolveUserPath(override, env), "models.json"));
+  }
 
   const agentsRoot = path.join(resolvedStateDir, "agents");
   if (fs.existsSync(agentsRoot)) {
@@ -56,12 +50,7 @@ export function listAgentModelsJsonPaths(
   }
 
   for (const agentId of listAgentIds(config)) {
-    if (agentId === "main") {
-      paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
-      continue;
-    }
-    const agentDir = resolveAgentDir(config, agentId);
-    paths.add(path.join(resolveUserPath(agentDir), "models.json"));
+    paths.add(path.join(resolveAgentDir(config, agentId, env), "models.json"));
   }
 
   return [...paths];

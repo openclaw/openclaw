@@ -1,9 +1,12 @@
+import "./openclaw-tools.sessions.mocks.test-support.js";
+import "./test-helpers/fast-openclaw-tools-sessions.js";
 // Verifies sessions list/history/send behavior across gateway and channel targets.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
@@ -21,6 +24,7 @@ import {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
@@ -31,37 +35,15 @@ import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-
 import { isCompletionReportInputProvenance } from "../sessions/input-provenance.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-
-const callGatewayMock = vi.fn();
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
-const loadSessionEntryByKeyMock = vi.fn();
-vi.mock("./subagents/announce/subagent-announce-delivery.js", () => ({
-  loadSessionEntryByKey: (sessionKey: string) => loadSessionEntryByKeyMock(sessionKey),
-}));
-
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => ({
-    session: {
-      mainKey: "main",
-      scope: "per-sender",
-    },
-    tools: {
-      // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
-      sessions: { visibility: "all" },
-      agentToAgent: { enabled: true },
-    },
-  }),
-  resolveGatewayPort: () => 18789,
-}));
-
-import "./test-helpers/fast-openclaw-tools-sessions.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
 import { registerSessionsSendResumeTests } from "./openclaw-tools.sessions-resume.test-support.js";
-import { registerSessionsSendTimeoutTests } from "./openclaw-tools.sessions-timeout.test-support.js";
+import {
+  observeSessionSendContinuations,
+  registerSessionsSendPendingErrorTest,
+  registerSessionsSendTimeoutTests,
+} from "./openclaw-tools.sessions-timeout.test-support.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { compactToolOutputHint, toolSchemaDeclaration } from "./tool-schema-hints.js";
 import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
@@ -71,7 +53,11 @@ import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
+const { callGatewayMock, loadSessionEntryByKeyMock } =
+  await import("./openclaw-tools.sessions.mocks.test-support.js");
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const continuations = observeSessionSendContinuations();
 
 const TEST_CONFIG = {
   session: {
@@ -283,22 +269,35 @@ function sessionsSendDetails(details: unknown): SessionsSendDetails {
 }
 
 describe("sessions tools", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetGatewayWorkAdmission();
     callGatewayMock.mockClear();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     loadSessionEntryByKeyMock.mockReset();
     loadSessionEntryByKeyMock.mockReturnValue(undefined);
     installMessagingTestRegistry();
-    agentStepTesting.setDepsForTest({
+    await agentStepTesting.setDepsForTest({
       agentCommandFromIngress: async () => ({
         payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
         meta: { durationMs: 1 },
       }),
     });
   });
-  afterEach(resetGatewayWorkAdmission);
-  afterEach(resetSystemEventsForTest);
+  afterEach(() =>
+    runQaGatewayFixture(
+      () => continuations.settle(),
+      resetGatewayWorkAdmission,
+      resetSystemEventsForTest,
+      resetAdjustedParamsByToolCallIdForTests,
+      () => agentStepTesting.setDepsForTest(),
+    ),
+  );
+  afterAll(() =>
+    runQaGatewayFixture(
+      () => continuations.settle(),
+      () => continuations.restore(),
+    ),
+  );
 
   registerSessionsSendResumeTests({
     getSessionTool,
@@ -1563,50 +1562,10 @@ describe("sessions tools", () => {
     },
   );
 
-  it("sessions_send returns pending agent error diagnostics on timeout", async () => {
-    const calls: Array<{ method?: string; params?: unknown }> = [];
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
-      calls.push(request);
-      if (request.method === "agent") {
-        return {
-          runId: "run-pending-model-error",
-          status: "accepted",
-          acceptedAt: 1234,
-        };
-      }
-      if (request.method === "agent.wait") {
-        return {
-          runId: "run-pending-model-error",
-          status: "timeout",
-          error: "429 RESOURCE_EXHAUSTED",
-          pendingError: true,
-        };
-      }
-      return {};
-    });
-
-    const tool = getSessionTool("sessions_send", {
-      agentSessionKey: "discord:group:req",
-      agentChannel: "discord",
-    });
-
-    const result = await tool.execute("call-pending-error", {
-      sessionKey: "main",
-      message: "check status",
-      timeoutSeconds: 1,
-    });
-
-    const details = sessionsSendDetails(result.details);
-    expect(details.status).toBe("timeout");
-    expect(details.error).toBe("429 RESOURCE_EXHAUSTED");
-    expect(details.runId).toBe("run-pending-model-error");
-    expect(details.sentBeforeError).toBe(true);
-    expect(details.delivery?.status).toBe("pending");
-    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
-    await vi.waitFor(() =>
-      expect(calls.filter((call) => call.method === "agent.wait").length).toBeGreaterThanOrEqual(2),
-    );
+  registerSessionsSendPendingErrorTest({
+    getSessionTool,
+    callGatewayMock,
+    settleContinuations: () => continuations.settle(),
   });
 
   it("sessions_send resolves sessionId inputs", async () => {
@@ -1679,7 +1638,7 @@ describe("sessions tools", () => {
       }
       return {};
     });
-    agentStepTesting.setDepsForTest({
+    await agentStepTesting.setDepsForTest({
       agentCommandFromIngress: async () => ({
         payloads: [{ text: "announce now", mediaUrl: null }],
         meta: { durationMs: 1 },
@@ -1884,7 +1843,7 @@ describe("sessions tools", () => {
         }
         return {};
       });
-      agentStepTesting.setDepsForTest({
+      await agentStepTesting.setDepsForTest({
         agentCommandFromIngress: async (opts) => {
           expect(opts.sessionKey).toBe(targetKey);
           expect(opts.extraSystemPrompt).toContain("Agent-to-agent announce step");
@@ -2501,7 +2460,7 @@ describe("sessions tools", () => {
       }
       return {};
     });
-    agentStepTesting.setDepsForTest({
+    await agentStepTesting.setDepsForTest({
       agentCommandFromIngress: async () => ({
         payloads: [{ text: "announce now", mediaUrl: null }],
         meta: { durationMs: 1 },

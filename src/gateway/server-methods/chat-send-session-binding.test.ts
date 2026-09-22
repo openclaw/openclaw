@@ -23,6 +23,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
@@ -39,6 +40,7 @@ const admissionScenarios = [
   "terminal",
   "rotated",
   "queued",
+  "narrow-first-send",
   "dashboard",
   "dashboard-writer",
   "dashboard-credential-revoked",
@@ -54,7 +56,14 @@ it.each(admissionScenarios)(
     const directDashboard = dashboard && scenario !== "dashboard-internal";
     const dashboardReadAllowed = directDashboard && scenario !== "dashboard-unattested";
     const membershipRequired = scenario === "dashboard-member-revoked";
-    const closure = scenario === "dashboard-writer" ? "aborted" : dashboard ? "released" : scenario;
+    const closure =
+      scenario === "narrow-first-send"
+        ? "rotated"
+        : scenario === "dashboard-writer"
+          ? "aborted"
+          : dashboard
+            ? "released"
+            : scenario;
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const runId = "retained-preparation";
       const sessionKey = scenario === "dashboard" ? "agent:main:main" : "agent:main:binding";
@@ -113,11 +122,13 @@ it.each(admissionScenarios)(
           maxProtocol: 1,
           role: "operator",
           scopes:
-            scenario === "dashboard-writer" || membershipRequired
-              ? ["operator.write"]
-              : dashboard
-                ? ["operator.admin"]
-                : ["operator.read", "operator.write", "operator.admin"],
+            scenario === "narrow-first-send"
+              ? ["operator.sessions.write"]
+              : scenario === "dashboard-writer" || membershipRequired
+                ? ["operator.write"]
+                : dashboard
+                  ? ["operator.admin"]
+                  : ["operator.read", "operator.write", "operator.admin"],
           client: dashboard
             ? { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" }
             : { id: "cli", version: "test", platform: "test", mode: "cli" },
@@ -169,16 +180,24 @@ it.each(admissionScenarios)(
         });
         expect(authorization.error).toBeNull();
         const sendChat = directDashboard ? handleDirectExternalChatSend : handleChatSend;
-        await sendChat({
+        const request = {
           params,
-          req: { type: "req", id: runId, method: "chat.send" },
+          req: { type: "req" as const, id: runId, method: "chat.send", params },
           respond,
           context,
           client,
           hasCurrentClientAuthority,
           sessionMutationAuthorization: authorization.authorization,
           isWebchatConnect: () => false,
-        });
+        };
+        if (scenario === "narrow-first-send") {
+          await handleGatewayRequest({
+            ...request,
+            extraHandlers: { "chat.send": handleChatSend },
+          });
+        } else {
+          await sendChat(request);
+        }
         expect(respond).toHaveBeenCalledWith(
           true,
           dashboard

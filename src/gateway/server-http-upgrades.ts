@@ -355,6 +355,8 @@ export function attachGatewayUpgradeHandler(opts: {
             allowRealIpFallback,
             rateLimiter,
             cfg: configSnapshot,
+            getRuntimeConfig,
+            getResolvedAuth,
           });
           if (!authCheck.ok) {
             rejectUpgradeAuth(socket, authCheck.authResult);
@@ -368,6 +370,10 @@ export function attachGatewayUpgradeHandler(opts: {
             req,
             authCheck.requestAuth,
           );
+        }
+        if (pluginGatewayRequestAuth?.hasCurrentClientAuthority?.() === false) {
+          rejectUpgradeAuth(socket, { ok: false, reason: "unauthorized" });
+          return;
         }
         if (
           await handlePluginUpgrade(req, socket, head, pathContext, {

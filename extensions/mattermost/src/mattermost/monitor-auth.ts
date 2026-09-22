@@ -1,14 +1,14 @@
 // Mattermost plugin module implements monitor auth behavior.
-import {
-  type ChannelIngressDecision,
-  type ChannelIngressEventInput,
-  resolveStableChannelMessageIngress,
+import type {
+  ChannelIngressDecision,
+  ChannelIngressEventInput,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   resolveChannelContextVisibilityMode,
   shouldIncludeSupplementalContext,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getMattermostRuntime } from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";
 import { mattermostIngressIdentity, normalizeMattermostAllowEntry } from "./ingress-identity.js";
@@ -143,7 +143,7 @@ export async function resolveMattermostMonitorInboundAccess(params: {
   const readStoreAllowFrom =
     params.readStoreAllowFrom ??
     (storeAllowFrom != null ? async () => [...storeAllowFrom] : undefined);
-  const ingress = await resolveStableChannelMessageIngress({
+  const ingress = await getMattermostRuntime().channel.inbound.ingress.resolveStable({
     channelId: "mattermost",
     accountId: account.accountId,
     identity: mattermostIngressIdentity,

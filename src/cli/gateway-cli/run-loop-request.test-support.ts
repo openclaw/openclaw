@@ -1,11 +1,11 @@
 /** Shutdown request reasons and installation-replacement handoff cases share the run-loop fixture. */
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
-import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
-import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { registerGatewayForcedRestartTests } from "./run-loop-force.test-support.js";
+import type { RequestFixtures } from "./run-loop-request-fixtures.test-support.js";
 import {
   createActiveWorkSnapshot,
   createCloseMock,
@@ -14,47 +14,12 @@ import {
   waitForStart,
   waitForLoopCondition,
   withIsolatedSignals,
-  type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
-type RequestFixtures = {
-  acquireGatewayLock: Mock<
-    (opts?: { port?: number }) => Promise<{ release: Mock<() => Promise<void>> }>
-  >;
-  reloadTaskRuntimeStateFromStore: Mock<() => Promise<void>>;
-  runLoopWithStart: (params: {
-    start: ReturnType<typeof createSignaledStart>["start"];
-    runtime: ReturnType<typeof createRuntimeWithExitSignal>["runtime"];
-    ownsProcessLifecycle?: boolean;
-    beginBoot?: (startedAtMs: number) => void | Promise<void>;
-    completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
-  }) => Promise<unknown>;
-  waitForGatewayActiveWork: Mock<
-    typeof import("../../infra/gateway-active-work.js").waitForGatewayActiveWork
-  >;
-  restartGatewayProcessWithFreshPid: Mock<
-    typeof import("../../infra/process-respawn.js").restartGatewayProcessWithFreshPid
-  >;
-  respawnGatewayProcessForUpdate: UpdateRespawnFixtures["respawnGatewayProcessForUpdate"];
-  captureForegroundUpdateHandoffStop: UpdateRespawnFixtures["captureForegroundUpdateHandoffStop"];
-  readCgroup: Mock;
-  systemctl: Mock;
-  armShutdownHardExitWatchdog: Mock;
-  cancelShutdownHardExitWatchdog: Mock;
-  consumeGatewayRestartIntent: Mock<() => GatewayRestartIntent | null>;
-  consumeGatewayRestartIntentPayloadSync: Mock<
-    () => Pick<GatewayRestartIntent, "reason" | "force" | "waitMs"> | null
-  >;
-  peekGatewayRestartReason: Mock<() => string | undefined>;
-  managedUpdateSuccessorOwner: NonNullable<GatewayRestartIntent["successorOwner"]>;
-  commitManagedServiceUpdateHandoff: Mock<
-    typeof import("../../infra/update-managed-service-handoff.js").commitManagedServiceUpdateHandoff
-  >;
-  isGatewayWorkAdmissionClosed: () => boolean;
-  gatewayLog: { info: Mock; error: Mock };
-};
-
 export function registerGatewayRequestTests({
+  createSignaledLoopHarness,
+  createGatewayActiveWorkSnapshot,
+  abortActiveCronTaskRuns,
   acquireGatewayLock,
   reloadTaskRuntimeStateFromStore,
   runLoopWithStart,
@@ -75,6 +40,20 @@ export function registerGatewayRequestTests({
   gatewayLog,
 }: RequestFixtures): void {
   const idleActiveWorkSnapshot = createActiveWorkSnapshot();
+  registerGatewayForcedRestartTests({
+    createSignaledLoopHarness,
+    createGatewayActiveWorkSnapshot,
+    abortActiveCronTaskRuns,
+    runLoopWithStart,
+    waitForGatewayActiveWork,
+    consumeGatewayRestartIntent,
+    consumeGatewayRestartIntentPayloadSync,
+    isGatewayWorkAdmissionClosed,
+    gatewayLog,
+    readCgroup,
+    systemctl,
+  });
+
   it("keeps a captured pre-park Stop ahead of native budget refresh and drain completion", async () => {
     const nativeReply = {
       code: 0,

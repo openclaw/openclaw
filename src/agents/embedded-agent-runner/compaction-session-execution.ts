@@ -657,12 +657,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           },
         };
       } catch (err) {
-        assertActive();
         const failure = resolveCompactionFailure({
           error: err,
           safeguardCancellation: getCompactionSafeguardRuntime(sessionManager)?.cancellation,
           abortSignal: params.abortSignal,
         });
+        assertActive();
         const fallbackThinking = pickFallbackThinkingLevel({
           message: formatErrorMessage(failure.error),
           attempted: attemptedThinking,

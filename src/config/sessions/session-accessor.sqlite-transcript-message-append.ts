@@ -7,8 +7,10 @@ import {
   isOpenClawDeliveryMirrorAssistantMessage,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
 } from "../../shared/transcript-only-openclaw-assistant.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
+  SessionTranscriptWriteScope,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
@@ -18,7 +20,11 @@ import {
   resolveSessionPendingInputAppend,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
-import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
   isTranscriptEntryOnActivePathInTransaction,
@@ -32,6 +38,10 @@ import {
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
+import {
+  prepareTranscriptPayloadForReuse,
+  type PreparedTranscriptPayload,
+} from "./transcript-payload.js";
 
 class TranscriptTurnAdmissionConflictError extends Error {
   constructor(idempotencyKey: string) {
@@ -75,14 +85,30 @@ function messagesMatchForIdempotentReplay(stored: unknown, candidate: unknown): 
 }
 
 export type PreparedTranscriptMessageAppend<TMessage> = {
-  message: TMessage;
   messageJson: string;
   persistedMessage: TMessage;
+  physicalPayload?: PreparedTranscriptPayload;
 };
+
+type TranscriptMessageEnvelope = {
+  type: "message";
+  id: string;
+  parentId: string | null;
+  appendMode?: "side";
+  timestamp: string;
+};
+
+function serializePreparedMessageEvent(envelope: TranscriptMessageEnvelope, messageJson: string) {
+  return `${JSON.stringify(envelope).slice(0, -1)},"message":${messageJson}}`;
+}
 
 /** SessionManager owns a detached JSON message and retains this preparation across retries. */
 export function prepareTranscriptMessageAppend<TMessage extends object>(
   options: Pick<TranscriptMessageAppendOptions<TMessage>, "message" | "config">,
+  candidate?: {
+    scope: SessionTranscriptWriteScope;
+    envelope: TranscriptMessageEnvelope;
+  },
 ): PreparedTranscriptMessageAppend<TMessage> | undefined {
   if (
     !isRecord(options.message) ||
@@ -94,7 +120,20 @@ export function prepareTranscriptMessageAppend<TMessage extends object>(
   const message = redactTranscriptMessageForStorage(options.message, options);
   const messageJson = JSON.stringify(canonicalizePersistedUserMessageMedia(message).message);
   // SAFETY: Decode the detached canonical message from its own JSON storage bytes.
-  return { message, messageJson, persistedMessage: JSON.parse(messageJson) as TMessage };
+  const prepared = { messageJson, persistedMessage: JSON.parse(messageJson) as TMessage };
+  if (!candidate) {
+    return prepared;
+  }
+  const eventJson = serializePreparedMessageEvent(candidate.envelope, messageJson);
+  const read = withOpenClawAgentDatabaseReadOnly(
+    ({ db }) =>
+      prepareTranscriptPayloadForReuse(db, eventJson, {
+        ...candidate.envelope,
+        message: prepared.persistedMessage,
+      }),
+    toDatabaseOptions(resolveSqliteTranscriptScope(candidate.scope)),
+  );
+  return read.found ? { ...prepared, physicalPayload: read.value } : prepared;
 }
 
 export function appendTranscriptMessageInTransaction<TMessage>(
@@ -114,7 +153,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     throw new Error("Pending input session changed before transcript promotion");
   }
   const serializeForStorage = (message: TMessage): TMessage =>
-    preparedMessage?.message ??
+    preparedMessage?.persistedMessage ??
     (options.messageAlreadyRedacted
       ? message
       : redactTranscriptMessageForStorage(message, options));
@@ -205,7 +244,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   ensureTranscriptHeader(database, resolved, options.cwd);
   const parentId = resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
   const event = {
-    type: "message",
+    type: "message" as const,
     id: messageId,
     parentId: parentId ?? null,
     ...(options.appendMode ? { appendMode: options.appendMode } : {}),
@@ -216,10 +255,11 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   if (preparedMessage) {
     // The parent is authoritative only after BEGIN; serialize just its small envelope here.
     const { message: _message, ...envelope } = event;
-    eventJson = `${JSON.stringify(envelope).slice(0, -1)},"message":${preparedMessage.messageJson}}`;
+    eventJson = serializePreparedMessageEvent(envelope, preparedMessage.messageJson);
   }
   const appended = appendTranscriptEventInTransaction(database, resolved, event, {
     eventJson,
+    preparedPayload: preparedMessage?.physicalPayload,
     idempotencyKeyMode:
       options.idempotencyLookup === "caller-checked"
         ? "relocate-owner"

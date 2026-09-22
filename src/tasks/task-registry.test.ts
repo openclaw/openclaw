@@ -58,6 +58,12 @@ import {
 import { createManagedTaskFlow } from "./task-flow-registry.test-support.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
+import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
+import {
+  captureTaskDeliveryWork,
+  waitForAssertion,
+  waitForFast,
+} from "./task-registry-delivery.test-support.js";
 import { updateTaskStateByRunId } from "./task-registry-record-api.js";
 import {
   readTaskRegistryRevision,
@@ -89,7 +95,6 @@ import {
   getInspectableTaskAuditSummary,
   getTaskRegistryMaintenanceDiagnostics,
   previewTaskRegistryMaintenance,
-  resetTaskRegistryMaintenanceRuntimeForTests,
   reconcileInspectableTasks,
   runTaskRegistryMaintenance,
   startTaskRegistryMaintenance,
@@ -98,6 +103,7 @@ import {
 } from "./task-registry.maintenance.js";
 import {
   configureTaskRegistryMaintenanceRuntimeForTest,
+  resetTaskRegistryMaintenanceMocks,
   createAcpSessionStoreEntry,
 } from "./task-registry.maintenance.test-support.js";
 import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
@@ -116,19 +122,8 @@ import {
   configureTaskFlowRegistryRuntime,
   maybeDeliverTaskStateChangeUpdate,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
 } from "./task-runtime.test-helpers.js";
-
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
 
 const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const LOST_TASK_RETENTION_MS = 24 * 60 * 60_000;
@@ -147,18 +142,39 @@ function createTaskFlowForTask(
 
 const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
+  const resolveTaskControlUiSessionUrlMock =
+    vi.fn<typeof import("./task-registry-delivery-runtime.js").resolveTaskControlUiSessionUrl>();
   const cancelSessionMock = vi.fn();
   const cancelBackgroundExecSessionMock = vi.fn();
   const cancelActiveCronTaskRunMock = vi.fn();
   const killSubagentRunAdminMock = vi.fn();
   return {
     sendMessageMock,
+    resolveTaskControlUiSessionUrlMock,
     cancelSessionMock,
     cancelBackgroundExecSessionMock,
     cancelActiveCronTaskRunMock,
     killSubagentRunAdminMock,
   };
 });
+
+vi.mock("./task-registry-delivery-runtime.js", () => ({
+  sendMessage: hoisted.sendMessageMock,
+  resolveTaskControlUiSessionUrl: hoisted.resolveTaskControlUiSessionUrlMock,
+}));
+
+vi.mock("./task-registry-control.runtime.js", () => ({
+  cancelBackgroundExecSession: hoisted.cancelBackgroundExecSessionMock,
+  cancelActiveCronTaskRun: hoisted.cancelActiveCronTaskRunMock,
+  getAcpSessionManager: () => ({ cancelSession: hoisted.cancelSessionMock }),
+  killSubagentRunAdmin: async (
+    params: Parameters<TaskRegistryControlRuntime["killSubagentRunAdmin"]>[0],
+  ) => {
+    const result = await hoisted.killSubagentRunAdminMock(params);
+    params.onResult?.(result);
+    return result;
+  },
+}));
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   return items.filter(predicate).length;
@@ -207,10 +223,6 @@ function createSessionBindingRecord(
     ...(overrides.expiresAt !== undefined ? { expiresAt: overrides.expiresAt } : {}),
     ...(overrides.metadata !== undefined ? { metadata: overrides.metadata } : {}),
   };
-}
-
-function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
-  return waitForFast(assertion, { timeout: timeoutMs, interval: stepMs });
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -305,22 +317,6 @@ describe("task-registry", () => {
     });
     await flushHeartbeatWakeRequests();
     heartbeatWakeRequests = [];
-    setTaskRegistryDeliveryRuntimeForTests({
-      sendMessage: hoisted.sendMessageMock,
-    });
-    setTaskRegistryControlRuntimeForTests({
-      cancelBackgroundExecSession: (sessionId) =>
-        hoisted.cancelBackgroundExecSessionMock(sessionId),
-      cancelActiveCronTaskRun: (params) => hoisted.cancelActiveCronTaskRunMock(params),
-      getAcpSessionManager: () => ({
-        cancelSession: hoisted.cancelSessionMock,
-      }),
-      killSubagentRunAdmin: async (params) => {
-        const result = await hoisted.killSubagentRunAdminMock(params);
-        params.onResult?.(result);
-        return result;
-      },
-    });
   });
 
   afterEach(async () => {
@@ -332,12 +328,11 @@ describe("task-registry", () => {
     resetSystemEventsForTest();
     resetAgentEventsForTest({ preserveListeners: true });
     resetCronActiveJobs();
-    resetTaskRegistryControlRuntimeForTests();
-    resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryMaintenanceRuntimeForTests();
+    resetTaskRegistryMaintenanceMocks();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
+    hoisted.resolveTaskControlUiSessionUrlMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
     hoisted.cancelBackgroundExecSessionMock.mockReset();
     hoisted.cancelActiveCronTaskRunMock.mockReset();
@@ -362,7 +357,7 @@ describe("task-registry", () => {
           markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: Date.now() });
           await maybeDeliverTaskTerminalUpdate(task.taskId);
         } else {
-          await maybeDeliverTaskStateChangeUpdate(task.taskId, {
+          await maybeDeliverTaskStateChangeUpdate(task, {
             at: Date.now(),
             kind: "progress",
             summary: "Checking the result",
@@ -393,7 +388,7 @@ describe("task-registry", () => {
           notifyPolicy: "state_changes",
         });
         if (kind === "progress") {
-          await maybeDeliverTaskStateChangeUpdate(task.taskId, {
+          await maybeDeliverTaskStateChangeUpdate(task, {
             at: Date.now(),
             kind: "progress",
             summary: "Checking the result",
@@ -1836,11 +1831,10 @@ describe("task-registry", () => {
   it("queues delegated ACP completion to the requester session when a delivery origin exists", async () => {
     await withTaskRegistryTempDir(async () => {
       const terminalSummary = ("The export is ready. " + "Full result detail. ".repeat(20)).trim();
-      const resolveTaskControlUiSessionUrl = vi.fn(() => "https://dashboard.example/chat/task");
-      setTaskRegistryDeliveryRuntimeForTests({
-        sendMessage: hoisted.sendMessageMock,
-        resolveTaskControlUiSessionUrl,
-      });
+      const resolveTaskControlUiSessionUrl =
+        hoisted.resolveTaskControlUiSessionUrlMock.mockReturnValue(
+          "https://dashboard.example/chat/task",
+        );
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "notifychat",
         to: "notifychat:123",
@@ -1943,11 +1937,8 @@ describe("task-registry", () => {
   ])("delivers ACP completion directly to a requester thread $name", async (testCase) => {
     await withTaskRegistryTempDir(async () => {
       const terminalSummary = ("The export is ready. " + "Full result detail. ".repeat(20)).trim();
-      const resolveTaskControlUiSessionUrl = vi.fn(() => testCase.inspectUrl);
-      setTaskRegistryDeliveryRuntimeForTests({
-        sendMessage: hoisted.sendMessageMock,
-        resolveTaskControlUiSessionUrl,
-      });
+      const resolveTaskControlUiSessionUrl =
+        hoisted.resolveTaskControlUiSessionUrlMock.mockReturnValue(testCase.inspectUrl);
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "discord",
         to: "channel:123",
@@ -2752,6 +2743,9 @@ describe("task-registry", () => {
       const first = maybeDeliverTaskTerminalUpdate(task.taskId);
       const second = maybeDeliverTaskTerminalUpdate(task.taskId);
       await Promise.all([first, second]);
+      await waitForFast(() =>
+        expectRecordFields(requireTaskById(task.taskId), { deliveryStatus: "delivered" }),
+      );
 
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
       const message = sentMessageCall();
@@ -4101,7 +4095,7 @@ describe("task-registry", () => {
       expectRecordFields(requireTaskByRunId("run-state-change"), {
         notifyPolicy: "state_changes",
       });
-      await maybeDeliverTaskStateChangeUpdate(task.taskId);
+      await maybeDeliverTaskStateChangeUpdate(task);
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
     });
   });
@@ -4136,8 +4130,8 @@ describe("task-registry", () => {
       });
       const event = { at: 250, kind: "progress" as const, summary: "Still working." };
 
-      await maybeDeliverTaskStateChangeUpdate(task.taskId, event);
-      await maybeDeliverTaskStateChangeUpdate(task.taskId, event);
+      await maybeDeliverTaskStateChangeUpdate(task, event);
+      await maybeDeliverTaskStateChangeUpdate(task, event);
 
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(testCase.expectedSendCount);
     });
@@ -4224,6 +4218,7 @@ describe("task-registry", () => {
         notifyPolicy: "state_changes",
       });
 
+      using deliveries = captureTaskDeliveryWork();
       const relay = startAcpSpawnParentStreamRelay({
         runId: "run-state-stream",
         parentSessionKey: "agent:main:main",
@@ -4236,14 +4231,14 @@ describe("task-registry", () => {
       });
 
       relay.notifyStarted();
-      await flushAsyncWork();
+      await deliveries.settle();
       expectRecordFields(sentMessageCall(), {
         content: "Background task update: ACP background task. Started.",
       });
 
       hoisted.sendMessageMock.mockClear();
       vi.advanceTimersByTime(1_500);
-      await flushAsyncWork();
+      await deliveries.settle();
       expectRecordFields(sentMessageCall(), {
         content:
           "Background task update: ACP background task. No prompt submission observed for 1s after child start.",

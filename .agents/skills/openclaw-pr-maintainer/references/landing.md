@@ -72,13 +72,11 @@ FOR /prepare-pr`. After every push, rerun `review-init`; checkout alone does not
 refresh the guard. Validate from PR-head mode. Do not fabricate passing evidence
 or erase a failing review condition.
 
-The default agent path records pending GitHub gates, binds them to the prepared
-head, and submits one pinned squash/auto-merge request. GitHub owns waiting for
-the enforced `openclaw/ci-gate` (CI plus applicable security review) and required
-reviews. Known failed required checks still block submission. This path uses
-the PR's enforced checks rather than separately requiring scheduled Testbox
-workflow evidence. It never records pending checks as successful proof or uses
-an admin bypass. A clean, immediately mergeable PR lands in the same call.
+Preparation records pending gates bound to the prepared head, without success
+stamps or separate scheduled Testbox proof. Merge submits one pinned squash or
+auto-merge request, rejecting known failed required checks without admin bypass.
+GitHub waits for `openclaw/ci-gate` (CI plus applicable security review) and
+required reviews; a clean, mergeable PR lands immediately.
 
 Once GitHub accepts auto-merge, keep the task active until the merge and closeout
 are verified, the user pauses it, or a concrete blocker requires user input.
@@ -99,8 +97,8 @@ Treat a changed head as new review work, never as the original approved head.
 
 When completed hosted evidence is specifically needed, use
 `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>` after CI is green, then ordinary
-`scripts/pr merge-run <pr>`. The wrapper may accept a patch-identical recently green pre-rebase run
-when the main context incorporated into the candidate is unchanged or disjoint.
+`scripts/pr merge-run <pr>`. The wrapper may accept a patch-identical recently
+green pre-rebase run when the incorporated main context is unchanged or disjoint.
 Incorporated overlapping or critical input changes require current-head CI.
 The merge workflow still owns later main-drift policy. For explicitly
 owner-approved reviewed fork code without hosted Testbox, use the documented
@@ -108,8 +106,8 @@ owner-approved reviewed fork code without hosted Testbox, use the documented
 
 For a requested diagnosis or the completed-evidence path, watch one exact head
 with `node scripts/watch-pr-ci.mjs <pr> <head-sha>`; use narrow JSON check/run reads
-and fetch failed logs once. Address substantive human/bot
-findings and resolve fixed conversations. A queued bot score update is not a
+and fetch failed logs once. Address substantive human/bot findings and resolve
+fixed conversations. A queued bot score update is not a
 separate landing gate. Check live rules and review state before claiming a human
 approval is mandatory; bypass ability is not authorization to skip an enforced
 review.

@@ -458,7 +458,10 @@ describe("update run report", () => {
     }
   });
 
-  it("keeps advisory steps out of failures and shows only the final diagnostic lines", () => {
+  it.each([
+    { label: "single-line", stderrTail: "last error diagnostic" },
+    { label: "multiline", stderrTail: "earlier error\nlast error diagnostic" },
+  ])("keeps advisory steps out of failures and retains $label diagnostics", ({ stderrTail }) => {
     const report = renderUpdateRunReport(
       updateRunReportInputFromResult({
         status: "error",
@@ -484,7 +487,10 @@ describe("update run report", () => {
             exitCode: 1,
             termination: "timeout",
             stdoutTail: "earlier output\nlast build diagnostic",
-            stderrTail: "earlier error\nlast error diagnostic",
+            stderrTail,
+            failureFacts: [
+              { check: "build", code: "build-failed", message: "last error diagnostic" },
+            ],
           },
         ],
       }),
@@ -523,6 +529,37 @@ describe("update run report", () => {
     expect(report.markdown).toContain(cause);
     expect(report.markdown).not.toContain("Installing manually via npm");
   });
+
+  it.each([
+    { message: "Failed", detail: "Permission denied", repeated: false },
+    { message: "package-swap", detail: "Permission denied", repeated: false },
+    { message: "Permission denied", detail: "Permission denied", repeated: true },
+    {
+      message: "Permission denied",
+      detail: `${"x".repeat(300)} Permission denied`,
+      repeated: false,
+    },
+  ])(
+    "keeps facts unless their complete message is visible in the detail ($message, $repeated)",
+    ({ message, detail, repeated }) => {
+      const report = renderUpdateRunReport(
+        run({
+          status: "failed",
+          steps: [
+            {
+              step: "package-swap",
+              status: "failed",
+              detail,
+              failureFacts: [{ check: "package-swap", code: "swap-failed", message }],
+            },
+          ],
+        }),
+      );
+      expect(report.lines).toContain(
+        `Failing check package-swap (swap-failed)${repeated ? "" : `: ${message}`}`,
+      );
+    },
+  );
 
   it("reports pending work, verification, and repair facts without inferring success", () => {
     const report = renderUpdateRunReport(

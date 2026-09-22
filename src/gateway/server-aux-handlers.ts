@@ -290,18 +290,16 @@ export function createGatewayAuxHandlers(
     (authority, approvalReason) => {
       for (const manager of approvalManagers) {
         const kind = manager.approvalKind;
-        try {
-          cancelAgentRuntimeBoundApprovals<ApprovalPayload>({
-            authority,
-            reason: approvalReason,
-            manager,
-            publish: (record, liveRecord) => publishAuthorityClosure({ kind, record, liveRecord }),
-          });
-        } catch (error) {
+        void cancelAgentRuntimeBoundApprovals<ApprovalPayload>({
+          authority,
+          reason: approvalReason,
+          manager,
+          publish: (record, liveRecord) => publishAuthorityClosure({ kind, record, liveRecord }),
+        }).catch((error: unknown) => {
           params.log.error?.(
             `${kind} approvals: authority-close settlement failed: ${String(error)}`,
           );
-        }
+        });
       }
       questionManager.cancelClosedAuthorities();
       params.onAgentRunAuthorityClosed?.(authority, approvalReason);
@@ -311,15 +309,13 @@ export function createGatewayAuxHandlers(
     (claim) => {
       for (const manager of approvalManagers) {
         const kind = manager.approvalKind;
-        try {
-          cancelWorkerTurnClaimBoundApprovals<ApprovalPayload>({
-            claim,
-            manager,
-            publish: (record, liveRecord) => publishAuthorityClosure({ kind, record, liveRecord }),
-          });
-        } catch (error) {
+        void cancelWorkerTurnClaimBoundApprovals<ApprovalPayload>({
+          claim,
+          manager,
+          publish: (record, liveRecord) => publishAuthorityClosure({ kind, record, liveRecord }),
+        }).catch((error: unknown) => {
           params.log.error?.(`${kind} approvals: worker-claim settlement failed: ${String(error)}`);
-        }
+        });
       }
       questionManager.cancelClosedAuthorities();
     },
@@ -331,18 +327,18 @@ export function createGatewayAuxHandlers(
   const cancelRunBoundApprovals = (
     target: string | AgentRunDelegatedAuthority,
     context: GatewayRequestContext,
-  ): number => {
+  ): Promise<number> => {
     if (presentationWork.isClosing) {
-      return 0;
+      return Promise.resolve(0);
     }
-    let cancelled = 0;
+    const cancellations: Promise<number>[] = [];
     for (const manager of approvalManagers) {
       const kind = manager.approvalKind;
       const publish = (
         record: PendingAuthorityPublication["record"],
         liveRecord: PendingAuthorityPublication["liveRecord"],
       ) => publishResolution({ kind, record, liveRecord }, context, "run-abort");
-      cancelled +=
+      cancellations.push(
         typeof target === "string"
           ? cancelUnboundRunApprovals<ApprovalPayload>({ runId: target, manager, publish })
           : cancelAgentRuntimeBoundApprovals<ApprovalPayload>({
@@ -350,9 +346,12 @@ export function createGatewayAuxHandlers(
               reason: "permission-change",
               manager,
               publish,
-            });
+            }),
+      );
     }
-    return cancelled;
+    return Promise.all(cancellations).then((counts) =>
+      counts.reduce((sum, count) => sum + count, 0),
+    );
   };
   const loadPluginApprovalHandlers = createLazyPromise(
     () =>

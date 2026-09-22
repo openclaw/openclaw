@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { withDevicePairingLock } from "./device-pairing-state.js";
+import { withDevicePairingLock } from "./device-pairing-lock.js";
 import {
   persistDevicePairingStoreState,
   readDevicePairingStoreStateFromDatabase,

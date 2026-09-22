@@ -5,10 +5,6 @@ import * as sessionLifecycle from "../../../sessions/session-lifecycle-admission
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import * as taskControlRuntime from "../../../tasks/task-registry-control.runtime.js";
 import { cancelTaskById, findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
-import {
-  resetTaskRegistryControlRuntimeForTests,
-  setTaskRegistryControlRuntimeForTests,
-} from "../../../tasks/task-registry.test-support.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
@@ -75,8 +71,8 @@ it("does not promote a provisional task when replacement wins before admin admis
     assertAllowed: () => {},
     onInterrupt: () => {},
   });
-  const admin = vi.fn(killSubagentRunAdmin);
-  setTaskRegistryControlRuntimeForTests({ ...taskControlRuntime, killSubagentRunAdmin: admin });
+  const runAdmin = killSubagentRunAdmin;
+  const admin = vi.spyOn(taskControlRuntime, "killSubagentRunAdmin").mockImplementation(runAdmin);
   const pending = cancelTaskById({ cfg: getRuntimeConfig(), taskId: task.taskId });
   try {
     expect(admin).not.toHaveBeenCalled();
@@ -111,6 +107,6 @@ it("does not promote a provisional task when replacement wins before admin admis
   } finally {
     followup.release();
     await pending;
-    resetTaskRegistryControlRuntimeForTests();
+    admin.mockRestore();
   }
 });

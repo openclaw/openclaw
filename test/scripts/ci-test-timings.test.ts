@@ -29,6 +29,7 @@ import {
   type RuntimePlacementTiming,
 } from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import * as localCheckRuntime from "../../scripts/lib/local-check-runtime.mts";
 import { createCompactSplitTimingGeneration } from "../../scripts/lib/vitest-shard-metadata.mts";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 
@@ -306,12 +307,34 @@ describe("runtime placement observations", () => {
       const originalShards = fullSuiteVitestShards.slice();
       const runtimeConfig = "test/vitest/vitest.runtime-config.config.ts";
       const infrastructure = "test/vitest/vitest.infra.config.ts";
+      const gatewayFixtureConfig = "fixture-agentic-gateway-server-isolated.config.ts";
+      const isExclusiveConfig = localCheckRuntime.isExclusiveCiTestConfig;
+      // Model a Gateway recipient without borrowing a changing project inventory.
+      const gatewayConfigSpy = gatewayRecipient
+        ? vi
+            .spyOn(localCheckRuntime, "isExclusiveCiTestConfig")
+            .mockImplementation((config) =>
+              isExclusiveConfig(
+                config === gatewayFixtureConfig
+                  ? "test/vitest/vitest.gateway-methods-isolated.config.ts"
+                  : config,
+              ),
+            )
+        : undefined;
       const configs = new Set([
         runtimeConfig,
         infrastructure,
-        ...(gatewayRecipient ? [] : ["test/vitest/vitest.gateway-methods.config.ts"]),
+        ...(gatewayRecipient ? [] : ["test/vitest/vitest.gateway-database-workers.config.ts"]),
       ]);
-      const compactSpy = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
+      // Synthetic recipients must not inherit production costs that split their fixture jobs.
+      const compactSpy = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
+        gatewayRecipient
+          ? {
+              "agentic-gateway-server-isolated": 30,
+              "agentic-agents-core-subagents": 20,
+            }
+          : {},
+      );
       const spy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
       const options = {
         compactMode,
@@ -329,21 +352,42 @@ describe("runtime placement observations", () => {
             }))
             .filter((shard) => shard.projects.length > 0),
           ...(gatewayRecipient
-            ? [
-                ["agentic-gateway-server-isolated", "gateway-methods-isolated"],
-                ["agentic-agents-core-subagents", "unit-support"],
-              ].map(([name, config]) => ({
-                name: name!,
-                config: `fixture-${name}.config.ts`,
-                projects: [`test/vitest/vitest.${config}.config.ts`],
-              }))
+            ? ["agentic-gateway-server-isolated", "agentic-agents-core-subagents"].map((name) => {
+                const config = `fixture-${name}.config.ts`;
+                return { name, config, projects: [config] };
+              })
             : []),
         );
         const before = createNodeTestShardBundles(options);
         const runtimeGroups = before
           .flatMap((job) => job.groups)
           .filter((group) => group.pretestBuildMode === "runtime");
-        expect(runtimeGroups).toHaveLength(gatewayRecipient ? 3 : 4);
+        expect(runtimeGroups).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              configs: expect.arrayContaining([runtimeConfig]),
+              includePatterns: expect.arrayContaining(["src/config/state-startup-corpus.test.ts"]),
+            }),
+            expect.objectContaining({
+              configs: expect.arrayContaining([infrastructure]),
+              includePatterns: expect.arrayContaining([
+                "src/infra/update-managed-service-handoff-lifecycle.test.ts",
+              ]),
+            }),
+            ...(gatewayRecipient
+              ? []
+              : [
+                  expect.objectContaining({
+                    configs: expect.arrayContaining([
+                      "test/vitest/vitest.gateway-database-workers.config.ts",
+                    ]),
+                    includePatterns: expect.arrayContaining([
+                      "test/plugins/codex-model-catalog.gateway.test.ts",
+                    ]),
+                  }),
+                ]),
+          ]),
+        );
         const selected = ["src/config/state-startup-corpus.test.ts"];
         const preciseBefore = createSelectedNodeTestShardBundles(selected, {
           runnerBackend: "hybrid",
@@ -410,9 +454,9 @@ describe("runtime placement observations", () => {
             before.some(
               (original) =>
                 original.checkName === job.checkName &&
+                original.groups.some((group) => group.configs.includes(gatewayFixtureConfig)) &&
                 original.pretestBuildMode === undefined &&
-                original.planConcurrency === 1 &&
-                original.env?.OPENCLAW_VITEST_MAX_WORKERS === "2",
+                original.planConcurrency === 1,
             ),
           )!;
           expect(recipient, "serial Gateway recipient").toBeDefined();
@@ -431,15 +475,21 @@ describe("runtime placement observations", () => {
             true,
           );
         }
+        const originalOwners = new Map(
+          before.flatMap((job) => job.groups.map((group) => [group.shard_name, job.checkName])),
+        );
         const crossing = changed.flatMap((job) =>
           job.groups
-            .filter((group) => group.runner !== job.runner)
+            .filter((group) => originalOwners.get(group.shard_name) !== job.checkName)
             .map((group) => Object.assign({}, group, { env: { ...job.env, ...group.env } })),
         );
         expect(crossing.length).toBeGreaterThan(0);
-        expect(crossing.every((group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2")).toBe(
-          true,
-        );
+        for (const group of crossing) {
+          const measuredGateway = gatewayRecipient && group.configs.includes(gatewayFixtureConfig);
+          expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS, group.shard_name).toBe(
+            measuredGateway ? "8" : "2",
+          );
+        }
         spy.mockImplementation((profile) =>
           profile === "blacksmith"
             ? blacksmith.filter((entry) => !entry.configs.includes(runtimeConfig))
@@ -469,6 +519,7 @@ describe("runtime placement observations", () => {
       } finally {
         spy.mockRestore();
         compactSpy.mockRestore();
+        gatewayConfigSpy?.mockRestore();
         fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
       }
     },

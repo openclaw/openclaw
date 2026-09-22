@@ -96,6 +96,12 @@ async function settleDeliverySettings(
   let current = pendingSettings ? readQueuedMessageById(host, item.id) : item;
 
   while (pendingSettings && !consumed.has(pendingSettings)) {
+    if (
+      current?.sendState === "held" ||
+      (current?.sendState === "unconfirmed" && !current.sendRunId)
+    ) {
+      return "pending";
+    }
     if (current?.sendState !== "waiting-model") {
       current = setState("waiting-model");
       if (!current) {
@@ -109,6 +115,12 @@ async function settleDeliverySettings(
     current = readQueuedMessageById(host, item.id);
     if (!current) {
       return "failed";
+    }
+    if (
+      current.sendState === "held" ||
+      (current.sendState === "unconfirmed" && !current.sendRunId)
+    ) {
+      return "pending";
     }
     if (!ready) {
       const restored =

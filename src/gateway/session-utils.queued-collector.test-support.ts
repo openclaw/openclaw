@@ -214,7 +214,12 @@ export function useQueuedCollectorFixture() {
     return results;
   }
 
-  async function createQueuedReservation(name = "reserved") {
+  async function createQueuedReservation(
+    name = "reserved",
+    creationPolicy: Parameters<typeof createInitialSubagentSession>[0]["creationPolicy"] = {
+      actor: { type: "agent", id: "main" },
+    },
+  ) {
     const childSessionKey = `agent:main:subagent:${name}`;
     const runId = `${name}-collector`;
     const groupId = `swarm:${parentKey}:parent-turn`;
@@ -228,7 +233,7 @@ export function useQueuedCollectorFixture() {
         incognito: false,
         requesterInternalKey: parentKey,
         completionOwnerSessionKey: parentKey,
-        creationPolicy: { actor: { type: "agent", id: "main" } },
+        creationPolicy,
         modelPatch: {},
         swarmGroupId: groupId,
         collect: true,

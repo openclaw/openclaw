@@ -39,7 +39,8 @@ let streamResolution: typeof import("./stream-resolution.js");
 let replay: typeof import("../openai-transport-stream.test-support.js").testing;
 let accounting: typeof import("./run/compaction-accounting-bridge.js");
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    await databases.closeOpenClawAgentDatabasesAsync();
     databases.closeOpenClawAgentDatabasesForTest();
     cleanup();
   }),
@@ -112,8 +113,8 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
   decoyManager.appendMessage({ role: "user", content: "Unrelated store history", timestamp: 1 });
   decoyManager.flushPendingPersistence();
   const sessionManager = sessions.SessionManager.open(target, workspaceDir);
-  sessionManager.appendModelChange(model.provider, model.id);
-  sessionManager.appendThinkingLevelChange("off");
+  await sessionManager.appendModelChange(model.provider, model.id);
+  await sessionManager.appendThinkingLevelChange("off");
   for (const content of [
     "Review the deployment checklist.",
     "Compare the remaining options.",
@@ -226,6 +227,7 @@ describe("direct compactor through the context-engine delegate", () => {
         throw new Error("Compactor must return its complete resolved identity");
       }
       // Close the actual DB handles before observing the returned identity and history.
+      await databases.closeOpenClawAgentDatabasesAsync();
       databases.closeOpenClawAgentDatabasesForTest();
       const reopened = sessions.SessionManager.open({
         agentId: returned.agentId,
@@ -334,6 +336,7 @@ describe("direct compactor through the context-engine delegate", () => {
       await stopped.promise;
       expect(result).toMatchObject({ ok: false, compacted: false });
       expect(result.result).toBeUndefined();
+      await databases.closeOpenClawAgentDatabasesAsync();
       databases.closeOpenClawAgentDatabasesForTest();
       const reopened = sessions.SessionManager.open(fixture.target);
       expect(reopened.getSessionId()).toBe(fixture.target.sessionId);
@@ -357,6 +360,7 @@ describe("direct compactor through the context-engine delegate", () => {
     expect(fixture.stream).not.toHaveBeenCalled();
     expect(resolveModelMock).not.toHaveBeenCalled();
     expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
+    await databases.closeOpenClawAgentDatabasesAsync();
     databases.closeOpenClawAgentDatabasesForTest();
     expect(sessions.SessionManager.open(fixture.target).getEntries()).toEqual(
       fixture.originalEntries,

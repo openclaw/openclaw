@@ -74,7 +74,12 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const projection = {
       state: { rowContext: { projectedAgentRuns: undefined } },
       capture: () => current,
-      ensureMaterialized: () => prepared.promise,
+      ensureMaterialized: async () => {},
+      withPreparedExactRows: (async (queries, consume) => {
+        queries({});
+        await prepared.promise;
+        return { kind: "complete", value: consume(projection) };
+      }) satisfies SessionRowProjection["withPreparedExactRows"],
       isCurrent: (record: typeof original) => record === current,
       snapshot,
     } as unknown as SessionRowProjection;

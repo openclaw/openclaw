@@ -10,14 +10,17 @@ import {
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
+import { resolveSqliteAgentId } from "./session-accessor.sqlite-scope.js";
 import {
   listSqliteTargetCandidatePathsForSessionStorePath,
   resolveUnsuffixedSqliteTargetFromSessionStorePath,
+  resolveSqliteTargetFromSessionStorePath,
   SessionStoreRegistryReadRequired,
   type SessionStoreRegistryRead,
 } from "./session-sqlite-target.js";
 import {
   captureSessionStoreReadCandidate,
+  assertSessionStoreReadCandidate,
   type CapturedSessionStorePaths,
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
@@ -29,6 +32,73 @@ import {
   type SessionStoreTargetsReadResult,
 } from "./targets-read-availability.js";
 import { isPerAgentSessionStoreConfig, listConfiguredSessionStoreAgentIds } from "./targets.js";
+
+export type SessionStoreTargetReadRequest = {
+  agentId: string;
+  storePath: string;
+  env: NodeJS.ProcessEnv;
+  candidates: SessionStoreReadCandidate[];
+  registeredDatabases: SessionStoreRegistryRead;
+};
+
+export type SessionStoreTargetReadResult =
+  | { kind: "session-target-registry-required" }
+  | {
+      kind: "session-store-target";
+      sourcePath: string;
+      database: { agentId: string; path: string };
+    };
+
+/** Resolve a single configured store without inspecting or listing its session rows. */
+export function readSessionStoreTarget(
+  request: SessionStoreTargetReadRequest,
+): SessionStoreTargetReadResult {
+  try {
+    const target = resolveSqliteTargetFromSessionStorePath(request.storePath, {
+      agentId: request.agentId,
+      env: request.env,
+      registeredDatabases: request.registeredDatabases,
+      readCandidates: request.candidates,
+    });
+    const agentId = resolveSqliteAgentId({
+      scopedAgentId: request.agentId,
+      storeAgentId: target.agentId ?? request.agentId,
+      storeShared: target.shared,
+    });
+    return {
+      kind: "session-store-target",
+      sourcePath: target.path,
+      database: {
+        agentId: target.shared ? (target.agentId ?? agentId) : agentId,
+        path: assertSessionStoreReadCandidate(target.path, request.candidates),
+      },
+    };
+  } catch (error) {
+    if (error instanceof SessionStoreRegistryReadRequired) {
+      return { kind: "session-target-registry-required" };
+    }
+    throw error;
+  }
+}
+
+export function captureSessionStoreReadCandidates(storePath: string): SessionStoreReadCandidate[] {
+  const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+  const candidates = new Map<string, SessionStoreReadCandidate>();
+  const add = (candidate: SessionStoreReadCandidate) =>
+    candidates.set(JSON.stringify(candidate), candidate);
+  if (!target.agentId && !storePath.endsWith(".sqlite")) {
+    add(captureSessionStoreReadCandidate(target.path, "sibling-family"));
+  }
+  add(captureSessionStoreReadCandidate(target.path));
+  try {
+    for (const candidate of listSqliteTargetCandidatePathsForSessionStorePath(storePath)) {
+      add(captureSessionStoreReadCandidate(candidate));
+    }
+  } catch {
+    // The worker refuses an unreadable or changed target outside this captured family.
+  }
+  return [...candidates.values()];
+}
 
 export type SessionStoreTargetInventoryRequest = {
   config: OpenClawConfig;
@@ -121,18 +191,8 @@ export function prepareSessionStoreTargetInventory(
     ) {
       throw new Error("Incognito session discovery requires its process-held owner");
     }
-    const family = !target.agentId && !storePath.endsWith(".sqlite");
-    if (family) {
-      add(captureSessionStoreReadCandidate(target.path, "sibling-family"));
-    }
-    add(captureSessionStoreReadCandidate(target.path));
-    try {
-      for (const candidate of listSqliteTargetCandidatePathsForSessionStorePath(storePath)) {
-        add(captureSessionStoreReadCandidate(candidate));
-      }
-    } catch {
-      // Keep finite family custody when enumeration fails. The worker owns the
-      // store's read-failed result and refuses aliases not captured here.
+    for (const candidate of captureSessionStoreReadCandidates(storePath)) {
+      add(candidate);
     }
   }
   return {

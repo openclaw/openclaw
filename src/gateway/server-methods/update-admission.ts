@@ -1,4 +1,7 @@
+import type { PreparedCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
+import { isRestartEnabled } from "../../config/commands.flags.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import {
@@ -6,6 +9,7 @@ import {
   FreeBsdPkgOwnershipError,
 } from "../../infra/update-freebsd-pkg-ownership.js";
 import { resolveStartupInstallStatus } from "../../infra/update-install-status.js";
+import type { UpdateRequester } from "../../infra/update-requester-authority.js";
 import {
   recordUpdateRunDiagnostics,
   recordUpdateRunPhase,
@@ -14,6 +18,30 @@ import {
 import { summarizeUpdateStepFailure, type UpdateRunRecord } from "../../infra/update-run-record.js";
 import { resolveUpdateInstallSurface } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
+
+export function retainUpdateRequesterAuthority(
+  requester: UpdateRequester | undefined,
+  authority: PreparedCommandOwnerAuthority | undefined,
+  getConfig: () => OpenClawConfig,
+) {
+  return {
+    signal: authority?.signal,
+    assertCurrent: () => {
+      if (!requester?.channel || isInternalMessageChannel(requester.channel)) {
+        return;
+      }
+      const config = getConfig();
+      if (
+        !requester.authorizationSource ||
+        !authority?.isCurrent(config) ||
+        !isRestartEnabled(config)
+      ) {
+        throw new Error("Update requester authority changed before parking.");
+      }
+    },
+  };
+}
 
 export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: number) {
   recordUpdateRunStep(runId, { step: "installation-inspection", status: "in_progress" });

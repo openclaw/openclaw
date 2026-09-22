@@ -953,7 +953,7 @@ describe("cron service run admission", () => {
         dueAt,
       );
     });
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
     expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.queuedAtMs).toBe(dueAt);
 
     releaseActive.resolve({ status: "ok", summary: "active" });
@@ -961,7 +961,7 @@ describe("cron service run admission", () => {
     expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
       dueAt,
     );
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
     expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
       dueAt,
     );
@@ -1014,7 +1014,7 @@ describe("cron service run admission", () => {
       );
     });
     now += 2 * 60 * 60 * 1000 + 1;
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
     expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.queuedAtMs).toBe(dueAt);
     releaseActive.resolve({ status: "ok", summary: "active" });
     await waitingStarted.promise;
@@ -1028,7 +1028,7 @@ describe("cron service run admission", () => {
     ).toBe(waitingStartedAt);
     expect(state.queuedRunReservationsByJobId.has(waitingJob.id)).toBe(true);
     now += 2 * 60 * 60 * 1000 + 1;
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
     expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
       waitingStartedAt,
     );

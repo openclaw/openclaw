@@ -29,6 +29,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -428,6 +429,7 @@ it.each([
         closeOpenClawStateDatabaseForTest();
         const legacy = new DatabaseSync(agentPath);
         try {
+          restoreEmptyV21StorageForHistoricalFixture(legacy);
           removeCanonicalValidationFromHistoricalAgentFixture(legacy);
           legacy.exec(`DROP TABLE session_transcript_cold_archives;
           PRAGMA user_version = 19;

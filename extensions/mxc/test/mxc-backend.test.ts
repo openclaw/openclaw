@@ -193,15 +193,13 @@ async function withProcessEnv(
   overrides: Partial<Record<MxcTestEnvKey, string | undefined>>,
   run: () => Promise<void>,
 ): Promise<void> {
+  const originalEnv = process.env;
+  // Synthetic host variables belong to the fixture, not the native Windows environment.
+  process.env = { ...originalEnv, ...overrides };
   try {
-    for (const key of MXC_TEST_ENV_KEYS) {
-      if (Object.hasOwn(overrides, key)) {
-        vi.stubEnv(key, overrides[key]);
-      }
-    }
     await run();
   } finally {
-    vi.unstubAllEnvs();
+    process.env = originalEnv;
   }
 }
 

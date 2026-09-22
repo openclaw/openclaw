@@ -147,12 +147,14 @@ export async function readBoundedCodexRemoteWorkspaceFile(params: {
   let offset = 0;
   let expectedSize: number | undefined;
   let expectedRevision: string | undefined;
-  const startedAt = Date.now();
+  const startedAt = performance.now();
 
   do {
     params.signal?.throwIfAborted();
     const timeoutMs =
-      params.timeoutMs === undefined ? undefined : params.timeoutMs - (Date.now() - startedAt);
+      params.timeoutMs === undefined
+        ? undefined
+        : Math.floor(params.timeoutMs - (performance.now() - startedAt));
     if (timeoutMs !== undefined && timeoutMs <= 0) {
       throw new Error("Codex remote workspace file transfer timed out.");
     }
@@ -368,7 +370,7 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
 
   const maxBytes = params.maxBytes ?? REMOTE_WORKSPACE_MEDIA_MAX_BYTES;
   const timeoutMs = params.timeoutMs ?? REMOTE_WORKSPACE_MEDIA_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   const stagedPaths = new Map<string, string>();
   let totalBytes = 0;
   // Read the authoritative remote descriptor, not an unverified synchronized
@@ -376,7 +378,7 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
   for (const [localPath, { remotePath, sourcePaths }] of remotePathsByLocalPath) {
     params.signal?.throwIfAborted();
     const remainingBytes = maxBytes - totalBytes;
-    const remainingMs = deadline - Date.now();
+    const remainingMs = Math.floor(deadline - performance.now());
     if (remainingMs <= 0) {
       throw new Error("Codex remote workspace attachment batch timed out.");
     }

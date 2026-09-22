@@ -24,6 +24,9 @@ function skipNamespaceEntry(id: string, name: string, installed: boolean) {
   return (
     id === ".ci-harness" ||
     id === ".worktrees" ||
+    // Tests create and remove fixture packages here while sibling compilers run.
+    // Only checkout-root scratch is excluded; workspace and installed inputs still count.
+    id === ".tmp" ||
     id === ".cache/openclaw-pnpm-store" ||
     id === ".cache/vitest" ||
     id === "apps/macos/.build" ||

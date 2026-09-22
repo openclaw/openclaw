@@ -34,6 +34,11 @@ asynchronous planning first, then reread authoritative rows inside the admitted
 transaction. Preserve FIFO order, coordinator custody, transaction/commit grants,
 and settlement of accepted write-capable work.
 
+Worker authority requests wait for the retained host owner's grant or refusal;
+host scheduling delays do not expire that authority. The host still checks current
+authority before granting, and broker failure joins worker exit before releasing
+custody. Coordinator-lock and broker-capacity admission keep their own deadlines.
+
 ## Carry facts, publish after commit
 
 Before yielding, capture the physical store target, source/admission scope,
@@ -57,6 +62,11 @@ existing reconciliation custody: do not replay the write. Cancellation before
 dispatch can refuse work; cancellation after execution must still join its native
 settlement. Close and shutdown join accepted work and cleanup before releasing
 the store or replacing its generation.
+
+Session-reclamation retirement honors settled cleanup reported by its worker,
+including after a failed request. After an unsettled native exit, the shared-state
+cleanup worker releases the exact retained lease. Retirement joins lease deletion and cleanup
+store close, keeping those writes off the host connection used by live snapshots.
 
 ## Migrate a caller
 
@@ -97,16 +107,82 @@ subsequent read. No validation cache or new restoration owner is introduced.
 The asynchronous transcript-search facade similarly moves durable FTS reads for
 all four Gateway/tool callers through the existing worker lifecycle. Each caller
 rechecks current scope and authorization after awaiting. Warm `sessions.list`
-already selects resident projection rows without host Kysely reads; its remaining
-database work is hydration, dirty/archived-row refresh, and membership. Preserve
-that projection and its identity/revision invalidation instead of replacing it
-with another per-request store scan. See the
+selects resident projection rows without host Kysely reads. Background refreshes
+prepare up to 64 dirty persistent rows in the history worker: entry metadata,
+membership, board presence, and activity-summary watermarks share one read
+snapshot per physical store. The projection retains each store through consumption
+and rejects replies after projection or registry invalidation. Rows replaced or
+refreshed by direct reads while a reply is pending keep their newer facts; a dirty
+replacement retries under its own generation. Related rows use resident facts and
+existing invalidations to converge across batches.
+
+Startup/topology hydration, direct keyed and archived reads, process-held incognito
+stores, and optional transcript backfill remain migration debt. Preserve the
+projection and its identity/revision invalidation instead of replacing it with
+another per-request store scan. See the
 [inventory baseline](/reference/database-schemas/worker-access-inventory#profile-priority-and-current-cutover-status)
 for measurements and the next owners to migrate.
+
+Scheduled task maintenance and asynchronous task-status summaries read exact
+backing-session keys through the existing session reader worker. Each bounded
+batch returns only identity and subagent recovery facts; retained session history
+is not materialized. Recovery hooks trigger fresh backing reads before the task
+owner rechecks the current record. A concurrent session publication invalidates
+prepared facts, so uncertain backing state keeps the task alive for a later pass.
+Synchronous operator inspection uses the same selected-row reader. An unavailable
+schema refuses the read rather than reporting missing backing sessions. Canonical
+admission, malformed-row handling, retention, and update behavior are unchanged.
+
+Shared GitHub publication prepares canonical profile identity and alias-binding
+lifetimes through the existing profile catalogue and read worker. Alias writers
+publish their committed binding facts before observers; worker creation and
+lost-reply reconciliation use the same catalogue publication owner. Final
+profile identity checks read those retained facts before and after policy callbacks,
+without a synchronous database fallback. Unsettled profile mutations keep publication
+pending until the mutation owner confirms its outcome. Store replacement invalidates the
+retained identity. Doctor alias repairs use exclusive Gateway maintenance, and
+the next Gateway prepares facts from the resulting store.
+Grant resumption reads the current assigned role and email aliases from that
+retained owner on each assertion. The requester resolves its role ceiling from
+those supplied facts through the shared role-policy owner.
+
+Session metadata and membership facts are prepared through the existing session
+worker. Their canonical writers publish committed changes before observers, and
+unknown or unavailable facts leave publication recovery pending until preparation
+succeeds. Incognito sessions retain facts from their existing in-memory writer
+lifetime. The requester evaluates these facts with the current role and profile
+aliases before and after policy callbacks.
 
 For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
 through their original store/projection owner.
+
+Channel identity administration, profile role assignments, email linking, and
+HTTP/WebSocket sign-in acquisition use that writer and the existing read worker.
+Worker commit receipts publish affected profile, alias, and display facts through
+the profile owner; warm sign-in ensures avoid unnecessary write transactions.
+Channel ingress prepares exact identity and role facts in the read worker, then
+retains the profile owner's physical-store and mutation revisions. Final owner
+checks read those revisions and current configuration without querying SQLite.
+Relevant identity or role mutations revoke prior authority before publication;
+closing or replacing the store invalidates its retained authority. Display caches
+and discovery snapshots do not grant permission.
+
+Secret-store expiry runs in that worker for scheduled Gateway cleanup and
+post-mutation cleanup. The caller captures the database and expiry cutoffs before
+yielding; the worker retains the existing SQL and expiry rules and returns only
+the deleted count. Scheduled sweeps coalesce while one is active, and Gateway
+shutdown stops scheduling and joins accepted cleanup. Ordinary secret-store
+set/delete operations remain separate synchronous migration debt.
+
+Placement change reporting reads its before/after snapshots in the shared-state
+read worker using the placement store's row codec. It transfers only session
+identity, state, generation, and update time to the Gateway. The reconciliation
+coordinator reserves and admits its sweep before awaiting reporting, preserving
+dispatch ordering and request coalescing. Reporting failures preserve the original
+operation outcomes. Placement
+writes, current-authority checks, and workspace retention retain their existing
+owners; these reporting snapshots grant no execution or deletion authority.
 
 This execution cutover does not change schemas, stored bytes, retention, config,
 or update behavior. A change to those contracts follows the

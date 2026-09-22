@@ -677,9 +677,13 @@ it.each([
       }
       const pendingStatus = createDeferred();
       statusResponse = pendingStatus.promise;
-      const statusReadsBeforeCheck = request.mock.calls.filter(
-        ([method]) => method === "update.status",
-      ).length;
+      const checkoutReads = () =>
+        request.mock.calls.filter(
+          ([method, params]) =>
+            method === "update.status" &&
+            expect.objectContaining({ refreshCheckout: true }).asymmetricMatch(params),
+        );
+      const checkoutReadsBeforeCheck = checkoutReads().length;
       check.click();
       await flushMicrotasks();
       expect(findButton("Checking status…").disabled).toBe(true);
@@ -692,9 +696,7 @@ it.each([
       expect(modal.textContent).not.toContain("Run status read failed");
       expect(modal.querySelector('[role="status"]')?.textContent).toContain("Status refreshed.");
       expect(view.run).toEqual(run);
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
-        statusReadsBeforeCheck + 1,
-      );
+      expect(checkoutReads()).toHaveLength(checkoutReadsBeforeCheck + 1);
 
       statusResponse = Promise.reject(new Error("Status refresh unavailable"));
       findButton("Check status").click();
@@ -718,9 +720,7 @@ it.each([
         expect(findButton("Retry update").disabled).toBe(true);
       }
       findButton("Check status").click();
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
-        statusReadsBeforeCheck + 3,
-      );
+      expect(checkoutReads()).toHaveLength(checkoutReadsBeforeCheck + 3);
       expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(
         entry === "started" ? 1 : 0,
       );

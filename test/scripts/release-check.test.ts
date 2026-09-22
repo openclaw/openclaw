@@ -185,14 +185,26 @@ describe("release-check", () => {
         "stale target setup consumer",
       );
       const moduleUrl = pathToFileURL(join(toolingRoot, "scripts/release-check.ts")).href;
+      const npmInventoryGuard = join(root, "reject-npm-inventory.cjs");
+      writeFileSync(
+        npmInventoryGuard,
+        `const childProcess = require("node:child_process");
+const original = childProcess.execFileSync;
+childProcess.execFileSync = function (...args) {
+  if (Array.isArray(args[1]) && args[1].includes("pack") && args[1].includes("--dry-run")) {
+    throw new Error("Prepared tarball inspection must not launch npm pack");
+  }
+  return Reflect.apply(original, this, args);
+};
+require("node:module").syncBuiltinESMExports();
+`,
+      );
       const runtimeArgs = process.versions.bun
         ? []
         : [...resolveVitestNodeArgs(), "--import", join(toolingRoot, "scripts/tsx.mjs")];
       const fixtureEnv = {
         ...process.env,
         TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json"),
-        // npm runs its notifier separately from the offline tarball inspection.
-        npm_config_update_notifier: "false",
       };
       diagnostics.stage("sparse-import-probe");
       const probe = await command.run(
@@ -207,8 +219,7 @@ describe("release-check", () => {
             `console.log(JSON.stringify({\n` +
             `  execArgv: process.execArgv,\n` +
             `  fixture: readFileSync("consumer/src/index.ts", "utf8"),\n` +
-            `  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8"),\n` +
-            `  concurrentSparkplugDisabled: process.execArgv.includes("--no-concurrent-sparkplug")\n` +
+            `  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8")\n` +
             `}));`,
         ],
         {
@@ -234,7 +245,6 @@ describe("release-check", () => {
           join(toolingRoot, "scripts/fixtures/packed-plugin-sdk-setup-consumer.ts"),
           "utf8",
         ),
-        concurrentSparkplugDisabled: !process.versions.bun,
       });
 
       diagnostics.stage("packed-fixture-setup");
@@ -243,6 +253,9 @@ describe("release-check", () => {
       writeWorkerArtifacts(packedRoot, legacyArtifacts);
       const tarball = join(root, "target.tgz");
       create({ cwd: root, file: tarball, gzip: true, sync: true }, ["package"]);
+      if (!process.versions.bun) {
+        runtimeArgs.unshift("--require", npmInventoryGuard);
+      }
       diagnostics.stage("legacy three-file contract requires the launcher");
       const result = await command.run(
         process.execPath,

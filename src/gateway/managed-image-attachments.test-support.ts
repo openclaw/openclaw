@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -30,6 +30,34 @@ export function prepareAgentSessionStore(stateDir: string, agentId: string): voi
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   openOpenClawAgentDatabase({ agentId, env });
   closeOpenClawAgentDatabasesForTest();
+}
+
+export async function prepareManagedSessionStore(stateDir: string): Promise<string> {
+  closeOpenClawAgentDatabasesForTest();
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const storePath = path.join(stateDir, "sessions.sqlite");
+  const { replaceSessionEntrySync } = await import("../config/sessions/session-accessor.js");
+  replaceSessionEntrySync(
+    {
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:main",
+      storePath,
+    },
+    { sessionId: "sess-1", updatedAt: Date.now() },
+  );
+  closeOpenClawAgentDatabasesForTest();
+  const { loadExactSessionEntryReadOnlyResult } =
+    await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
+  expect(
+    loadExactSessionEntryReadOnlyResult({
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:main",
+      storePath,
+    }),
+  ).toMatchObject({ found: true, value: { sessionKey: "agent:main:main" } });
+  return storePath;
 }
 
 export function usePreparedManagedImageState(params: {

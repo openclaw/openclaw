@@ -19,6 +19,7 @@ import {
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
 import {
   decodeRun,
+  hasStoredUpdateRecovery,
   readActiveUpdateRun,
   readLatestUpdateRun,
   readUpdateRunRecord,
@@ -30,7 +31,6 @@ import {
   type UpdateFetchFailure,
   type UpdateRunRecord,
 } from "./update-run-record.js";
-import { hasStoredUpdateRecovery } from "./update-run-recovery-store.js";
 import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
 export function getUpdateRun(

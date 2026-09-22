@@ -12,6 +12,7 @@ import "./agent.session-followup.test-utils.js";
 import "./agent.reset-and-identity.test-utils.js";
 import "./agent.abort-integration.test-utils.js";
 import "./agent.caller-authority.test-utils.js";
+import "./agent.dispatch-clock.test-utils.js";
 
 resetAgentTaskRegistryForTests();
 afterAll(restoreAgentTaskRegistryRuntimeAfterTests);

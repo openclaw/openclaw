@@ -52,8 +52,6 @@ import {
 } from "../shared/channel-read-authority.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   createGatewayByteStream,
   createImmutableFileValidators,
@@ -61,9 +59,10 @@ import {
   writeByteHeaders,
 } from "./http-byte-range.js";
 import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeGatewayHttpRequestOrReply,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import {
@@ -1620,12 +1619,8 @@ function buildManagedMediaContentDisposition(value: string | null, contentType: 
 export async function handleManagedOutgoingMediaHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
+  opts: GatewayHttpRequestAuthOptions & {
     basePath?: string;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
     stateDir?: string;
   },
 ): Promise<boolean> {
@@ -1668,20 +1663,19 @@ export async function handleManagedOutgoingMediaHttpRequest(
     sessionKey,
     attachmentId,
   });
+  let assertCurrent: (() => void) | undefined;
   if (!hasValidMediaTicket) {
     const requestAuth = await authorizeGatewayHttpRequestOrReply({
+      ...opts,
       req,
       res,
-      auth: opts.auth,
-      trustedProxies: opts.trustedProxies,
-      allowRealIpFallback: opts.allowRealIpFallback,
-      rateLimiter: opts.rateLimiter,
     });
     if (!requestAuth) {
       return true;
     }
+    assertCurrent = requestAuth.assertCurrent;
 
-    const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
+    const requestedScopes = resolveSharedSecretHttpOperatorScopes(req, requestAuth);
     const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
     if (!scopeAuth.allowed) {
       sendMissingScopeForbidden(res, scopeAuth.missingScope);
@@ -1730,20 +1724,23 @@ export async function handleManagedOutgoingMediaHttpRequest(
     return true;
   }
   const respondNotFound = () => sendStatus(res, 404, "not found");
-
-  let responseContentType = record.original.contentType || "application/octet-stream";
-  let responseFilename = record.original.filename;
-  if (variant === "thumbnail") {
-    if (mediaKind !== "image") {
-      await opened.handle.close();
-      sendStatus(res, 404, "not found");
-      return true;
-    }
-    try {
+  let byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
+  try {
+    let responseContentType = record.original.contentType || "application/octet-stream";
+    let responseFilename = record.original.filename;
+    if (variant === "thumbnail") {
       // A full-image ticket already authorizes these original bytes; the thumbnail
       // is a lower-fidelity representation of the same transcript attachment.
-      const thumbnail = await readManagedImageThumbnailFromFile(opened);
-      await opened.handle.close();
+      const thumbnail =
+        mediaKind === "image"
+          ? await readManagedImageThumbnailFromFile(opened).catch(() => null)
+          : null;
+      await byteStream.close();
+      assertCurrent?.();
+      if (!thumbnail) {
+        respondNotFound();
+        return true;
+      }
       const sourceName = path.parse(responseFilename ?? "generated-image").name;
       res.statusCode = 200;
       res.setHeader("content-type", "image/png");
@@ -1762,72 +1759,72 @@ export async function handleManagedOutgoingMediaHttpRequest(
       );
       res.end(req.method === "HEAD" ? undefined : thumbnail);
       return true;
-    } catch {
-      await opened.handle.close().catch(() => {});
-      sendStatus(res, 404, "not found");
-      return true;
     }
-  }
 
-  let byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
-  const isPlayback =
-    requestUrl.searchParams.get("playback") === "1" &&
-    (mediaKind === "audio" || mediaKind === "video");
-  if (isPlayback) {
-    const playback = await resolvePlaybackTranscode({
-      sourcePath: opened.realPath,
-      sourceStat: opened.stat,
-      mimeType: responseContentType,
-      kind: mediaKind,
-    }).catch(async (error: unknown) => {
-      await byteStream.close();
-      throw error;
-    });
-    if (playback.kind === "preparing") {
-      await byteStream.close();
-      sendJson(res, 202, { status: "preparing" });
-      return true;
-    }
-    if (playback.kind === "transcoded") {
-      const transcoded = await openLocalFileSafely({ filePath: playback.path }).catch(() => null);
-      if (transcoded) {
+    const isPlayback =
+      requestUrl.searchParams.get("playback") === "1" &&
+      (mediaKind === "audio" || mediaKind === "video");
+    if (isPlayback) {
+      const playback = await resolvePlaybackTranscode({
+        sourcePath: opened.realPath,
+        sourceStat: opened.stat,
+        mimeType: responseContentType,
+        kind: mediaKind,
+      });
+      if (playback.kind === "preparing") {
         await byteStream.close();
-        opened = transcoded;
-        byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
-        responseContentType = playback.contentType;
-        responseFilename = replacePlaybackFileExtension(
-          responseFilename ?? "generated-media",
-          playback.extension,
-        );
+        assertCurrent?.();
+        sendJson(res, 202, { status: "preparing" });
+        return true;
+      }
+      if (playback.kind === "transcoded") {
+        const transcoded = await openLocalFileSafely({ filePath: playback.path }).catch(() => null);
+        if (transcoded) {
+          await byteStream.close();
+          opened = transcoded;
+          byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
+          responseContentType = playback.contentType;
+          responseFilename = replacePlaybackFileExtension(
+            responseFilename ?? "generated-media",
+            playback.extension,
+          );
+        }
       }
     }
-  }
 
-  res.setHeader("content-type", responseContentType);
-  res.setHeader("x-content-type-options", "nosniff");
-  res.setHeader("referrer-policy", "no-referrer");
-  res.setHeader(
-    "cache-control",
-    isPlayback
-      ? "private, no-cache"
-      : hasValidMediaTicket
-        ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
-        : "private, max-age=31536000, immutable",
-  );
-  res.setHeader(
-    "content-disposition",
-    buildManagedMediaContentDisposition(responseFilename, responseContentType),
-  );
-  const byteResponse = resolveByteResponse({
-    file: opened.stat,
-    // Playback can replace a failed rendition with a successful one at the same URL.
-    validators: isPlayback ? undefined : createImmutableFileValidators(opened.stat),
-    method: req.method,
-    request: req,
-  });
-  writeByteHeaders(res, byteResponse);
-  // Stream from the verified descriptor so a path swap cannot bypass fs-safe after validation.
-  await byteStream.pipe(byteResponse, req.method);
+    const byteResponse = resolveByteResponse({
+      file: opened.stat,
+      // Playback can replace a failed rendition with a successful one at the same URL.
+      validators: isPlayback ? undefined : createImmutableFileValidators(opened.stat),
+      method: req.method,
+      request: req,
+    });
+    // Stream from the verified descriptor so a path swap cannot bypass fs-safe after validation.
+    await byteStream.pipe(byteResponse, req.method, () => {
+      assertCurrent?.();
+      res.setHeader("content-type", responseContentType);
+      res.setHeader("x-content-type-options", "nosniff");
+      res.setHeader("referrer-policy", "no-referrer");
+      res.setHeader(
+        "cache-control",
+        isPlayback
+          ? "private, no-cache"
+          : hasValidMediaTicket
+            ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
+            : "private, max-age=31536000, immutable",
+      );
+      res.setHeader(
+        "content-disposition",
+        buildManagedMediaContentDisposition(responseFilename, responseContentType),
+      );
+      writeByteHeaders(res, byteResponse);
+    });
+  } catch (error) {
+    await byteStream.close();
+    if (!res.writableEnded && !res.destroyed) {
+      throw error;
+    }
+  }
   return true;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

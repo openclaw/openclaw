@@ -33,7 +33,12 @@ import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
 
 export { hashText } from "./hash.js";
-export { parseEmbedding, cosineSimilarity } from "./embedding-vector.js";
+export {
+  parseEmbedding,
+  cosineSimilarity,
+  encodeMemoryEmbedding,
+  decodeMemoryEmbedding,
+} from "./embedding-vector.js";
 export {
   chunkMarkdown,
   splitCuratedMarkdownEntries,

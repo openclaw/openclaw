@@ -1,9 +1,11 @@
 import path from "node:path";
 import { ChannelType, MessageType, type APIMessage } from "discord-api-types/v10";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Message } from "../internal/discord.js";
+import { setDiscordRuntime } from "../runtime.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
@@ -78,6 +80,10 @@ const buildContext = (ctx: DiscordMessagePreflightContext) =>
   buildDiscordMessageProcessContext({ ctx, text: "addressed current turn", mediaList: [] });
 
 describe("Discord native recent history through process context", () => {
+  beforeEach(() => {
+    setDiscordRuntime(createPluginRuntimeMock());
+  });
+
   it("keeps quiet ingress quiet, then excludes each debounced original without losing its current text", async () => {
     const base = await recentContext();
     const get = vi

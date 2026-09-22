@@ -41,7 +41,7 @@ describe("prepared SQLite snapshot cleanup", () => {
       const sentinel = path.join(host, "host-package.txt");
       const modules = path.join(ownedRoot, "plugin-captures", "generation", "node_modules");
       fs.mkdirSync(modules, { recursive: true });
-      fs.writeFileSync(path.join(ownedRoot, "owner.sqlite"), "snapshot custody");
+      fs.writeFileSync(path.join(ownedRoot, "owner.sqlite"), "");
       fs.writeFileSync(sentinel, "host bytes");
       fs.symlinkSync(host, path.join(modules, "openclaw"), "junction");
       fs.symlinkSync(ownedRoot, path.join(host, "captures"), "junction");

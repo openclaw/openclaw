@@ -2855,9 +2855,19 @@ fi
         "-c",
         [
           "set -euo pipefail",
+          "unset SECONDS",
+          "SECONDS=0",
+          'mkfifo "$PROBE_READY_FILE"',
+          'exec 3<>"$PROBE_READY_FILE"',
+          // Expire only after the child has installed its TERM trap and recorded its PID.
+          "sleep() {",
+          "  read -r ready <&3",
+          '  [[ "$ready" == ready ]]',
+          "  SECONDS=1",
+          "}",
           probeFunction,
           'run_bounded_probe "$PROBE_OUTPUT" "$((SECONDS + 1))" /bin/bash -c ' +
-            '\'trap "" TERM; printf "%s\\n" "$$" >"$PROBE_PID_FILE"; exec sleep 30\'',
+            '\'trap "" TERM; printf "%s\\n" "$$" >"$PROBE_PID_FILE"; printf "ready\\n" >&3; exec sleep 30\'',
           'printf "status=%s timed_out=%s\\n" "$probe_status" "$probe_timed_out"',
         ].join("\n"),
       ],
@@ -2867,6 +2877,7 @@ fi
           ...process.env,
           PROBE_OUTPUT: path.join(probeTimeoutRoot, "probe.txt"),
           PROBE_PID_FILE: probePidFile,
+          PROBE_READY_FILE: path.join(probeTimeoutRoot, "probe.ready"),
         },
         timeout: 5_000,
       },
@@ -3306,7 +3317,7 @@ fi
         file: ".github/workflows/ios-beta-release.yml",
         name: "iOS Beta Release",
         platform: "ios",
-        releaseRunner: "macos-26",
+        releaseRunner: "xcode-27",
         signingCheckoutName: "Checkout encrypted iOS signing assets",
         signingCheckoutRevalidateName:
           "Revalidate release authority immediately before iOS signing checkout",
@@ -4515,7 +4526,7 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
       };
     };
     const releaseSteps = workflow.jobs.release.steps;
-    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 26");
+    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 27");
     const rustIndex = releaseSteps.findIndex(
       (step) => step.name === "Install Watch Rust toolchain",
     );

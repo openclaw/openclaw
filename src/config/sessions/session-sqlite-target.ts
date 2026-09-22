@@ -1,5 +1,6 @@
 import { lstatSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
@@ -360,12 +361,13 @@ export function listSqliteTargetCandidatePathsForSessionStorePath(storePath: str
   const candidateNames = new Set([path.basename(unsuffixedTarget.path)]);
   try {
     for (const fileName of readdirSync(directory)) {
-      if (fileName.startsWith(`${baseName}.`) && fileName.endsWith(".sqlite")) {
-        candidateNames.add(fileName);
+      const databaseName = fileName.replace(/-(?:wal|shm|journal)$/u, "");
+      if (databaseName.startsWith(`${baseName}.`) && databaseName.endsWith(".sqlite")) {
+        candidateNames.add(databaseName);
       }
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+    if (!hasErrnoCode(error, "ENOENT")) {
       throw error;
     }
   }

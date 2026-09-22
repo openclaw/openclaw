@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -14,7 +13,6 @@ import {
   isTranscriptSessionStarting,
   resolveSourceProvider,
   resolveTranscriptSourceOwnership,
-  sourceFromParams,
   startTranscripts,
   type TranscriptsRuntimeContext,
 } from "./capture.js";
@@ -22,7 +20,7 @@ import { hasSameTranscriptCaptureIntent } from "./config-reload.js";
 import { resolveTranscriptsConfig, type ResolvedTranscriptsAutoStartConfig } from "./config.js";
 import { beginConfiguredTranscriptStarts } from "./configured-start-status.js";
 import type { TranscriptOccupancyWatchHandle, TranscriptSourceLocator } from "./provider-types.js";
-import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
+import { sanitizeTranscriptSourceLocator, sourceFromParams } from "./source-locator.js";
 import { transcriptSessionSelector } from "./store.js";
 
 const AUTO_START_RETRY_ATTEMPTS = 12;
@@ -47,13 +45,23 @@ function formatAutoStopDiagnostic(value: unknown): string {
   return JSON.stringify(truncateUtf16Safe(sanitizeTerminalText(formatErrorMessage(value)), 300));
 }
 
+function matchesConfiguredSource(
+  owner: AutoStartEntryOwner,
+  config: OpenClawConfig | undefined,
+  index: number,
+): boolean {
+  return hasSameTranscriptCaptureIntent(
+    { autoStart: owner.config?.transcripts?.autoStart?.slice(owner.index, owner.index + 1) },
+    { autoStart: config?.transcripts?.autoStart?.slice(index, index + 1) },
+  );
+}
+
 /** Own configured captures independently of the room's provider connection. */
 export function createTranscriptsAutoStartService(
   ctx: TranscriptsRuntimeContext,
   getConfig?: () => OpenClawConfig | undefined,
 ) {
   const entries = new Set<{
-    config: ResolvedTranscriptsAutoStartConfig;
     owner: AutoStartEntryOwner;
     providerId: string | undefined;
     stop: (strict: boolean) => Promise<boolean>;
@@ -66,7 +74,7 @@ export function createTranscriptsAutoStartService(
   let stopped = false;
   let diagnostics: ReturnType<typeof beginConfiguredTranscriptStarts> | undefined;
   return {
-    start(config = ctx.config, pausedProviders?: ReadonlySet<string>) {
+    start(config = ctx.config) {
       if (stopped) {
         return { settled: Promise.resolve() };
       }
@@ -77,19 +85,12 @@ export function createTranscriptsAutoStartService(
       }
       const retained = new Set(entries);
       for (const [index, entry] of resolved.autoStart.entries()) {
-        const current = [...retained].find(
-          (candidate) =>
-            isDeepStrictEqual(candidate.config, entry) ||
-            (candidate.owner.index === index &&
-              hasSameTranscriptCaptureIntent(
-                candidate.owner.config?.transcripts,
-                config?.transcripts,
-              )),
+        const current = [...retained].find((candidate) =>
+          matchesConfiguredSource(candidate.owner, config, index),
         );
         if (current) {
           current.owner.index = index;
           current.owner.config = config;
-          current.config = entry;
           // Reindex the retained owner's last produced fact into the new config snapshot.
           if (current.owner.diagnostic) {
             current.owner.diagnostic[0] = index;
@@ -99,12 +100,8 @@ export function createTranscriptsAutoStartService(
           continue;
         }
         const providerId = normalizeCapabilityProviderId(entry.providerId);
-        if (providerId && pausedProviders?.has(providerId)) {
-          continue;
-        }
         const owner: AutoStartEntryOwner = { index, config };
         entries.add({
-          config: entry,
           owner,
           providerId,
           ...startTranscriptsAutoStartEntry(
@@ -128,14 +125,29 @@ export function createTranscriptsAutoStartService(
         ).then(() => undefined),
       };
     },
-    async stop(providerIds?: ReadonlySet<string>) {
+    async stop(providerIds?: ReadonlySet<string>, nextConfig?: OpenClawConfig) {
       stopped ||= providerIds === undefined;
       if (stopped) {
         diagnostics?.clear();
       }
-      const selected = [...entries].filter(
-        (entry) => !providerIds || (entry.providerId && providerIds.has(entry.providerId)),
-      );
+      const next = resolveTranscriptsConfig(nextConfig?.transcripts);
+      const retained = new Set(next.enabled ? next.autoStart.map((_, index) => index) : []);
+      const selected = [...entries].filter((entry) => {
+        if (!providerIds || (entry.providerId && providerIds.has(entry.providerId))) {
+          return true;
+        }
+        if (!nextConfig) {
+          return false;
+        }
+        const index = [...retained].find((candidate) =>
+          matchesConfiguredSource(entry.owner, nextConfig, candidate),
+        );
+        if (index === undefined) {
+          return true;
+        }
+        retained.delete(index);
+        return false;
+      });
       const stopping = Promise.allSettled(
         selected.map(async (entry) => {
           // A caller's deadline never discards or duplicates in-flight provider cleanup.
@@ -599,7 +611,7 @@ function startTranscriptsAutoStartEntry(
             provider,
             source: { ...sourceFromParams(entry), providerId: provider.id },
             configuredLifecycle: true,
-          }).source;
+          });
           // Guild voice transports own one connection per account. Claim before
           // awaiting readiness so later entries cannot displace the first room.
           if (source.guildId) {

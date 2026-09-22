@@ -1,5 +1,6 @@
 import { getSubagentRegistryPublicationRevision } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
+import { getSubagentSessionListReadSnapshotIdentity } from "../agents/subagents/registry/subagent-registry-state.js";
 import { buildProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
@@ -17,10 +18,10 @@ import { refreshSessionRowProfiles } from "./session-utils-row.js";
 export function createSessionRowProjectionContext() {
   let preparedEpoch = -1;
   let registryRevision: number | undefined = getSubagentRegistryPublicationRevision();
+  let registrySnapshot = getSubagentSessionListReadSnapshotIdentity();
   let profileRevision = 0;
   let subagentRevision = 0;
   let parentRevision = 0;
-  let placementRevision = 0;
   let modelFactsDirty = false;
   const identityProjection = createSessionIdentityProjection();
   let current: SessionListRowContext = {
@@ -29,8 +30,13 @@ export function createSessionRowProjectionContext() {
   };
   const subagentInputs = current.subagentRuns.inputs;
   function prepare(epoch: number) {
-    if (preparedEpoch === epoch) {
+    const snapshot = getSubagentSessionListReadSnapshotIdentity();
+    if (preparedEpoch === epoch && registrySnapshot === snapshot) {
       return;
+    }
+    if (registrySnapshot !== snapshot) {
+      registryRevision = undefined;
+      registrySnapshot = snapshot;
     }
     const now = Date.now(),
       revision = getSubagentRegistryPublicationRevision();
@@ -68,11 +74,18 @@ export function createSessionRowProjectionContext() {
     preparedEpoch = epoch;
   }
   return {
+    readPrepared(epoch: number): SessionListRowContext | undefined {
+      return preparedEpoch === epoch &&
+        parentRevision === subagentRevision &&
+        registryRevision === getSubagentRegistryPublicationRevision() &&
+        registrySnapshot === getSubagentSessionListReadSnapshotIdentity()
+        ? current
+        : undefined;
+    },
     get current() {
       return current;
     },
     subagentInputs,
-    placementRevision: () => placementRevision,
     get materializedRevisions() {
       return { profileRevision, subagentRevision };
     },
@@ -93,7 +106,6 @@ export function createSessionRowProjectionContext() {
           return true;
         case "worker-environments":
         case "worker-placements":
-          placementRevision++;
           return true;
         case "agent-runs":
         case "sessions":

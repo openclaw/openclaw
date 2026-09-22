@@ -447,6 +447,8 @@ export function writeSessionEntry(
     allowStoredAliases?: boolean;
     /** Only the personal involvement owner may replace this logical-node state. */
     profileInvolvement?: SessionEntry["profileInvolvement"];
+    /** Only the provider review owner may replace a generation-bound pause. */
+    providerReviewMutation?: boolean;
     /** Canonical row revalidated in this write transaction; null proves absence. */
     canonicalPreviousEntry?: SessionEntry | null;
     consumePendingReset?: boolean;
@@ -477,6 +479,20 @@ export function writeSessionEntry(
       : options.allowStoredAliases && options.previousEntry !== undefined
         ? (options.previousEntry ?? undefined)
         : readExactSessionEntryRow(database, sessionKey)?.entry;
+  if (!options.providerReviewMutation && !options.allowStoredAliases) {
+    // Bookkeeping can carry a stale snapshot; only the review owner may clear its pause.
+    normalizedEntry = {
+      ...normalizedEntry,
+      providerReview:
+        canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
+        canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision
+          ? canonicalPreviousEntry.providerReview
+          : undefined,
+    };
+  }
+  if (normalizedEntry.providerReview?.sessionId !== normalizedEntry.sessionId) {
+    delete normalizedEntry.providerReview;
+  }
   if (canonicalPreviousEntry?.sandbox === "required") {
     if (
       normalizedEntry.sandbox !== "required" ||

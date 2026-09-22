@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
@@ -133,7 +134,6 @@ import * as postCoreModule from "./update-command-post-core.js";
 import { registerBoundaryFinalizationControls } from "./update-command-post-update-boundary.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import * as rollbackModule from "./update-command-rollback.js";
-import { UpdateServiceLoadBoundaryError } from "./update-command-service-load.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
@@ -153,11 +153,14 @@ afterEach(() => {
 describe("successful update finalization ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // These roots are package fixtures; separate process tests cover Git discovery.
+    vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
     mocks.readServiceState.mockReset();
     mocks.restartService.mockReset().mockResolvedValue("ok");
     mocks.stopService.mockReset();
     mocks.leaseActive = false;
     mocks.loadPluginRecords.mockResolvedValue({});
+    mocks.revalidateService.mockReset();
     mocks.revalidateService.mockImplementation(async ({ root, preManagedServiceStop }) => ({
       kind: "owned",
       root,
@@ -211,25 +214,6 @@ describe("successful update finalization ordering", () => {
   });
 
   registerBoundaryFinalizationControls({ makeTempDir: (prefix) => tempDirs.make(prefix), mocks });
-
-  it("retains pending staged service load without legacy rollback or completion", async () => {
-    const refusal = new UpdateServiceLoadBoundaryError("checkpoint seal refused");
-    mocks.restartService.mockRejectedValueOnce(refusal);
-    const rollback = vi
-      .spyOn(rollbackModule, "rollbackFailedUpdate")
-      .mockImplementationOnce(async ({ result }) => ({ result, rolledBack: false }));
-    const complete = vi.fn<NonNullable<FinishUpdateParams["packageTransaction"]>["complete"]>(
-      async () => undefined,
-    );
-    const finishing = finishSuccessfulPackageSwitch(undefined, {
-      packageTransaction: { backupRoot: "/tmp/retained-previous", rollback: vi.fn(), complete },
-    });
-    await expect(finishing).rejects.toBe(refusal);
-    expect(rollback).not.toHaveBeenCalled();
-    expect(complete).not.toHaveBeenCalled();
-    expect(mocks.printResult).not.toHaveBeenCalled();
-    expect(mocks.restartService).toHaveBeenCalledOnce();
-  });
 
   it.each(["local", "fresh"] as const)(
     "keeps service activation behind awaited %s convergence and Doctor",

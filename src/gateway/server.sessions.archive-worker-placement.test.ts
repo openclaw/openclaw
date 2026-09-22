@@ -2,6 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -31,7 +32,8 @@ import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -109,10 +111,10 @@ test.each([false, true])(
     const sessionId = "session-archive-already-stopping";
     await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
     let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
-    const environmentStore = createWorkerEnvironmentStore({
+    const environmentStore = await createWorkerEnvironmentStore({
       database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: dir } }),
     });
-    environmentStore.createIntent({
+    await environmentStore.createIntent({
       environmentId: "worker-environment",
       providerId: "fixture",
       profileId: "fixture",

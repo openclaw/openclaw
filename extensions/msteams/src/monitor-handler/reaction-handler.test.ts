@@ -1,4 +1,5 @@
 // Msteams tests cover reaction handler plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   enqueueSystemEvent,
@@ -15,6 +16,7 @@ function buildMockRuntime(overrides?: Partial<PluginRuntime>): PluginRuntime {
   return {
     logging: { shouldLogVerbose: () => false },
     channel: {
+      inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
       routing: {
         resolveAgentRoute: vi.fn(() => ({
           sessionKey: "test-session",

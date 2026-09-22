@@ -57,6 +57,8 @@ type Terminal = {
 };
 
 async function fixture(options: { failSettlement?: boolean } = {}) {
+  // Keep the attempt budget under test control while sockets, workers, and real children progress.
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const sessionFile = path.join(tempDir, "native-owner-session.jsonl");
   const workspaceDir = path.join(tempDir, "workspace");
   const threadId = "qualification-shared-thread";
@@ -64,6 +66,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
   const terminated: Actor[] = [];
   const activeRuns: Array<{ controller: AbortController; run: Promise<unknown> }> = [];
   const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
+  const backgroundCleanupFailed = createDeferred<void>();
   const turns: string[] = [];
   let socket: WebSocket | undefined;
   let registeredUrl: string | undefined;
@@ -147,6 +150,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     const controller = new AbortController();
     const source = new AbortController();
     let completed = false;
+    const admitted = createDeferred<void>();
     const params = createParams(sessionFile, workspaceDir, {
       runId: `${actor}-run-${turns.length + 1}`,
       prompt: `${actor} qualification turn`,
@@ -161,20 +165,35 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     params.senderId = actor;
     params.onAgentEvent = (event) => {
       events.push(event);
+      if (event.stream === "lifecycle" && event.data.phase === "start") {
+        admitted.resolve();
+      }
+      if (
+        event.stream === "codex_app_server.lifecycle" &&
+        event.data.phase === "background_cleanup_failed"
+      ) {
+        backgroundCleanupFailed.resolve();
+      }
     };
     params.sandbox = sandbox;
     params.abortSignal = controller.signal;
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
     setCodexTestToolFactory(params, () => []);
-    const expectedTurns = turns.length + 1;
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },
     });
     activeRuns.push({ controller, run });
-    await harness.waitForMethod("turn/start");
-    await vi.waitFor(() => expect(turns).toHaveLength(expectedTurns), { timeout: 5_000 });
-    await nextTurn();
+    await Promise.race([
+      admitted.promise,
+      run.then(() => {
+        throw new Error("Native process fixture attempt ended before admission");
+      }),
+    ]);
+    if (turns.length > 1) {
+      // A replaced relay keeps its retired listener for 250ms to reject stale callers.
+      await vi.advanceTimersByTimeAsync(250);
+    }
     const turnId = turns.at(-1)!;
     const commandThreadId = nativeChild?.threadId ?? threadId;
     const commandTurnId = nativeChild?.turnId ?? turnId;
@@ -328,6 +347,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     begin,
     terminated,
     events,
+    backgroundCleanupFailed: backgroundCleanupFailed.promise,
     harness,
     sessionFile,
     threadId,
@@ -341,17 +361,21 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       });
     },
     dispose: async () => {
-      for (const { controller } of activeRuns) {
-        controller.abort(new Error("fixture cleanup"));
+      try {
+        for (const { controller } of activeRuns) {
+          controller.abort(new Error("fixture cleanup"));
+        }
+        await Promise.allSettled(activeRuns.map(({ run }) => run));
+        if (retainedEnvironment) {
+          await releaseCodexSandboxExecServerEnvironment(sandbox, retainedEnvironment);
+          retainedEnvironment = undefined;
+        }
+        await sandboxExecServerRegistry.closeAll();
+        socket?.terminate();
+        harness.close();
+      } finally {
+        vi.useRealTimers();
       }
-      await Promise.allSettled(activeRuns.map(({ run }) => run));
-      if (retainedEnvironment) {
-        await releaseCodexSandboxExecServerEnvironment(sandbox, retainedEnvironment);
-        retainedEnvironment = undefined;
-      }
-      await sandboxExecServerRegistry.closeAll();
-      socket?.terminate();
-      harness.close();
     },
   };
 }
@@ -398,13 +422,12 @@ describe("native background process source authority", () => {
       await guest.complete();
       guest.revoke();
       await expect(guest.terminal.settled).rejects.toThrow("fixture backend settlement failed");
-      await vi.waitFor(() =>
-        expect(f.events).toContainEqual(
-          expect.objectContaining({
-            stream: "codex_app_server.lifecycle",
-            data: expect.objectContaining({ phase: "background_cleanup_failed" }),
-          }),
-        ),
+      await f.backgroundCleanupFailed;
+      expect(f.events).toContainEqual(
+        expect.objectContaining({
+          stream: "codex_app_server.lifecycle",
+          data: expect.objectContaining({ phase: "background_cleanup_failed" }),
+        }),
       );
       expect(guest.terminal.alive).toBe(false);
       await expect(f.begin("guest")).rejects.toThrow("unsettled native command identity");

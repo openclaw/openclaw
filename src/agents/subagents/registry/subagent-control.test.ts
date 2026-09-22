@@ -36,7 +36,6 @@ import {
   buildControlledSubagentRunsReadContext,
   killAllControlledSubagentRuns,
   killSubagentRunAdmin,
-  listControlledSubagentRuns,
 } from "./subagent-control.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -2715,7 +2714,7 @@ describe("killAllControlledSubagentRuns", () => {
   });
 });
 
-describe("listControlledSubagentRuns", () => {
+describe("controlled subagent reads", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests({ persist: false });
   });
@@ -2741,7 +2740,7 @@ describe("listControlledSubagentRuns", () => {
     },
   ])(
     "applies read visibility for the $name",
-    ({ controllerSessionKey, requesterSessionKey, expectedCount }) => {
+    async ({ controllerSessionKey, requesterSessionKey, expectedCount }) => {
       const childSessionKey = "agent:main:subagent:list-visibility";
       addSubagentRunForTests({
         runId: "run-list-visibility",
@@ -2755,7 +2754,7 @@ describe("listControlledSubagentRuns", () => {
         startedAt: Date.now(),
       });
 
-      const results = listControlledSubagentRuns("agent:main:main");
+      const { runs: results } = await buildControlledSubagentRunsReadContext("agent:main:main");
       expect(results).toHaveLength(expectedCount);
       if (expectedCount === 1) {
         expect(results[0]?.childSessionKey).toBe(childSessionKey);
@@ -2763,7 +2762,7 @@ describe("listControlledSubagentRuns", () => {
     },
   );
 
-  it("uses one stable snapshot for listing and descendant counts", () => {
+  it("uses one stable snapshot for listing and descendant counts", async () => {
     const now = Date.now();
     const rootSessionKey = "agent:main:main";
     const parentSessionKey = "agent:main:subagent:status-parent";
@@ -2791,7 +2790,7 @@ describe("listControlledSubagentRuns", () => {
       startedAt: now - 1_500,
     });
 
-    const context = buildControlledSubagentRunsReadContext(rootSessionKey);
+    const context = await buildControlledSubagentRunsReadContext(rootSessionKey);
 
     addSubagentRunForTests({
       runId: "run-status-child-2",
@@ -2806,15 +2805,15 @@ describe("listControlledSubagentRuns", () => {
     });
 
     expect(context.runs.map((run) => run.runId)).toEqual(["run-status-parent"]);
-    expect(context.countPendingDescendantRuns(parentSessionKey)).toBe(1);
+    expect(context.list.pendingDescendants.get(parentSessionKey)).toBe(1);
     expect(
-      buildControlledSubagentRunsReadContext(rootSessionKey).countPendingDescendantRuns(
+      (await buildControlledSubagentRunsReadContext(rootSessionKey)).list.pendingDescendants.get(
         parentSessionKey,
       ),
     ).toBe(2);
   });
 
-  it("partitions duplicate bare controller keys by owning agent", () => {
+  it("partitions duplicate bare controller keys by owning agent", async () => {
     const now = Date.now();
     for (const agentId of ["research", "ops"]) {
       addSubagentRunForTests({
@@ -2837,9 +2836,8 @@ describe("listControlledSubagentRuns", () => {
         entries: { research: {}, ops: {} },
       },
     } as OpenClawConfig;
-    expect(listControlledSubagentRuns("global", "research", cfg).map((run) => run.runId)).toEqual([
-      "run-research",
-    ]);
+    const context = await buildControlledSubagentRunsReadContext("global", "research", cfg);
+    expect(context.runs.map((run) => run.runId)).toEqual(["run-research"]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

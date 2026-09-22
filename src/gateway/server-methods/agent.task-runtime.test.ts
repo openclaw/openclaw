@@ -270,6 +270,8 @@ describe("gateway agent detached task lifecycle", () => {
                   respond,
                   client: backendGatewayClient(),
                   reqId: runId,
+                  // Cancellation owns the terminal wait below and must not wait for dispatch.
+                  flushDispatch: outcome !== "cancelled",
                 });
                 expect(acceptedTasks).toEqual([
                   [
@@ -285,7 +287,6 @@ describe("gateway agent detached task lifecycle", () => {
                   ],
                 ]);
                 expect(aborted).toBe(outcome === "cancelled");
-                expect(mocks.agentCommand).toHaveBeenCalledTimes(outcome === "cancelled" ? 0 : 1);
               } finally {
                 execution.resolve({ payloads: [], meta: { durationMs: 1 } });
                 await waitForAssertion(() => {
@@ -297,6 +298,7 @@ describe("gateway agent detached task lifecycle", () => {
                   });
                 });
               }
+              expect(mocks.agentCommand).toHaveBeenCalledTimes(outcome === "cancelled" ? 0 : 1);
               expect(persistedTasks(runId)).toEqual([
                 expect.objectContaining({
                   taskId: acceptedTasks[0]?.[0]?.taskId,

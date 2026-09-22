@@ -20,7 +20,7 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunNotice, renderUpdateRunReport } from "../../infra/update-run-report.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -123,8 +123,8 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
 
 import { UpdatePreMutationError } from "./shared.js";
 import { registerDoctorRestorationRollbackTests } from "./update-command-doctor-rollback.test-support.js";
-import { registerLiveRepairOwnershipTests } from "./update-command-live-repair.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
+import { registerRestartFailureOwnershipTest } from "./update-command-restart-failure.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
@@ -925,7 +925,7 @@ describe("failed package update recovery safety", () => {
   });
 });
 
-registerLiveRepairOwnershipTests({
+registerRestartFailureOwnershipTest({
   makeTempDir: (prefix) => tempDirs.make(prefix),
   gatewayCommand: mocks.gatewayCommand,
 });

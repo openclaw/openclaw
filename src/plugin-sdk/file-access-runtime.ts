@@ -26,8 +26,10 @@ export {
   assertNoSymlinkParentsSync,
   readFileHandleBounded,
   resolvePathPrefixSync,
+  tempFile,
 } from "../infra/fs-safe-advanced.js";
 export { readFileWindowFully } from "../infra/file-read.js";
+export { writeFileWindowFully } from "../infra/file-descriptor.js";
 export { openRootFile } from "../infra/boundary-file-read.js";
 export {
   ensureDurableDirectory,

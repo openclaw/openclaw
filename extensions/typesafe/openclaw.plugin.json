@@ -108,7 +108,7 @@
         "type": "integer",
         "minimum": 1000,
         "maximum": 60000,
-        "default": 10000
+        "default": 30000
       },
       "baseUrl": {
         "type": "string",

@@ -181,12 +181,36 @@ paired-node wire tests provide the full Gateway dispatch and reconciliation proo
 Runs synthetic streaming agent turns in parallel sessions on one isolated
 Gateway. Add tool calls, session history, observers, and control-plane probes to
 reproduce allocation pressure from a busy Gateway. Build with `pnpm build`
-first; no provider key is required.
+first. The default mock provider needs no key. Dreaming is disabled in this
+isolated benchmark; ordinary indexing, recaps, and database idle retention keep
+their normal settings.
 
 ```bash
 pnpm test:gateway:concurrency -- --concurrency 16 --tool-events --workspace-fanout --session-count 100 --history-messages 20 --history-clients 4 --subscribers 4 --visible-observer --control-plane --heap-prof-dir .artifacts/gateway-heap --output .artifacts/gateway-concurrency.json
 pnpm test:gateway:concurrency -- --concurrency 64 --turns-per-session 8 --tool-events --timeout-ms 600000 --heap-prof-dir .artifacts/gateway-sustained-heap --output .artifacts/gateway-sustained.json
 ```
+
+Use `--provider openai` with `OPENAI_API_KEY` supplied in the environment for
+real OpenAI turns:
+
+```bash
+pnpm test:gateway:concurrency -- --provider openai --runs 1 --warmup 0 \
+  --agent-warmup-turns 0 --agent-count 32 --concurrency 32 --turns-per-session 3 \
+  --session-count 1000 --history-messages 20 --history-message-chars 1024 \
+  --probe-rounds 64 --cadence-ms 100 --session-updates 100 \
+  --session-update-clients 2 --history-clients 2 --history-burst 2 \
+  --subscribers 4 --control-plane --timeout-ms 120000 \
+  --load-cpu-prof-dir .artifacts/gateway-live-cpu \
+  --output .artifacts/gateway-live.json
+```
+
+Live mode uses a fixed OpenAI model, denies tools, and limits output to 128
+tokens. It permits one run with no warmups and at most 96 turns, and checks
+streamed replies, terminal receipts, history, and persisted replies after
+shutdown. It does not report synthetic provider request counts. CPU profiles
+are instrumented observations; keep them separate from unprofiled latency
+measurements. The [manual workflow](/ci/scheduled-workflows#gateway-concurrency-benchmark)
+runs this workload with repository-managed credentials.
 
 `--concurrency` controls parallel sessions; `--turns-per-session` controls serial
 turns in each session (default 1, maximum 100). The second example completes 512

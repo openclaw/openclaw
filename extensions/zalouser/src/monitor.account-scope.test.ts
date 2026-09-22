@@ -1,4 +1,5 @@
 // Zalouser tests cover monitor.account scope plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
@@ -55,6 +56,7 @@ describe("zalouser monitor pairing account scoping", () => {
         shouldLogVerbose: () => false,
       },
       channel: {
+        inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
         pairing: {
           readAllowFromStore,
           upsertPairingRequest,

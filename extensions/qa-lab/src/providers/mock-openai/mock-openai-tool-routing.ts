@@ -1,4 +1,5 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
 import { findNamedToolDefinition, hasToolDefinition } from "./mock-openai-directives.js";
 import { extractPlannedToolArgs, extractPlannedToolName } from "./mock-openai-events.js";
@@ -85,7 +86,7 @@ export function resolveCodeModeExecSurface(
     : null;
 }
 
-export function hasCodeModeExecSurface(body: Record<string, unknown>) {
+function hasCodeModeExecSurface(body: Record<string, unknown>) {
   return resolveCodeModeExecSurface(body) !== null;
 }
 
@@ -113,7 +114,7 @@ export function findToolCallByCallId(input: ResponsesInputItem[], callId: string
   });
 }
 
-export function parseToolCallArguments(toolCall: ResponsesInputItem) {
+function parseToolCallArguments(toolCall: ResponsesInputItem) {
   if (typeof toolCall.arguments !== "string") {
     return null;
   }
@@ -270,6 +271,7 @@ export function readScenarioCompletedToolName(toolCall: ResponsesInputItem | und
 export function unwrapScenarioCatalogOutput(
   input: ResponsesInputItem[],
   output = extractToolOutput(input),
+  projection: "details" | "content" = "details",
 ) {
   const call = findToolCallByCallId(input, extractToolOutputCallId(input));
   if (call?.name !== "tool_call") {
@@ -287,14 +289,16 @@ export function unwrapScenarioCatalogOutput(
   // Keep target failures and receipt fields at the same level as direct calls.
   // Do not unwrap unrelated JSON stdout or an unmatched catalog result.
   const result = envelope.result;
-  if (extractToolOutputStructuredError(input) === true) {
-    return stringifyScenarioToolOutput({
-      ...(isRecord(result.details) ? result.details : {}),
-      status: "error",
-    });
-  }
-  if (Object.hasOwn(result, "details")) {
-    return stringifyScenarioToolOutput(result.details);
+  if (projection === "details") {
+    if (extractToolOutputStructuredError(input) === true) {
+      return stringifyScenarioToolOutput({
+        ...(isRecord(result.details) ? result.details : {}),
+        status: "error",
+      });
+    }
+    if (Object.hasOwn(result, "details")) {
+      return stringifyScenarioToolOutput(result.details);
+    }
   }
   return Array.isArray(result.content)
     ? result.content
@@ -302,6 +306,124 @@ export function unwrapScenarioCatalogOutput(
         .map((part) => part.text)
         .join("\n")
     : output;
+}
+
+function readProgressCommandOutput(input: ResponsesInputItem[], command: string, isPoll = false) {
+  const text = unwrapScenarioCatalogOutput(input, extractToolOutput(input), "content");
+  // Provider wires carry content, not process details; JSON stdout remains data.
+  const sessionId = !isPoll
+    ? /(?:^|\n\n)Command still running \(session ([^,\s]+), pid (?:\d+|n\/a)\)\. Use process \(list\/poll\/log\/write\/send-keys\/submit\/paste\/kill\/clear\/remove\) for follow-up\.$/u.exec(
+        text,
+      )?.[1]
+    : undefined;
+  const running =
+    Boolean(sessionId) ||
+    (isPoll &&
+      /\n\n(?:Process still running\.|No new output for [^;\n]+; this session may be waiting for input\. Use process write, send-keys, submit, or paste to provide input\.)$/u.test(
+        text,
+      ));
+  // Final footers own lifecycle: Node exec joins with one newline; other owners append two.
+  // Timeout guidance is one line, so earlier stdout cannot swallow a later real footer.
+  const exitPattern = isPoll
+    ? /(?:^|\n\n)Process exited with (code -?\d+|signal \S+|unknown exit code)\.(\n\nThe command was terminated,[^\n]*)?$/u
+    : /^Node: [^\n]+\n/u.test(text)
+      ? /(?:^|\n)\(Command exited with (code -?\d+)\)$/u
+      : /(?:^|\n\n)\(Command exited with (code -?\d+)\)$/u;
+  const exit = exitPattern.exec(text);
+  // Bind the command inside the matcher so warning text cannot hide a later native notice.
+  const commandPattern = escapeRegExp(command);
+  const approval = new RegExp(
+    String.raw`(?:^|\n\n)Approval required \(id (?<approvalSlug>[^,\n]+), full [^\n]+\)\.\nHost: (?:gateway|node)\n(?:Node: [^\n]+\n)?CWD: [^\n]+\nCommand:\n(?<fence>\x60{3,})sh\n${commandPattern}\n\k<fence>\nMode: foreground \(interactive approvals available\)\.\n(?:Background mode [^\n]+\n)?Reply with: \/approve \k<approvalSlug> (?<decisions>allow-once(?:\|allow-always)?\|deny)\n(?<unavailable>Allow Always is unavailable for this command\.\n)?If the short code is ambiguous, use the full id in \/approve\.$`,
+    "u",
+  ).exec(text)?.groups;
+  const fence = approval?.fence;
+  // Require the formatter's canonical fence and decision guidance so malformed quoted notices stay stdout.
+  const pendingApproval =
+    fence &&
+    !command.includes(fence) &&
+    (fence.length === 3 || command.includes(fence.slice(1))) &&
+    Boolean(approval?.decisions?.includes("allow-always")) !== Boolean(approval?.unavailable);
+  const unknownNotice = new RegExp(
+    String.raw`(?:^|\n\n)Node command outcome is unknown for [^\n]+\.\nThe command may have executed\. Do not rerun it automatically\.\n\nCommand:\n${commandPattern}\n\nDetails: `,
+    "u",
+  ).test(text);
+  let state: "running" | "completed" | "failed" | "unconfirmed";
+  if (
+    !isPoll &&
+    (pendingApproval ||
+      /(?:^|\n\n)Approval required\. I sent approval DMs to the approvers for this account\.$/u.test(
+        text,
+      ) ||
+      /(?:^|\n\n)Exec approval is required, but no interactive approval client is currently available\.\n\nApprove it from the Web UI or terminal UI[^\n]* Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox\.[^\n]* Then retry the command\. You can usually leave execApprovals\.approvers unset when owner config already identifies the approvers\.$/u.test(
+        text,
+      ) ||
+      unknownNotice)
+  ) {
+    // Complete notices own lifecycle state; an unknown result's Details tail is only diagnostic text.
+    state = "unconfirmed";
+  } else if (extractToolOutputStructuredError(input) === true) {
+    // A poll error without terminal evidence cannot establish that the command failed.
+    state = running || (isPoll && !exit) ? "unconfirmed" : "failed";
+  } else if (running) {
+    state = "running";
+  } else if (exit) {
+    state = exit[2] !== undefined || exit[1] !== "code 0" ? "failed" : "completed";
+  } else {
+    // Foreground success can be empty; a poll needs an explicit terminal result.
+    state = isPoll ? "unconfirmed" : "completed";
+  }
+  return { state, sessionId };
+}
+
+export function readProgressCommand(input: ResponsesInputItem[], command: string) {
+  let current: ReturnType<typeof readProgressCommandOutput> | undefined;
+  let sessionId: string | undefined;
+  let pendingCall: ResponsesInputItem | undefined;
+  // Walk the whole turn so a valid exec or poll cannot hide an earlier foreign call.
+  for (const item of input) {
+    if (item.type === "function_call" || item.type === "custom_tool_call") {
+      const wireArgs = parseToolCallArguments(item);
+      const name = item.name === "tool_call" ? readScenarioCompletedToolName(item) : item.name;
+      const args = item.name === "tool_call" && isRecord(wireArgs?.args) ? wireArgs.args : wireArgs;
+      if (
+        pendingCall ||
+        typeof item.call_id !== "string" ||
+        item.call_id.length === 0 ||
+        (current
+          ? current.state !== "running" ||
+            !sessionId ||
+            name !== "process" ||
+            args?.action !== "poll" ||
+            args.sessionId !== sessionId
+          : item.type !== "function_call" || name !== "exec" || args?.command !== command)
+      ) {
+        return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
+      }
+      pendingCall = item;
+    } else if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
+      if (!pendingCall || item.call_id !== pendingCall.call_id) {
+        return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
+      }
+      const isPoll = current !== undefined;
+      current = readProgressCommandOutput([pendingCall, item], command, isPoll);
+      if (!isPoll) {
+        sessionId = current.sessionId;
+      }
+      pendingCall = undefined;
+    }
+  }
+  if (!current) {
+    return {
+      error: pendingCall ? "BUG-TOOL-PROGRESS-RESULT-MISSING" : "BUG-TOOL-PROGRESS-CALL-MISMATCH",
+    };
+  }
+  if (pendingCall || current.state === "unconfirmed") {
+    return { error: "BUG-TOOL-DID-NOT-COMPLETE" };
+  }
+  if (current.state === "running") {
+    return sessionId ? { sessionId } : { error: "BUG-TOOL-PROGRESS-SESSION-MISSING" };
+  }
+  return { failed: current.state === "failed" };
 }
 
 export function buildScenarioToolCallEvents(

@@ -214,7 +214,7 @@ function publishDelivery(receipt: TaskAgentEventPublication): void {
     return;
   }
   if (receipt.nextEvent) {
-    void maybeDeliverTaskStateChangeUpdate(receipt.task.taskId, receipt.nextEvent);
+    void maybeDeliverTaskStateChangeUpdate(receipt.task, receipt.nextEvent);
   }
   if (isTerminalTaskStatus(receipt.task.status)) {
     void maybeDeliverTaskTerminalUpdate(receipt.task.taskId);
@@ -327,6 +327,18 @@ function prepareNativeEventConsumption(): { consume: () => void; release: () => 
 
 export const taskAgentEventMutations = {
   prepare: prepareNativeEventConsumption,
+  pendingTaskIds(): readonly string[] {
+    const taskIds: string[] = [];
+    for (const [taskId, entries] of pendingByTask) {
+      for (const entry of entries) {
+        if (entry.phase.kind !== "consumed") {
+          taskIds.push(taskId);
+          break;
+        }
+      }
+    }
+    return taskIds;
+  },
   pending(taskId?: string) {
     const entries = taskId === undefined ? pendingEvents : pendingByTask.get(taskId);
     for (const entry of entries ?? []) {

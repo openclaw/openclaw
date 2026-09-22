@@ -114,6 +114,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         includePatterns: ["src/one.test.ts", "src/two.test.ts"],
         shard_name: "one",
         fallbackMaxWorkers: 2,
+        minTotalMemoryBytes: 28 * 1024 ** 3,
         timing_key: "one#include-2-abcd",
       },
       { configs: ["two.config.ts"], env: { OPENCLAW_VITEST_MAX_WORKERS: "2" }, shard_name: "two" },
@@ -259,7 +260,14 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     async (policy) => {
       const skippedOnBun = "src/process/spawn-broker/cleanup.test.ts";
       const v8HeapTest = "src/infra/worker-task-pool.memory.test.ts";
-      const includePatterns = [bunTarget, nodeTarget, skippedOnBun, v8HeapTest];
+      const nodeHistoryBenchmark = "test/scripts/bench-session-history.test.ts";
+      const includePatterns = [
+        bunTarget,
+        nodeTarget,
+        skippedOnBun,
+        v8HeapTest,
+        nodeHistoryBenchmark,
+      ];
       const shard = { configs: [bunConfig], includePatterns, shard_name: "partition" };
       const seen: Array<{
         runtime: string | undefined;
@@ -295,7 +303,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         {
           runtime: "node",
           includes:
-            policy === "dual" ? includePatterns : [nodeTarget, skippedOnBun, v8HeapTest].toSorted(),
+            policy === "dual"
+              ? includePatterns
+              : [nodeTarget, skippedOnBun, v8HeapTest, nodeHistoryBenchmark].toSorted(),
           label: `${nodePrefix}partition`,
           timing: `${nodePrefix}partition`,
         },
@@ -386,6 +396,56 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       { runtime: "node" },
       { runtime: "bun" },
     ]);
+  });
+
+  it.each(["bun-compatible", "dual"] as const)(
+    "applies the measured UI JIT policy only to the Bun child under %s",
+    async (policy) => {
+      const seen: Array<Record<string, string | undefined>> = [];
+      await expect(
+        runShardPlans([{ kind: "group", name: "ui", plan: { configs: ["ui/vitest.config.ts"] } }], {
+          env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
+          scratchDir: makeScratchDir(),
+          runChild: async (_args, env) => {
+            seen.push({
+              runtime: env.OPENCLAW_VITEST_RUNTIME,
+              warmup: env.BUN_JSC_thresholdForFTLOptimizeAfterWarmUp,
+              soon: env.BUN_JSC_thresholdForFTLOptimizeSoon,
+              ftlEnabled: env.BUN_JSC_useFTLJIT,
+            });
+            return 0;
+          },
+        }),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        { runtime: "node", warmup: undefined, soon: undefined, ftlEnabled: undefined },
+        { runtime: "bun", warmup: "512000", soon: "8000", ftlEnabled: undefined },
+      ]);
+    },
+  );
+
+  it.each([
+    { vitestArgs: ["--root=another-root"] },
+    { vitestArgs: ["--config", "another.config.ts"] },
+    { vitestArgs: ["--pool=threads"] },
+    { vitestArgs: ["--watch"] },
+    { vitestArgs: ["--shard=4/3"] },
+    { vitestArgs: ["--reporter=custom.mts"] },
+    { vitestArgs: ["--maxWorkers"] },
+    { includePatterns: ["ui/src/pages/skills/view.test.ts"] },
+    { targets: ["ui/src/pages/skills/view.test.ts"] },
+    { configs: [], targets: ["ui/src/pages/skills/view.test.ts"], env: {} },
+    { configs: ["ui/vitest.config.ts", bunConfig] },
+    {
+      env: { OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: "external.json" },
+    },
+  ])("keeps unproven UI execution envelopes on Node: %s", (overrides) => {
+    const selection = {
+      configs: ["ui/vitest.config.ts"],
+      ...overrides,
+    };
+    expect(resolveCiTestRuntimeSelections(selection, "dual")).toEqual([{ runtime: "node" }]);
+    expect(ciTestShardRequiresBun(selection, "bun-compatible")).toBe(false);
   });
 
   it.each([
@@ -636,6 +696,33 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
   it.each([
     { name: "measured host", cpus: 8, gib: 31, runner: "self-hosted", expected: "8" },
+    { name: "shared memory floor", cpus: 8, gib: 24, runner: "self-hosted", expected: "8" },
+    {
+      name: "below group memory floor",
+      cpus: 8,
+      gib: 24,
+      minGib: 28,
+      runner: "self-hosted",
+      expected: "2",
+    },
+    {
+      name: "at group memory floor",
+      cpus: 8,
+      gib: 28,
+      minGib: 28,
+      runner: "self-hosted",
+      expected: "8",
+    },
+    {
+      name: "larger host retains group cap",
+      cpus: 16,
+      gib: 31,
+      minGib: 28,
+      runner: "self-hosted",
+      cap: "8",
+      requested: "16",
+      expected: "8",
+    },
     { name: "constrained CPUs", cpus: 4, gib: 31, runner: "self-hosted", expected: "2" },
     { name: "constrained memory", cpus: 8, gib: 16, runner: "self-hosted", expected: "2" },
     { name: "hosted fallback", cpus: 8, gib: 31, runner: "github-hosted", expected: "2" },
@@ -666,7 +753,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
   ])(
     "retains the measured group's fallback ceiling on $name",
-    async ({ cpus, gib, runner, frozen, cap, parallel, expected }) => {
+    async ({ cpus, gib, minGib, runner, frozen, cap, requested, parallel, expected }) => {
       vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
       vi.spyOn(os, "totalmem").mockReturnValue(gib * 1024 ** 3);
       const runChild = vi.fn(async (_args: string[], _env: NodeJS.ProcessEnv) => 0);
@@ -675,6 +762,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           {
             configs: ["measured.config.ts"],
             fallbackMaxWorkers: 2,
+            minTotalMemoryBytes: minGib === undefined ? undefined : minGib * 1024 ** 3,
             env: { OPENCLAW_VITEST_MAX_WORKERS: cap },
           },
           { configs: ["ordinary.config.ts"] },
@@ -686,7 +774,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
             CI: "true",
             RUNNER_ENVIRONMENT: runner,
             FROZEN_TARGET: frozen,
-            OPENCLAW_VITEST_MAX_WORKERS: "8",
+            OPENCLAW_VITEST_MAX_WORKERS: requested ?? "8",
             OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: parallel ? "2" : "1",
           },
           scratchDir: makeScratchDir(),
@@ -695,7 +783,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       ).resolves.toBe(0);
       expect(runChild.mock.calls.map(([, env]) => env.OPENCLAW_VITEST_MAX_WORKERS)).toEqual([
         expected,
-        "8",
+        requested ?? "8",
       ]);
     },
   );

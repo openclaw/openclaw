@@ -20,10 +20,8 @@ import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-comple
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { listTasksForRelatedSessionKey } from "../../tasks/task-registry-query.js";
 import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
-import {
-  deliveryContextFromSession,
-  type DeliveryContext,
-} from "../../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "./manager.turn-timeout.js";
 import type { AcpRunTurnInput, AcpSessionManagerDeps } from "./manager.types.js";

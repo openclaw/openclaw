@@ -1,10 +1,13 @@
+import { globSync } from "node:fs";
 import { matchesVitestGlob } from "../../test/vitest/vitest.pattern-file.ts";
+import { controlUiE2eTestGlobs, controlUiTestGlobs } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
+import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 
 export type CiTestRuntimePolicy = "node" | "bun-compatible" | "dual";
 type TestRuntime = "node" | "bun";
@@ -16,14 +19,26 @@ type TestSelection = {
   vitestArgs?: readonly string[];
 };
 type TestShard = TestSelection & { groups?: readonly TestSelection[] };
-export type CiTestRuntimeSelection = { runtime: TestRuntime; includePatterns?: string[] };
+export type CiTestRuntimeSelection = {
+  runtime: TestRuntime;
+  includePatterns?: string[];
+  includeAfterShard?: true;
+  env?: Readonly<Record<string, string>>;
+};
+
+// Short-lived UI workers spend less time compiling their top JIT tier when it
+// starts later. Keep every tier enabled and share the producer/consumer policy.
+export const BUN_UI_TEST_ENV = {
+  BUN_JSC_thresholdForFTLOptimizeAfterWarmUp: "512000",
+  BUN_JSC_thresholdForFTLOptimizeSoon: "8000",
+} as const;
 
 const bunCompatibleConfigs = new Set(["test/vitest/vitest.unit-fast-fake-timers.config.ts"]);
 // Bun fork 3ff0efc82217775e04094a1d4402d7c6932ecb24 failed or added skips in these files.
 // Keep every case on Node while the canonical inventories own all other membership.
 const runtimePartitions = new Map<
   string,
-  { files: () => string[]; nodeRequired: ReadonlySet<string> }
+  { files: (cwd: string) => string[]; nodeRequired: ReadonlySet<string>; includeAfterShard?: true }
 >([
   [
     "test/vitest/vitest.unit-fast.config.ts",
@@ -43,6 +58,8 @@ const runtimePartitions = new Map<
         "src/process/spawn-broker/startup.test.ts",
         "src/process/spawn-broker/stdin-handoff.test.ts",
         "src/process/spawn-broker/transports.test.ts",
+        // Preserve native Node process and SQLite lifecycle semantics for this benchmark.
+        "test/scripts/bench-session-history.test.ts",
         "test/scripts/update-restart-module-outcome.test.ts",
       ]),
     },
@@ -50,8 +67,23 @@ const runtimePartitions = new Map<
   [
     "test/vitest/vitest.unit-fast-isolated.config.ts",
     {
-      files: getUnitFastIsolatedTestFiles,
+      files: () => getUnitFastIsolatedTestFiles(),
       nodeRequired: new Set(["src/proxy-capture/proxy-server.test.ts"]),
+    },
+  ],
+  [
+    "ui/vitest.config.ts",
+    {
+      files: (cwd) =>
+        globSync(controlUiTestGlobs, { cwd, exclude: controlUiE2eTestGlobs })
+          .map((file) => file.replaceAll("\\", "/"))
+          .toSorted(),
+      // These whole files retain their GC assertions on Node; Bun runs every other UI file.
+      nodeRequired: new Set([
+        "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
+        "ui/src/pages/usage/usage-page-details.test.ts",
+      ]),
+      includeAfterShard: true,
     },
   ],
 ]);
@@ -80,6 +112,39 @@ function supportsRuntimePartition(args: string[]): boolean {
   return args.every((arg) => /^--(?:maxWorkers|testTimeout|hookTimeout)=\d+$/u.test(arg));
 }
 
+function supportsUiRuntime(args: string[]): boolean {
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    const consumesNext = vitestOptionConsumesNextArg(arg, args[index + 1]);
+    const separator = arg.indexOf("=");
+    const option = separator < 0 ? arg : arg.slice(0, separator);
+    const value = consumesNext
+      ? args[++index]
+      : separator < 0
+        ? undefined
+        : arg.slice(separator + 1);
+    if (/^--(?:maxWorkers|testTimeout|hookTimeout)$/u.test(option) && /^\d+$/u.test(value ?? "")) {
+      continue;
+    }
+    if (option === "--shard" && /^[1-9]\d*\/[1-9]\d*$/u.test(value ?? "")) {
+      const [shard, count] = value!.split("/").map(Number);
+      if (shard! <= count!) {
+        continue;
+      }
+    }
+    if (
+      option === "--reporter" &&
+      ["verbose", "github-actions", "./scripts/lib/vitest-resource-reporter.mts"].includes(
+        value ?? "",
+      )
+    ) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 export function resolveCiTestRuntimePolicy(
   env: NodeJS.ProcessEnv = process.env,
 ): CiTestRuntimePolicy {
@@ -102,13 +167,22 @@ export function resolveCiTestRuntimeSelections(
   if (
     policy === "node" ||
     selection.env?.OPENCLAW_VITEST_INCLUDE_FILE ||
-    !args ||
-    !supportsRuntimePartition(args)
+    selection.env?.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE ||
+    !args
   ) {
     return node;
   }
   const completeBun = (): CiTestRuntimeSelection[] =>
     policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }];
+  const uiPartition =
+    selection.configs?.length === 1 &&
+    selection.configs[0] === "ui/vitest.config.ts" &&
+    !selection.targets?.length &&
+    !selection.includePatterns &&
+    supportsUiRuntime(args);
+  if (!uiPartition && !supportsRuntimePartition(args)) {
+    return node;
+  }
   if (selection.targets?.length) {
     // Preserve exact target argv and its native owner; broad targets can carry
     // multiple process/filter contracts and stay on Node.
@@ -124,10 +198,14 @@ export function resolveCiTestRuntimeSelections(
     }
     const config = plans[0]!.config;
     const partition = runtimePartitions.get(config);
-    if (!partition || !plans.every((plan) => plan.config === config)) {
+    if (
+      !partition ||
+      partition.includeAfterShard ||
+      !plans.every((plan) => plan.config === config)
+    ) {
       return node;
     }
-    const files = new Set(partition.files());
+    const files = new Set(partition.files(cwd));
     return selection.targets.every(
       (target) => files.has(target) && !partition.nodeRequired.has(target),
     )
@@ -142,11 +220,11 @@ export function resolveCiTestRuntimeSelections(
     return completeBun();
   }
   const partition = runtimePartitions.get(config);
-  if (!partition) {
+  if (!partition || (partition.includeAfterShard && !uiPartition)) {
     return node;
   }
   const files = partition
-    .files()
+    .files(cwd)
     .filter(
       (file) =>
         !selection.includePatterns ||
@@ -161,9 +239,20 @@ export function resolveCiTestRuntimeSelections(
     ...(policy === "dual"
       ? node
       : nodeFiles.length
-        ? [{ runtime: "node" as const, includePatterns: nodeFiles }]
+        ? [
+            {
+              runtime: "node" as const,
+              includePatterns: nodeFiles,
+              ...(partition.includeAfterShard ? { includeAfterShard: true as const } : {}),
+            },
+          ]
         : []),
-    { runtime: "bun", includePatterns: bunFiles },
+    {
+      runtime: "bun",
+      includePatterns: bunFiles,
+      ...(partition.includeAfterShard ? { includeAfterShard: true } : {}),
+      ...(config === "ui/vitest.config.ts" ? { env: BUN_UI_TEST_ENV } : {}),
+    },
   ];
 }
 

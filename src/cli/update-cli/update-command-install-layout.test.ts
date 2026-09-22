@@ -12,7 +12,7 @@ import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
-import { runGatewayUpdate } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isReportableUpdateRun } from "../../shared/update-outcome.js";
@@ -160,6 +160,13 @@ it.each([true, false])(
     expect(output[0]).not.toHaveProperty("recovery");
     expect(output[0]).not.toHaveProperty("runId");
     expect(triage).not.toHaveBeenCalled();
+    const result = output[0] as UpdateRunResult;
+    expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+      containerized ? "Pull or build" : "Reinstall",
+    );
+    await expect(
+      prepareUpdateFailureReport({ attemptId: "untouched-install", result }),
+    ).rejects.toThrow("Only a final failed update");
     await expect(fs.stat(resolveOpenClawStateSqlitePath(process.env))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -238,28 +245,6 @@ it.each(["missing", "invalid"])(
     }
   },
 );
-
-it("keeps the Git runner's untouched container result out of failure reports", async () => {
-  vi.spyOn(container, "isContainerEnvironment").mockReturnValue(true);
-  const result = await runGatewayUpdate({
-    cwd: root,
-    argv1: path.join(root, "openclaw.mjs"),
-    runCommand: processRunner.runCommandWithTimeout,
-  });
-  expect(result).toMatchObject({
-    status: "skipped",
-    mode: "unknown",
-    reason: "container-image-install",
-    steps: [],
-  });
-  expect(result.recovery).toBeUndefined();
-  expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
-    "Pull or build",
-  );
-  await expect(
-    prepareUpdateFailureReport({ attemptId: "untouched-container", result }),
-  ).rejects.toThrow("Only a final failed update");
-});
 
 it.skipIf(process.platform === "win32").each([false, true])(
   "reports Homebrew guidance across output and existing history (database: %s)",

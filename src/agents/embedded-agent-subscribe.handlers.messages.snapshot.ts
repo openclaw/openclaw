@@ -204,7 +204,7 @@ export function reconcileBlockReplySnapshot(
         }
       }
     }
-    ctx.blockChunker.replace(nextText);
+    ctx.blockChunker.replace(nextText, 0, retainedPrefix);
     return;
   }
 
@@ -230,7 +230,7 @@ export function reconcileBlockReplySnapshot(
     }
   }
   if (retainedPrefix && nextText.length < consumed && restartPrefix !== next.blockText) {
-    ctx.blockChunker.replace(nextText);
+    ctx.blockChunker.replace(nextText, 0, retainedPrefix);
     return;
   }
   const sourceBreaks: number[] = [];
@@ -281,6 +281,6 @@ export function reconcileBlockReplySnapshot(
     contentIndex: restartIndex,
     itemId: resolveAssistantStreamItemId({ contentIndex: restartIndex, message: next.message }),
   };
-  ctx.blockChunker.reset(sourceBreaks);
+  ctx.blockChunker.reset(sourceBreaks, restartPrefix.length);
   ctx.blockChunker.append(next.blockText.slice(restartPrefix.length));
 }

@@ -18,7 +18,7 @@ import {
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
 import {
-  legacyFinalizerBuildSources,
+  preservedModuleBuildSources,
   vitestWorkerBuildEntries,
 } from "./vitest-worker-build-entries.mts";
 import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
@@ -227,7 +227,10 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   const compileShared = async () => {
     await build(config);
     reportPhase("shared entries compiled");
-    for (const [name, source] of Object.entries(standaloneRuntimeProcessBuildEntries)) {
+    for (const [name, source] of Object.entries(entry)) {
+      if (!Object.hasOwn(standaloneRuntimeProcessBuildEntries, name)) {
+        continue;
+      }
       await build({
         ...config,
         entry: { [name]: source },
@@ -246,14 +249,14 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     });
     reportPhase("managed handoff compiled");
   };
-  const compileLegacy = async () => {
+  const compilePreservedModules = async () => {
     const fixtureBoundaries = new Set(
-      legacyFinalizerBuildSources.map((source) => path.join(root, source)),
+      preservedModuleBuildSources.map((source) => path.join(root, source)),
     );
     await build({
       ...config,
       // Array entries honor root; object entries infer src/ and break import.meta paths.
-      entry: legacyFinalizerBuildSources,
+      entry: preservedModuleBuildSources,
       outDir: path.join(outDir, "legacy-finalizer"),
       root,
       // Load hooks forward the complete original namespaces through query imports.
@@ -261,7 +264,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       treeshake: false,
       inputOptions: { preserveEntrySignatures: "strict" },
       outputOptions: { entryFileNames: "[name].js", chunkFileNames: "[name].js" },
-      // Hooked service and authority owners must stay in this single preserved graph.
+      // Hooked owners must stay in this single preserved graph.
       plugins: [
         {
           name: "openclaw:fixture-module-boundaries",
@@ -289,21 +292,21 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
         ...createInputPlugins(legacyOutputPrefix),
       ],
     });
-    reportPhase("legacy finalizers compiled");
+    reportPhase("preserved fixture modules compiled");
   };
   // Serial preparation measured about 3 GiB RSS; leave headroom for both graphs.
   if (cache && process.availableMemory() >= 8 * 1024 ** 3) {
     // These outputs occupy separate subtrees. Join both writers even if one fails.
-    const completed = await Promise.allSettled([compileShared(), compileLegacy()]);
+    const completed = await Promise.allSettled([compileShared(), compilePreservedModules()]);
     const failed = completed.find((result) => result.status === "rejected");
     if (failed?.status === "rejected") {
       throw failed.reason;
     }
   } else {
     await compileShared();
-    await compileLegacy();
+    await compilePreservedModules();
   }
-  for (const source of legacyFinalizerBuildSources) {
+  for (const source of preservedModuleBuildSources) {
     fs.accessSync(path.join(outDir, legacyOutputPrefix, source.replace(/\.ts$/u, ".js")));
   }
   for (const name of Object.keys(entry)) {

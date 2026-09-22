@@ -81,7 +81,11 @@ describe("Code Mode configuration", () => {
   });
 
   it("resolves object config defaults", () => {
-    expect(resolveCodeModeConfig({ tools: { codeMode: true } } as never).enabled).toBe(true);
+    expect(resolveCodeModeConfig()).toMatchObject({ enabled: "auto", executor: "node" });
+    expect(resolveCodeModeConfig({ tools: { codeMode: true } })).toMatchObject({
+      enabled: true,
+      executor: "node",
+    });
     const resolved = resolveCodeModeConfig({
       tools: {
         codeMode: {
@@ -93,7 +97,7 @@ describe("Code Mode configuration", () => {
     expect(resolveCodeModeConfig({ tools: { codeMode: { enabled: true } } } as never).enabled).toBe(
       true,
     );
-    expect(resolved.runtime).toBe("quickjs-wasi");
+    expect(resolved.executor).toBe("node");
     expect(resolved.mode).toBe("only");
     expect(resolved.timeoutMs).toBe(1234);
     const limitedSearch = resolveCodeModeConfig({
@@ -106,6 +110,36 @@ describe("Code Mode configuration", () => {
     } as never);
     expect(limitedSearch.searchDefaultLimit).toBe(3);
     expect(limitedSearch.maxSearchLimit).toBe(3);
+  });
+
+  it("inherits the executor independently of activation and overrides it per agent", () => {
+    const config: OpenClawConfig = {
+      tools: { codeMode: { enabled: "auto", executor: "quickjs", timeoutMs: 2500 } },
+      agents: {
+        entries: {
+          inherited: { tools: { codeMode: true } },
+          fast: { tools: { codeMode: { executor: "node" } } },
+        },
+      },
+    };
+
+    expect(resolveCodeModeConfig(config, "inherited")).toMatchObject({
+      enabled: true,
+      executor: "quickjs",
+      timeoutMs: 2500,
+    });
+    expect(resolveCodeModeConfig(config, "fast")).toMatchObject({
+      enabled: "auto",
+      executor: "node",
+      timeoutMs: 2500,
+    });
+    expect(resolveCodeModeConfig(config, "missing").executor).toBe("quickjs");
+  });
+
+  it("rejects an unsupported executor instead of falling back to Node", () => {
+    expect(() =>
+      resolveCodeModeConfig({ tools: { codeMode: { executor: "unsupported" } } } as never),
+    ).toThrow('Code Mode executor must be "node" or "quickjs".');
   });
 
   it("resolves active-agent code mode over the runtime default", () => {
@@ -156,7 +190,7 @@ describe("Code Mode configuration", () => {
       } as never,
       "ops",
     );
-    expect(configuredAgent.enabled).toBe(false);
+    expect(configuredAgent.enabled).toBe("auto");
     expect(configuredAgent.timeoutMs).toBe(2345);
   });
 });

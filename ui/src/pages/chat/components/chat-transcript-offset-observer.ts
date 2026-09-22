@@ -6,6 +6,7 @@ import type { ChatTranscriptInteractionAnchor } from "./chat-transcript-interact
 import type { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import {
   publishTranscriptScroll,
+  subscribeTranscriptScroll,
   type TranscriptScrollObservation,
 } from "./chat-transcript-scroll-events.ts";
 import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-session.ts";
@@ -162,6 +163,14 @@ export function observeTranscriptOffset(
     }
   };
   owner.state.recordProgrammaticScroll = recordProgrammaticScroll;
+  const stopCorrections = element
+    ? subscribeTranscriptScroll(element, (observation) => {
+        if (observation.type === "resize" && observation.scrollCorrection) {
+          const { before, after } = observation.scrollCorrection;
+          recordProgrammaticScroll(before, after, true);
+        }
+      })
+    : undefined;
   const publishOffset = (offset: number, scrolling: boolean) => {
     if (
       scrolling &&
@@ -338,6 +347,7 @@ export function observeTranscriptOffset(
       owner.state.maintenanceScrollOffset = null;
     }
     cleanup?.();
+    stopCorrections?.();
     contactIds.clear();
     owner.state.touching = false;
     owner.state.touchScrolling = false;

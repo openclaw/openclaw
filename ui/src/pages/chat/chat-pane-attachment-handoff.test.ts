@@ -22,7 +22,7 @@ import {
   replacePaneStagedAttachmentGatewayOwner,
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 import { enqueueChatMessage, subscribeChatOutboxProjection } from "./chat-queue.ts";
 import {
   captureChatCommandComposerRecovery,
@@ -575,7 +575,7 @@ describe("staged chat attachment pane handoff", () => {
     const owner = {} as GatewayBrowserClient;
     const { pane, state: current } = createTestChatPane({
       client: owner,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.paneId = "p2";
     pane.discardStagedAttachments?.();

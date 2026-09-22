@@ -4,7 +4,6 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { format as formatUrl } from "node:url";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -192,12 +191,11 @@ import {
   encodeCodeModeTarget,
   resolveCodeModeExecSurface,
   canCallScenarioTool,
-  hasCodeModeExecSurface,
   readScenarioCompletedToolName,
+  readProgressCommand,
   unwrapScenarioCatalogOutput,
   resolveCurrentToolDeclarationSurface,
   findToolCallByCallId,
-  parseToolCallArguments,
   parseNativeCodeModeOutput,
   readRestartCheckpointProgress,
   isCodeModeControlToolOutput,
@@ -331,122 +329,6 @@ const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEF
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
 const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
-
-function readProgressCommandOutput(input: ResponsesInputItem[], command: string, isPoll = false) {
-  const text = extractToolOutput(input);
-  // Provider wires carry content, not process details; JSON stdout remains data.
-  const sessionId = !isPoll
-    ? /(?:^|\n\n)Command still running \(session ([^,\s]+), pid (?:\d+|n\/a)\)\. Use process \(list\/poll\/log\/write\/send-keys\/submit\/paste\/kill\/clear\/remove\) for follow-up\.$/u.exec(
-        text,
-      )?.[1]
-    : undefined;
-  const running =
-    Boolean(sessionId) ||
-    (isPoll &&
-      /\n\n(?:Process still running\.|No new output for [^;\n]+; this session may be waiting for input\. Use process write, send-keys, submit, or paste to provide input\.)$/u.test(
-        text,
-      ));
-  // Final footers own lifecycle: Node exec joins with one newline; other owners append two.
-  // Timeout guidance is one line, so earlier stdout cannot swallow a later real footer.
-  const exitPattern = isPoll
-    ? /(?:^|\n\n)Process exited with (code -?\d+|signal \S+|unknown exit code)\.(\n\nThe command was terminated,[^\n]*)?$/u
-    : /^Node: [^\n]+\n/u.test(text)
-      ? /(?:^|\n)\(Command exited with (code -?\d+)\)$/u
-      : /(?:^|\n\n)\(Command exited with (code -?\d+)\)$/u;
-  const exit = exitPattern.exec(text);
-  // Bind the command inside the matcher so warning text cannot hide a later native notice.
-  const commandPattern = escapeRegExp(command);
-  const approval = new RegExp(
-    String.raw`(?:^|\n\n)Approval required \(id (?<approvalSlug>[^,\n]+), full [^\n]+\)\.\nHost: (?:gateway|node)\n(?:Node: [^\n]+\n)?CWD: [^\n]+\nCommand:\n(?<fence>\x60{3,})sh\n${commandPattern}\n\k<fence>\nMode: foreground \(interactive approvals available\)\.\n(?:Background mode [^\n]+\n)?Reply with: \/approve \k<approvalSlug> (?<decisions>allow-once(?:\|allow-always)?\|deny)\n(?<unavailable>Allow Always is unavailable for this command\.\n)?If the short code is ambiguous, use the full id in \/approve\.$`,
-    "u",
-  ).exec(text)?.groups;
-  const fence = approval?.fence;
-  // Require the formatter's canonical fence and decision guidance so malformed quoted notices stay stdout.
-  const pendingApproval =
-    fence &&
-    !command.includes(fence) &&
-    (fence.length === 3 || command.includes(fence.slice(1))) &&
-    Boolean(approval?.decisions?.includes("allow-always")) !== Boolean(approval?.unavailable);
-  const unknownNotice = new RegExp(
-    String.raw`(?:^|\n\n)Node command outcome is unknown for [^\n]+\.\nThe command may have executed\. Do not rerun it automatically\.\n\nCommand:\n${commandPattern}\n\nDetails: `,
-    "u",
-  ).test(text);
-  let state: "running" | "completed" | "failed" | "unconfirmed";
-  if (
-    !isPoll &&
-    (pendingApproval ||
-      /(?:^|\n\n)Approval required\. I sent approval DMs to the approvers for this account\.$/u.test(
-        text,
-      ) ||
-      /(?:^|\n\n)Exec approval is required, but no interactive approval client is currently available\.\n\nApprove it from the Web UI or terminal UI[^\n]* Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox\.[^\n]* Then retry the command\. You can usually leave execApprovals\.approvers unset when owner config already identifies the approvers\.$/u.test(
-        text,
-      ) ||
-      unknownNotice)
-  ) {
-    // Complete notices own lifecycle state; an unknown result's Details tail is only diagnostic text.
-    state = "unconfirmed";
-  } else if (extractToolOutputStructuredError(input) === true) {
-    // A poll error without terminal evidence cannot establish that the command failed.
-    state = running || (isPoll && !exit) ? "unconfirmed" : "failed";
-  } else if (running) {
-    state = "running";
-  } else if (exit) {
-    state = exit[2] !== undefined || exit[1] !== "code 0" ? "failed" : "completed";
-  } else {
-    // Foreground success can be empty; a poll needs an explicit terminal result.
-    state = isPoll ? "unconfirmed" : "completed";
-  }
-  return { state, sessionId };
-}
-
-function readProgressCommand(input: ResponsesInputItem[], command: string) {
-  let current: ReturnType<typeof readProgressCommandOutput> | undefined;
-  let sessionId: string | undefined;
-  let pendingCall: ResponsesInputItem | undefined;
-  // Walk the whole turn so a valid exec or poll cannot hide an earlier foreign call.
-  for (const item of input) {
-    if (item.type === "function_call" || item.type === "custom_tool_call") {
-      const args = parseToolCallArguments(item);
-      if (
-        pendingCall ||
-        typeof item.call_id !== "string" ||
-        item.call_id.length === 0 ||
-        (current
-          ? current.state !== "running" ||
-            !sessionId ||
-            item.name !== "process" ||
-            args?.action !== "poll" ||
-            args.sessionId !== sessionId
-          : item.type !== "function_call" || item.name !== "exec" || args?.command !== command)
-      ) {
-        return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
-      }
-      pendingCall = item;
-    } else if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
-      if (!pendingCall || item.call_id !== pendingCall.call_id) {
-        return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
-      }
-      const isPoll = current !== undefined;
-      current = readProgressCommandOutput([item], command, isPoll);
-      if (!isPoll) {
-        sessionId = current.sessionId;
-      }
-      pendingCall = undefined;
-    }
-  }
-  if (!current) {
-    return {
-      error: pendingCall ? "BUG-TOOL-PROGRESS-RESULT-MISSING" : "BUG-TOOL-PROGRESS-CALL-MISMATCH",
-    };
-  }
-  if (pendingCall || current.state === "unconfirmed") {
-    return { error: "BUG-TOOL-DID-NOT-COMPLETE" };
-  }
-  if (current.state === "running") {
-    return sessionId ? { sessionId } : { error: "BUG-TOOL-PROGRESS-SESSION-MISSING" };
-  }
-  return { failed: current.state === "failed" };
-}
 
 type TerminalRequesterSettleGate = {
   markSettled: (caseName: string, childSessionKey: string) => void;
@@ -718,14 +600,14 @@ async function buildResponsesPayload(
         codeModeControlJson?.status === "waiting" &&
         "runId" in codeModeControlJson &&
         typeof codeModeControlJson.runId === "string" &&
-        hasDeclaredTool(body, "wait")
+        hasDeclaredTool(toolDeclarationBody, "wait")
       ) {
         return buildToolCallEventsWithArgs("wait", { runId: codeModeControlJson.runId });
       }
       if (
         toolJson?.status === "waiting" &&
         typeof toolJson.runId === "string" &&
-        hasDeclaredTool(body, "wait")
+        hasDeclaredTool(toolDeclarationBody, "wait")
       ) {
         return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
       }
@@ -737,7 +619,7 @@ async function buildResponsesPayload(
       if (nextCheckpoint > 1 && !QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
         return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
       }
-      if (hasDeclaredTool(body, "exec")) {
+      if (hasDeclaredTool(toolDeclarationBody, "exec")) {
         const encodedTarget = encodeCodeModeTarget("qa_restart_wait", {});
         return buildToolCallEventsWithArgs("exec", {
           restartSafe: true,
@@ -757,7 +639,7 @@ async function buildResponsesPayload(
     if (!QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
       return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
     }
-    if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
+    if (hasToolDefinition(toolDeclarationBody, "qa_restart_unsafe_probe")) {
       return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
     }
     return buildAssistantEvents(QA_RESTART_FINAL_TEXT);
@@ -1099,7 +981,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("NO_REPLY");
   }
   if (terminalWorkerCase === "empty") {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "write")) {
+    if (!hasCompletedToolOutput && canCallScenarioTool(toolDeclarationBody, "write")) {
       return buildToolCallEventsWithArgs("write", {
         path: "qa-terminal-empty-side-effect.txt",
         content: "empty terminal QA side effect completed\n",
@@ -1987,7 +1869,7 @@ async function buildResponsesPayload(
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
     !hasCompletedToolOutput &&
-    (hasToolDefinition(body, "image_generate") || hasCodeModeExecSurface(body))
+    canCallScenarioTool(toolDeclarationBody, "image_generate")
   ) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",

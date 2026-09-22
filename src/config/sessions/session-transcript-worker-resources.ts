@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -12,6 +11,7 @@ import {
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
   registerOpenClawAgentDatabaseAsyncResource,
@@ -28,46 +28,19 @@ import {
 } from "./session-store-read-candidates.js";
 import type {
   SessionStoreTargetInventoryRequest,
+  SessionStoreTargetReadRequest,
+  SessionStoreTargetReadResult,
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
 import type {
-  SessionEntryListWorkerInput,
-  SessionTargetInventoryWorkerInput,
-  SessionIdentityEvidenceWorkerInput,
-  SessionMembersWorkerInput,
-  SessionPreviewWorkerInput,
-  SessionTitleFieldsWorkerInput,
-  SessionRowPresenceWorkerInput,
-  SessionTranscriptHistoryWorkerInput,
+  SessionHistoryWorkerInput,
   SessionTranscriptWorkerReply,
-  SessionUsageCacheWorkerInput,
-  SessionTranscriptSearchWorkerInput,
 } from "./session-transcript-worker.types.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 export const historyPages = new WorkerTaskPool<
-  | SessionTranscriptHistoryWorkerInput
-  | SessionPreviewWorkerInput
-  | SessionTitleFieldsWorkerInput
-  | SessionRowPresenceWorkerInput
-  | SessionMembersWorkerInput
-  | SessionEntryListWorkerInput
-  | SessionTargetInventoryWorkerInput
-  | SessionIdentityEvidenceWorkerInput
-  | SessionUsageCacheWorkerInput
-  | SessionTranscriptSearchWorkerInput,
-  SessionTranscriptWorkerReply<
-    | "history-page"
-    | "session-preview"
-    | "session-title-fields"
-    | "session-row-presence"
-    | "session-members"
-    | "session-entry-list"
-    | "session-target-inventory"
-    | "session-identity-evidence"
-    | "usage-cache"
-    | "transcript-search"
-  >
+  SessionHistoryWorkerInput,
+  SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
 >({
   workerUrl,
   workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
@@ -129,7 +102,6 @@ export type HistoryDatabaseResource = {
 };
 
 const historyDatabases = new Map<string, HistoryDatabaseResource>();
-const runInHistoryOwnerContext = AsyncLocalStorage.snapshot();
 const historySetTimeout = setTimeout;
 export const historyClearTimeout = clearTimeout;
 let historyGeneration = 0;
@@ -161,7 +133,7 @@ channel("openclaw.memory.critical").subscribe(() => {
       continue;
     }
     historyClearTimeout(lane.idleTimer);
-    void runInHistoryOwnerContext(() => rotateDatabaseWorkers(lane)).catch((error: unknown) => {
+    void runInDetachedAsyncContext(() => rotateDatabaseWorkers(lane)).catch((error: unknown) => {
       process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
     });
   }
@@ -216,7 +188,7 @@ export function armDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane)
   if (lane.nativeSequence <= lane.retiredSequence || lane.pending > 0) {
     return;
   }
-  lane.idleTimer = runInHistoryOwnerContext(() =>
+  lane.idleTimer = runInDetachedAsyncContext(() =>
     historySetTimeout(() => {
       void rotateDatabaseWorkers(lane).catch((error: unknown) => {
         process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
@@ -302,6 +274,9 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   candidates: readonly SessionStoreReadCandidate[],
   operation: (scope: {
     assertCurrent: () => void;
+    readStoreTarget: (
+      request: SessionStoreTargetReadRequest,
+    ) => Promise<SessionStoreTargetReadResult>;
     readTargetInventory: (
       request: SessionStoreTargetInventoryRequest,
     ) => Promise<SessionStoreTargetInventoryResult>;
@@ -366,6 +341,31 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       assertCurrent();
       const value = await operation({
         assertCurrent,
+        readStoreTarget: async (request) => {
+          const reply = await historyPages.run(
+            () => {
+              assertCurrent();
+              dispatched = true;
+              historyLane.nativeSequence++;
+              return { kind: "session-store-target", request };
+            },
+            { inputBytes: JSON.stringify(request).length * 2, timeoutMs: 60_000 },
+          );
+          const result =
+            unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
+          if (
+            typeof result === "boolean" ||
+            Array.isArray(result) ||
+            (result.kind !== "session-store-target" &&
+              result.kind !== "session-target-registry-required")
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of store target",
+            );
+          }
+          assertCurrent();
+          return result;
+        },
         readTargetInventory: async (request) => {
           const reply = await historyPages.run(
             () => {
@@ -379,18 +379,8 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
               timeoutMs: 60_000,
             },
           );
-          const result = unwrapSessionTranscriptWorkerReply<
-            | "history-page"
-            | "session-preview"
-            | "session-title-fields"
-            | "session-row-presence"
-            | "session-members"
-            | "session-entry-list"
-            | "session-target-inventory"
-            | "session-identity-evidence"
-            | "usage-cache"
-            | "transcript-search"
-          >(reply);
+          const result =
+            unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (
             typeof result === "boolean" ||
             Array.isArray(result) ||

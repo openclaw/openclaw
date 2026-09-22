@@ -67,6 +67,7 @@ const mocks = vi.hoisted(() => ({
   needsNodeRuntimeMigration: vi.fn(() => false),
   renderSystemNodeWarning: vi.fn().mockReturnValue(undefined),
   resolveSystemNodeInfo: vi.fn().mockResolvedValue(null),
+  resolveNodeRuntimeInfo: vi.fn(),
   isSystemdUnitActive: vi
     .fn<typeof import("../daemon/systemd-exec.js").isSystemdUnitActive>()
     .mockResolvedValue({ ok: true, value: false }),
@@ -97,6 +98,7 @@ vi.mock("../daemon/inspect.js", () => ({
 vi.mock("../daemon/runtime-paths.js", () => ({
   renderSystemNodeWarning: mocks.renderSystemNodeWarning,
   resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
+  resolveNodeRuntimeInfo: mocks.resolveNodeRuntimeInfo,
 }));
 
 vi.mock("../daemon/service-audit.js", () => ({
@@ -370,6 +372,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.needsNodeRuntimeMigration.mockReturnValue(false);
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.resolveSystemNodeInfo.mockResolvedValue(null);
+    mocks.resolveNodeRuntimeInfo.mockResolvedValue({ status: "supported" });
     mocks.isSystemdUnitActive.mockResolvedValue(ok(false));
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
@@ -635,31 +638,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
   );
 
   registerDoctorRuntimePinTests({ mocks, runRepair, createRecommendedServiceAudit });
-
-  it("preserves a supported Bun runtime when repairing the Gateway service", async () => {
-    const bunPath = "/home/test/.bun/bin/bun";
-    const bunCommand = {
-      programArguments: [bunPath, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
-      environment: {},
-    };
-    mocks.readCommand.mockResolvedValue(bunCommand);
-    mocks.buildGatewayInstallPlan.mockResolvedValue(bunCommand);
-    mocks.auditGatewayServiceConfig.mockResolvedValue(
-      createRecommendedServiceAudit(
-        "gateway-path-nonminimal",
-        "Gateway PATH should be regenerated",
-      ),
-    );
-
-    await runRepair({ gateway: {} });
-
-    for (const [options] of mocks.buildGatewayInstallPlan.mock.calls) {
-      expect(options).toEqual(expect.objectContaining({ runtime: "bun", runtimePath: bunPath }));
-    }
-    expect(mocks.install).toHaveBeenCalledWith(
-      expect.objectContaining({ programArguments: bunCommand.programArguments }),
-    );
-  });
 
   it("migrates an unsupported Bun Gateway service to supported system Node", async () => {
     const bunPath = "/home/test/.bun/bin/bun";

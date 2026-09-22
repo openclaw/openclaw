@@ -4,6 +4,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
 import remend from "remend";
 import { icons } from "../../../components/icons.ts";
+import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
@@ -70,7 +71,7 @@ function renderSubagentActivityIndicator(task: TaskSummary): TemplateResult {
   >
     <span
       class="chat-subagent-activity__claw ${backgroundTaskIsExecuting(task) ? "chat-reading-indicator" : ""}"
-      >${icons.claw}</span
+      >${currentThemeBranding().mascot === "none" ? icons.mark : icons.claw}</span
     >
   </span>`;
 }

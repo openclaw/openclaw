@@ -296,6 +296,9 @@ describe("openclaw.chat caretaker welcome", () => {
       const second = await callChat(context, { sessionId: "second-welcome", ...variant });
 
       expect(first.ok).toBe(true);
+      expect(first.payload).toMatchObject({ optionalWelcome: welcomeVariant === undefined });
+      const rejoin = await callChat(context, { sessionId: "first-welcome", ...variant });
+      expect(rejoin.payload).toMatchObject({ optionalWelcome: welcomeVariant === undefined });
       expect(second.payload).toMatchObject({
         reply: expectDefined(first.payload as { reply?: string }, "first welcome").reply,
       });
@@ -322,6 +325,7 @@ describe("openclaw.chat caretaker welcome", () => {
 
     expect(call.payload).toMatchObject({
       reply: "I'm healthy. An update is ready, and I noticed a manual config edit.",
+      optionalWelcome: false,
       question: {
         header: "Quick actions",
         options: [

@@ -33,6 +33,8 @@ Hidden retained chats defer command and model metadata refreshes until you retur
 
 Provider authentication status is shared across views and refreshes after account changes and near credential warning or expiry deadlines. Credentials without an expiry do not need periodic refreshes. Hidden tabs defer deadline refreshes until visible again.
 
+Thinking, speed, and context-window changes stay synchronized across panes showing the same session. While a change is pending, the latest selection remains visible. A rejected change restores the latest confirmed value. Delayed events from a replaced session leave the current transcript and unsent draft intact.
+
 Subagent runs appear in inline transcript activity rows, the chat **Tasks** tab,
 and the [Tasks page](/automation/tasks#control-ui), outside sidebar navigation.
 Their activity rows lead with the child task's display title, using its configured

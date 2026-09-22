@@ -150,7 +150,7 @@ describe("sessions.patch", () => {
           const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
           expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
           expect(loadSessionEntry(scope)).toMatchObject({
-            boardFace: "chat",
+            boardFace: "dashboard",
             boardPresentation: "expanded",
           });
           const reopened = await tool.execute("reopened", { action: "read" });

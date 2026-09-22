@@ -17,6 +17,7 @@ import {
   isUiGlobalSessionKey,
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedSessionAgentId,
+  resolveUiConversationIdentity,
   uiSessionRowMatchesSelectedChat,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
@@ -130,6 +131,7 @@ type ChatAbortIntentBase = {
   sourceClient: GatewayBrowserClient;
   sessionKey: string;
   agentId?: string;
+  readonly conversation: Readonly<ReturnType<typeof resolveUiConversationIdentity>>;
 };
 
 export type PendingChatAbort = ChatAbortIntentBase & {
@@ -323,19 +325,32 @@ async function requestChatAbort(
   }
 }
 
-// Non-abortable runs can still be finalizing; only the refreshed session owner
-// may retire them. Check the captured UI scope before starting that refresh.
-async function settleNoopAbort(state: ChatAbortRunState, intent: ChatAbortIntent): Promise<void> {
-  if (
-    !state.connected ||
-    state.client !== intent.sourceClient ||
-    state.sessionKey !== intent.sessionKey ||
-    (state.chatRunId ?? null) !== intent.runId ||
-    scopedAgentParamsForSession(state, state.sessionKey).agentId !== intent.agentId
-  ) {
-    return;
+function ownsChatAbortIntent(state: ChatAbortRunState, intent: ChatAbortIntent): boolean {
+  const conversation = resolveUiConversationIdentity(state, state.sessionKey);
+  return (
+    state.client === intent.sourceClient &&
+    conversation.sessionKey === intent.conversation.sessionKey &&
+    conversation.agentId === intent.conversation.agentId &&
+    (state.chatRunId ?? null) === intent.runId &&
+    scopedAgentParamsForSession(state, state.sessionKey).agentId === intent.agentId
+  );
+}
+
+// Error publication and follow-up reads remain with the captured Stop intent.
+async function settleChatAbortResponse(
+  state: ChatAbortRunState,
+  intent: ChatAbortIntent,
+  result: ChatAbortRequestResult,
+): Promise<boolean> {
+  if (ownsChatAbortIntent(state, intent)) {
+    if (!result.ok) {
+      setChatError(state, formatConnectError(result.error));
+    } else if (result.noActiveRun && state.connected) {
+      // Only the refreshed owner may retire a run that is still finalizing.
+      await state.refreshCurrentChat?.();
+    }
   }
-  await state.refreshCurrentChat?.();
+  return result.ok;
 }
 
 function currentChatAbortIntent(
@@ -347,6 +362,7 @@ function currentChatAbortIntent(
   const base = {
     sourceClient,
     sessionKey: state.sessionKey,
+    conversation: resolveUiConversationIdentity(state, state.sessionKey),
     ...scopedAgentParamsForSession(state, state.sessionKey),
   };
   return runId
@@ -365,13 +381,7 @@ async function abortChatRun(state: ChatAbortRunState): Promise<void> {
   }
   const intent = currentChatAbortIntent(state, client);
   const result = await requestChatAbort(client, intent);
-  if (!result.ok) {
-    setChatError(state, formatConnectError(result.error));
-    return;
-  }
-  if (result.noActiveRun) {
-    await settleNoopAbort(state, intent);
-  }
+  await settleChatAbortResponse(state, intent, result);
 }
 
 export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boolean> {
@@ -393,18 +403,13 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
     true,
   ).abort;
   if (!access.allowed) {
-    setChatError(host, access.reason);
+    if (ownsChatAbortIntent(host, intent)) {
+      setChatError(host, access.reason);
+    }
     return false;
   }
   const result = await requestChatAbort(client, intent);
-  if (result.ok) {
-    if (result.noActiveRun) {
-      await settleNoopAbort(host, intent);
-    }
-    return true;
-  }
-  setChatError(host, formatConnectError(result.error));
-  return false;
+  return settleChatAbortResponse(host, intent, result);
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions): Promise<void> {
@@ -533,42 +538,22 @@ function reconcileSessionRows(
   options: ReconcileOptions,
   occurredAt: number,
 ) {
-  if (!options.outcome) {
+  if (!options.outcome && !options.yielded) {
     return;
   }
   const keys = sessionKeysFor(host, options);
-  if (keys.size === 0) {
+  if (options.outcome && keys.size === 0) {
     return;
   }
-  const status =
-    options.sessionStatus ?? (options.outcome === "done" ? ("done" as const) : ("killed" as const));
+  const status = options.outcome
+    ? (options.sessionStatus ?? (options.outcome === "done" ? "done" : "killed"))
+    : "running";
   const terminal: SessionRunTerminal = {
     sessionKeys: [...keys],
     agentId: options.agentId,
     runId: options.runId ?? host.chatRunId ?? null,
     status,
-    errorMessage: options.errorMessage,
-    endedAt: occurredAt,
-  };
-  if (host.sessionsResult) {
-    host.sessionsResult = reconcileSessionRunTerminal(host.sessionsResult, terminal);
-  }
-  host.sessions?.reconcileRunTerminal?.(terminal);
-}
-
-function reconcileYieldedSessionRows(
-  host: RunLifecycleHost,
-  options: ReconcileOptions,
-  occurredAt: number,
-) {
-  if (!options.yielded) {
-    return;
-  }
-  const terminal: SessionRunTerminal = {
-    sessionKeys: [...sessionKeysFor(host, options)],
-    agentId: options.agentId,
-    runId: options.runId ?? host.chatRunId ?? null,
-    status: "running",
+    ...(options.outcome ? { errorMessage: options.errorMessage } : {}),
     endedAt: occurredAt,
   };
   if (host.sessionsResult) {
@@ -629,7 +614,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
       scheduleRunStatusClear(host, status);
     }
   } else if (options.yielded) {
-    reconcileYieldedSessionRows(host, sessionOptions, occurredAt);
+    reconcileSessionRows(host, sessionOptions, occurredAt);
     host.lastLocalTerminalReconcile = null;
     clearChatRunStatus(host);
   } else if (options.clearRunStatus) {

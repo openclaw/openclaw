@@ -160,7 +160,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
 
 export function normalizeManagedSessionListQuery(
   options: SessionListOptions,
-): Readonly<Record<string, unknown>> & { readonly limit: number } {
+): Readonly<SessionsListParams & { limit: number }> {
   const { offset: _offset, append: _append, ...queryOptions } = options;
   const limit =
     typeof options.limit === "number" && options.limit > 0
@@ -178,7 +178,7 @@ export async function requestSessionList(
 
 export async function requestSessionListParams(
   client: SessionRequestClient,
-  params: Readonly<Record<string, unknown>>,
+  params: Readonly<SessionsListParams>,
 ): Promise<SessionsListResult | null> {
   const result = await client.request<SessionsListResult | undefined>("sessions.list", params);
   return result ?? null;

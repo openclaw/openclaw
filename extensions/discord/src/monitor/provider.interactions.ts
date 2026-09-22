@@ -92,6 +92,7 @@ export function createDiscordProviderInteractionSurface(params: {
       sessionPrefix: params.sessionPrefix,
       ephemeralDefault: params.ephemeralDefault,
       threadBindings: params.threadBindings,
+      buildContext: params.channelRuntime?.inbound.buildContext,
       dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     });
   });
@@ -145,6 +146,7 @@ export function createDiscordProviderInteractionSurface(params: {
       accountId: params.accountId,
       sessionPrefix: params.sessionPrefix,
       threadBindings: params.threadBindings,
+      buildContext: params.channelRuntime?.inbound.buildContext,
       dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     }),
     createDiscordModelPickerFallbackButton({
@@ -154,6 +156,7 @@ export function createDiscordProviderInteractionSurface(params: {
       accountId: params.accountId,
       sessionPrefix: params.sessionPrefix,
       threadBindings: params.threadBindings,
+      buildContext: params.channelRuntime?.inbound.buildContext,
       dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     }),
     createDiscordModelPickerFallbackSelect({
@@ -163,6 +166,7 @@ export function createDiscordProviderInteractionSurface(params: {
       accountId: params.accountId,
       sessionPrefix: params.sessionPrefix,
       threadBindings: params.threadBindings,
+      buildContext: params.channelRuntime?.inbound.buildContext,
       dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     }),
   ];

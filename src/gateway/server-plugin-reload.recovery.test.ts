@@ -76,6 +76,7 @@ import {
 } from "./server-plugin-reload.resources.test-support.js";
 import { registerPluginServiceRecoveryTests } from "./server-plugin-reload.service-recovery.test-support.js";
 import {
+  createTranscriptFixtures,
   registerTranscriptFixture,
   startTranscriptReloadFixtureSidecars,
 } from "./server-plugin-reload.transcripts.test-support.js";
@@ -88,7 +89,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/io.plugin-metadata.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.plugin-metadata.js")>()),
-  resolveConfigWidePluginMetadataSnapshot: mocks.resolveConfigWidePluginMetadataSnapshot,
+  resolveConfigWidePluginMetadataSnapshotAsync: mocks.resolveConfigWidePluginMetadataSnapshot,
 }));
 vi.mock("../plugins/plugin-lookup-table.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-lookup-table.js")>()),
@@ -662,10 +663,7 @@ it.for([
         plugins: { allow: ["first", "sibling"] },
         transcripts: { autoStart: [entry("first"), entry("sibling")] },
       };
-      const providers = {
-        first: [] as ReturnType<typeof registerTranscriptFixture>[],
-        sibling: [] as ReturnType<typeof registerTranscriptFixture>[],
-      };
+      const { providers, register } = createTranscriptFixtures();
       const failure = new Error("fixture publication rejected");
       const reject = async () => {
         throw failure;
@@ -673,9 +671,7 @@ it.for([
       const fixture = await createRecoveryFixture({
         config,
         abortOnCandidateStart: false,
-        register: (api, owner) => {
-          providers[owner].push(registerTranscriptFixture(api, owner));
-        },
+        register,
         ...(outcome === "rollback" ? { beforePublish: reject } : {}),
         ...(outcome === "after-commit error" ? { afterPublish: reject } : {}),
       });
@@ -904,9 +900,7 @@ it("starts the first configured transcript capture after plugin reload", async (
       config: { plugins: { allow: ["first", "sibling"] } },
       abortOnCandidateStart: false,
       register: (api, owner) => {
-        if (owner === "first") {
-          api.registerReload({ hotPrefixes: ["transcripts"] });
-        } else {
+        if (owner === "sibling") {
           providers.push(registerTranscriptFixture(api, owner));
         }
       },
@@ -930,7 +924,7 @@ it("starts the first configured transcript capture after plugin reload", async (
           ],
         },
       };
-      await fixture.reload(config);
+      await fixture.reload(config, [], ["transcripts.autoStart"]);
       await vi.waitFor(() => expect(provider.watches).toHaveLength(1));
       await provider.waitForCapture(1, signal);
       expect(provider.watches[0]?.cfg).toEqual(config);
@@ -944,10 +938,13 @@ it("starts the first configured transcript capture after plugin reload", async (
   });
 });
 
-it.for(["replace", "remove", "disable"] as const)(
+it.for(["replace", "remove", "disable", "rollback"] as const)(
   "drains changed transcript configuration on a retained plugin before publication: %s",
   async (change, { signal }) => {
-    expect(buildGatewayReloadPlan(["transcripts.autoStart"]).restartGateway).toBe(true);
+    expect(buildGatewayReloadPlan(["transcripts.autoStart"])).toMatchObject({
+      restartGateway: false,
+      reloadPlugins: true,
+    });
     const stateDir = makeTrackedTempDir("gateway-transcript-config-replacement-", tempDirs);
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const entry = (owner: string, channelId = "original-room") => ({
@@ -956,26 +953,22 @@ it.for(["replace", "remove", "disable"] as const)(
         channelId,
         whenOccupied: true,
       });
+      const retainedSource = { ...entry("sibling", "retained-room"), guildId: "other-guild" };
       const config: OpenClawConfig = {
         plugins: { allow: ["first", "sibling"] },
-        transcripts: { autoStart: [entry("first"), entry("sibling")] },
+        transcripts: { autoStart: [entry("first"), entry("sibling"), retainedSource] },
       };
-      const providers = {
-        first: [] as ReturnType<typeof registerTranscriptFixture>[],
-        sibling: [] as ReturnType<typeof registerTranscriptFixture>[],
-      };
+      const { providers, register } = createTranscriptFixtures();
       const events: string[] = [];
       const fixture = await createRecoveryFixture({
         config,
         abortOnCandidateStart: false,
-        register: (api, owner) => {
-          providers[owner].push(registerTranscriptFixture(api, owner));
-          if (owner === "first") {
-            api.registerReload({ hotPrefixes: ["transcripts"] });
-          }
-        },
+        register,
         beforePublish: async () => {
           events.push("publish");
+          if (change === "rollback") {
+            throw new Error("fixture publication rejected");
+          }
         },
       });
       const nextConfig: OpenClawConfig = {
@@ -986,12 +979,15 @@ it.for(["replace", "remove", "disable"] as const)(
             : {
                 autoStart: [
                   entry("first"),
-                  ...(change === "replace" ? [entry("sibling", "replacement-room")] : []),
+                  retainedSource,
+                  ...(change === "replace" || change === "rollback"
+                    ? [entry("sibling", "replacement-room")]
+                    : []),
                 ],
               },
       };
       expect(
-        buildGatewayReloadPlan(["plugins.entries.first", "transcripts.autoStart"], {
+        buildGatewayReloadPlan(["transcripts.autoStart"], {
           previousConfig: config,
           candidateConfig: nextConfig,
         }),
@@ -1005,26 +1001,46 @@ it.for(["replace", "remove", "disable"] as const)(
         events.push("unwatch-sibling");
       });
       try {
-        await Promise.all([first.waitForCapture(1, signal), sibling.waitForCapture(1, signal)]);
-        await vi.waitFor(() =>
-          expect(activeSessions.get(sibling.captures[0]!.session.sessionId)?.phase).toBe("active"),
-        );
-        const result = await fixture.reload(nextConfig);
-        expect(result).toMatchObject({ runtime: { pluginIds: ["first"] } });
-        expect(events).toEqual(["unwatch-sibling", "publish"]);
-        expect(sibling.stop).toHaveBeenCalledOnce();
+        await Promise.all([
+          first.waitForActiveCapture(1, signal),
+          sibling.waitForActiveCapture(2, signal),
+        ]);
+        const retainedCapture = sibling.getActiveCaptureForChannel(retainedSource);
+        const result = await fixture
+          .reload(nextConfig, [], ["transcripts.autoStart"])
+          .catch((error: unknown) => error);
+        if (change === "rollback") {
+          expect(result).toMatchObject({ details: { committed: false, pluginIds: [] } });
+          expect(fixture.getConfig()).toBe(config);
+        } else {
+          expect(result).toMatchObject({ runtime: { pluginIds: [] } });
+        }
+        expect(events).toEqual([
+          "unwatch-sibling",
+          ...(change === "disable" ? ["unwatch-sibling"] : []),
+          "publish",
+        ]);
+        expect(sibling.stop).toHaveBeenCalledTimes(change === "disable" ? 2 : 1);
+        expect(first.stop).toHaveBeenCalledTimes(change === "disable" ? 1 : 0);
         expect(fixture.siblingStart).toHaveBeenCalledOnce();
         expect(fixture.siblingStop).not.toHaveBeenCalled();
+        expect(fixture.firstStart).toHaveBeenCalledOnce();
+        expect(fixture.firstStop).not.toHaveBeenCalled();
         expect(providers.sibling).toHaveLength(1);
-        if (change === "replace") {
-          await sibling.waitForCapture(2, signal);
-          expect(sibling.watches).toHaveLength(2);
-          expect(sibling.watches[1]?.source.channelId).toBe("replacement-room");
-          expect(sibling.watches[1]?.cfg).toEqual(nextConfig);
+        if (change === "replace" || change === "rollback") {
+          await sibling.waitForCapture(3, signal);
+          expect(sibling.watches).toHaveLength(3);
+          expect(sibling.watches[2]?.source.channelId).toBe(
+            change === "rollback" ? "original-room" : "replacement-room",
+          );
+          expect(sibling.watches[2]?.cfg).toEqual(change === "rollback" ? config : nextConfig);
         } else {
-          expect(sibling.watches).toHaveLength(1);
-          expect(sibling.captures).toHaveLength(1);
+          expect(sibling.watches).toHaveLength(2);
+          expect(sibling.captures).toHaveLength(2);
         }
+        expect(activeSessions.get(retainedCapture.session.sessionId)).toBe(
+          change === "disable" ? undefined : retainedCapture,
+        );
         expect(mocks.log.warn).not.toHaveBeenCalledWith(expect.stringContaining("already owns"));
       } finally {
         await sidecars.stop();

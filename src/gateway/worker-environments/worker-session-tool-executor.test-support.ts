@@ -13,6 +13,7 @@ import {
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -419,6 +420,7 @@ async function createWorkerSessionToolTestFixture(
         releaseAgentRunDelegatedAuthority(authority);
       }
       rootAdmission.release();
+      await closeOpenClawStateDatabaseByPathAsync(database.path);
       closeOpenClawStateDatabaseForTest();
       await fs.rm(root, { recursive: true, force: true });
     },

@@ -386,7 +386,28 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
   </Tab>
 </Tabs>
 
-A final provider refusal ends the current turn. OpenClaw surfaces it without automatic recovery turns, compaction retries, or switching to an unrelated model. A queued or later user message still starts its own turn.
+A final provider refusal ends the current turn. OpenClaw surfaces it without automatic recovery turns, compaction retries, or switching to an unrelated model. Except for a misalignment precaution, a queued or later user message still starts its own turn.
+
+### Misalignment precautions
+
+An OpenAI `misalignment_policy_violation` stops further work in the affected
+conversation. It means the agent's interpretation of the task needs review; it
+does not establish that the user violated a policy. OpenClaw preserves available
+provider findings and holds queued messages instead of retrying the conversation.
+Already-accepted results can still finish recording.
+
+In the Control UI, choose **Review findings**. When a supported Codex or ChatGPT
+Responses runtime supplies a continuation, the dialog shows its exact message
+before offering **Acknowledge findings and continue**. Confirmation applies only
+to the displayed session and findings. It preserves the runtime, model, sandbox,
+and approval settings; a changed review requires another decision. The precaution
+clears only after the provider accepts the continuation. Previously queued
+messages remain held for individual review and retry.
+
+Ordinary API-key Responses and incognito conversations do not offer continuation.
+Missing or incomplete findings also cannot authorize one. A stopped conversation
+does not undo actions already completed. See [OpenAI's misalignment monitoring
+guide](https://developers.openai.com/api/docs/guides/safety-checks/misalignment-monitoring).
 
 ### Cooldown skip vs probe behavior
 

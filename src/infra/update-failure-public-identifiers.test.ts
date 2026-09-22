@@ -24,3 +24,20 @@ it("keeps unknown check and reason identifiers private", async () => {
     projectPublicUpdateFailureIdentifiers({ check: "private-check", code: "private-reason" }),
   ).resolves.toEqual({ check: "[redacted-check]", code: "[redacted-code]" });
 });
+
+it("publishes only the fixed lease code, not the internal class or arbitrary identities", async () => {
+  await expect(
+    projectPublicUpdateFailureIdentifiers({ check: "doctor", code: "agent-database-lease-active" }),
+  ).resolves.toEqual({ check: "doctor", code: "agent-database-lease-active" });
+  for (const code of [
+    "OpenClawAgentDatabaseLeaseActiveError",
+    "private-lease-class",
+    "/private/state.db",
+    "token=fixture-only-token",
+    "alice@example.invalid",
+  ]) {
+    await expect(
+      projectPublicUpdateFailureIdentifiers({ check: "doctor", code, errorName: code }),
+    ).resolves.toEqual({ check: "doctor", code: "[redacted-error-class]" });
+  }
+});

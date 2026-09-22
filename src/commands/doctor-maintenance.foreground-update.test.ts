@@ -9,7 +9,7 @@ import {
   GATEWAY_SHUTDOWN_RESERVE_MS,
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
 } from "../infra/gateway-shutdown-budget.js";
-import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
 import { acquireGatewayLifecycleCoordinator } from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";

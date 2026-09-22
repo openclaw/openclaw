@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
@@ -13,7 +14,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { resetPreparedModelCatalogStateForTest } from "./server-model-catalog.js";
 import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
@@ -101,7 +101,7 @@ type ModelCatalogRpcEntry = {
 type AgentCatalogFixtureEntry = {
   id: string;
   provider: string;
-  name?: string;
+  name: string;
   contextWindow?: number;
 };
 
@@ -111,7 +111,7 @@ const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacemen
 };
 
 const buildAgentCatalogFixture = (): AgentCatalogFixtureEntry[] => [
-  { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
+  { id: "gpt-test-z", name: "", provider: "openai", contextWindow: 0 },
   {
     id: "gpt-test-a",
     name: "A-Model",
@@ -514,6 +514,7 @@ describe("gateway server models + voicewake", () => {
   test("models.list all view returns model catalog", async () => {
     await withModelsConfig(fullCatalogProviderConfig(), async () => {
       await seedAgentModelCatalog();
+      const discoverCallsBefore = agentDiscoveryMock.discoverCalls;
 
       const res1 = await listModels({ view: "all", preparedOnly: true });
       const res2 = await listModels({ view: "all", preparedOnly: true });
@@ -524,7 +525,7 @@ describe("gateway server models + voicewake", () => {
       const models = res1.payload?.models ?? [];
       expect(models).toEqual(expectedSortedCatalog());
 
-      expect(agentDiscoveryMock.discoverCalls).toBe(0);
+      expect(agentDiscoveryMock.discoverCalls).toBe(discoverCallsBefore);
     });
   });
 
