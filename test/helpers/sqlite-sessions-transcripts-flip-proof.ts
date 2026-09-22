@@ -1706,13 +1706,15 @@ async function waitForAgentRunSettled(client: GatewayClient, runId: string): Pro
   if (result.status === "ok") {
     return;
   }
-  // Deletion can settle through the runtime abort outcome instead of the RPC stop reason.
+  // Deletion can settle through the runtime abort outcome instead of the RPC stop reason,
+  // or through the lifecycle drain action when the run had not started yet.
   const terminalLifecycleStatus = result.status === "timeout" || result.status === "error";
   if (
     terminalLifecycleStatus &&
     (result.stopReason === "rpc" ||
       result.stopReason === "stop" ||
-      result.stopReason === "aborted") &&
+      result.stopReason === "aborted" ||
+      result.stopReason === "delete") &&
     typeof result.endedAt === "number"
   ) {
     return;
