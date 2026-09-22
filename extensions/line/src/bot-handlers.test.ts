@@ -106,7 +106,8 @@ vi.mock("openclaw/plugin-sdk/reply-history", () => ({
       entry: HistoryEntry;
     }) => {
       const existing = historyMap.get(historyKey) ?? [];
-      historyMap.set(historyKey, [...existing, entry].slice(-limit));
+      // The caller reads the retained window back.
+      return historyMap.set(historyKey, [...existing, entry].slice(-limit)).get(historyKey);
     },
     buildInboundHistory: ({ historyKey, limit }: { historyKey: string; limit: number }) => {
       if (limit <= 0) {
@@ -238,7 +239,7 @@ vi.mock("./bot-message-context.js", async (importOriginal) => ({
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
 // Loaded through the same registry epoch as the module under test so both share
 // one instance of the sent-id record.
-let recordLineSentMessages: typeof import("./outbound-message-log.js").recordLineSentMessages;
+let recordLineSentMessages: typeof import("./quoted-messages.js").recordLineSentMessages;
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
@@ -346,7 +347,7 @@ async function expectRequireMentionGroupMessageProcessed(event: MessageEvent) {
 describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
     ({ handleLineWebhookEvents } = await import("./bot-handlers.js"));
-    ({ recordLineSentMessages } = await import("./outbound-message-log.js"));
+    ({ recordLineSentMessages } = await import("./quoted-messages.js"));
   });
 
   afterAll(() => {
