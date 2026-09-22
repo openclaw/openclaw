@@ -6,6 +6,7 @@ import {
 } from "node:http";
 import { request as httpsRequest, type Agent as HttpsAgent } from "node:https";
 import { PassThrough, Writable, type Readable } from "node:stream";
+import { sanitizeForwardedResponseHeaders } from "./response-headers.js";
 import {
   createSecretEgressBodyTransform,
   SecretEgressSubstitutionError,
@@ -15,6 +16,8 @@ import {
 
 export const REFUSAL_BODY = "Secret egress proxy refused the request.\n";
 const UPSTREAM_ERROR_BODY = "Secret egress proxy could not reach the upstream host.\n";
+const FORWARDED_RESPONSE_FAILURE_BODY =
+  "Secret egress proxy could not forward the upstream response.\n";
 const MAX_BUFFERED_REQUEST_BODY_BYTES = 100 * 1024 * 1024;
 const BUFFERED_REQUEST_WRITE_BYTES = 64 * 1024;
 const MAX_BUFFERED_UPGRADE_BYTES = 64 * 1024;
@@ -40,6 +43,39 @@ export function sendHttpRefusal(res: ServerResponse, status = 502, body = REFUSA
     "Content-Type": "text/plain; charset=utf-8",
   });
   res.end(body);
+}
+
+/** Write upstream headers without letting one illegal value exit the process. */
+function writeForwardedResponseHead(
+  response: ServerResponse,
+  statusCode: number,
+  headers: IncomingHttpHeaders,
+): boolean {
+  if (response.destroyed || response.writableEnded || response.headersSent) {
+    return false;
+  }
+  try {
+    response.writeHead(statusCode, sanitizeForwardedResponseHeaders(headers));
+    return true;
+  } catch {
+    if (response.destroyed || response.writableEnded || response.headersSent) {
+      response.destroy();
+      return false;
+    }
+    // writeHead stores the reason phrase and, for 1xx/204/304, clears the
+    // private body flag before a later field can throw. HEAD responses are
+    // created bodyless and must stay that way; other methods need the flag
+    // restored so end() keeps the 502 bytes.
+    response.statusMessage = "";
+    Reflect.set(response, "_hasBody", response.req.method !== "HEAD");
+    response.chunkedEncoding = false;
+    try {
+      sendHttpRefusal(response, 502, FORWARDED_RESPONSE_FAILURE_BODY);
+    } catch {
+      response.destroy();
+    }
+    return false;
+  }
 }
 
 export function handleUpgradeRequest(
@@ -162,7 +198,16 @@ function sendSecretEgressRequest(
           return;
         }
         upstreamResponse.once("error", () => forward.response.destroy());
-        forward.response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+        if (
+          !writeForwardedResponseHead(
+            forward.response,
+            upstreamResponse.statusCode ?? 502,
+            upstreamResponse.headers,
+          )
+        ) {
+          upstreamResponse.destroy();
+          return;
+        }
         upstreamResponse.pipe(forward.response);
       },
     ),
@@ -243,9 +288,12 @@ function sendSecretEgressRequest(
     const clientSocket = forward.ownResource(forward.request.socket);
     // The handshake is an HTTP request; subsequent bytes are WebSocket frames,
     // not HTTP bodies. Forward them opaquely, including both parsers' head buffers.
+    if (!writeForwardedResponseHead(forward.response, 101, response.headers)) {
+      upstreamSocket.destroy();
+      return;
+    }
     forward.response.off("close", onResponseClose);
     upgraded = true;
-    forward.response.writeHead(101, response.headers);
     forward.response.end();
     forward.response.detachSocket(clientSocket);
     forward.releaseResponse();
