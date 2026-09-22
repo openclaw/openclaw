@@ -287,15 +287,13 @@ export async function sendMessageMSTeams(
         teamId: ctx.ref.teamId,
         channelId: conversationType === "channel" ? conversationId : undefined,
         tokenProvider,
-        getTeamDetails: ctx.app.api?.teams?.getById
-          ? async (teamId) => {
-              const getById = await resolveReferenceScopedTeamsGetById(ctx.app, ctx.ref.serviceUrl);
-              if (!getById) {
-                throw new Error("Teams team lookup unavailable");
-              }
-              return await getById(teamId);
-            }
-          : undefined,
+        getTeamDetails: async (teamId) => {
+          const getById = await resolveReferenceScopedTeamsGetById(ctx.app, ctx.ref.serviceUrl);
+          if (!getById) {
+            throw new Error("Teams team lookup unavailable");
+          }
+          return await getById(teamId);
+        },
       });
       log.debug?.("uploading to SharePoint for native file card", {
         fileName,

@@ -20,7 +20,7 @@ const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
 
-export function requireMSTeamsSharePointSiteId(siteId?: string): string {
+function requireMSTeamsSharePointSiteId(siteId?: string): string {
   const normalized = siteId?.trim();
   if (!normalized) {
     throw new Error(
@@ -46,8 +46,13 @@ export async function resolveUploadSiteId(params: {
   getTeamDetails?: (teamId: string) => Promise<{ aadGroupId?: string }>;
   fetchFn?: typeof fetch;
 }): Promise<string> {
-  const explicit = params.configuredSiteId?.trim();
-  if (explicit) {
+  if (params.configuredSiteId !== undefined) {
+    const explicit = params.configuredSiteId.trim();
+    if (!explicit) {
+      throw new Error(
+        "channels.msteams.sharePointSiteId is blank. Omit it to discover a standard channel's team site, or set a site ID.",
+      );
+    }
     return explicit;
   }
   if (!params.teamId) {

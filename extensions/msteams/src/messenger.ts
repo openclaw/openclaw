@@ -315,18 +315,16 @@ export async function sendMSTeamsMessages(
             {
               feedbackLoopEnabled: params.feedbackLoopEnabled,
               assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-              getTeamDetails: params.app.api?.teams?.getById
-                ? async (teamId) => {
-                    const getById = await resolveReferenceScopedTeamsGetById(
-                      params.app,
-                      params.conversationRef.serviceUrl,
-                    );
-                    if (!getById) {
-                      throw new Error("Teams team lookup unavailable");
-                    }
-                    return await getById(teamId);
-                  }
-                : undefined,
+              getTeamDetails: async (teamId) => {
+                const getById = await resolveReferenceScopedTeamsGetById(
+                  params.app,
+                  params.conversationRef.serviceUrl,
+                );
+                if (!getById) {
+                  throw new Error("Teams team lookup unavailable");
+                }
+                return await getById(teamId);
+              },
             },
           );
 

@@ -265,6 +265,22 @@ describe("graph upload helpers", () => {
     expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
   });
 
+  it.each(["", "   "])(
+    "rejects a blank configured site ID before discovery (%j)",
+    async (configuredSiteId) => {
+      tokenProvider.getAccessToken.mockClear();
+      await expect(
+        resolveUploadSiteId({
+          configuredSiteId,
+          teamId: "team-1",
+          channelId: "19:channel@thread.tacv2",
+          tokenProvider,
+        }),
+      ).rejects.toThrow("sharePointSiteId is blank");
+      expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses default folder name when none is configured", async () => {
     const fetchFn = createGraphFetch(
       fixedGraphRoute("/content", {
