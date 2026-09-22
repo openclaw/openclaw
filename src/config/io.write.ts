@@ -1,6 +1,5 @@
 import type fs from "node:fs";
 import path from "node:path";
-import { err, ok } from "@openclaw/normalization-core/result";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import {
@@ -48,6 +47,11 @@ import type { ConfigIoContext } from "./io.context.js";
 import { prepareCronOwnerWriteRefusal } from "./io.cron-owner-refusal.js";
 import { recordConfigWriteMetadata } from "./io.meta.js";
 import {
+  advanceConfigHealthBaselineForAcceptedWrite,
+  captureConfigHealthBaselineForWrite,
+  restoreConfigHealthBaselineForRolledBackWrite,
+} from "./io.observe.js";
+import {
   containsConfigIncludeDirective,
   hashConfigRaw,
   hasConfigMeta,
@@ -56,7 +60,10 @@ import {
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
 import { hashConfigRevision } from "./io.snapshot.js";
-import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
+import {
+  restoreLoggedConfigWarningFingerprint,
+  loggedConfigWarningFingerprints,
+} from "./io.state.js";
 import type {
   ConfigWriteInputBasis,
   ConfigWriteOptions,
@@ -75,10 +82,10 @@ import {
   type ConfigWriteRollbackStatus,
 } from "./io.write-errors.js";
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
+import { rejectConfigWriteForBlockingReasons } from "./io.write-rejected.js";
 import {
   assertBaseSnapshotStillCurrent,
   createGuardedConfigFileSystem,
-  formatConfigArtifactTimestamp,
   resolveConfigSizeBaselineBytes,
   resolveConfigStatMetadata,
   resolveConfigWriteBlockingReasons,
@@ -419,26 +426,15 @@ export async function writeConfigFileFromContext(
     });
   };
   const blockingReasons = resolveConfigWriteBlockingReasons(suspiciousReasons, options);
-  if (blockingReasons.length > 0 && options.allowDestructiveWrite !== true) {
-    const rejectedPath = `${configPath}.rejected.${formatConfigArtifactTimestamp(new Date().toISOString())}`;
-    // Only the completed exclusive create proves this payload is available for inspection.
-    options.assertConfigPathForWrite?.();
-    const rejectedSave = await deps.fs.promises
-      .writeFile(rejectedPath, json, { encoding: "utf-8", mode: 0o600, flag: "wx" })
-      .then(ok, err);
-    const saveDetail = rejectedSave.ok
-      ? `Rejected payload saved to ${rejectedPath}.`
-      : `Rejected payload could not be saved to ${rejectedPath}: ${formatErrorMessage(rejectedSave.error)}.`;
-    const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). ${saveDetail}`;
-    const error = Object.assign(new Error(message), {
-      code: "CONFIG_WRITE_REJECTED",
-      ...(rejectedSave.ok ? { rejectedPath } : {}),
-      reasons: blockingReasons,
-    });
-    deps.logger.warn(message);
-    await appendWriteAudit("rejected", error);
-    throw error;
-  }
+  await rejectConfigWriteForBlockingReasons({
+    deps,
+    configPath,
+    json,
+    blockingReasons,
+    allowDestructiveWrite: options.allowDestructiveWrite,
+    assertConfigPathForWrite: options.assertConfigPathForWrite,
+    appendWriteAudit,
+  });
 
   const preCommitRuntimePreflight =
     options.preCommitRuntimePreflight ??
@@ -507,6 +503,11 @@ export async function writeConfigFileFromContext(
       assertCurrent: guardedFs.assertCurrent,
     });
     await options.beforeCommit?.();
+    // Capture the pre-publication last-known-good baseline: an observed read
+    // between the publication and the baseline advance can record the published
+    // candidate as healthy, so the compensation must retain the pre-write
+    // baseline captured here instead of reading it after publication.
+    const healthBaselineCapture = await captureConfigHealthBaselineForWrite(deps, configPath);
     const result = withDeferredPluginMigrationsCurrent(
       { env: deps.env, expectedPending: deferredPluginMigrations },
       () => {
@@ -529,6 +530,15 @@ export async function writeConfigFileFromContext(
       result.method,
       undefined,
       await deps.fs.promises.stat(configPath).catch(() => null),
+    );
+    const healthBaselineCompensation = await advanceConfigHealthBaselineForAcceptedWrite(
+      deps,
+      healthBaselineCapture,
+      {
+        raw: json,
+        parsed: stampedOutputConfig,
+        resolved: sourceConfigForPreflight,
+      },
     );
     options.assertConfigPathForWrite?.();
     if (
@@ -605,15 +615,8 @@ export async function writeConfigFileFromContext(
             snapshot: priorSnapshotAuditRecord,
             expectedSnapshot: writtenSnapshotAuditRecord,
           });
-          if (previousWarningFingerprint === undefined) {
-            loggedConfigWarningFingerprints.delete(configPath);
-          } else {
-            setBoundedConfigIoWarningEntry(
-              loggedConfigWarningFingerprints,
-              configPath,
-              previousWarningFingerprint,
-            );
-          }
+          restoreLoggedConfigWarningFingerprint(configPath, previousWarningFingerprint);
+          return restoreConfigHealthBaselineForRolledBackWrite(deps, healthBaselineCompensation);
         },
       },
     };

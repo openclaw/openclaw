@@ -670,10 +670,6 @@ export function resolveConfigWriteBlockingReasons(
   );
 }
 
-export function formatConfigArtifactTimestamp(ts: string): string {
-  return ts.replaceAll(":", "-").replaceAll(".", "-");
-}
-
 export function stampConfigVersion(
   cfg: OpenClawConfig,
   version?: string,

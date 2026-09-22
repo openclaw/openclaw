@@ -29,7 +29,10 @@ import {
   readConfigFingerprintForPathSync,
   readConfigHealthEntry,
 } from "./io.observe-state.js";
-import { resolveConfigReadRecoveryContext } from "./io.observe-suspicious.js";
+import {
+  resolveConfigObserveSuspiciousReasons,
+  resolveConfigReadRecoveryContext,
+} from "./io.observe-suspicious.js";
 import { hashConfigRaw, resolveGatewayMode } from "./io.read-helpers.js";
 import type {
   ConfigRecoveryCandidate,
@@ -531,6 +534,20 @@ export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
   });
   const lastGoodPath = `${snapshot.path}.last-good`;
   if (!health.isCurrent()) {
+    return false;
+  }
+  const entry = readConfigHealthEntry(healthSnapshot.state, snapshot.path);
+  const suspiciousReasons = resolveConfigObserveSuspiciousReasons({
+    bytes: current.bytes,
+    hasMeta: current.hasMeta,
+    gatewayMode: current.gatewayMode,
+    parsed: snapshot.parsed,
+    lastKnownGood: entry.lastKnownGood,
+  });
+  if (suspiciousReasons.length > 0) {
+    params.logger?.warn(
+      `Config last-known-good promotion skipped: ${snapshot.path} (${suspiciousReasons.join(", ")})`,
+    );
     return false;
   }
   const raw = snapshot.raw;

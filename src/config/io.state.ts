@@ -25,3 +25,19 @@ export function setBoundedConfigIoWarningEntry<K, V>(map: Map<K, V>, key: K, val
   map.set(key, value);
   pruneMapToMaxSize(map, CONFIG_IO_WARNING_CACHE_MAX_SIZE);
 }
+
+/** Rolls the logged-config warning fingerprint back to its pre-write state. */
+export function restoreLoggedConfigWarningFingerprint(
+  configPath: string,
+  previousWarningFingerprint: string | undefined,
+): void {
+  if (previousWarningFingerprint === undefined) {
+    loggedConfigWarningFingerprints.delete(configPath);
+  } else {
+    setBoundedConfigIoWarningEntry(
+      loggedConfigWarningFingerprints,
+      configPath,
+      previousWarningFingerprint,
+    );
+  }
+}
