@@ -21,7 +21,7 @@ export async function respondDesktopObserve(params: {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true), then restart the gateway",
+          "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true)",
         ),
       );
       return;
@@ -32,7 +32,7 @@ export async function respondDesktopObserve(params: {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "gateway host desktop is not active; desktop.host.enabled changes require a gateway restart",
+          "gateway host desktop is unavailable in this Gateway runtime",
         ),
       );
       return;
@@ -85,7 +85,7 @@ export async function respondDesktopObserve(params: {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "node desktop is disabled; explicitly allow desktop.stream, then restart the gateway",
+          "node desktop service is unavailable; reconnect to the Gateway and retry",
         ),
       );
       return;

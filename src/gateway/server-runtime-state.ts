@@ -331,6 +331,12 @@ export async function createGatewayHttpTransport(params: {
   const portalService = createGatewayPortalService({
     httpBindHosts,
     httpServers,
+    ingress: params.cfg.gateway?.portals?.ingress,
+    managedTailscale: Boolean(managedTailscaleMode),
+    gatewayOrigins: [
+      params.cfg.gateway?.publicOrigin,
+      ...(params.cfg.gateway?.controlUi?.allowedOrigins ?? []),
+    ].filter((origin): origin is string => Boolean(origin)),
     ...(params.gatewayTls?.enabled ? { tlsOptions: params.gatewayTls.tlsOptions } : {}),
   });
   const reportUnattributableProxy = createGatewayUnattributableProxyReporter(params.log);
@@ -570,6 +576,9 @@ export async function createGatewayHttpTransport(params: {
       httpBindHosts.push(...bindHosts.filter((host) => boundHosts.has(host)));
       if (httpBindHosts.length === 0) {
         throw new Error("Gateway HTTP server failed to start");
+      }
+      if (!params.updateCanary) {
+        await portalService.startIngress();
       }
       // Published updaters retain the live sandbox port but already pass --update-canary.
       if (!params.updateCanary && params.cfg.mcp?.apps?.enabled === true) {

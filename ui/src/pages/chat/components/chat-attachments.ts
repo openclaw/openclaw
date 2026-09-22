@@ -18,6 +18,7 @@ import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
+import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
 import { ChatAttachmentReadLifecycle, type ChatAttachmentRead } from "./chat-attachment-reads.ts";
 import { encodeTextAsDataUrl } from "./chat-attachment-text.ts";
 import { renderComposerPastedText } from "./chat-composer-pasted-text.ts";
@@ -117,34 +118,35 @@ function dataImageClipboardFile(
   baseName = "pasted-image",
 ): { file: File; dataUrl: string } | null {
   const trimmed = dataUrl.trim();
-  const commaIndex = trimmed.indexOf(",");
-  const match =
-    commaIndex >= 0
-      ? /^data:(image\/[a-z0-9.+-]+);base64$/i.exec(trimmed.slice(0, commaIndex))
-      : null;
-  if (!match) {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(trimmed);
+  const mimeType = match?.[1]?.toLowerCase();
+  const base64 = match ? trimmed.slice(match[0].length).replace(/\s+/g, "") : undefined;
+  if (!mimeType || !base64) {
     return null;
   }
-  const mimeType = match[1]?.toLowerCase();
-  const base64Source = trimmed.slice(commaIndex + 1);
-  if (!mimeType || !base64Source) {
-    return null;
-  }
-  const base64 = base64Source.replace(/\s+/g, "");
   try {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    const extension = mimeType.split("/")[1]?.replace(/[^a-z0-9.+-]/gi, "") || "png";
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
     return {
-      file: new File([bytes], `${baseName}.${extension}`, { type: mimeType }),
+      file: new File([bytes], `${baseName}.${mimeType.slice("image/".length)}`, { type: mimeType }),
       dataUrl: `data:${mimeType};base64,${base64}`,
     };
   } catch {
     return null;
   }
+}
+
+/** Normalize clipboard images for the loaded composers. */
+function readChatClipboardImages(clipboard: DataTransfer | null): {
+  files: File[];
+  inline?: { file: File; dataUrl: string };
+} {
+  const files = Array.from(clipboard?.items ?? [])
+    .filter((item) => item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+  const text = files.length === 0 ? clipboard?.getData("text/plain") : undefined;
+  const inline = text ? dataImageClipboardFile(text) : null;
+  return inline ? { files: [inline.file], inline } : { files };
 }
 
 /** Builds a registered chat attachment from a base64 image data URL. */
@@ -226,13 +228,16 @@ function readAttachmentFile(
   }
 }
 
-function appendAttachmentFiles(candidates: readonly File[], props: ChatAttachmentControlsProps) {
+export function appendChatAttachmentFiles(
+  candidates: readonly File[],
+  props: ChatAttachmentControlsProps,
+): number {
   if (!props.onAttachmentsChange || candidates.length === 0 || props.readSignal?.aborted) {
-    return;
+    return 0;
   }
   const files = admitAttachmentFiles(candidates, props.attachmentLimits);
   if (files.length === 0) {
-    return;
+    return 0;
   }
   const reads =
     props.attachmentReads ?? new ChatAttachmentReadLifecycle(() => props.onRequestUpdate?.());
@@ -243,25 +248,26 @@ function appendAttachmentFiles(candidates: readonly File[], props: ChatAttachmen
       readAttachmentFile(file, entry, reads, props);
     }
   });
+  return files.length;
 }
 
-export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
-  const items = e.clipboardData?.items;
-  if (!items || !props.onAttachmentsChange) {
+export function handleChatAttachmentPaste(
+  e: ClipboardEvent,
+  props: ChatAttachmentControlsProps,
+  options: { imagesOnly?: boolean } = {},
+) {
+  if (!e.clipboardData || !props.onAttachmentsChange) {
     return;
   }
-  const imageFiles = Array.from(items)
-    .filter((item) => item.type.startsWith("image/"))
-    .map((item) => item.getAsFile())
-    .filter((file): file is File => file !== null);
+  const { files: imageFiles, inline: pasted } = readChatClipboardImages(e.clipboardData);
   if (imageFiles.length === 0) {
-    const text = e.clipboardData?.getData("text/plain");
-    const pasted = text ? dataImageClipboardFile(text) : null;
-    if (!pasted) {
+    if (!options.imagesOnly) {
       handleLargeTextPaste(e, props);
-      return;
     }
-    e.preventDefault();
+    return;
+  }
+  e.preventDefault();
+  if (pasted) {
     if (admitAttachmentFiles([pasted.file], props.attachmentLimits).length === 0) {
       return;
     }
@@ -271,8 +277,7 @@ export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachme
     ]);
     return;
   }
-  e.preventDefault();
-  appendAttachmentFiles(imageFiles, props);
+  appendChatAttachmentFiles(imageFiles, props);
 }
 
 function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
@@ -282,12 +287,12 @@ function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsP
   }
   const files = [...(input.files ?? [])];
   input.value = "";
-  appendAttachmentFiles(files, props);
+  appendChatAttachmentFiles(files, props);
 }
 
 function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentControlsProps) {
   e.preventDefault();
-  appendAttachmentFiles([...(e.dataTransfer?.files ?? [])], props);
+  appendChatAttachmentFiles([...(e.dataTransfer?.files ?? [])], props);
 }
 
 type ChatAttachmentDropProps = ChatAttachmentControlsProps & {
@@ -411,20 +416,21 @@ export function renderChatAttachmentMenuTrigger(
 }
 
 export function renderChatAttachmentMenuOptions(fileIcon = icons.folder) {
-  return html`
-    <wa-dropdown-item class="agent-chat__attach-menu-option" value="camera">
-      <span slot="icon" aria-hidden="true">${icons.camera}</span>
-      <span>${t("chat.composer.takePhoto")}</span>
-    </wa-dropdown-item>
-    <wa-dropdown-item class="agent-chat__attach-menu-option" value="photo">
-      <span slot="icon" aria-hidden="true">${icons.image}</span>
-      <span>${t("chat.composer.attachPhoto")}</span>
-    </wa-dropdown-item>
-    <wa-dropdown-item class="agent-chat__attach-menu-option" value="file">
-      <span slot="icon" aria-hidden="true">${fileIcon}</span>
-      <span>${t("chat.composer.attachFileOption")}</span>
-    </wa-dropdown-item>
-  `;
+  const options = useSingleAttachmentPicker()
+    ? [{ value: "file", icon: fileIcon, label: t("chat.composer.attach") }]
+    : [
+        { value: "camera", icon: icons.camera, label: t("chat.composer.takePhoto") },
+        { value: "photo", icon: icons.image, label: t("chat.composer.attachPhoto") },
+        { value: "file", icon: fileIcon, label: t("chat.composer.attachFileOption") },
+      ];
+  return options.map(
+    ({ value, icon, label }) => html`
+      <wa-dropdown-item class="agent-chat__attach-menu-option" value=${value}>
+        <span slot="icon" aria-hidden="true">${icon}</span>
+        <span>${label}</span>
+      </wa-dropdown-item>
+    `,
+  );
 }
 
 function removeBrowserAnnotationAttachment(

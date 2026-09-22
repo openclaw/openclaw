@@ -29,7 +29,12 @@ import {
   isBrowserOperatorUiClient,
   isOperatorUiClient,
 } from "../../../utils/message-channel.js";
+import {
+  isGatewayAuthPolicyCurrent,
+  resolveGatewayAuthPolicyGeneration,
+} from "../../auth-policy.js";
 import { gitHubPublicApi } from "../../github-public-api.js";
+import { resolveIdentityOperatorScopes } from "../../operator-identity-scopes.js";
 import type { OperatorScope } from "../../operator-scopes.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
@@ -90,7 +95,10 @@ export async function rejectGatewayStartupConnect(
 }
 
 export async function rejectUnavailableProfileConnect(
-  context: GatewayConnectPhaseContext,
+  context: Pick<
+    GatewayConnectPhaseContext,
+    "markHandshakeFailure" | "sendHandshakeErrorResponse" | "releasePendingNodePairingCleanup"
+  > & { handler: Pick<GatewayConnectPhaseContext["handler"], "close"> },
   error: unknown,
 ): Promise<void> {
   // Role admission needs a verified profile; an empty-scope hello hides the
@@ -137,15 +145,7 @@ export function resolveEffectiveConnectionScopes(params: {
   const verifiedIdentity = params.verifiedIdentity;
   let identityScopes: OperatorScope[] = [];
   if (params.role === "operator" && verifiedIdentity) {
-    const exactIdentityScopes = params.identityScopes?.[verifiedIdentity];
-    identityScopes = exactIdentityScopes ?? [];
-    if (exactIdentityScopes === undefined && verifiedIdentity.includes("@")) {
-      const normalizedIdentity = verifiedIdentity.toLowerCase();
-      identityScopes =
-        Object.entries(params.identityScopes ?? {}).find(
-          ([identity]) => identity.includes("@") && identity.toLowerCase() === normalizedIdentity,
-        )?.[1] ?? [];
-    }
+    identityScopes = resolveIdentityOperatorScopes(verifiedIdentity, params.identityScopes);
   }
   const scopes = applyConnectionScopeCap({
     scopes: [...new Set([...params.deviceScopes, ...identityScopes])],
@@ -185,6 +185,9 @@ export function resolveGatewayConnectPolicyFailure(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
+  if (!isGatewayAuthPolicyCurrent(resolveGatewayAuthPolicyGeneration(context.configSnapshot))) {
+    return { kind: "auth" };
+  }
   if (
     state.sessionUsesSharedGatewayAuth &&
     context.handler.getRequiredSharedGatewaySessionGeneration &&

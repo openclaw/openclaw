@@ -1,8 +1,7 @@
+import { mediaKindFromMime } from "@openclaw/media-core/constants";
 /**
  * Message normalization utilities for chat rendering.
  */
-
-import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import {
   asFiniteNumber,
   asNonNegativeFiniteNumber,
@@ -21,6 +20,7 @@ import {
   isToolResultContentType,
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
+import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
@@ -85,6 +85,7 @@ function normalizeOmittedMediaContentBlock(
   if (
     item.type !== "image" ||
     item.omitted !== true ||
+    normalizeOptionalString(item.artifactId) !== undefined ||
     normalizeOptionalString(item.url) !== undefined
   ) {
     return null;
@@ -461,7 +462,9 @@ function expandTextContent(
  * Normalize a raw message object into a consistent structure.
  */
 export function normalizeMessage(message: unknown): NormalizedMessage {
-  const m = asOptionalRecord(projectImportedMessageForDisplay(message)) ?? {};
+  const m =
+    asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
+    {};
   const role = resolveMessageRole(m);
   const contentRaw = m.content;
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;

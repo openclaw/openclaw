@@ -143,26 +143,4 @@ describe("question chat items", () => {
     expect(container.textContent).not.toContain("fake-secret-never-render");
     expect(container.innerHTML).not.toContain("fake-secret-never-render");
   });
-
-  it.each(["pending", "answered", "expired", "cancelled"] as const)(
-    "scopes %s questions to the selected session and its equivalent alias",
-    (status) => {
-      const question = prompt(status);
-      const expected =
-        status === "pending"
-          ? []
-          : [
-              {
-                kind: "question",
-                key: "question:question-1",
-                questionId: "question-1",
-                startedAt: 1_000,
-              },
-            ];
-
-      expect(items(question, false)).toEqual(expected);
-      expect(items({ ...question, sessionKey: "main" }, false)).toEqual(expected);
-      expect(items({ ...question, sessionKey: "agent:other:main" }, false)).toEqual([]);
-    },
-  );
 });

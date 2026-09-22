@@ -390,6 +390,7 @@ describe("tools.effective handler", () => {
     expect(payload?.groups?.[0]?.source).toBe("core");
     expect(payload?.groups?.[0]?.tools?.[0]?.id).toBe("exec");
     const inventoryParams = resolveEffectiveToolInventoryArg();
+    expect(inventoryParams?.sessionId).toBe("session-1");
     expect(inventoryParams?.currentChannelId).toBe("channel-1");
     expect(inventoryParams?.currentThreadTs).toBe("thread-2");
     expect(inventoryParams?.accountId).toBe("acct-1");
@@ -435,6 +436,32 @@ describe("tools.effective handler", () => {
     expect(runtimeMocks.peekSessionMcpRuntime).toHaveBeenCalledTimes(2);
     expect(runtimeMocks.resolveSessionMcpConfigSummary).toHaveBeenCalledTimes(1);
     expectResponsesOk(first.respond, second.respond);
+  });
+
+  it("does not reuse a fresh inventory after the same session key is reset", async () => {
+    runtimeMocks.resolveEffectiveToolInventory
+      .mockReturnValueOnce(
+        makeCoreInventory({ id: "old_session_tool", label: "Old", description: "Old session" }),
+      )
+      .mockReturnValueOnce(
+        makeCoreInventory({ id: "new_session_tool", label: "New", description: "New session" }),
+      );
+    const first = createInvokeParams({ sessionKey: "main:abc" });
+    await first.invoke();
+    const loaded = runtimeMocks.loadSessionEntry("main:abc");
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      ...loaded,
+      entry: { ...loaded.entry!, sessionId: "session-2" },
+    });
+    const second = createInvokeParams({ sessionKey: "main:abc" });
+    await second.invoke();
+    expect(firstRespondCall(first.respond)?.[1]).toMatchObject({
+      groups: [{ tools: [{ id: "old_session_tool" }] }],
+    });
+    expect(firstRespondCall(second.respond)?.[1]).toMatchObject({
+      groups: [{ tools: [{ id: "new_session_tool" }] }],
+    });
+    expect(resolveEffectiveToolInventoryArg(1)?.sessionId).toBe("session-2");
   });
 
   it("recomputes fresh base inventory when connected node plugin tools change", async () => {

@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   resolveAgentWorkspaceDir,
@@ -13,7 +12,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isFileMissingError,
-  listMemoryFiles,
   loadSqliteVecExtension,
   readMemoryEntryOriginsInDatabase,
   type MemoryEntryOrigin,
@@ -51,6 +49,11 @@ import {
 } from "./memory-forget-index-sources.js";
 import { summarizeParticipantMatches, type MemoryForgetReport } from "./memory-forget-report.js";
 import { ensureMemorySessionTombstones } from "./memory-session-tombstones.js";
+import {
+  listWorkspaceDirectory,
+  listWorkspaceMemoryFiles,
+  readWorkspaceText,
+} from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
 import {
@@ -231,14 +234,14 @@ async function forgetWorkspaceMemory(
   const untargetableEntryKeys = new Set<string>();
   const refusals: string[] = [];
   const corpusDir = path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR);
-  const corpusFiles = await fs
-    .readdir(corpusDir, { withFileTypes: true })
-    .catch((error: unknown) => {
+  const corpusFiles = await listWorkspaceDirectory(workspaceDir, corpusDir).catch(
+    (error: unknown) => {
       if (isFileMissingError(error)) {
         return [];
       }
       throw error;
-    });
+    },
+  );
   const corpusRewrites: MemoryRewrite[] = [];
   const corpusSnippets = new Set<string>();
   let removedCorpusLines = 0;
@@ -247,7 +250,7 @@ async function forgetWorkspaceMemory(
       continue;
     }
     const absolutePath = path.join(corpusDir, file.name);
-    const content = await fs.readFile(absolutePath, "utf8");
+    const content = await readWorkspaceText(workspaceDir, absolutePath);
     const lines = content.split("\n");
     const retained = lines.filter((line) => {
       if (!referencesSession(line, params.agentId, sessionIds)) {
@@ -279,7 +282,7 @@ async function forgetWorkspaceMemory(
     scrubMemoryContent({ content, entryKeys, sessionIds, corpusSnippets, agentId: params.agentId });
   let removedMemoryEntries = 0;
   let removedMemoryLines = 0;
-  const memoryFiles = await listMemoryFiles(
+  const memoryFiles = await listWorkspaceMemoryFiles(
     workspaceDir,
     DREAMS_FILENAMES.map((name) => path.join(workspaceDir, name)),
   );
@@ -288,7 +291,7 @@ async function forgetWorkspaceMemory(
     if (path.dirname(absolutePath) === corpusDir) {
       continue;
     }
-    const content = await fs.readFile(absolutePath, "utf8");
+    const content = await readWorkspaceText(workspaceDir, absolutePath);
     for (const line of content.split(/\r?\n/u)) {
       const key = PROMOTION_MARKER.exec(line)?.[1]?.trim();
       if (key && !allOriginKeys.has(key)) {
@@ -545,12 +548,6 @@ async function forgetWorkspaceMemory(
           return false;
         }
         if (chunkIds.length > 0) {
-          if (indexPlan.ftsRows > 0) {
-            executeSqliteQuerySync(
-              db,
-              kysely.deleteFrom("memory_index_chunks_fts").where("id", "in", chunkIds),
-            );
-          }
           if (indexPlan.hasVectorTable) {
             executeSqliteQuerySync(
               db,
@@ -609,6 +606,7 @@ async function forgetWorkspaceMemory(
   }
   for (const rewrite of [...memoryRewrites, ...corpusRewrites]) {
     await commitMemoryContent({
+      workspaceDir,
       filePath: rewrite.absolutePath,
       tempPrefix: `${path.basename(rewrite.absolutePath)}.forget`,
       expectedHash: hashMemoryContent(rewrite.expectedContent),

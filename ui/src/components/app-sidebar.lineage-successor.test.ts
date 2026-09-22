@@ -17,6 +17,7 @@ describe("selected lineage after managed list admission", () => {
   it.each(["metadata", "successor", "pending incarnation", "known parent"] as const)(
     "%s updates preserve current ancestry before the primary response settles",
     async (kind) => {
+      vi.useFakeTimers();
       const pendingIncarnation = kind === "pending incarnation";
       const changesParent = kind === "successor" || kind === "known parent";
       const changesSessionId = kind === "successor" || pendingIncarnation;
@@ -176,6 +177,7 @@ describe("selected lineage after managed list admission", () => {
           reason: kind === "metadata" ? "patch" : "create",
           ts: 30,
         });
+        await vi.advanceTimersByTimeAsync(5_000);
         await waitForFast(() => {
           expect(primaryReads).toBeGreaterThan(0);
           expect(managedReads).toBeGreaterThan(originalManagedReads);

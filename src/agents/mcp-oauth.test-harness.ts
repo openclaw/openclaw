@@ -1,6 +1,9 @@
 import path from "node:path";
 import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 
 const REQUESTER_SCOPE = { messageChannel: "telegram", agentAccountId: "bot" } as const;
@@ -23,10 +26,12 @@ export async function withTempHome<T>(
   return withBaseTempHome(async (home) => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     try {
       return await run(home);
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;

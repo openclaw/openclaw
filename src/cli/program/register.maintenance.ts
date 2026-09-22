@@ -239,6 +239,11 @@ export function registerMaintenanceCommands(
         if (error instanceof ExitError || (!lintMode && !opts.json)) {
           throw error;
         }
+        if (lintMode && (opts.json === true || !process.stdout.isTTY)) {
+          const { formatDoctorLintFailure } = await import("../../commands/doctor-lint-output.js");
+          defaultRuntime.writeJson(formatDoctorLintFailure(error));
+          exitCliAfterOutput(defaultRuntime, 2);
+        }
         exitDoctorError(error, opts.json === true || !process.stdout.isTTY);
       }
     });

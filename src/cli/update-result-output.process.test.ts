@@ -37,7 +37,31 @@ describe("failed update result output", () => {
       reason: "doctor-failed",
       recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
     });
-    expect(output.steps).toHaveLength(40);
-    expect(output.steps.at(-1).stderrTail).toBe("diagnostic ".repeat(727));
+    expect(output.steps.slice(0, 40)).toEqual(
+      Array.from({ length: 40 }, (_, index) => ({
+        name: `update step ${index}`,
+        command: "fixture",
+        cwd: state,
+        durationMs: 1,
+        exitCode: index === 39 ? 1 : 0,
+        stderrTail: "diagnostic ".repeat(727),
+      })),
+    );
+    expect(output.steps.slice(40)).toEqual([
+      {
+        name: "gateway recovery verification",
+        command: "gateway verification",
+        cwd: state,
+        durationMs: expect.any(Number),
+        exitCode: 1,
+        failureFacts: [
+          {
+            check: "gateway-recovery",
+            code: "gateway-probe-failed",
+            message: "The installed Gateway version could not be read for recovery verification.",
+          },
+        ],
+      },
+    ]);
   });
 });

@@ -3,7 +3,7 @@ import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
@@ -234,9 +234,11 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
   });
 
-  it("uses only the detail contract when an agent is selected", async () => {
+  it("passes the selected agent to the detail identity owner", async () => {
     const request = vi.fn(async (_method: string, params?: unknown) => {
-      if (Object.keys(params as object).some((key) => key !== "url" && key !== "refresh")) {
+      if (
+        Object.keys(params as object).some((key) => !["url", "refresh", "agentId"].includes(key))
+      ) {
         throw new Error("Unexpected detail parameter");
       }
       return requestedItem(params);
@@ -247,7 +249,7 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
     expect(request).toHaveBeenCalledWith(
       "forge.item",
-      { url: itemUrl(1) },
+      { url: itemUrl(1), agentId: "selected-agent" },
       { signal: expect.any(AbortSignal) },
     );
   });
@@ -627,6 +629,29 @@ describe("Plugin link reader panel", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    "GitHub API rate limit exceeded (HTTP 403). Wait 120 seconds and retry.",
+    "GitHub authentication failed (HTTP 401). Reconnect the GitHub identity in Settings.",
+    "GitHub access denied (HTTP 403). Check the configured GitHub identity's repository access.",
+    "GitHub item is unavailable or not public (HTTP 404). Open the link on GitHub to check access.",
+    "GitHub request timed out. Retry shortly.",
+  ])("shows the actionable Gateway failure: %s", async (message) => {
+    const request = vi
+      .fn()
+      .mockRejectedValue(new GatewayRequestError({ code: "UNAVAILABLE", message }));
+    const panel = await mount(request);
+    open(panel);
+    await waitForFast(() =>
+      expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(message),
+    );
+    expect(panel.renderRoot.querySelector('[role="alert"] h2')?.textContent).toBe(
+      "Could not load item",
+    );
+    expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).not.toContain(
+      "This item may be private or deleted",
+    );
+  });
+
   it("keeps failure and disconnect states actionable without displaying stale content", async () => {
     const request = vi
       .fn()
@@ -636,7 +661,7 @@ describe("Plugin link reader panel", () => {
     open(panel);
     await waitForFast(() =>
       expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(
-        "rate-limiting",
+        "Try again or open the original",
       ),
     );
     const external = panel.renderRoot.querySelector<HTMLAnchorElement>(

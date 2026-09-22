@@ -62,15 +62,16 @@ export class PaletteSessionSettings {
     this.host.requestUpdate();
   }
 
-  private async showPlaces(value: boolean) {
+  private async showPlaces(value: boolean, pointer = false) {
     this.places = value;
     this.query = "";
     this.host.requestUpdate();
     await this.host.updateComplete;
+    // Text inputs show :focus-visible even after a pointer click. Focus the
+    // back button on pointer entry; keyboard entry goes straight to search.
+    const target = value ? (pointer ? "back" : "search") : "workspace";
     this.host
-      .querySelector<HTMLElement>(
-        value ? ".palette-session-settings__search" : ".palette-session-settings__workspace",
-      )
+      .querySelector<HTMLElement>(".palette-session-settings__" + target)
       ?.focus({ preventScroll: true });
   }
 
@@ -322,6 +323,7 @@ export class PaletteSessionSettings {
                   <div class="palette-session-settings__agent">
                     ${renderAgentSelect({
                       agents: place.agents(),
+                      variant: "default",
                       agentId: place.agentId,
                       agentIdentity: context?.agentIdentity,
                       disabled: locked,
@@ -336,7 +338,7 @@ export class PaletteSessionSettings {
                     class="palette-session-settings__row palette-session-settings__workspace"
                     type="button"
                     ?disabled=${locked}
-                    @click=${() => this.showPlaces(true)}
+                    @click=${(event: MouseEvent) => this.showPlaces(true, event.detail > 0)}
                   >
                     <span class="palette-session-settings__icon">${icons.folder}</span
                     ><span class="palette-session-settings__copy"
@@ -365,25 +367,33 @@ export class PaletteSessionSettings {
                   </button>
                 `
           }
-          <div class="palette-session-settings__footer">
-            <label
-              class="palette-session-settings__remember"
-              title=${!preferences.available ? t("commandPalette.rememberUnavailable") : nothing}
-              ><input
-                type="checkbox"
-                .checked=${preferences.remember}
-                ?disabled=${locked || !preferences.available}
-                @change=${(event: Event) => {
-                  if (event.currentTarget instanceof HTMLInputElement) {
-                    preferences.setRemember(event.currentTarget.checked);
+          ${
+            !this.places || preferences.failed
+              ? html`<div class="palette-session-settings__footer">
+                  ${
+                    !this.places
+                      ? html`<label
+                          class="palette-session-settings__remember"
+                          title=${!preferences.available ? t("commandPalette.rememberUnavailable") : nothing}
+                          ><input
+                            type="checkbox"
+                            .checked=${preferences.remember}
+                            ?disabled=${locked || !preferences.available}
+                            @change=${(event: Event) => {
+                              if (event.currentTarget instanceof HTMLInputElement) {
+                                preferences.setRemember(event.currentTarget.checked);
+                              }
+                            }}
+                          /><span
+                            >${t("commandPalette.rememberSettings", { shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette) })}</span
+                          ></label
+                        >`
+                      : nothing
                   }
-                }}
-              /><span
-                >${t("commandPalette.rememberSettings", { shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette) })}</span
-              ></label
-            >
-            ${preferences.failed ? html`<div class="palette-session-settings__error" role="alert">${t("commandPalette.settingsSaveFailed")} <button type="button" class="btn btn--sm" @click=${() => preferences.retry()}>${t("common.retry")}</button></div>` : nothing}
-          </div>
+                  ${preferences.failed ? html`<div class="palette-session-settings__error" role="alert">${t("commandPalette.settingsSaveFailed")} <button type="button" class="btn btn--sm" @click=${() => preferences.retry()}>${t("common.retry")}</button></div>` : nothing}
+                </div>`
+              : nothing
+          }
         </div>
       </wa-popover>
     `;

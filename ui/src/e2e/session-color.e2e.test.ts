@@ -38,13 +38,10 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
         const trigger =
           surface === "sidebar"
-            ? page.getByRole("button", {
-                name: "Open session menu: Keyboard appearance",
-                exact: true,
-              })
+            ? page.locator(`[data-session-key="${key}"] .sidebar-recent-session__link`)
             : page.locator(".chat-header-session-menu__trigger");
         await trigger.focus();
-        await page.keyboard.press("Enter");
+        await page.keyboard.press(surface === "sidebar" ? "Shift+F10" : "Enter");
         if (surface === "compact") {
           await expect
             .poll(() =>
@@ -305,7 +302,14 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
 
-      Object.assign(designReview, { label: "Design review refreshed", color: null, icon: "book" });
+      const committed = await gateway.getSessionRow(key);
+      Object.assign(designReview, {
+        ...committed,
+        label: "Design review refreshed",
+        color: null,
+        icon: "book",
+        updatedAt: committed.updatedAt! + 1,
+      });
       await gateway.setSessionsListResponse(sessionsListResponse(sessions));
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, color: null });
       // Only the roster response carries this label; wait for that render so a

@@ -70,6 +70,7 @@ async function extractTimestamp(params: {
   source?: string;
   workspaceDir?: string;
   sessionSourceMtimes?: ReadonlyMap<string, number | undefined>;
+  memorySourceMtimes?: ReadonlyMap<string, number | undefined>;
 }): Promise<Date | null> {
   if (params.source === "sessions") {
     // Session paths are logical SQLite identities, not workspace files. Ranking
@@ -85,6 +86,12 @@ async function extractTimestamp(params: {
   // Memory root/topic files are evergreen knowledge and should not decay.
   if (params.source === "memory" && isEvergreenMemoryPath(params.filePath)) {
     return null;
+  }
+
+  if (params.source === "memory" && params.memorySourceMtimes) {
+    // Remote files use the host metadata already recorded by indexing, never Gateway paths.
+    const mtime = params.memorySourceMtimes.get(params.filePath);
+    return mtime !== undefined && Number.isFinite(mtime) ? new Date(mtime) : null;
   }
 
   if (!params.workspaceDir) {
@@ -113,6 +120,7 @@ export async function applyTemporalDecayToHybridResults<
   temporalDecay?: Partial<TemporalDecayConfig>;
   workspaceDir?: string;
   sessionSourceMtimes?: ReadonlyMap<string, number | undefined>;
+  memorySourceMtimes?: ReadonlyMap<string, number | undefined>;
   nowMs?: number;
 }): Promise<T[]> {
   const config = { ...DEFAULT_TEMPORAL_DECAY_CONFIG, ...params.temporalDecay };
@@ -133,6 +141,7 @@ export async function applyTemporalDecayToHybridResults<
           source: entry.source,
           workspaceDir: params.workspaceDir,
           sessionSourceMtimes: params.sessionSourceMtimes,
+          memorySourceMtimes: params.memorySourceMtimes,
         });
         timestampPromiseCache.set(cacheKey, timestampPromise);
       }

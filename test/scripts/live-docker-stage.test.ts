@@ -388,6 +388,41 @@ describe("frozen committed source errors", () => {
     expect(() => freshReader.readText(metadata)).toThrow();
   });
 
+  it.each(["tree", "blob"] as const)(
+    "rejects a wrong-type %s reference even when Git can dereference it",
+    (type) => {
+      const source = committedSourceFixture({ "contract.txt": "committed contract" });
+      const objectFile = path.join(source.root, "fixture-object");
+      const writeObject = (kind: string, content: string | Buffer) => {
+        writeFileSync(objectFile, content);
+        return source.git("hash-object", "-w", "--literally", "-t", kind, objectFile);
+      };
+      let wrongOid = source.sha;
+      let tree = wrongOid;
+      if (type === "blob") {
+        const blob = source.git("rev-parse", `${source.sha}:contract.txt`);
+        wrongOid = writeObject(
+          "tag",
+          `object ${blob}\ntype blob\ntag fixture\ntagger Test <test@example.invalid> 1 +0000\n\nfixture\n`,
+        );
+        tree = writeObject(
+          "tree",
+          Buffer.concat([Buffer.from("100644 contract.txt\0"), Buffer.from(wrongOid, "hex")]),
+        );
+      }
+      const commit = writeObject(
+        "commit",
+        `${source.git("cat-file", "commit", source.sha).replace(/^tree [0-9a-f]{40}/u, `tree ${tree}`)}\n`,
+      );
+      source.git("update-ref", "HEAD", commit);
+      // Typed cat-file accepts these conversions; source identity must still reject them.
+      expect(source.git("cat-file", type, wrongOid).length).toBeGreaterThan(0);
+      expect(() =>
+        createFrozenTargetSource(source.root, commit).readText("contract.txt"),
+      ).toThrow();
+    },
+  );
+
   it("distinguishes genuine absence from read errors through fallback and negative predicates", () => {
     const source = committedSourceFixture({ "package.json": "{}\n" });
     const result = invoke(

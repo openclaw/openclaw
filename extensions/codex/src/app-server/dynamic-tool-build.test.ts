@@ -61,6 +61,7 @@ import { createCodexTestModel } from "./test-support.js";
 const {
   bindProductionCodexHostCapabilities,
   buildDynamicToolsForTest,
+  cleanupDynamicToolBuildFixture,
   createCodexRuntimePlanFixture,
   createParams,
   createRuntimeDynamicTool,
@@ -395,13 +396,7 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   afterEach(async () => {
-    for (const close of hostCapabilityClosers.splice(0)) {
-      close();
-    }
-
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers);
   });
 
   it("uses the message tool channel before a differing ingress provider", () => {

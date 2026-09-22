@@ -15,7 +15,7 @@ import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
+import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";

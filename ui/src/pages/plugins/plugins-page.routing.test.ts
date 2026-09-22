@@ -78,7 +78,7 @@ describe("PluginsPage routing", () => {
   afterEach(resetPluginsPageTestState);
 
   it.each([false, true])(
-    "a chat install link opens review only when installed=%s permits it",
+    "a chat install link opens details without installing (installed=%s)",
     async (installed) => {
       const detail = {
         plugin: {
@@ -130,7 +130,7 @@ describe("PluginsPage routing", () => {
           search: "",
         }),
       );
-      expect(Boolean(page.querySelector(".plugin-install-wizard"))).toBe(!installed);
+      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
     },
   );
@@ -595,46 +595,38 @@ describe("PluginsPage routing", () => {
     expect(request.mock.calls.filter(([method]) => method === "plugins.inspect")).toHaveLength(2);
   });
 
-  it.each(["review", "installing"])(
-    "keeps the latest Install selection while its wizard is %s",
-    async (stage) => {
-      const details = ["Alpha", "Beta"].map((name) =>
-        discoveryDetail({
-          ...createPlugin({
-            id: name.toLowerCase(),
-            name,
-            installed: false,
-            state: "not-installed",
-          }),
-          catalogId: name === "Alpha" ? "ch_YWxwaGE" : "ch_YmV0YQ",
+  it.each(["installed", "unavailable"])(
+    "reports when a listed install becomes %s",
+    async (change) => {
+      const offered = discoveryDetail({
+        ...createPlugin({
+          id: "calendar",
+          name: "Calendar",
+          installed: false,
+          state: "not-installed",
         }),
-      );
-      const [alpha, beta] = details;
-      const alphaRead = deferred<PluginDiscoveryDetailResult>();
-      const betaRead = deferred<PluginDiscoveryDetailResult>();
-      const installation = deferred<unknown>();
+        catalogId: "ch_Y2FsZW5kYXI",
+      });
+      const current = {
+        ...offered,
+        plugin: {
+          ...offered.plugin,
+          local: {
+            ...offered.plugin.local,
+            installed: change === "installed",
+            action: change === "installed" ? ("manage" as const) : ("unavailable" as const),
+          },
+        },
+      };
       const { client, request } = createClient(async (method, params) => {
         if (method === "plugins.catalog.browse") {
-          return {
-            items:
-              asNullableRecord(params)?.intent === "all"
-                ? details.map((detail) => detail.plugin)
-                : [],
-          };
+          return { items: asNullableRecord(params)?.intent === "all" ? [offered.plugin] : [] };
         }
         if (method === "plugins.catalog.categories") {
           return { categories: [] };
         }
         if (method === "plugins.catalog.get") {
-          return asNullableRecord(params)?.id === alpha!.plugin.id
-            ? alphaRead.promise
-            : betaRead.promise;
-        }
-        if (method === "plugins.install") {
-          return installation.promise;
-        }
-        if (method === "plugins.list") {
-          return createResult();
+          return current;
         }
         throw new Error(`Unexpected method: ${method}`);
       });
@@ -647,63 +639,121 @@ describe("PluginsPage routing", () => {
           createPluginsRouteLocation("/plugins"),
         ),
       );
-      try {
-        await vi.waitFor(() =>
-          expect(page.querySelectorAll(".plugin-catalog-card__install")).toHaveLength(2),
-        );
-        page.querySelector<HTMLButtonElement>('[aria-label="Install Alpha"]')!.click();
-        page.querySelector<HTMLButtonElement>('[aria-label="Install Beta"]')!.click();
-        await vi.waitFor(() =>
-          expect(
-            request.mock.calls.filter(([method]) => method === "plugins.catalog.get"),
-          ).toHaveLength(2),
-        );
-        betaRead.resolve(beta!);
-        const wizard = () => page.querySelector(".plugin-install-wizard");
-        await vi.waitFor(() => expect(wizard()?.querySelector("h2")?.textContent).toBe("Beta"));
-        if (stage === "installing") {
-          [...wizard()!.querySelectorAll<HTMLButtonElement>("button")]
-            .find((button) => button.textContent?.trim() === "Install Beta")!
-            .click();
-          await vi.waitFor(() =>
-            expect(request).toHaveBeenCalledWith("plugins.install", {
-              source: "clawhub",
-              packageName: "beta",
-            }),
-          );
-          expect(wizard()?.getAttribute("data-stage")).toBe("installing");
-        }
-        alphaRead.resolve(alpha!);
-        await alphaRead.promise;
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-        await page.updateComplete;
-
-        expect(wizard()?.querySelector("h2")?.textContent).toBe("Beta");
-        expect(wizard()?.getAttribute("data-stage")).toBe(stage);
-        expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(
-          stage === "installing" ? 1 : 0,
-        );
-      } finally {
-        alphaRead.resolve(alpha!);
-        betaRead.resolve(beta!);
-        installation.resolve({
-          ok: true,
-          plugin: createPlugin({ id: "beta", name: "Beta", enabled: true, state: "enabled" }),
-          restartRequired: false,
-        });
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-        await page.updateComplete;
-      }
+      await vi.waitFor(() =>
+        expect(page.querySelector('[aria-label="Install Calendar"]')).not.toBeNull(),
+      );
+      page.querySelector<HTMLButtonElement>('[aria-label="Install Calendar"]')!.click();
+      await vi.waitFor(() => expect(page.textContent).toContain("Plugin availability changed"));
+      expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
+      expect(
+        page.querySelector<HTMLButtonElement>('[aria-label="Install Calendar"]')?.disabled,
+      ).toBe(false);
     },
   );
 
-  it.each(["/settings/plugins/workboard", "/plugins/ch_QG9wZW5jbGF3L3dvcmtib2FyZA"])(
-    "renders local controls at %s while optional metadata settles independently",
-    async (route) => {
+  it("keeps the latest Install request while an older catalog detail is pending", async () => {
+    const details = ["Alpha", "Beta"].map((name) =>
+      discoveryDetail({
+        ...createPlugin({
+          id: name.toLowerCase(),
+          name,
+          installed: false,
+          state: "not-installed",
+        }),
+        catalogId: name === "Alpha" ? "ch_YWxwaGE" : "ch_YmV0YQ",
+      }),
+    );
+    const [alpha, beta] = details;
+    const alphaRead = deferred<PluginDiscoveryDetailResult>();
+    const betaRead = deferred<PluginDiscoveryDetailResult>();
+    const installation = deferred<unknown>();
+    const { client, request } = createClient(async (method, params) => {
+      if (method === "plugins.catalog.browse") {
+        return {
+          items:
+            asNullableRecord(params)?.intent === "all"
+              ? details.map((detail) => detail.plugin)
+              : [],
+        };
+      }
+      if (method === "plugins.catalog.categories") {
+        return { categories: [] };
+      }
+      if (method === "plugins.catalog.get") {
+        return asNullableRecord(params)?.id === alpha!.plugin.id
+          ? alphaRead.promise
+          : betaRead.promise;
+      }
+      if (method === "plugins.install") {
+        return installation.promise;
+      }
+      if (method === "plugins.list") {
+        return createResult();
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(),
+        createPluginsRouteLocation("/plugins"),
+      ),
+    );
+    try {
+      await vi.waitFor(() =>
+        expect(page.querySelectorAll(".plugin-catalog-card__install")).toHaveLength(2),
+      );
+      page.querySelector<HTMLButtonElement>('[aria-label="Install Alpha"]')!.click();
+      page.querySelector<HTMLButtonElement>('[aria-label="Install Beta"]')!.click();
+      await vi.waitFor(() =>
+        expect(
+          request.mock.calls.filter(([method]) => method === "plugins.catalog.get"),
+        ).toHaveLength(2),
+      );
+      betaRead.resolve(beta!);
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "plugins.install",
+          {
+            source: "clawhub",
+            packageName: "beta",
+          },
+          expect.objectContaining({ onSent: expect.any(Function) }),
+        ),
+      );
+      alphaRead.resolve(alpha!);
+      await alphaRead.promise;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      await page.updateComplete;
+
+      expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(1);
+      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+    } finally {
+      alphaRead.resolve(alpha!);
+      betaRead.resolve(beta!);
+      installation.resolve({
+        ok: true,
+        plugin: createPlugin({ id: "beta", name: "Beta", enabled: true, state: "enabled" }),
+        restartRequired: false,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      await page.updateComplete;
+    }
+  });
+
+  it.each(
+    ["/settings/plugins/workboard", "/plugins/ch_QG9wZW5jbGF3L3dvcmtib2FyZA"].flatMap((route) =>
+      [false, true].map((remoteFails) => ({ route, remoteFails })),
+    ),
+  )(
+    "renders local controls at $route while optional metadata settles (failure: $remoteFails)",
+    async ({ route, remoteFails }) => {
       const plugin = createPlugin({
         catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA",
         clawhubPackage: "@openclaw/workboard",
@@ -740,8 +790,10 @@ describe("PluginsPage routing", () => {
       };
       const tools = deferred<ToolsCatalogResult>();
       let resolveCatalog!: (value: typeof catalog) => void;
-      const catalogPending = new Promise<typeof catalog>((resolve) => {
+      let rejectCatalog!: (error: Error) => void;
+      const catalogPending = new Promise<typeof catalog>((resolve, reject) => {
         resolveCatalog = resolve;
+        rejectCatalog = reject;
       });
       const { client, request } = createClient(async (method) => {
         if (method === "plugins.inspect") {
@@ -775,6 +827,10 @@ describe("PluginsPage routing", () => {
       await vi.waitFor(() => expect(page.querySelector("h1")?.textContent).toContain("Workboard"));
       expect(page.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
       expect(page.querySelector(".plugin-catalog-detail__sidebar")?.textContent).toContain("1.2.3");
+      expect(page.querySelector(".plugin-metadata__loading[role=status]")).not.toBeNull();
+      expect(page.querySelector(".plugin-capability__static")?.textContent).toContain(
+        "board_create",
+      );
       expect(request).toHaveBeenCalledWith(
         "plugins.catalog.get",
         {
@@ -784,10 +840,16 @@ describe("PluginsPage routing", () => {
         undefined,
       );
 
-      resolveCatalog(catalog);
-      await vi.waitFor(() =>
-        expect(page.querySelector(".plugin-catalog-detail__sidebar")).not.toBeNull(),
+      if (remoteFails) {
+        rejectCatalog(new Error("Catalog unavailable"));
+      } else {
+        resolveCatalog(catalog);
+      }
+      await vi.waitFor(() => expect(page.querySelector(".plugin-metadata__loading")).toBeNull());
+      expect(page.querySelector(".plugin-metadata__categories .chip")?.textContent).toBe(
+        remoteFails ? undefined : "tools",
       );
+      expect(page.querySelector(".plugin-catalog-detail__sidebar")?.textContent).toContain("1.2.3");
       tools.resolve({
         agentId: "main",
         profiles: [],
@@ -968,9 +1030,9 @@ describe("PluginsPage routing", () => {
     expect(page.querySelector(".plugins-settings-detail-setup")).toBeNull();
     expect(page.querySelector('[role="tablist"]')).toBeNull();
     expect(page.querySelector(".plugin-catalog-detail__panel .oc-banner-warning")).toBeNull();
-    const settings = [
-      ...page.querySelectorAll<HTMLAnchorElement>(".plugin-catalog-detail__actions a"),
-    ].find((link) => link.textContent?.includes("Settings"));
+    const settings = page.querySelector<HTMLAnchorElement>(
+      '.plugin-catalog-detail__actions a[aria-label="Settings"]',
+    );
     expect(settings?.href).toContain("view=settings");
     expect(
       page.querySelector('[aria-label="Enable Team Reports"]')?.getAttribute("aria-disabled"),

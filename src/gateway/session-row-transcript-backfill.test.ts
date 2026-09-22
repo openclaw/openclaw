@@ -70,12 +70,14 @@ async function withColdStore(params: BackfillParams, read: () => Promise<void>) 
     await read();
     expect(isSessionTranscriptIndexReconcileRunning(options)).toBe(false);
     expect(getOpenClawAgentDatabaseIfOpen(options) === undefined).toBe(true);
-    expect(opened.every(({ readOnly, database }) => readOnly && !database.isOpen)).toBe(true);
+    expect(opened.every(({ readOnly }) => readOnly)).toBe(true);
   } finally {
     observe.mockRestore();
     // Failed pre-fix assertions must still join any accidentally admitted rebuild.
     await waitForSessionTranscriptIndexReconcile(options);
+    await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
   }
+  expect(opened.every(({ database }) => !database.isOpen)).toBe(true);
 }
 
 async function withSession(

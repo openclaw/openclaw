@@ -3,9 +3,9 @@ import {
   type GatewayActiveWorkBlocker,
   type GatewayActiveWorkInspectors,
 } from "./gateway-active-work.js";
-import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
+import { scheduleGatewayRestart, type ScheduledRestart } from "./restart.js";
 
-// Safe restart coordination checks active local work before scheduling SIGUSR1
+// Safe restart coordination checks active local work before scheduling SIGUSR2
 // restarts, while still allowing explicit deferral bypasses for operators.
 type SafeGatewayRestartCounts = {
   queueSize: number;
@@ -109,7 +109,7 @@ export function scheduleSafeGatewayRestart(
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight(opts.inspect);
   const skipDeferral = opts.skipDeferral === true;
-  const restart = scheduleGatewaySigusr1Restart({
+  const restart = scheduleGatewayRestart({
     delayMs: opts.delayMs ?? 0,
     reason: opts.reason ?? "gateway.restart.safe",
     ...(opts.preservePendingEmitHooks === true || skipDeferral

@@ -1,11 +1,11 @@
 import { existsSync, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -102,14 +102,17 @@ export function installGatewaySessionsTestResources(
   setup?: GatewaySessionsSuiteSetup,
 ) {
   const tempDirs = createTempDirTracker();
-  const defaultAgentWorkspace = path.join(os.tmpdir(), "openclaw-gateway-test");
   let harness: GatewayServerHarness | undefined;
   let sharedSessionStoreDir: string | undefined;
 
   installGatewayTestHooks({
     scope: "suite",
     setup: async () => {
-      await fs.mkdir(defaultAgentWorkspace, { recursive: true });
+      const workspace = getRuntimeConfig().agents?.defaults?.workspace;
+      if (!workspace) {
+        throw new Error("Gateway sessions fixture requires a configured workspace");
+      }
+      await fs.mkdir(workspace, { recursive: true });
       if (startServer) {
         const { startGatewayServerHarness } = await getGatewayServerHarnessModule();
         harness = await startGatewayServerHarness();
@@ -157,5 +160,5 @@ export function installGatewaySessionsTestResources(
     }
     return sharedSessionStoreDir;
   };
-  return { defaultAgentWorkspace, requireHarness, requireSharedSessionStoreDir };
+  return { requireHarness, requireSharedSessionStoreDir };
 }

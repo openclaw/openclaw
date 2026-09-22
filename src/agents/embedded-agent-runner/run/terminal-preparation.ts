@@ -1,4 +1,5 @@
 import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { applyPreparedReplyMedia } from "../../../auto-reply/reply/reply-media-paths.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -199,7 +200,12 @@ export function prepareEmbeddedRunTerminal(input: {
     assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
     lastAssistant: payloadAssistant,
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
-    lastToolError: attempt.lastToolError,
+    // A clean yield is a handoff, not a terminal tool failure. Keep the error
+    // on the attempt for diagnostics without turning the pause into a warning.
+    lastToolError:
+      attempt.yieldDetected && input.terminalState.outcome.status === "ok"
+        ? undefined
+        : attempt.lastToolError,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",
     isHeartbeatTrigger: runParams.trigger === "heartbeat",
@@ -230,7 +236,7 @@ export function prepareEmbeddedRunTerminal(input: {
       timedOutDuringPrompt && (!hasMessagingToolDeliveryEvidence(attempt) || timeoutFinal),
     didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
     heartbeatToolResponse: attempt.heartbeatToolResponse,
-  });
+  }).map((payload) => applyPreparedReplyMedia(payload, attempt.preparedReplyMedia ?? []));
   const mergeToolMedia = input.mergeToolMedia ?? mergeAttemptToolMediaPayloads;
   const payloadsWithToolMedia = mergeToolMedia(
     {

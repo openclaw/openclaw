@@ -1,6 +1,8 @@
+import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { ensureSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type {
@@ -9,6 +11,8 @@ import type {
   WorkerProvider,
 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
@@ -23,13 +27,20 @@ import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
+import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 
 describe("node worker provider provisioning", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  afterEach(() => closeOpenClawAgentDatabases());
 
-  it.each([undefined, "worker-turn", "remote-exec"] as const)(
-    "installs the verified bundle with runtime-appropriate prewarming for %s",
-    async (executionMode) => {
+  it.each([
+    { target: "primary", executionMode: undefined, prewarm: true },
+    { target: "primary", executionMode: "worker-turn", prewarm: true },
+    { target: "primary", executionMode: "remote-exec", prewarm: false },
+    { target: "conversation", executionMode: undefined, prewarm: false },
+  ] as const)(
+    "installs the verified bundle with runtime-appropriate prewarming for $target/$executionMode",
+    async ({ target, executionMode, prewarm }) => {
       const node: NodeWorkerSupervisorNodeProof = {
         nodeId: "cloud-device-mode",
         connId: "connection-mode",
@@ -72,12 +83,29 @@ describe("node worker provider provisioning", () => {
         },
       );
       try {
-        const environment = await workerService.create(
-          "development",
-          "runtime-mode",
-          undefined,
-          executionMode,
-        );
+        const request = {
+          profileId: "development",
+          idempotencyKey: "runtime-mode",
+        };
+        const identity = {
+          agentId: "main",
+          sessionId: "conversation-mode",
+          sessionKey: "agent:main:crabbox",
+        };
+        if (target === "conversation") {
+          support.testState.config.session = {
+            store: path.join(support.testState.root, "sessions.json"),
+          };
+          ensureSessionEntrySync(
+            { ...identity, storePath: support.testState.config.session.store },
+            { sessionId: identity.sessionId, updatedAt: 1 },
+          );
+        }
+        const environment =
+          target === "conversation"
+            ? (await workerService.createSessionAttachment({ ...request, ...identity }, () => {}))
+                .environment
+            : await workerService.createWithRequest({ ...request, executionMode });
         expect(environment).toMatchObject({
           state: "ready",
           bootstrapReceipt: support.BOOTSTRAP_RECEIPT,
@@ -88,10 +116,10 @@ describe("node worker provider provisioning", () => {
           }),
         );
         const input = invoke.mock.calls[0]?.[0].params;
-        if (executionMode === "remote-exec") {
-          expect(input).not.toHaveProperty("bundlePrewarm");
-        } else {
+        if (prewarm) {
           expect(input).toHaveProperty("bundlePrewarm", 1);
+        } else {
+          expect(input).not.toHaveProperty("bundlePrewarm");
         }
       } finally {
         transfer.closeAll();
@@ -102,6 +130,9 @@ describe("node worker provider provisioning", () => {
   it.each(["ready", "bundle-failed", "provider-failed", "provider-timeout"] as const)(
     "prepares the bundle during enrollment while preserving a %s provider outcome",
     async (outcome) => {
+      if (outcome === "provider-timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
       const enrolled = createDeferredCore();
       const finishProvider = createDeferredCore();
       const finishBundle = createDeferredCore();
@@ -155,7 +186,10 @@ describe("node worker provider provisioning", () => {
       );
       let creationSettled = false;
       const creation = workerService
-        .create("development", `bundle-overlap-${outcome}`)
+        .createWithRequest({
+          profileId: "development",
+          idempotencyKey: `bundle-overlap-${outcome}`,
+        })
         .then(
           (value) => ({ value }),
           (error: unknown) => ({ error }),
@@ -192,6 +226,7 @@ describe("node worker provider provisioning", () => {
             expect.objectContaining({ artifact: support.BUNDLE_ARTIFACT, deviceId }),
           );
         } else if (outcome === "provider-timeout") {
+          await vi.advanceTimersByTimeAsync(20);
           expect(await creation).toMatchObject({ error: { code: "provider_failure" } });
           await expect(begin!()).rejects.toThrow("Worker provisioning operation is closed");
           teardown = workerService.destroy(record.environmentId);
@@ -245,7 +280,7 @@ describe("node worker provider provisioning", () => {
 
   it("supplies replay-safe enrollment only to providers that require it", async () => {
     const prepareNodeEnrollment = vi.fn(async (record) => {
-      const enrolled = support.testState.store.ensureNodeEnrollment(record.environmentId);
+      const enrolled = await support.testState.store.ensureNodeEnrollment(record.environmentId);
       if (!enrolled.nodeSetupId) {
         throw new Error("expected persisted cloud enrollment ownership");
       }
@@ -291,7 +326,10 @@ describe("node worker provider provisioning", () => {
       },
     );
 
-    const environment = await workerService.create("development", "request-cloud-node");
+    const environment = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-cloud-node",
+    });
     expect(environment).toMatchObject({
       state: "ready",
       nodeSetupId: expect.any(String),
@@ -350,7 +388,10 @@ describe("node worker provider provisioning", () => {
           ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
         },
       );
-      const creation = workerService.create("development", `request-node-preparation-${outcome}`);
+      const creation = workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: `request-node-preparation-${outcome}`,
+      });
       const completed = creation.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
@@ -361,7 +402,7 @@ describe("node worker provider provisioning", () => {
         const record = support.testState.store.list()[0]!;
         expect(record.state).toBe("requested");
         if (outcome === "teardown") {
-          support.testState.store.requestDestroy({
+          await support.testState.store.requestDestroy({
             environmentId: record.environmentId,
             state: "requested",
           });
@@ -395,6 +436,7 @@ describe("node worker provider provisioning", () => {
   it.each(["provider-error", "provider-timeout", "enrollment-timeout", "runtime-timeout"] as const)(
     "closes the exact enrollment and rejects retained callbacks after %s",
     async (outcome) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const providerEntered = createDeferredCore();
       const finishProvider = createDeferredCore();
       const finishEnrollment = createDeferredCore<WorkerNodeEnrollment>();
@@ -409,7 +451,11 @@ describe("node worker provider provisioning", () => {
       let runtimeSignal: AbortSignal | undefined;
       const prepareNodeRuntime = vi.fn(async (_record, _bundle, signal?: AbortSignal) => {
         runtimeSignal = signal;
-        return outcome === "runtime-timeout" ? await finishRuntime.promise : runtime;
+        if (outcome === "runtime-timeout") {
+          providerEntered.resolve();
+          return await finishRuntime.promise;
+        }
+        return runtime;
       });
       const closeNodeRuntime = vi.fn();
       const enrollment: WorkerNodeEnrollment = {
@@ -420,9 +466,13 @@ describe("node worker provider provisioning", () => {
         displayName: "Cloud worker lifecycle",
         waitForDeviceId: async () => "cloud-device-closed",
       };
-      const prepareNodeEnrollment = vi.fn(async () =>
-        outcome === "enrollment-timeout" ? await finishEnrollment.promise : enrollment,
-      );
+      const prepareNodeEnrollment = vi.fn(async () => {
+        if (outcome === "enrollment-timeout") {
+          providerEntered.resolve();
+          return await finishEnrollment.promise;
+        }
+        return enrollment;
+      });
       const closeNodeEnrollment = vi.fn();
       let begin: (() => Promise<WorkerNodeEnrollment>) | undefined;
       let pendingEnrollment: Promise<WorkerNodeEnrollment> | undefined;
@@ -437,13 +487,10 @@ describe("node worker provider provisioning", () => {
             begin = options!.beginNodeEnrollment!;
             prepareRuntime = options!.prepareNodeRuntime!;
             pendingRuntime = prepareRuntime();
-            if (outcome === "runtime-timeout") {
-              providerEntered.resolve();
-            }
             await pendingRuntime;
             pendingEnrollment = begin();
-            providerEntered.resolve();
             await pendingEnrollment;
+            providerEntered.resolve();
             if (outcome === "provider-error") {
               throw new Error("provider response lost");
             }
@@ -459,11 +506,27 @@ describe("node worker provider provisioning", () => {
           providerCallTimeoutMs: 20,
         },
       );
-      const creation = workerService.create("development", `request-node-closed-${outcome}`);
-      const rejected = expect(creation).rejects.toMatchObject({ code: "provider_failure" });
+      const creation = workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: `request-node-closed-${outcome}`,
+      });
+      const creationResult = creation.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
       try {
-        await providerEntered.promise;
-        await rejected;
+        await Promise.race([
+          providerEntered.promise,
+          creationResult.then((result) => {
+            throw new Error("Provisioning ended before the expected provider stage", {
+              cause: result,
+            });
+          }),
+        ]);
+        if (outcome !== "provider-error") {
+          await vi.advanceTimersByTimeAsync(20);
+        }
+        expect(await creationResult).toMatchObject({ error: { code: "provider_failure" } });
         expect(runtimeSignal?.aborted).toBe(true);
         if (outcome === "runtime-timeout") {
           const lateRejected = expect(pendingRuntime).rejects.toThrow(
@@ -501,6 +564,7 @@ describe("node worker provider provisioning", () => {
         finishEnrollment.resolve(enrollment);
         finishRuntime.resolve(runtime);
         finishProvider.resolve();
+        await creationResult;
       }
     },
   );
@@ -531,7 +595,7 @@ describe("node worker provider provisioning", () => {
     const stop = vi.spyOn(nodeTunnels, "stop");
     const transitions = vi.spyOn(support.testState.store, "transition");
     const prepareNodeEnrollment = vi.fn(async (record) => {
-      const enrolled = support.testState.store.ensureNodeEnrollment(record.environmentId);
+      const enrolled = await support.testState.store.ensureNodeEnrollment(record.environmentId);
       if (!enrolled.nodeSetupId) {
         throw new Error("expected persisted cloud enrollment ownership");
       }
@@ -557,10 +621,16 @@ describe("node worker provider provisioning", () => {
           if (enrollment?.mode !== "connect") {
             throw new Error("expected pending enrollment");
           }
-          bindCloudWorkerSetupCompletion({
-            db: support.testState.stateDb.db,
-            completion: { setupId: enrollment.setupId, deviceId, completedAtMs: 1_000 },
-          });
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              const { environmentId, ...patch } = bindCloudWorkerSetupCompletion({
+                db,
+                completion: { setupId: enrollment.setupId, deviceId, completedAtMs: 1_000 },
+              });
+              publishWorkerEnvironmentNativeMutation(db, environmentId, patch);
+            },
+            { database: support.testState.stateDb },
+          );
           throw new Error("provider response was lost after node allocation");
         },
         destroy,
@@ -575,7 +645,10 @@ describe("node worker provider provisioning", () => {
     );
 
     await expect(
-      workerService.create("development", "request-node-destroy-replay"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-node-destroy-replay",
+      }),
     ).rejects.toMatchObject({ code: "provider_failure" });
     const provisioning = support.testState.store.list()[0]!;
     expect(provisioning).toMatchObject({
@@ -662,7 +735,10 @@ describe("node worker provider provisioning", () => {
       },
     );
 
-    const environment = await workerService.create("development", "request-paired-device");
+    const environment = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-paired-device",
+    });
     expect(environment).toMatchObject({
       state: "ready",
       nodeSetupId: null,
@@ -695,7 +771,10 @@ describe("node worker provider provisioning", () => {
       { ensureNodeWorkerBundle: async () => workerBuild, placementStore: placementGate },
     );
 
-    const result = await workerService.create("development", "request-device");
+    const result = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-device",
+    });
 
     expect(result).toMatchObject({
       state: "ready",

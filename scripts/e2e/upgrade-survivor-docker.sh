@@ -110,6 +110,13 @@ NODE
 esac
 openclaw_resolve_frozen_upgrade_survivor_capabilities "$ROOT_DIR"
 if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
+  if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS:-}" ]; then
+    echo "Selected extended-stable target does not support OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS with its frozen upgrade survivor runner." >&2
+    exit 2
+  elif [ "${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI:-0}" = "1" ]; then
+    echo "Selected extended-stable target does not support OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI with its frozen upgrade survivor runner." >&2
+    exit 2
+  fi
   # Extended-stable retains shipped state expectations. Regular releases keep
   # the trusted runner and its serving-turn/post-inference assertions together.
   UPGRADE_SCENARIO_DIR="$(openclaw_resolve_frozen_target_file \
@@ -180,35 +187,28 @@ PROBE_MAX_BODY_BYTES="$(
   openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES 1048576
 )"
 ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
-LIVE_OPENAI="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI:-0}"
-LIVE_OPENAI_ENV_ARGS=()
-case "$LIVE_OPENAI" in
-  0)
-    ;;
-  1)
-    if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
-      echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1 requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
-      exit 2
-    fi
-    if [ -z "${OPENAI_API_KEY:-}" ]; then
-      echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1 requires OPENAI_API_KEY" >&2
-      exit 2
-    fi
-    LIVE_OPENAI_TIMEOUT_SECONDS="$(
-      openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS 180
-    )"
-    LIVE_OPENAI_ENV_ARGS=(
-      -e OPENAI_API_KEY
-      -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1
-      -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL:-openai/gpt-5.5}"
-      -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS="$LIVE_OPENAI_TIMEOUT_SECONDS"
-    )
-    ;;
-  *)
-    echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI must be 0 or 1; got: $LIVE_OPENAI" >&2
+LIVE_MODEL_ROWS="$(node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/live-models.mjs" rows)"
+LIVE_ENABLED=0
+LIVE_MODEL_ENV_ARGS=()
+if [ -n "$LIVE_MODEL_ROWS" ]; then
+  LIVE_ENABLED=1
+  if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
+    echo "Live survivor turns require OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
     exit 2
-    ;;
-esac
+  fi
+  LIVE_MODEL_TIMEOUT_SECONDS="$(
+    openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS 180
+  )"
+  LIVE_MODEL_ENV_ARGS=(
+    -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS:-}"
+    -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI:-0}"
+    -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL:-openai/gpt-5.5}"
+    -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS="$LIVE_MODEL_TIMEOUT_SECONDS"
+  )
+  while IFS=$'\t' read -r live_model live_provider live_key_env live_artifact; do
+    LIVE_MODEL_ENV_ARGS+=(-e "$live_key_env")
+  done <<<"$LIVE_MODEL_ROWS"
+fi
 
 if { [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ] || [ "$SCENARIO" = "legacy-operator-state" ]; } && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
   echo "$SCENARIO requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
@@ -218,18 +218,18 @@ if [ "$SCENARIO" = "mobile-pairing-reconnect" ] && [ "${OPENCLAW_UPGRADE_SURVIVO
   echo "mobile-pairing-reconnect requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
   exit 1
 fi
-if [ "$SCENARIO" = "recovery-cleanup" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ]; }; then
+if [ "$SCENARIO" = "recovery-cleanup" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; }; then
   echo "recovery-cleanup requires the isolated manual-restart fixture without live provider credentials" >&2
   exit 1
 fi
-if [ "$SCENARIO" = "mobile-pairing-reconnect" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ]; }; then
+if [ "$SCENARIO" = "mobile-pairing-reconnect" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; }; then
   echo "mobile-pairing-reconnect requires the isolated manual-restart fixture without live provider credentials" >&2
   exit 1
 fi
 
 if [ "$SCENARIO" = "abandoned-update" ] && {
   [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ] ||
-  [ "$UPDATE_RESTART_MODE" != "auto-auth" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ];
+  [ "$UPDATE_RESTART_MODE" != "auto-auth" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ];
 }; then
   echo "abandoned-update requires the published baseline, auto-auth service fixture, and no live provider" >&2
   exit 1
@@ -238,7 +238,7 @@ fi
 if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "taskflow-restoration" ]; then
   if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ] ||
     [ "$BASELINE_SPEC" != "openclaw@2026.9.4" ] ||
-    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ]; then
+    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
     echo "$SCENARIO requires published openclaw@2026.9.4, manual restart, isolated state, and no live provider" >&2
     exit 1
   fi
@@ -246,7 +246,7 @@ fi
 
 if [ "$SCENARIO" = "workshop-doctor-recovery" ] && {
   [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ] ||
-  [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ];
+  [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ];
 }; then
   echo "workshop-doctor-recovery requires the published baseline, manual restart, and no live provider" >&2
   exit 1
@@ -457,7 +457,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT=/tmp/openclaw-release-harness/scripts/e2e/lib/plugins/npm-registry-server.mjs \
     ${UPGRADE_COMPAT_ENV_ARGS[@]+"${UPGRADE_COMPAT_ENV_ARGS[@]}"} \
     "${PROBE_ENV_ARGS[@]}" \
-    ${LIVE_OPENAI_ENV_ARGS[@]+"${LIVE_OPENAI_ENV_ARGS[@]}"} \
+    ${LIVE_MODEL_ENV_ARGS[@]+"${LIVE_MODEL_ENV_ARGS[@]}"} \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/config-parking.mjs:/tmp/openclaw-config-parking.mjs:ro" \

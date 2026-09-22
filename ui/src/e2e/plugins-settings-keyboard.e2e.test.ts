@@ -17,8 +17,10 @@ suite.define(() => {
         });
         const settingsUrl = `${suite.server.baseUrl}settings/plugins/workboard?view=settings`;
         await page.goto(settingsUrl);
-        const heading = page.getByRole("heading", { name: "Workboard settings", exact: true });
-        await heading.waitFor();
+        const search = page
+          .locator(".plugin-editor")
+          .getByRole("searchbox", { name: "Search settings", exact: true });
+        await search.waitFor();
         const trigger = page.getByRole("button", { name: "Actions for Workspace label" });
         await trigger.click();
         const item = page.getByRole("menuitem", { name: "Reset value", exact: true });

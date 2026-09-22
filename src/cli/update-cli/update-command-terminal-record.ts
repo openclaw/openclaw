@@ -6,7 +6,7 @@ import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryDirectoryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { captureCompletedUpdateRun } from "../../infra/update-run-terminal-record.js";
 import { isUpdateRunVerificationConfirmed } from "../../infra/update-run-verification.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { openClawStateDatabaseCache } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";

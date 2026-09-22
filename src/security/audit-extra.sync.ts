@@ -24,7 +24,7 @@ import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   listDangerousPluginNodeCommands,
-  resolveNodeCommandAllowlist,
+  resolveNodePairingCommandAllowlist,
 } from "../gateway/node-command-policy.js";
 import { listEffectiveGroupRouteBindings } from "../routing/resolve-route.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
@@ -225,45 +225,13 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
   const platformNodes = [
     { platform: "ios", deviceFamily: "iPhone" },
     { platform: "android", deviceFamily: "Android" },
-    {
-      platform: "macos",
-      deviceFamily: "Mac",
-      approvedCommands: [
-        "system.run",
-        "system.run.prepare",
-        "system.which",
-        "browser.proxy",
-        "browser.proxy.upload.v1",
-        "screen.snapshot",
-      ],
-    },
-    {
-      platform: "linux",
-      deviceFamily: "Linux",
-      approvedCommands: [
-        "system.run",
-        "system.run.prepare",
-        "system.which",
-        "browser.proxy",
-        "browser.proxy.upload.v1",
-      ],
-    },
-    {
-      platform: "windows",
-      deviceFamily: "Windows",
-      approvedCommands: [
-        "system.run",
-        "system.run.prepare",
-        "system.which",
-        "browser.proxy",
-        "browser.proxy.upload.v1",
-        "screen.snapshot",
-      ],
-    },
+    { platform: "macos", deviceFamily: "Mac" },
+    { platform: "linux", deviceFamily: "Linux" },
+    { platform: "windows", deviceFamily: "Windows" },
     { platform: "unknown" },
   ];
   for (const node of platformNodes) {
-    const allow = resolveNodeCommandAllowlist(baseCfg, node);
+    const allow = resolveNodePairingCommandAllowlist(baseCfg, node);
     for (const cmd of allow) {
       const normalized = normalizeNodeCommand(cmd);
       if (normalized) {
@@ -271,7 +239,7 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
       }
     }
   }
-  for (const cmd of resolveNodeCommandAllowlist(baseCfg, { caps: ["talk"] })) {
+  for (const cmd of resolveNodePairingCommandAllowlist(baseCfg, { caps: ["talk"] })) {
     const normalized = normalizeNodeCommand(cmd);
     if (normalized) {
       out.add(normalized);

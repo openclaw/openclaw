@@ -116,6 +116,24 @@ describe("ensureCliExecutionBootstrap", () => {
     });
   });
 
+  it("uses validation-only admission for managed worktree commands", async () => {
+    const runtime = {} as never;
+
+    await ensureCliExecutionBootstrap({
+      runtime,
+      commandPath: ["worktrees", "gc"],
+      startupPolicy: bootstrapPolicy(["worktrees", "gc"]),
+      loadPlugins: false,
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime,
+      commandPath: ["worktrees", "gc"],
+      measure: expect.any(Function),
+      validateConfigOnly: true,
+    });
+  });
+
   it("loads configured channel plugins with repair enabled for operational channel commands", async () => {
     await ensureCliExecutionBootstrap({
       runtime: {} as never,

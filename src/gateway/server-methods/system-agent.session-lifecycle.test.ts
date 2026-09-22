@@ -179,6 +179,7 @@ describe("openclaw.chat session lifecycle", () => {
       step: liveStep,
     }));
     const session = seededSession({ engine });
+    session.optionalWelcome = true;
     (session as { welcomeQuestion?: unknown }).welcomeQuestion = {
       id: "welcome-q",
       header: "Welcome",
@@ -194,6 +195,7 @@ describe("openclaw.chat session lifecycle", () => {
     expect(call.payload).toMatchObject({
       sessionId: "s1",
       sensitive: true,
+      optionalWelcome: false,
       wizardInputPending: true,
       question: liveQuestion,
       step: liveStep,

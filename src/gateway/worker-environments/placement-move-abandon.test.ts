@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../../infra/node-commands.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -33,16 +34,25 @@ describe("offline device placement abandonment", () => {
   let root: string;
   let database: OpenClawStateDatabase;
   let placements: WorkerSessionPlacementStore;
+  let stopServices: Array<() => Promise<void>>;
 
   beforeEach(() => {
+    stopServices = [];
     root = tempDirs.make("openclaw-device-abandon-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
+    try {
+      for (const stop of stopServices) {
+        await stop();
+      }
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   function seedEnvironment(
@@ -93,7 +103,7 @@ describe("offline device placement abandonment", () => {
         Number(sharedHost),
         active.environmentId,
       );
-    const store = createWorkerEnvironmentStore({ database, now: () => 1_000 });
+    const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
     let connected = false;
     const nodeTransport = transport();
     const nodes = await nodeTransport.listCurrentNodes();
@@ -135,7 +145,7 @@ describe("offline device placement abandonment", () => {
     });
     vi.mocked(harness.environments.get).mockImplementation(environments.get);
     vi.mocked(harness.environments.destroy).mockImplementation(environments.destroy);
-    onTestFinished(async () => {
+    stopServices.push(async () => {
       connected = true;
       await environments.stop();
     });

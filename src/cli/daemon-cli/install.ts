@@ -61,13 +61,9 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
-import { waitForGatewayServiceLoad } from "./install-load.js";
+import { parsePort } from "../shared/parse-port.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
-import {
-  createDaemonInstallActionContext,
-  resolveDaemonInstallBlockMessage,
-  parsePort,
-} from "./shared.js";
+import { createDaemonInstallActionContext, resolveDaemonInstallBlockMessage } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
 function resolveGatewayInstallBindMode(cfg: OpenClawConfig): GatewayBindMode {
@@ -175,30 +171,14 @@ export function mergeInstallInvocationEnv(params: {
 /** Install or refresh the managed Gateway service. */
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   let definitionBackup: GatewayServiceDefinitionBackupReceipt | undefined;
-  const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(
-    opts.json,
-    () => definitionBackup,
-  );
-  const warn = (message: string) => {
-    if (json) {
-      warnings.push(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  };
+  const { json, stdout, warnings, warn, emit, emitMessage, fail } =
+    createDaemonInstallActionContext(opts.json, () => definitionBackup);
   const installBlock = resolveDaemonInstallBlockMessage("gateway");
   if (installBlock) {
     fail(installBlock);
     return;
   }
 
-  if (
-    opts.deferActivation &&
-    (process.platform !== "linux" || !process.send || !process.connected)
-  ) {
-    fail("Deferred service load requires Linux and the updater IPC channel.");
-    return;
-  }
   const service = resolveGatewayService();
   let existingServiceCommand: GatewayServiceCommandConfig | null;
   try {
@@ -380,6 +360,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         `${recordedRuntime.error.message} Reinstall with: ${formatCliCommand("openclaw gateway install --force")}.`,
       );
       return;
+    } else if (recordedRuntime.status === "supported" && opts.runtime === undefined) {
+      runtimePath = recordedNode;
     }
   }
   if (loaded && !opts.force) {
@@ -407,12 +389,6 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     warn(autoRefreshMessage);
   }
 
-  // Native staging cannot attribute unrelated config writes. Require prior
-  // config preparation; do not generate defaults or credentials in this phase.
-  if (opts.deferActivation && (!configSnapshot.valid || cfg.gateway?.mode === undefined)) {
-    fail("Deferred service load requires valid, prepared gateway configuration.");
-    return;
-  }
   if (configSnapshot.valid && cfg.gateway?.mode === undefined) {
     const baseConfig = configSnapshot.sourceConfig ?? configSnapshot.config;
     await replaceConfigFile({
@@ -440,15 +416,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     warn("No gateway.mode found. Set gateway.mode=local for managed gateway install.");
   }
 
-  if (loaded && !opts.force && !autoRefreshMessage && !opts.deferActivation) {
-    emit({
+  if (loaded && !opts.force && !autoRefreshMessage) {
+    emitMessage({
       ok: true,
       result: "already-installed",
       message: `Gateway service already ${service.loadedText}.`,
       service: buildDaemonServiceSnapshot(service, loaded),
     });
     if (!json) {
-      defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
       defaultRuntime.log(`Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`);
     }
     return;
@@ -458,10 +433,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     config: cfg,
     env: installEnv,
     explicitToken: opts.token,
-    requireExisting: opts.deferActivation,
-    ...(opts.deferActivation
-      ? {}
-      : { generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions } }),
+    generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions },
   });
   if (tokenResolution.unavailableReason) {
     fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);
@@ -500,12 +472,18 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       environment,
       environmentValueSources,
       definitionTransaction,
-      ...(opts.deferActivation ? { beforeLoad: waitForGatewayServiceLoad } : {}),
     });
   };
+  const successMessage = `Gateway service installed. Runtime readiness has not been checked; startup may still be in progress. Check with ${formatCliCommand("openclaw gateway status")} and ${formatCliCommand("openclaw health")}.`;
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",
     service,
+    successMessage,
+    onVerified: async () => {
+      if (!json) {
+        defaultRuntime.log(successMessage);
+      }
+    },
     warnings,
     emit,
     fail,

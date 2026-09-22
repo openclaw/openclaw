@@ -15,6 +15,7 @@ import {
   isChildProcessTreeAlive,
   shouldDetachChildForProcessTree,
 } from "../../process/child-process-tree.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import * as execCommands from "../../process/exec.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
@@ -44,12 +45,11 @@ it.each([
   { supported: false, destination: "same" },
   { supported: "legacy", destination: "same" },
   { supported: "without-backup", destination: "same" },
-  { supported: "without-backup", destination: "same", deferred: true },
   { supported: true, destination: "changed" },
   { supported: true, destination: "foreign" },
 ])(
-  "native command admits only the bound receiver: $supported / $destination / deferred=$deferred",
-  async ({ supported, destination, deferred }) => {
+  "native command admits only the bound receiver: $supported / $destination",
+  async ({ supported, destination }) => {
     const scratch = dirs.make("native-command-custody-");
     const receiverRoot = await fs.realpath(process.cwd());
     const root = destination === "same" ? receiverRoot : scratch;
@@ -69,7 +69,6 @@ it.each([
     const {runGatewayServiceUpdateCommand}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor).href)});
     const {execFileUtf8}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExec).href)});
     const fs=await import("node:fs");
-    if(process.argv.includes("--defer-activation")) fs.writeFileSync(${JSON.stringify(effect)},"unguarded deferred installation");
     const mode=process.argv[process.argv.indexOf("--update-executor")+1];
     const action=process.argv[3];
     if(mode==="check") {
@@ -107,13 +106,29 @@ it.each([
   `,
     );
     vi.spyOn(entrypoints, "resolveGatewayInstallEntrypoint").mockResolvedValue(entrypoint);
+    const observed: unknown[] = [];
+    const actualRun = execCommands.runCommandWithTimeout;
+    vi.spyOn(execCommands, "runCommandWithTimeout").mockImplementation(async (...args) => {
+      const started = Date.now();
+      const result = await actualRun(...args);
+      observed.push({
+        mode: args[0].at(-1),
+        elapsedMs: Date.now() - started,
+        code: result.code,
+        signal: result.signal,
+        termination: result.termination,
+        cleanup: result.cleanup,
+        killed: result.killed,
+        stderr: result.stderr.slice(-1000),
+      });
+      return result;
+    });
     const runId = randomUUID();
     const work = withUpdateCommandExecutor(runId, async (executor) => {
       const fence = await executor.enter(root);
       if (supported === "without-backup") {
         const recovery: UpdateServiceDefinitionRecovery = {};
         const warnings: string[] = [];
-        const seal = vi.fn(async () => {});
         const failure = await runUpdatedInstallGatewayCommand(
           {
             result: { root: targetRoot },
@@ -121,9 +136,6 @@ it.each([
             invocationEnv: process.env,
             timeoutMs: 20_000,
             definitionRecovery: recovery,
-            ...(deferred
-              ? { serviceLoadBoundary: { assertCurrent: fence.assertCurrent, seal } }
-              : {}),
             onWarnings: (messages) => warnings.push(...messages),
           },
           "install",
@@ -132,7 +144,6 @@ it.each([
           (error: unknown) => error,
         );
         await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(seal).not.toHaveBeenCalled();
         expect(failure).toMatchObject({
           message: expect.stringContaining("SERVICE_DEFINITION_UNKNOWN"),
         });
@@ -152,13 +163,18 @@ it.each([
         },
         "restart",
       );
+    }).catch((cause: unknown) => {
+      throw new Error(
+        `${cause instanceof Error ? cause.message : String(cause)}; native fixture runner: ${JSON.stringify(observed)}`,
+        { cause },
+      );
     });
     if ((supported === true || supported === "without-backup") && destination !== "foreign") {
       expect(await work).toBe("accepted");
       expect(await fs.readFile(effect, "utf8")).toBe("owned");
-      const observed = JSON.parse(await fs.readFile(receipt, "utf8"));
-      expect(observed).toMatchObject({ parent: process.pid, noRespawn: "1" });
-      expect(observed.pid).not.toBe(process.pid);
+      const childReceipt = JSON.parse(await fs.readFile(receipt, "utf8"));
+      expect(childReceipt).toMatchObject({ parent: process.pid, noRespawn: "1" });
+      expect(childReceipt.pid).not.toBe(process.pid);
     } else {
       await expect(work).rejects.toThrow(
         destination === "foreign" ? /installation|binding/ : "cannot fence",
@@ -387,7 +403,7 @@ it.skipIf(process.platform === "win32").each([
       return result;
     });
     try {
-      const supported = await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const operation = withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(root);
         const probeParams = {
           root,
@@ -402,11 +418,20 @@ it.skipIf(process.platform === "win32").each([
         expect(isPidAlive(pids.child)).toBe(false);
         return capabilitySupported;
       });
+      if (cleanup === "forced") {
+        await expect(operation).rejects.toSatisfy(hasCommandProcessCleanupError);
+      } else {
+        await expect(operation).resolves.toBe(true);
+      }
+      const pids = JSON.parse(await fs.readFile(receipt, "utf8"));
+      expect(isChildProcessTreeAlive({ pid: pids.root })).toBe(false);
+      expect(isPidAlive(pids.child)).toBe(false);
       expect(observed).toHaveLength(1);
       expect(observed[0]).toMatchObject({ code: 0, termination: "exit", cleanup });
       expect(fsSync.existsSync(stopped)).toBe(cleanup === "cooperative");
-      expect(supported).toBe(cleanup === "cooperative");
-      expect(createManagedHandoffLeaseStore().read(root).kind).toBe("absent");
+      expect(createManagedHandoffLeaseStore().read(root).kind).toBe(
+        cleanup === "forced" ? "current" : "absent",
+      );
     } finally {
       if (fsSync.existsSync(receipt)) {
         const pids = JSON.parse(fsSync.readFileSync(receipt, "utf8"));
@@ -417,4 +442,86 @@ it.skipIf(process.platform === "win32").each([
     }
   },
   60000,
+);
+
+it.each([
+  { retained: true, advertised: undefined },
+  { retained: true, advertised: false },
+  { retained: true, advertised: "true" },
+  { retained: true, advertised: true },
+  { retained: false, advertised: undefined },
+])(
+  "requires retained capability before private native input ($retained / $advertised)",
+  async ({ retained, advertised }) => {
+    const scratch = fsSync.realpathSync(dirs.make("native-retained-capability-"));
+    const root = fsSync.realpathSync(process.cwd());
+    const serviceRoot = path.join(scratch, "service-A");
+    await fs.mkdir(serviceRoot);
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
+    const entrypoint = path.join(scratch, "entry.mjs");
+    const privateInput = path.join(scratch, "private-input");
+    const effect = path.join(scratch, "effect");
+    await fs.writeFile(
+      entrypoint,
+      `
+    const fs=await import("node:fs");
+    const {runGatewayServiceUpdateCommand}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor).href)});
+    const mode=process.argv[process.argv.indexOf("--update-executor")+1];
+    if(mode==="check")process.stdout.write(${JSON.stringify(JSON.stringify({ updateExecutor: "root-spawner-v1", targetRootBinding: true, retainedOwnerBinding: advertised }))});
+    else {
+      process.stdin.once("data",()=>fs.writeFileSync(${JSON.stringify(privateInput)},"received"));
+      await runGatewayServiceUpdateCommand(mode,"restart",async()=>{
+        fs.writeFileSync(${JSON.stringify(effect)},"owned");
+        process.stdout.write(JSON.stringify({action:"restart",ok:true,result:"restarted"}));
+      });
+    }
+  `,
+    );
+    vi.spyOn(entrypoints, "resolveGatewayInstallEntrypoint").mockResolvedValue(entrypoint);
+    const probes: Awaited<ReturnType<typeof execCommands.runCommandWithTimeout>>[] = [];
+    const actualRun = execCommands.runCommandWithTimeout;
+    vi.spyOn(execCommands, "runCommandWithTimeout").mockImplementation(async (...args) => {
+      const result = await actualRun(...args);
+      if (args[0][args[0].indexOf("--update-executor") + 1] === "check") {
+        probes.push(result);
+      }
+      return result;
+    });
+    const runId = randomUUID();
+    const work = withUpdateCommandExecutor(runId, async (executor) => {
+      const fence = await executor.enter(root, { serviceRoot: retained ? serviceRoot : undefined });
+      return await runUpdatedInstallGatewayCommand(
+        {
+          result: { root },
+          opts: { json: true, run: { runId, env: process.env, executorFence: fence } },
+          invocationEnv: process.env,
+        },
+        "restart",
+      );
+    });
+    if (!retained || advertised === true) {
+      expect(await work).toBe("accepted");
+      expect(await fs.readFile(privateInput, "utf8")).toBe("received");
+      expect(await fs.readFile(effect, "utf8")).toBe("owned");
+    } else {
+      await expect(work).rejects.toThrow("cannot fence");
+      expect(fsSync.existsSync(privateInput)).toBe(false);
+      expect(fsSync.existsSync(effect)).toBe(false);
+    }
+    expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
+    expect(probes).toHaveLength(1);
+    expect(probes[0]).toMatchObject({
+      code: 0,
+      termination: "exit",
+      signal: null,
+      cleanup: "normal",
+      killed: false,
+    });
+    expect(JSON.parse(probes[0]!.stdout)).toEqual({
+      updateExecutor: "root-spawner-v1",
+      targetRootBinding: true,
+      ...(advertised === undefined ? {} : { retainedOwnerBinding: advertised }),
+    });
+    expect(createManagedHandoffLeaseStore().read(serviceRoot)).toEqual({ kind: "absent" });
+  },
 );

@@ -1,6 +1,7 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { isDeepStrictEqual } from "node:util";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
+import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -89,7 +90,7 @@ import {
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
-import { loadCronSessionEntryLatest, resolveCronSession } from "./session.js";
+import { loadCronSessionEntryLatest, prepareCronSession } from "./session.js";
 
 export type PreparedCronRunContext = {
   input: RunCronAgentTurnParams;
@@ -228,7 +229,7 @@ export async function prepareCronRunContext(params: {
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
   const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
-  const cronSession = resolveCronSession({
+  const cronSession = await prepareCronSession({
     cfg: runtimeCfg,
     sessionKey: agentSessionKey,
     sourceSessionKey,
@@ -289,6 +290,11 @@ export async function prepareCronRunContext(params: {
         throw new CronSessionLifecycleClaimError(agentSessionKey, archivedSessionError);
       }
     },
+  });
+
+  clearBootstrapSnapshotOnSessionRollover({
+    sessionKey: agentSessionKey,
+    previousSessionId: cronSession.previousSessionId,
   });
 
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
@@ -597,6 +603,7 @@ export async function prepareCronRunContext(params: {
       cronSession,
     });
     const authSelection = await resolveCronAuthSelection({
+      agentId,
       cfg: cfgWithAgentDefaults,
       provider,
       modelId: model,

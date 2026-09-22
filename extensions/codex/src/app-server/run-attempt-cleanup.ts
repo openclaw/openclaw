@@ -26,6 +26,7 @@ export async function cleanupCodexAttempt(
     releaseCurrentRoute,
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
+    releaseNativeProcessAuthority,
     retainThreadSubscription,
     releaseThreadSubscription,
     runCleanupStep,
@@ -229,6 +230,7 @@ export async function cleanupCodexAttempt(
       await nativeHookRelay.drain();
     });
     await runCleanupStep("codex-sandbox-release", releaseSandboxExecEnvironment);
+    await runCleanupStep("codex-native-process-source-release", releaseNativeProcessAuthority);
     await runCleanupStep("codex-abort-listener-remove", () => {
       runAbortController.signal.removeEventListener("abort", abortListener);
     });

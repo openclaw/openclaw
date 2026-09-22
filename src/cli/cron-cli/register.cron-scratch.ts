@@ -1,6 +1,7 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 // Cron scratch CLI: private per-job prompt context reads and compare-and-swap writes.
 import type { Command } from "commander";
+import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { createCronOutputCommand } from "./output-mode.js";
@@ -48,20 +49,32 @@ export function registerCronScratchCommand(cron: Command) {
           if (mutations > 1) {
             throw new CronCliError("choose only one of --set, --file, or --unset");
           }
-          const current = (await callGatewayFromCli("cron.scratch.get", opts, {
-            id,
-          })) as ScratchGetResult;
-          if (mutations === 0) {
-            if (opts.json) {
-              printCronJson(current);
-            } else if (current.scratch) {
-              process.stdout.write(current.scratch.content);
+          // Inline writes with a valid explicit revision already have their CAS input.
+          // Keep the initial read before file/stdin consumption and input errors.
+          let expectedRevision =
+            mutations === 1 &&
+            opts.expectedRevision !== undefined &&
+            opts.file === undefined &&
+            (opts.unset ||
+              Buffer.byteLength(String(opts.set ?? ""), "utf8") <= CRON_JOB_SCRATCH_MAX_BYTES)
+              ? parseStrictNonNegativeInteger(opts.expectedRevision)
+              : undefined;
+          if (expectedRevision === undefined) {
+            const current = (await callGatewayFromCli("cron.scratch.get", opts, {
+              id,
+            })) as ScratchGetResult;
+            if (mutations === 0) {
+              if (opts.json) {
+                printCronJson(current);
+              } else if (current.scratch) {
+                process.stdout.write(current.scratch.content);
+              }
+              return;
             }
-            return;
+            expectedRevision =
+              parseExpectedRevision(opts.expectedRevision) ?? current.currentRevision;
           }
 
-          const explicitRevision = parseExpectedRevision(opts.expectedRevision);
-          const expectedRevision = explicitRevision ?? current.currentRevision;
           const content = opts.unset
             ? null
             : opts.file !== undefined

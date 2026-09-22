@@ -67,7 +67,7 @@ if (role === 'leader') {
     `import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { threadId } from 'node:worker_threads';
 import { createFixtureLifetime } from ${source("test/helpers/fixture-lifetime.ts")};
 import { runManagedCommand, inspectManagedProcessGroup } from ${source("scripts/lib/managed-child-process.mts")};
@@ -91,12 +91,14 @@ it('retains inputs after a genuine escaped writer fails strict join', async () =
   const input = path.join(root, 'input');
   fs.writeFileSync(input, 'owned\\n');
   let child;
+  let exited;
   const command = lifetime.track(runManagedCommand({
     bin: process.execPath, args: [file('process.mjs'), 'leader', control, input],
     shell: false, stdio: ['ignore', 'pipe', 'pipe'], requireProcessTreeExit: true,
     timeoutMs: 15000, timeoutKillGraceMs: 0,
     onReady(owned) {
       child = owned;
+      exited = new Promise(resolve => child.once('exit', resolve));
       fs.writeFileSync(file('leader.pid.json'), JSON.stringify(child.pid));
     },
   }));
@@ -107,7 +109,15 @@ it('retains inputs after a genuine escaped writer fails strict join', async () =
   retained = { root, input, namespace: os.tmpdir(), workerPid: process.pid, threadId, leaderPid: child.pid, writerPid: before.pid };
   fs.writeFileSync(file('retained.json'), JSON.stringify(retained));
   ${mode === "crash" ? "process.kill(process.pid, 'SIGKILL'); await new Promise(() => {});" : ""}
-  await expect(command).rejects.toMatchObject({ code: 'EPROCESSGROUP_CLEANUP_FAILED', processTreeState: 'indeterminate' });
+  await exited;
+  // The real writer has written and the leader has exited. Advance only the
+  // unchanged drain deadline; native process/pipe observation remains real.
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5000);
+  try {
+    await expect(command).rejects.toMatchObject({ code: 'EPROCESSGROUP_CLEANUP_FAILED', processTreeState: 'indeterminate' });
+  } finally {
+    clock.mockRestore();
+  }
   expect(child.exitCode).toBe(0);
   expect(inspectManagedProcessGroup(child, { errorPolicy: 'indeterminate' })).toBe('dead');
   expect(child.stdout.destroyed).toBe(true);

@@ -17,7 +17,8 @@ vi.mock("./auth-profiles.js", async () => ({
   isConfiguredAwsSdkAuthProfileForProvider: (await import("./auth-profiles/order.js"))
     .isConfiguredAwsSdkAuthProfileForProvider,
   isProfileInCooldown: (await import("./auth-profiles/usage-state.js")).isProfileInCooldown,
-  resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
+  resolveAuthProfileDisplayLabel: (await import("./auth-profiles/display.js"))
+    .resolveAuthProfileDisplayLabel,
   resolveAuthStorePathForDisplay: () => "/tmp/catalog-auth/auth-profiles.json",
 }));
 const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig = {}) => {
@@ -74,6 +75,85 @@ describe("captured catalog auth labels", () => {
       expect(captured.labels.get("openai")?.all).toMatchObject({ profiles: { default: label } });
     },
   );
+
+  it("preserves provider-specific placeholders and independently owned profile labels", () => {
+    const config = createBedrockAwsSdkConfig();
+    config.auth = {
+      ...config.auth,
+      profiles: {
+        ...config.auth?.profiles,
+        token: { provider: "openai", mode: "oauth" },
+        oauth: { provider: "openai", mode: "oauth", displayName: "Configured account" },
+        mismatch: { provider: "anthropic", mode: "api_key" },
+      },
+    };
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        key: { type: "api_key", provider: "openai", key: "key-one" },
+        token: {
+          type: "token",
+          provider: "openai",
+          tokenRef: { source: "env", provider: "default", id: "SYNTHETIC_LABEL_TOKEN" },
+        },
+        oauth: {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-access",
+          refresh: "synthetic-refresh",
+          expires: 100_000,
+          email: "fixture@example.invalid",
+        },
+        mismatch: { type: "api_key", provider: "openai", key: "synthetic-mismatched-key" },
+      },
+      order: { openai: ["missing"] },
+    };
+    const before = structuredClone({ config, store });
+    const labels = prepareModelCatalogAuthLabels({
+      config,
+      store,
+      agentDir: "/tmp/catalog-auth",
+      env: {},
+      providers: ["OPENAI", "amazon-bedrock", "anthropic", "openai"],
+    });
+    const expected = {
+      key: "key=ke...ne",
+      token: "token=token:ref",
+      oauth: "oauth=OAuth (Configured account)",
+      mismatch: "mismatch=missing",
+      "amazon-bedrock:default": "amazon-bedrock:default=missing",
+      missing: "missing=missing",
+    };
+    expect([...labels.keys()]).toEqual(["openai", "amazon-bedrock", "anthropic"]);
+    const tables = [];
+    for (const [provider, pair] of labels) {
+      if (typeof pair.all === "string" || typeof pair.apiKey === "string") {
+        throw new Error("Expected captured profile label records");
+      }
+      expect(pair.all.profiles).toEqual(
+        provider === "amazon-bedrock"
+          ? { ...expected, "amazon-bedrock:default": "amazon-bedrock:default=aws-sdk" }
+          : expected,
+      );
+      expect(Object.keys(pair.all.profiles)).toEqual(Object.keys(expected));
+      expect(pair.apiKey.profiles).toBe(pair.all.profiles);
+      expect(pair.apiKey.apiKeyOnly).toBe(provider === "openai");
+      expect(pair.apiKey === pair.all).toBe(provider !== "openai");
+      tables.push(pair.all.profiles);
+    }
+    expect(new Set(tables).size).toBe(3);
+    expect({ config, store }).toEqual(before);
+    store.profiles.key = { type: "api_key", provider: "openai", key: "replacement" };
+    expect(labels.get("openai")?.all).toMatchObject({ profiles: expected });
+    const refreshed = prepareModelCatalogAuthLabels({
+      config,
+      store,
+      agentDir: "/tmp/catalog-auth",
+      env: {},
+      providers: ["openai"],
+    });
+    expect(refreshed.get("openai")?.all).toMatchObject({ profiles: { key: "key=re...nt" } });
+  });
 
   it("captures configured AWS SDK authentication without a stored credential", () => {
     const captured = capture(

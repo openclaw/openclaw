@@ -1,5 +1,6 @@
 import {
   embeddedAgentLog,
+  formatErrorMessage,
   runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -26,10 +27,15 @@ import {
   type CodexNativePreToolUseFailure,
   type CodexNativeHookRelay,
 } from "./native-hook-relay.js";
+import {
+  CodexNativeProcessAuthority,
+  hasCodexNativeBackgroundProcesses,
+} from "./native-process-authority.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
+import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
 import {
   releaseCodexSandboxExecServerEnvironment,
@@ -68,6 +74,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     nativeHookRelayEvents,
   } = connection;
   const { toolBridge } = attemptTools;
+  let nativeProcessAuthorityReleased = false;
+  const releaseNativeProcessAuthority = () => {
+    if (!nativeProcessAuthorityReleased) {
+      nativeProcessAuthorityReleased = true;
+      nativeProcessAuthority?.release();
+    }
+  };
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
     cwd: effectiveCwd,
@@ -344,8 +357,12 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         if (!state.turnStartAttempted) {
           runAbortController.signal.throwIfAborted();
         }
-        params.hostCapabilities.assertActive();
-        connection.assertCurrent();
+        // Retaining the existing subscription is cleanup custody for concrete
+        // background work; revoking this foreground source cannot evict a peer.
+        if (!hasCodexNativeBackgroundProcesses(client, thread.threadId)) {
+          params.hostCapabilities.assertActive();
+          connection.assertCurrent();
+        }
         thread.liveThreadOwnership?.assertCurrent();
       } catch {
         return false;
@@ -431,6 +448,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       await relay?.drain();
     });
     await runCleanupStep("codex-pre-turn-sandbox-release", releaseSandboxExecEnvironment);
+    await runCleanupStep("codex-pre-turn-source-release", releaseNativeProcessAuthority);
     await runCleanupStep("codex-pre-turn-trajectory-flush", () => trajectoryRecorder?.flush());
     await runCleanupStep(
       "codex-pre-turn-shared-client-release",
@@ -450,6 +468,11 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     previousRelay?.unregister();
     await previousRelay?.drain();
     connection.assertCurrent();
+    const requiresProcessAdmission = nativeProcessAuthority && runtime.nativeToolSurfaceEnabled;
+    const relayEvents =
+      requiresProcessAdmission && !nativeHookRelayEvents.includes("pre_tool_use")
+        ? [...nativeHookRelayEvents, "pre_tool_use" as const]
+        : nativeHookRelayEvents;
     if (params.pluginHarnessToolPolicyRestricted === true) {
       state.nativeHookRelay = undefined;
       return {
@@ -458,14 +481,16 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       };
     }
     state.nativeHookRelay = createCodexNativeHookRelay({
-      options: options.nativeHookRelay,
+      options: requiresProcessAdmission
+        ? { ...options.nativeHookRelay, enabled: true }
+        : options.nativeHookRelay,
       generation:
         decision.action === "resume" ? decision.binding.nativeHookRelayGeneration : undefined,
       generationMismatchGraceMs:
         decision.action === "resume" && !decision.binding.nativeHookRelayGeneration
           ? CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS
           : undefined,
-      events: nativeHookRelayEvents,
+      events: relayEvents,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: contextSessionKey,
@@ -489,6 +514,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
       hostCapabilities: params.hostCapabilities,
+      nativeProcessAuthority: requiresProcessAdmission
+        ? { owner: nativeProcessAuthority, client: () => state.client }
+        : undefined,
       assertCurrent: connection.assertCurrent,
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
@@ -507,7 +535,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       configPatch: state.nativeHookRelay
         ? buildCodexNativeHookRelayConfig({
             relay: state.nativeHookRelay,
-            events: nativeHookRelayEvents,
+            events: relayEvents,
             hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
           })
         : options.nativeHookRelay?.enabled === false
@@ -516,12 +544,29 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       nativeHookRelayGeneration: state.nativeHookRelay?.generation,
     };
   };
+  const nativeProcessAuthority =
+    sandbox?.enabled && sandbox.backend && params.hostCapabilities.retainSourceAuthority
+      ? new CodexNativeProcessAuthority(params.hostCapabilities, (error) => {
+          const message = formatErrorMessage(error);
+          embeddedAgentLog.warn("codex native background work remains unsettled", {
+            runId: params.runId,
+            sessionId: params.sessionId,
+            error: message,
+          });
+          void emitCodexAppServerEvent(params, {
+            stream: "codex_app_server.lifecycle",
+            data: { phase: "background_cleanup_failed", error: message },
+          });
+        })
+      : undefined;
   return {
     prompt,
     trajectoryRecorder,
     state,
     projectorRef,
     pendingNativePreToolUseFailures,
+    nativeProcessAuthority,
+    releaseNativeProcessAuthority,
     markTrajectoryEndRecorded: () => {
       state.trajectoryEndRecorded = true;
     },

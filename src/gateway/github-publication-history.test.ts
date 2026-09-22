@@ -57,7 +57,10 @@ async function historyFixture() {
       }
       if (argv.includes("push")) {
         try {
-          const output = await workspace.git("push", "--porcelain", "--", remote, argv.at(-1)!);
+          const remoteIndex = argv.indexOf("--") + 1;
+          const output = await workspace.git(
+            ...argv.slice(1).map((arg, index) => (index + 1 === remoteIndex ? remote : arg)),
+          );
           if (pr) {
             pr.headSha = await remoteHead();
           }

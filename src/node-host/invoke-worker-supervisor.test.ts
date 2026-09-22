@@ -262,8 +262,8 @@ describe("node-host worker supervisor commands", () => {
       descriptor: { id: "terminal", executablePath: "openclaw-worker-terminal" },
     },
     {
-      name: "terminal arguments",
-      descriptor: { id: "terminal", executablePath: process.execPath, args: ["--unsafe"] },
+      name: "NUL argument",
+      descriptor: { id: "terminal", executablePath: process.execPath, args: ["bad\0"] },
     },
     {
       name: "terminal CDP port",
@@ -289,31 +289,32 @@ describe("node-host worker supervisor commands", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
   });
 
-  it.runIf(process.platform !== "win32").each(["browser", "terminal"] as const)(
-    "runs one absolute zero-argument %s launcher without replay after failure",
+  it.each(["browser", "terminal"] as const)(
+    "runs provider-attested %s arguments literally without replay after failure",
     async (appId) => {
       const root = tempDirs.make("node-worker-desktop-launch-");
-      const executablePath = path.join(root, "launcher");
-      const markerPath = `${executablePath}.marker`;
-      fs.writeFileSync(
-        executablePath,
-        '#!/bin/sh\nprintf \'%s\\n\' "$#" >> "$0.marker"\nexit 7\n',
-        { mode: 0o755 },
-      );
+      const markerPath = path.join(root, "marker");
+      const args = ["spaces stay together", "literal;$(text)"];
       const supervisor = supervisorWith(fullReceipt());
 
       const { result } = await invokePrivate({
         command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
         paramsJSON: JSON.stringify({
           id: appId,
-          executablePath,
+          executablePath: process.execPath,
+          args: [
+            "-e",
+            "require('node:fs').appendFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)) + '\\n');process.exit(7)",
+            markerPath,
+            ...args,
+          ],
           ...(appId === "browser" ? { cdpPort: 9222 } : {}),
         }),
         supervisor,
       });
 
       expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-      expect(fs.readFileSync(markerPath, "utf8")).toBe("0\n");
+      expect(fs.readFileSync(markerPath, "utf8")).toBe(`${JSON.stringify(args)}\n`);
     },
   );
 

@@ -320,6 +320,10 @@ suite.define(() => {
       await expect.poll(() => card.count()).toBe(1);
       await waitForChatScrollIdle(page);
       report.afterCard = await dockGeometry(page);
+      if ((await card.getAttribute("open")) === null) {
+        await card.locator("summary").click();
+        await waitForChatScrollIdle(page);
+      }
       await expect.poll(() => card.getAttribute("open")).toBe("");
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "01-expanded-at-bottom.png") });

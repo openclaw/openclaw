@@ -117,7 +117,10 @@ describe("scripts/test-live-shard", () => {
         "src/gateway/fixture.live.test.ts",
         "src/system-agent/fixture.live.test.ts",
       ],
-      "native-live-src-infra": ["src/infra/fixture.live.test.ts"],
+      "native-live-src-infra": [
+        "src/cli/update-cli/update-command-node-runtime.live.test.ts",
+        "src/infra/fixture.live.test.ts",
+      ],
       "native-live-test": ["test/fixture.live.test.ts"],
       "native-live-extensions-a-k": [
         "extensions/a-provider/model.live.test.ts",

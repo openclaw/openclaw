@@ -9,7 +9,7 @@ title: "Session state on disk"
 ## Two persistence layers
 
 1. **Session rows (per-agent SQLite)** - key/value map `sessionKey -> SessionEntry`. Mutable runtime state owned by the Gateway. Tracks metadata: current session id, last activity, toggles, token counters.
-2. **Transcript events (per-agent SQLite)** - append-only, tree-structured (entries have `id` + `parentId`). Stores the conversation, tool calls, and compaction summaries; rebuilds model context for future turns. Compaction checkpoints are metadata over the compacted successor transcript - a new compaction does not write a second `.checkpoint.*.jsonl` copy.
+2. **Transcript events (per-agent SQLite)** - append-only, tree-structured (entries have `id` + `parentId`). Stores the conversation, tool calls, and compaction summaries; rebuilds model context for future turns. Compaction summaries and available token measurements remain in the transcript without a separate checkpoint record or snapshot copy.
 
 Older installs may still have `sessions.json` files under the agent `sessions/`
 directory. Treat those files as legacy session-row migration inputs or explicit

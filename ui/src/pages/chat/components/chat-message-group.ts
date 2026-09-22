@@ -13,7 +13,6 @@ import { t } from "../../../i18n/index.ts";
 import type { MessageGroup, ToolCard } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   readToolApprovalReviewOutcome,
   readToolApprovalReviews,
@@ -55,6 +54,7 @@ import {
 } from "./chat-message-stream.ts";
 import type { AssistantMessageDisclosure } from "./chat-message-text.ts";
 import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts";
+import { renderChatReplyAttribution } from "./chat-reply-attribution.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
   renderBrowserTabPreviews,
@@ -557,9 +557,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ? resolveIdentityHue(group.sender)
         : null;
   const sendStatus = readPendingSendStatus(group.messages.at(-1)?.message);
-  const replyToLabel =
-    normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
-  const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
 
   const inlineUserAvatar =
     normalizedRole === "user" &&
@@ -598,22 +595,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       ${inlineUserAvatar ? nothing : avatar}
       <div class="chat-group-messages">
         ${forwardedSource ? renderForwardedAttribution(group, opts) : nothing}
-        ${
-          replyToLabel
-            ? html`
-                <div
-                  class="chat-reply-attribution"
-                  title=${replyToTitle}
-                  aria-label=${replyToTitle}
-                >
-                  <span class="chat-reply-attribution__icon" aria-hidden="true"
-                    >${icons.cornerDownLeft}</span
-                  >
-                  <span>${replyToLabel}</span>
-                </div>
-              `
-            : nothing
-        }
+        ${normalizedRole === "assistant" ? renderChatReplyAttribution(group.replyToSender) : nothing}
         ${
           opts.frameContent ??
           repeat(

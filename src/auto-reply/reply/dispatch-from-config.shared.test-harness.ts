@@ -331,7 +331,7 @@ const transcriptMocks = vi.hoisted(() => ({
     target: {
       agentId: "main",
       sessionId: "test-session",
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       storePath: "/tmp/sessions.json",
     },
     messageId: "message-1",

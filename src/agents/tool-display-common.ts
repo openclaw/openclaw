@@ -62,10 +62,17 @@ export function defaultTitle(name: string): string {
   return parts.join(" ");
 }
 
+/** Beyond this nesting depth, a value does not contribute to the compact display preview. */
+const TOOL_DISPLAY_ARRAY_DEPTH_LIMIT = 64;
+
 function coerceDisplayValue(
   value: unknown,
   opts: CoerceDisplayValueOptions = {},
+  depth = 0,
 ): string | undefined {
+  if (depth > TOOL_DISPLAY_ARRAY_DEPTH_LIMIT) {
+    return undefined;
+  }
   if (value === null || value === undefined) {
     return undefined;
   }
@@ -102,7 +109,7 @@ function coerceDisplayValue(
   if (Array.isArray(value)) {
     const values: string[] = [];
     for (const item of value) {
-      const display = coerceDisplayValue(item, opts);
+      const display = coerceDisplayValue(item, opts, depth + 1);
       if (!display) {
         continue;
       }

@@ -144,6 +144,10 @@
 ```json
 {
   "additionalContext": {
+    "openclaw_active_computer": {
+      "kind": "application",
+      "value": "Current active computer (latest physical input, not message origin): active_node=unknown"
+    },
     "openclaw_current_sender": {
       "kind": "untrusted",
       "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
@@ -234,8 +238,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "additionalContext": {
-    "chars": 882,
-    "roughTokens": 221
+    "chars": 1025,
+    "roughTokens": 257
   },
   "codexCollaborationModeDeveloperInstructions": {
     "chars": 0,
@@ -254,8 +258,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 66253,
-    "roughTokens": 16564
+    "chars": 67095,
+    "roughTokens": 16774
   },
   "openClawDeveloperInstructions": {
     "chars": 2983,
@@ -266,12 +270,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 26903,
-    "roughTokens": 6726
+    "chars": 27046,
+    "roughTokens": 6762
   },
   "totalWithDynamicToolsJson": {
-    "chars": 93158,
-    "roughTokens": 23290
+    "chars": 94143,
+    "roughTokens": 23536
   },
   "userInputText": {
     "chars": 879,
@@ -515,6 +519,12 @@ You are in a Telegram direct conversation. In this conversation, message(action=
 ### Developer: Codex Collaboration Mode Instructions
 
 This turn asks Codex app-server to resolve its built-in Default collaboration-mode instructions at runtime.
+
+### Developer: OpenClaw Additional Context (openclaw_active_computer)
+
+```text
+<openclaw_active_computer>Current active computer (latest physical input, not message origin): active_node=unknown</openclaw_active_computer>
+```
 
 ### User: OpenClaw Additional Context (openclaw_current_sender)
 

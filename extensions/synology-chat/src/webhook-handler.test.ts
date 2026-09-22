@@ -1,8 +1,10 @@
 // Synology Chat tests cover webhook handler plugin behavior.
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { setSynologyRuntime } from "./runtime.js";
 import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import type { WebhookHandlerDeps } from "./webhook-handler.js";
@@ -148,6 +150,7 @@ describe("createWebhookHandler", () => {
   let log: TestLog;
 
   beforeEach(() => {
+    setSynologyRuntime(createPluginRuntimeMock());
     resolveLegacyWebhookNameToChatUserId.mockClear();
     resolveLegacyWebhookNameToChatUserId.mockResolvedValue(undefined);
     log = {

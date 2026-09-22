@@ -28,11 +28,11 @@ print_release_resume_command() {
 }
 
 is_stable_release() {
-  [[ "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
+  [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
 }
 
 is_android_release() {
-  [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
+  [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
 }
 
 resolve_child_workflow_ref() {
@@ -765,7 +765,7 @@ write_clawhub_runtime_state() {
   local output_path="$1"
   local force_skip_clawhub=false
   # Verification and release notes project the same joined child outcomes.
-  if [[ "${clawhub_failed}" != "0" ]]; then
+  if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" || "${clawhub_failed}" != "0" ]]; then
     force_skip_clawhub=true
   fi
   node --import tsx \
@@ -783,6 +783,7 @@ render_github_release_notes() {
   local output_file="$1"
   local verification_file="${2:-}"
   local metadata_file="${3:-}"
+  local regular_stable_version=""
   local -a render_args=(
     node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
     --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
@@ -796,6 +797,10 @@ render_github_release_notes() {
   fi
   if [[ -n "${metadata_file}" ]]; then
     render_args+=(--metadata-output "${metadata_file}")
+  fi
+  if [[ "${RELEASE_NPM_DIST_TAG:-}" == "extended-stable" ]]; then
+    regular_stable_version="$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")"
+    render_args+=(--regular-stable-version "${regular_stable_version}")
   fi
   "${render_args[@]}"
 }

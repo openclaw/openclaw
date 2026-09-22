@@ -147,20 +147,18 @@ async function persistSnapshot(
   lane.abort = abort;
   try {
     const summary = await readTranscriptSummary({ ...params, snapshot, abortSignal: abort.signal });
-    const intendedSummaryPath = await params.store.writeSummary(
-      summary,
-      params.session,
-      undefined,
-      () => {
+    const intendedSummaryPath = await params.store.writeSummary(summary, params.session, {
+      guard: {
+        inputRevision: snapshot.inputRevision,
+        nextSequence: snapshot.nextSequence,
+        summaryRevision: snapshot.summaryRevision,
+        allowAppends: params.allowAppends === true,
+      },
+      assertCurrent: () => {
         abort.signal.throwIfAborted();
         params.assertCurrent?.();
-        params.store.assertSummarySnapshotCurrent(
-          params.session,
-          snapshot,
-          params.allowAppends === true,
-        );
       },
-    );
+    });
     if (lane.live) {
       lane.live.lastSequence = snapshot.nextSequence;
     }

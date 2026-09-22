@@ -45,7 +45,7 @@ class ChatWorkedSummaryTest {
 
   @Test fun expandingRestoresOriginalOrderWithoutHidingFinalAnswer() {
     val timeline = prepareChatHistory(messages, "agent:main:dashboard:test", "agent:main:main").buildTimeline(0, emptyList(), null, expandedWorkKeys = setOf("final"))
-    assertEquals(listOf("message:final", "completed-tools:call", "message:commentary", "worked:final", "message:user"), timeline.items.map(::chatTimelineItemKey))
+    assertEquals(listOf("message:final", "tools:user", "message:commentary", "worked:final", "message:user"), timeline.items.map(::chatTimelineItemKey))
   }
 
   @Test fun mixedCommentaryFoldsWithEarlierWorkAndExpandsWithCanonicalContent() {
@@ -227,7 +227,7 @@ class ChatWorkedSummaryTest {
     for (tool in listOf(ChatToolActivity("later", "read", null, null, false), ChatToolActivity("later", "read", null, "Failed to read", true))) {
       val history = messages + ChatMessage("later", if (tool.isError) "toolresult" else "assistant", listOf(ChatMessageContent(type = if (tool.isError) "toolResult" else "toolCall", toolActivity = tool)), 150000)
       val timeline = prepareChatHistory(history, "main", "main").buildTimeline(0, emptyList(), null)
-      assertEquals(listOf("completed-tools:later", "message:final", "worked:final", "message:user"), timeline.items.map(::chatTimelineItemKey))
+      assertEquals(listOf("tools:user", "message:final", "worked:final", "message:user"), timeline.items.map(::chatTimelineItemKey))
     }
   }
 
@@ -241,7 +241,7 @@ class ChatWorkedSummaryTest {
     val answer = messages.last().copy(entryId = "answer-entry")
     val history = listOf(message("older", "assistant", 500)) + messages.dropLast(1) + answer
     val timeline = prepareChatHistory(history, "main", "main").buildTimeline(0, emptyList(), null, expandedWorkKeys = setOf("answer-entry"))
-    assertEquals(listOf("message:final", "completed-tools:call", "message:commentary", "worked:answer-entry", "message:user", "message:older"), timeline.items.map(::chatTimelineItemKey))
+    assertEquals(listOf("message:final", "tools:user", "message:commentary", "worked:answer-entry", "message:user", "message:older"), timeline.items.map(::chatTimelineItemKey))
     assertTrue(
       timeline.items
         .filterIsInstance<ChatTimelineItem.WorkedSummary>()
@@ -351,12 +351,12 @@ class ChatWorkedSummaryTest {
       assertEquals(listOf("message:error", "message:final", "message:media", "worked:final", "message:user"), collapsed.items.map(::chatTimelineItemKey))
       assertEquals(collapsed.items.lastIndex, collapsed.readAnchorIndex)
       val expanded = prepared.buildTimeline(0, emptyList(), null, expandedWorkKeys = setOf("final"))
-      assertEquals(listOf("message:error", "message:final", "message:media", "completed-tools:call", "message:commentary", "worked:final", "message:user"), expanded.items.map(::chatTimelineItemKey))
+      assertEquals(listOf("message:error", "message:final", "message:media", "tools:user", "message:commentary", "worked:final", "message:user"), expanded.items.map(::chatTimelineItemKey))
       assertEquals(expanded.items.lastIndex, expanded.readAnchorIndex)
       val active = prepared.buildTimeline(0, emptyList(), null, activeRunId = "run-a")
       assertEquals(originalKeys, active.items.map(::chatTimelineItemKey))
       val streaming = prepared.buildTimeline(1, listOf(ChatPendingToolCall("pending-$index", "read", startedAtMs = 7000)), "Live $index")
-      assertEquals(listOf("stream", "tools", "thinking") + originalKeys, streaming.items.map(::chatTimelineItemKey))
+      assertEquals(listOf("stream", "thinking") + originalKeys, streaming.items.map(::chatTimelineItemKey))
       assertEquals(streaming.items.lastIndex, streaming.readAnchorIndex)
     }
   }

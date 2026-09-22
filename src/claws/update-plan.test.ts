@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -20,9 +21,13 @@ import {
   targetSource,
 } from "./update-plan.test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => closeOpenClawStateDatabaseForTest());
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 async function fixture(options?: Parameters<typeof createUpdatePlanFixture>[1]) {
   const root = tempDirs.make("openclaw-claw-update-");
@@ -32,6 +37,7 @@ async function fixture(options?: Parameters<typeof createUpdatePlanFixture>[1]) 
 describe("buildClawUpdatePlan", () => {
   it("reads pre-bootstrap-column v6 state without mutating it", async () => {
     const current = await fixture();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const databasePath = resolveOpenClawStateSqlitePath(current.env);
     const sqlite = requireNodeSqlite();

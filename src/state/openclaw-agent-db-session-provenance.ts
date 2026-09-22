@@ -64,6 +64,7 @@ export function backfillSessionEntryProvenance(db: DatabaseSync, previousVersion
         hook_external_content_source = ?
     WHERE session_id = ?;
   `);
+  update.setReadBigInts(true);
   for (const row of rows) {
     const sessionId = normalizeNullableString(row.session_id);
     const entry = readMigratedEntry(row.entry_json);

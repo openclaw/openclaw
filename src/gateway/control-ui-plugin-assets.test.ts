@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { TLSSocket } from "node:tls";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRecord } from "../plugins/registry.js";
@@ -20,6 +21,7 @@ import {
   listControlUiPluginTabAuthGrants,
   listControlUiPluginWidgetKinds,
 } from "./control-ui-plugin-tabs.js";
+import { resolveControlUiPluginAuthCookieGeneration } from "./http-auth-plugin-cookie.js";
 import { setControlUiPluginAuthCookieForRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
@@ -80,7 +82,12 @@ function cookieForGrant(overrides: { pluginId?: string; generation?: string } = 
     response.res,
     [{ ...grant, pluginId: overrides.pluginId ?? grant.pluginId }],
     {
-      generation: overrides.generation ?? resolveSharedGatewaySessionGeneration(AUTH_TOKEN),
+      generation:
+        overrides.generation ??
+        resolveControlUiPluginAuthCookieGeneration(
+          resolveSharedGatewaySessionGeneration(AUTH_TOKEN),
+          getRuntimeConfig(),
+        ),
     },
   );
   const value = response.setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
@@ -132,11 +139,17 @@ describe("native Control UI browser assets", () => {
     },
   );
 
-  it("withdraws Custom plugin UI assets and receipts when the applied lab setting turns off", async () => {
+  it("hot-applies Custom plugin UI admission without replacing the backend plugin", async () => {
     await withTempConfig({
-      cfg: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      cfg: {},
       run: async () => {
         activateFixture("workspace");
+        expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
+        expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+
+        setRuntimeConfigSnapshot({
+          gateway: { controlUi: { experimental: { customPlugins: true } } },
+        });
         const entry = (await listControlUiPluginCatalog()).plugins[0]!;
         expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(
           expect.objectContaining({ pluginId: entry.pluginId }),
@@ -161,7 +174,6 @@ describe("native Control UI browser assets", () => {
           gateway: { controlUi: { experimental: { customPlugins: false } } },
         });
 
-        expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
         expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
         expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
           expect.objectContaining({ pluginId: entry.pluginId }),
@@ -176,6 +188,26 @@ describe("native Control UI browser assets", () => {
           for (const asset of [entry.entryUrl, ...entry.styles]) {
             expect((await sendRequest(server, { path: asset, headers })).res.statusCode).toBe(404);
           }
+        }
+        expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
+
+        setRuntimeConfigSnapshot({
+          gateway: { controlUi: { experimental: { customPlugins: true } } },
+        });
+        expect((await listControlUiPluginCatalog()).plugins).toEqual([entry]);
+        expect(listControlUiPluginTabAuthGrants(["operator.read"])).toContainEqual(
+          expect.objectContaining({ pluginId: entry.pluginId }),
+        );
+        expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(
+          expect.objectContaining({ pluginId: entry.pluginId }),
+        );
+        expect(listControlUiPluginActivations(browser)).toEqual([]);
+        expect(reportControlUiPluginActivation(browser, report)).toBe(true);
+        expect(listControlUiPluginActivations(browser)).toEqual([report]);
+        for (const asset of [entry.entryUrl, ...entry.styles]) {
+          expect(
+            (await sendRequest(server, { path: asset, headers: { cookie } })).res.statusCode,
+          ).toBe(200);
         }
       },
     });
@@ -354,6 +386,7 @@ describe("native Control UI browser assets", () => {
                 "token",
                 false,
                 resolveSharedGatewaySessionGeneration(AUTH_TOKEN),
+                getRuntimeConfig(),
                 ["operator.read"],
               );
               const cookies = response.setHeader.mock.calls
@@ -423,12 +456,12 @@ describe("native Control UI browser assets", () => {
         status: "activated",
       }),
     ).toBe(true);
-    const cookie = cookieForGrant();
     await withGatewayServer({
       prefix: "native-ui-http-",
       resolvedAuth: AUTH_TOKEN,
       overrides: { controlUiEnabled: true, controlUiBasePath: "" },
       run: async (server) => {
+        const cookie = cookieForGrant();
         const read = (url: string, method = "GET") =>
           sendRequest(server, {
             path: url,
@@ -514,7 +547,6 @@ describe("native Control UI browser assets", () => {
       status: "activated" as const,
     };
     expect(reportControlUiPluginActivation(browser, report)).toBe(true);
-    const cookie = cookieForGrant();
     const retained = createEmptyPluginRegistry();
     retained.plugins.push(fixture.record, createPluginRecord({ id: "unrelated" }));
     retained.controlUiDescriptors.push(...fixture.registry.controlUiDescriptors);
@@ -525,6 +557,7 @@ describe("native Control UI browser assets", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: { controlUiEnabled: true, controlUiBasePath: "" },
       run: async (server) => {
+        const cookie = cookieForGrant();
         const oldChunk = first.entryUrl.replace(/index\.js$/u, "lazy.js");
         const read = () => sendRequest(server, { path: oldChunk, headers: { cookie } });
         const response = await read();
@@ -665,7 +698,6 @@ describe("native Control UI browser assets", () => {
     fs.writeFileSync(path.join(fixture.directory, "index.js.map"), "private sourcemap");
     fs.writeFileSync(path.join(fixture.directory, ".secret.js"), "private hidden file");
     const entry = (await listControlUiPluginCatalog()).plugins[0]!;
-    const cookie = cookieForGrant();
     const prefix = entry.entryUrl.slice(0, -"index.js".length);
     expect(listControlUiPluginTabAuthGrants(["operator.approvals"])).toEqual([]);
     expect(authorizeOperatorScopesForMethod("plugins.controlUi.list", ["operator.read"])).toEqual({
@@ -679,6 +711,7 @@ describe("native Control UI browser assets", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: { controlUiEnabled: true, controlUiBasePath: "" },
       run: async (server) => {
+        const cookie = cookieForGrant();
         const unauthorizedHeaders: Record<string, string>[] = [
           {},
           { cookie: cookieForGrant({ pluginId: "another-owner" }) },

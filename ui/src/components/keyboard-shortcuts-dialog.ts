@@ -1,16 +1,21 @@
 import { css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import { openShellNewSession, type ShellNewSessionHost } from "../app/app-shell-new-session.ts";
 import type { ChatSendShortcut } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import {
   formatKeyboardShortcutParts,
+  KEYBOARD_SHORTCUT_COMBOS,
+  matchesShortcutCombo,
   resolveKeyboardShortcutSections,
 } from "../lib/keyboard-shortcut-catalog.ts";
+import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import "./modal-dialog.ts";
 
 class KeyboardShortcutsDialog extends OpenClawLitElement {
   @property({ attribute: false }) sendShortcut: ChatSendShortcut = "enter";
+  @property({ attribute: false }) newSessionHost?: ShellNewSessionHost;
   @state() private open = false;
 
   static override styles = css`
@@ -122,15 +127,62 @@ class KeyboardShortcutsDialog extends OpenClawLitElement {
     this.open = !this.open;
   }
 
+  private readonly handleKeydown = async (event: KeyboardEvent): Promise<void> => {
+    const modal = event.currentTarget;
+    const layers = document.openClawModalLayers;
+    if (
+      event.defaultPrevented ||
+      event.repeat ||
+      !this.open ||
+      !(modal instanceof HTMLElement) ||
+      layers?.size !== 1 ||
+      !layers.has(modal)
+    ) {
+      return;
+    }
+    const host = this.newSessionHost;
+    const context = host?.context;
+    const newSession =
+      matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession, event) &&
+      host &&
+      !host.onboardingMode &&
+      readSessionMethodAccess(context?.gateway.snapshot, { method: "sessions.create", params: {} })
+        .allowed;
+    if (!newSession && !matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts, event)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    this.open = false;
+    // Release modal ownership and restore its previous focus before shell navigation
+    // focuses the new composer. Other dialogs keep the global shortcut guard.
+    await this.updateComplete;
+    if (
+      this.isConnected &&
+      !this.open &&
+      newSession &&
+      host.isConnected &&
+      host.context === context
+    ) {
+      openShellNewSession(host, "shortcut");
+    }
+  };
+
   override render() {
     if (!this.open) {
       return nothing;
     }
-    const close = () => {
+    const close = (event: Event) => {
+      // Removal owns focus restoration; do not also queue Web Awesome's close callback.
+      event.preventDefault();
       this.open = false;
     };
     return html`
-      <openclaw-modal-dialog label=${t("shortcutsOverlay.title")} @modal-cancel=${close}>
+      <openclaw-modal-dialog
+        label=${t("shortcutsOverlay.title")}
+        @modal-cancel=${close}
+        @keydown=${this.handleKeydown}
+      >
         <div class="dialog">
           <header class="header">
             <h2>${t("shortcutsOverlay.title")}</h2>

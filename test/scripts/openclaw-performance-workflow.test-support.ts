@@ -141,6 +141,7 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     RUNNER_TEMP: temp,
     TARGET_CHECKOUT_DIR: workspace,
     TARGET_REF_INPUT: "main",
+    PERFORMANCE_MODE: "kova",
     KOVA_REF_INPUT: "fixture",
     KOVA_CONFIG_CONTRACT_INPUT: "canonical",
     KOVA_TRUSTED_LIVE_REF: "fixture",
