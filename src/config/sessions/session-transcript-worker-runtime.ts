@@ -99,7 +99,7 @@ export function prepareSessionEntryPresenceRead(input: SessionAccessScope): Read
 }
 
 /** Single and batch reads synchronously retain the same lane-aware database owner. */
-function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOptions) {
+export function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOptions) {
   const owned = acquireHistoryDatabaseResource(options);
   const { database } = owned;
   const assertCurrent = () => {

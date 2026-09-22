@@ -44,6 +44,7 @@ import {
   recordAnnounceDeliveryResult,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
@@ -728,10 +729,12 @@ export const startSubagentAnnounceCleanupFlow = (
         deadlineTimer.unref?.();
       }
       try {
-        announceOutcome = await params.runSubagentAnnounceFlow({
-          ...announceParams,
-          signal: deadline.signal,
-        });
+        announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
+          params.runSubagentAnnounceFlow({
+            ...announceParams,
+            signal: deadline.signal,
+          }),
+        );
       } catch (error) {
         defaultRuntime.log(
           `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,

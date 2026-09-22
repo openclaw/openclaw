@@ -1,3 +1,9 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  persistSubagentRunsToDiskOrThrow,
+  useSubagentControlFixture,
+} from "../registry/subagent-control.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
@@ -11,10 +17,8 @@ import {
   maybeDeliverTaskTerminalUpdate,
 } from "../../../tasks/task-registry.js";
 import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
-import { useSubagentControlFixture } from "../registry/subagent-control.test-support.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "../registry/subagent-registry-run-pause.js";
-import { persistSubagentRunsToDiskOrThrow } from "../registry/subagent-registry-state.js";
 import {
   adoptPausedSubagentRunForFollowUp,
   markRequesterTurnYielded,

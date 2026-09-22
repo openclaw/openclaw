@@ -81,6 +81,20 @@ with its scheduler-owned continuation.
   After the successor binds its run scope, that scope owns the entitlement until
   it closes. Retiring the delivered child batch cannot revoke a still-running
   requester.
+- **Completion-source custody.** Registration retains the live operator source
+  separately from execution. Individual delivery and requester settlement use
+  that captured permission ceiling, not the async caller that later schedules
+  cleanup. Committed settlement, retirement, or source/Gateway revocation
+  releases it; provisional writes and same-task replacement cannot drop it.
+  Retained results do not retain usable authority after that release, and a
+  batch cannot combine incompatible operator sources. Cancellation-only batches
+  keep the existing cancellation caller's admission, rather than using the
+  revoked target to authorize a new turn. Mixed result/cancellation batches
+  require every original source to remain live and compatible. An explicit
+  delivery retry captures its newly admitted caller while live and transfers
+  custody only after the new delivery generation commits; it does not reopen the
+  expired source. Restart still admits a
+  fresh recovery owner rather than reviving the previous process capability.
 - **Stable audience.** A nested wake uses internal delivery. A settlement
   continuation targeting a live `sessions_yield`-paused row adopts that row;
   unrelated inter-session messages do not adopt that row. An ordinary

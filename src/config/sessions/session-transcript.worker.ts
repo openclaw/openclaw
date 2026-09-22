@@ -260,6 +260,25 @@ serveWorkerTasks(
           })),
         };
       }
+      if (request.kind === "session-progress-card") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { readSessionProgressCard } =
+          await import("../../session-cards/progress-card-store.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => {
+            const result = withOpenClawAgentDatabaseReadOnly(
+              (database) => readSessionProgressCard(database.db, request.sessionKey),
+              { ...request.database, env: request.env },
+            );
+            return {
+              kind: "session-progress-card" as const,
+              card: result.found ? result.value : null,
+            };
+          })),
+        };
+      }
       if (request.kind === "session-row-presence") {
         const { loadSessionEntryReadOnlyInScope } =
           await import("./session-accessor.sqlite-entry.js");

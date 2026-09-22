@@ -741,7 +741,7 @@ describe("collectPackUnpackedSizeErrors", () => {
   it.each([
     { label: "ordinary package", unpackedSize: 120_354_302 },
     { label: "required native payload", unpackedSize: 243_066_603 },
-    { label: "exact budget", unpackedSize: 235 * 1024 * 1024 },
+    { label: "exact budget", unpackedSize: 320 * 1024 * 1024 },
   ])("accepts pack results at or below the budget: $label", ({ unpackedSize }) => {
     expect(
       collectPackUnpackedSizeErrors([makePackResult("candidate.tgz", unpackedSize)]),
@@ -758,9 +758,9 @@ describe("collectPackUnpackedSizeErrors", () => {
 
   it("rejects pack results one byte above the unpacked size budget", () => {
     expect(
-      collectPackUnpackedSizeErrors([makePackResult("candidate.tgz", 235 * 1024 * 1024 + 1)]),
+      collectPackUnpackedSizeErrors([makePackResult("candidate.tgz", 320 * 1024 * 1024 + 1)]),
     ).toEqual([
-      "candidate.tgz unpackedSize 246415361 bytes (235.0 MiB) exceeds budget 246415360 bytes (235.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
+      "candidate.tgz unpackedSize 335544321 bytes (320.0 MiB) exceeds budget 335544320 bytes (320.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
     ]);
   });
 

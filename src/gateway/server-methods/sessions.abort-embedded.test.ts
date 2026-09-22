@@ -1,4 +1,7 @@
 /** Exact recovered-parent Stop owns its descendants, not other turns or queues. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expect, it, vi } from "vitest";
 import {
   clearActiveEmbeddedRun,
@@ -29,7 +32,6 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
-import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { createActiveRun, createChatAbortContext } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 

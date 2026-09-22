@@ -1,8 +1,10 @@
-import { afterAll } from "vitest";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import {
   resetAgentTaskRegistryForTests,
   restoreAgentTaskRegistryRuntimeAfterTests,
 } from "./agent.test-harness.js";
+import { afterAll } from "vitest";
 import "./agent.base.test-utils.js";
 import "./agent.media-and-routing.test-utils.js";
 import "./agent.events-and-subagents.test-utils.js";

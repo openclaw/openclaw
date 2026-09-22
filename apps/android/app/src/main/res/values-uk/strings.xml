@@ -236,7 +236,6 @@
     <string name="native_205dac381e0872e8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Текст події"</string>
     <string name="native_2065cc867eba1b39" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Не вдалося завантажити конфігурацію моделі постачальника."</string>
     <string name="native_207ccb22d618db05" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s застосунку дозволено пересилання."</string>
-    <string name="native_20d4f92989f4fd3e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Приховано додаткових зображень: %1$s"</string>
     <string name="native_211988ba9dd0570a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Відхилити запит на сполучення?"</string>
     <string name="native_2132066dc9475cb7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Цю навичку встановлено, але вона недоступна поточному агенту. Змінювати фільтри агентів можна лише в настільному застосунку або через CLI."</string>
     <string name="native_21378545892f1fe2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Видавець"</string>
@@ -588,6 +587,7 @@
     <string name="native_50009ce1da4d15e1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Файл"</string>
     <string name="native_5047cfb3b607e7d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Підключіть Gateway, щоб завантажити вузли та спарені пристрої."</string>
     <string name="native_5051902c7b6a368b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Перемкнути гілку"</string>
+    <string name="native_506ec35a250d7ff9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Зображення %1$s–%2$s із %3$s"</string>
     <string name="native_5083cd4b96b0d09d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Немає навичок"</string>
     <string name="native_50bae925225d054b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Відповіді озвучуються"</string>
     <string name="native_50c8b81faf51e7d1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Позначити як прочитане"</string>
@@ -1125,6 +1125,7 @@
     <string name="native_99b6623213642793" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Контекст телефону та конфіденційність"</string>
     <string name="native_99f818dd50c0dd7c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Підключено: %1$s/%2$s"</string>
     <string name="native_9a0019fcfaef0a49" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s  %2$s"</string>
+    <string name="native_9a06e0f6dc47486e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Наступні зображення"</string>
     <string name="native_9a0bf562e602f844" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Відновлення Gateway після перезапуску ще триває."</string>
     <string name="native_9a16d8b4110f4349" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Заміна коду налаштування очищує збережені на цьому телефоні облікові дані налаштування та токени пристрою перед повторним підключенням. Можливо, для цього телефону знадобиться повторне схвалення можливостей вузла; продовжуйте, лише якщо маєте намір виконати сполучення за допомогою нового коду налаштування Gateway."</string>
     <string name="native_9a25e9ad380dafd4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Відкрийте автоматизацію, щоб переглянути її конфігурацію та історію запусків. Підключення з правами адміністратора також дають змогу запускати, редагувати, вмикати, вимикати або видаляти її."</string>
@@ -1808,6 +1809,7 @@
     <string name="native_fa664b09af472ec4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Спробуйте інший пошук або очистьте поточний запит."</string>
     <string name="native_fa8b0b30b80cd97e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Дозволити доступ до геоданих у фоновому режимі?"</string>
     <string name="native_fa91fd53f004be47" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Виведення на поверхню"</string>
+    <string name="native_fa96cc95351c426a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Попередні зображення"</string>
     <string name="native_faab0dc4735c1cfe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Початкове налаштування"</string>
     <string name="native_fad13bdbe9a8cd0f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s · %3$s"</string>
     <string name="native_fae8fa3bc050ab7e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Скасувати голосову нотатку"</string>

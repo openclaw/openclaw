@@ -1,3 +1,9 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  persistSubagentRunsToDiskOrThrow,
+  useSubagentControlFixture,
+} from "./subagent-control.test-support.js";
 /** Cancellation retains selected descendants across committed ancestor retirement. */
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -9,6 +15,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
@@ -24,12 +31,10 @@ import {
 } from "../completion/subagent-completion-admission.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import { persistSubagentRunsToDiskAsyncOrThrow } from "./subagent-registry-state.js";
 import {
   activateSubagentRegistry,
   initSubagentRegistry,
@@ -561,12 +566,11 @@ it("does not create a missing child database while binding cancellation", async 
 });
 
 describe("restored historical cancellation ownership", () => {
-  const wake = vi.fn<SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]>();
-  const announce = vi.fn<SubagentRegistryDeps["runSubagentAnnounceFlow"]>();
-  const capture = vi.fn<SubagentRegistryDeps["captureSubagentCompletionReply"]>();
-  const cleanup = vi.fn<SubagentRegistryDeps["cleanupBrowserSessionsForLifecycleEnd"]>();
+  const { wake, announce, capture, cleanup } = fixture;
 
   beforeEach(() => {
+    vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockReset();
+    vi.mocked(resolveContextEngine).mockReset();
     wake.mockReset().mockImplementation(async (params) => {
       params.completeBatch([params.settledEntry], 1, {
         delivered: false,
@@ -578,14 +582,6 @@ describe("restored historical cancellation ownership", () => {
     announce.mockReset().mockResolvedValue("delivered");
     capture.mockReset().mockResolvedValue(undefined);
     cleanup.mockReset().mockResolvedValue(undefined);
-    testing.setDepsForTest({
-      callGateway: fixture.gateway,
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      maybeWakeRequesterAfterAllChildrenSettled: wake,
-      runSubagentAnnounceFlow: announce,
-      captureSubagentCompletionReply: capture,
-      cleanupBrowserSessionsForLifecycleEnd: cleanup,
-    });
   });
 
   function historicalCancellation() {

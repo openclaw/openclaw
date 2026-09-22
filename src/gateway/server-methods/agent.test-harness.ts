@@ -1,12 +1,16 @@
 // Agent method tests cover run/steer/reset/wait behavior, task/subagent state,
 // approval followups, lifecycle hooks, and emitted gateway events.
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  resetSubagentRegistryMocks,
+  subagentRegistryMocks,
+} from "./agent.subagent-registry.mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
-import { setSubagentRegistryDepsForTest } from "../../agents/subagents/registry/subagent-registry-deps.js";
-import type { SubagentRegistryDeps } from "../../agents/subagents/registry/subagent-registry-deps.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type {
@@ -100,8 +104,10 @@ const mocks = vi.hoisted(() => ({
   lifecycleGeneration: "test-generation",
 }));
 
+const agentTestMocks = Object.assign(mocks, subagentRegistryMocks);
+
 export function getAgentTestMocks() {
-  return mocks;
+  return agentTestMocks;
 }
 
 function resolveAgentTestConfig(cfg: OpenClawConfig = mocks.loadConfigReturn): OpenClawConfig {
@@ -297,22 +303,26 @@ vi.mock("../../agents/agent-scope.js", async () => {
   };
 });
 
-vi.mock("../../infra/agent-events.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/agent-events.js")>()),
-  assertAgentRunLifecycleGenerationCurrent: (lifecycleGeneration: string) => {
-    if (lifecycleGeneration === mocks.lifecycleGeneration) {
-      return;
-    }
-    const error = new Error("Agent run belongs to a stale gateway lifecycle");
-    error.name = "AbortError";
-    throw error;
-  },
-  emitAgentEvent: mocks.emitAgentEvent,
-  getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
-  isAgentEventLifecycleGenerationCurrent: (generation: string) =>
-    generation === mocks.lifecycleGeneration,
-  registerAgentEventLifecycleRotationHandler: vi.fn(),
-}));
+vi.mock("../../infra/agent-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/agent-events.js")>();
+  return {
+    ...actual,
+    assertAgentRunLifecycleGenerationCurrent: (lifecycleGeneration: string) => {
+      if (lifecycleGeneration === mocks.lifecycleGeneration) {
+        return;
+      }
+      const error = new Error("Agent run belongs to a stale gateway lifecycle");
+      error.name = "AbortError";
+      throw error;
+    },
+    emitAgentEvent: mocks.emitAgentEvent,
+    getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
+    isAgentEventLifecycleGenerationCurrent: (generation: string) =>
+      generation === mocks.lifecycleGeneration,
+    registerAgentEventLifecycleRotationHandler: vi.fn(),
+  };
+});
+
 vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/agent-run-registry.js")>()),
   claimAgentRunContext: mocks.registerAgentRunContext,
@@ -1067,29 +1077,6 @@ export async function invokeAgentIdentityGet(
   return respond;
 }
 
-/**
- * Keep subagent registry dependencies deterministic across gateway tests.
- * Real ended-run hooks load a plugin bundle in the background, which can
- * replace registrations installed by the next test before it finalizes.
- */
-export function applyGatewaySubagentRegistryTestDeps(
-  overrides?: Parameters<typeof setSubagentRegistryDepsForTest>[0],
-) {
-  setSubagentRegistryDepsForTest({
-    // Registration alone does not complete a child. Completion fixtures supply
-    // their own terminal observation before exercising cleanup or announcement.
-    callGateway: (async () => ({
-      status: "pending",
-    })) as SubagentRegistryDeps["callGateway"],
-    loadAgentRuntimePluginRegistryHandle: () => undefined,
-    // Handler fixtures own no browser sessions; lifecycle cleanup has separate coverage.
-    cleanupBrowserSessionsForLifecycleEnd: async () => {},
-    ...overrides,
-  });
-}
-
-applyGatewaySubagentRegistryTestDeps();
-
 /** Keep handler tests on the real task lifecycle without paying for SQLite durability. */
 export function resetAgentTaskRegistryForTests(): void {
   resetTaskRegistryForTests({ persist: false });
@@ -1109,7 +1096,7 @@ export const describe0AfterEach0 = async () => {
   resetDiagnosticEventsForTest();
   resetAgentTaskRegistryForTests();
   resetSubagentRegistryForTests({ persist: false });
-  applyGatewaySubagentRegistryTestDeps();
+  resetSubagentRegistryMocks();
   mocks.agentCommand.mockReset();
   mocks.updateSessionStore.mockReset().mockResolvedValue(undefined);
   mocks.loadConfigReturn = {};
@@ -1142,7 +1129,7 @@ async function resetIntegrationState() {
   resetDetachedTaskLifecycleRuntimeForTests();
   resetAgentTaskRegistryForTests();
   resetSubagentRegistryForTests({ persist: false });
-  applyGatewaySubagentRegistryTestDeps();
+  resetSubagentRegistryMocks();
   mocks.agentCommand.mockReset();
   mocks.loadConfigReturn = {};
   mocks.loadSessionEntry.mockReset();

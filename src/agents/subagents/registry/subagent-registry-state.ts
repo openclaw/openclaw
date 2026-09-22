@@ -85,7 +85,9 @@ const committedSwarmNotifications = new Map<
   { event: SessionLifecycleEvent; signature: string }
 >();
 
-function swarmNotification(entry: SubagentRunRecord | undefined) {
+function swarmNotification(
+  entry: SubagentRunRecord | undefined,
+): { event: SessionLifecycleEvent; signature: string } | undefined {
   if (
     !entry?.collect ||
     !entry.swarmRequesterSessionKey ||
@@ -99,6 +101,7 @@ function swarmNotification(entry: SubagentRunRecord | undefined) {
       sessionKey: entry.swarmRequesterSessionKey,
       agentId: entry.requesterAgentId,
       reason: "swarm",
+      scope: "runtime",
     },
     // Compare the summary's raw inputs, never child results, labels or error text.
     signature: JSON.stringify([
@@ -198,6 +201,7 @@ export function publishSubagentRunsAfterAtomicStore(
   deferredObserverEvents: Array<() => void>,
 ): void {
   supersedePendingSubagentRegistryWrites(changedRunIds);
+  subagentRuns.settleCompletionAuthorities(runs, changedRunIds);
   const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds);
   const events = updateCommittedSwarmNotifications(runs, changedRunIds);
   deferredObserverEvents.push(() => {
@@ -280,6 +284,9 @@ function persistSubagentRuns(
       throw error;
     }
   }
+  if (committed) {
+    subagentRuns.settleCompletionAuthorities(runs, changedRunIds);
+  }
   // In-process readers must observe the authoritative memory snapshot before the wake.
   const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds);
   const events = committed ? updateCommittedSwarmNotifications(runs, changedRunIds) : [];
@@ -310,6 +317,7 @@ export function persistSubagentRunsToDiskAsyncOrThrow(
 ): Promise<void> {
   return persistSubagentRegistryChangesAsync(runs, changedRunIds, options, (snapshot, runIds) => {
     options.onCommitted?.();
+    subagentRuns.settleCompletionAuthorities(snapshot, runIds);
     const keys = rememberPersistedSubagentRunsSnapshot(
       snapshot,
       runIds,

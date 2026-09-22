@@ -16,6 +16,8 @@ export const runtimeProcessDeclarationEntries = {
 };
 export const vitestWorkerDeclarationEntries = {
   ...runtimeProcessDeclarationEntries,
+  "test-support/bench-session-history-runtime":
+    "scripts/bench-session-history-runtime.test-support.ts",
   "extensions/discord/src/voice/audio-worker-entrypoints.test-support":
     "extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts",
   // Codex is package-owned and excluded from the root runtime bundle.
