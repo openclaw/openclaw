@@ -57,10 +57,13 @@ export type Job = {
   reject(error: unknown): void;
   detach(): void;
 };
+export type SqliteWorkerAdmissionLane = "shared" | "isolated";
 export type Slot = {
   runtimeGeneration?: RuntimeWorkerGeneration;
   borrowedGenerationSlot?: true;
   worker: Worker;
+  /** Sticky execution lane; foreign/isolated must not share workers with shared stores. */
+  lane?: SqliteWorkerAdmissionLane;
   receiveReply(reply: SqliteWorkerReply, pumping?: boolean): void;
   actors: Set<Actor>;
   queue: Job[];

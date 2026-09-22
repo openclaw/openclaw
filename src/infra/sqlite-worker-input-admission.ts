@@ -1,5 +1,8 @@
 import { createDeferredCore } from "../shared/deferred.js";
-import type { SqliteWorkerInputPreparation } from "./sqlite-worker-broker.types.js";
+import type {
+  SqliteWorkerAdmissionLane,
+  SqliteWorkerInputPreparation,
+} from "./sqlite-worker-broker.types.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 
 /** Retained inputs share the broker budget before they become queued jobs. */
@@ -7,7 +10,11 @@ export class SqliteWorkerInputAdmission {
   private bytes = 0;
   private inputPreparationGeneration = {};
   private readonly inputPreparations = new Set<Promise<void>>();
-  private openTail: Promise<void> = Promise.resolve();
+  /** Separate scheduling lanes; retained byte budget stays shared. */
+  private readonly openTail = {
+    shared: Promise.resolve() as Promise<void>,
+    isolated: Promise.resolve() as Promise<void>,
+  };
 
   constructor(
     private readonly owner: {
@@ -33,7 +40,11 @@ export class SqliteWorkerInputAdmission {
     };
   }
 
-  open<T>(bytes: number, dispatch: () => Promise<T>): Promise<T> {
+  open<T>(
+    bytes: number,
+    dispatch: () => Promise<T>,
+    lane: SqliteWorkerAdmissionLane = "shared",
+  ): Promise<T> {
     if (
       bytes > this.owner.maxMessageBytes ||
       this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes
@@ -42,11 +53,12 @@ export class SqliteWorkerInputAdmission {
         new SqliteWorkerError("SQLite worker open input capacity reached", "overloaded"),
       );
     }
-    const previous = this.openTail;
+    const previous = this.openTail[lane];
     const settled = createDeferredCore();
-    this.openTail = settled.promise;
+    this.openTail[lane] = settled.promise;
     const release = this.retain(bytes);
     // Physical-file identity must be published before admitting another open alias.
+    // Isolated/foreign opens use a separate tail so a wedged chat.db cannot stall shared OpenClaw admission.
     return previous.then(dispatch).finally(() => {
       release();
       settled.resolve();
@@ -54,7 +66,7 @@ export class SqliteWorkerInputAdmission {
   }
 
   joinOpens(): Promise<void> {
-    return this.openTail;
+    return Promise.all([this.openTail.shared, this.openTail.isolated]).then(() => undefined);
   }
 
   invalidatePreparations(): void {

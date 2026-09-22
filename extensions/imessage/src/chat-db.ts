@@ -1,7 +1,7 @@
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
-  openSqliteWorkerStore,
+  openIsolatedSqliteWorkerStore,
   type SqliteWorkerCommand,
   type SqliteWorkerStore,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -21,7 +21,8 @@ type ReadReceiptGuid = (
 ) => Promise<string | null>;
 
 function openIMessageChatDbReader(databasePath: string) {
-  return openSqliteWorkerStore<IMessageChatDbOperations>({
+  // Isolated admission lane: wedged chat.db must not stall shared OpenClaw SQLite (#148750).
+  return openIsolatedSqliteWorkerStore<IMessageChatDbOperations>({
     moduleUrl: resolveRuntimeWorkerUrl({
       currentModuleUrl: import.meta.url,
       sourceWorkerName: "chat-db.worker",

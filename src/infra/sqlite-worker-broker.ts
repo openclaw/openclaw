@@ -30,6 +30,7 @@ import type {
   PreparedSqliteWorkerOpen,
   RequestBody,
   Slot,
+  SqliteWorkerAdmissionLane,
   SqliteWorkerStoreOptions,
   StoreClient,
   SqliteWorkerOpenCustody,
@@ -51,6 +52,7 @@ import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 const ADMISSION_TIMEOUT_MS = 10_000;
+const OWNERSHIP_RETRY = Symbol("sqlite-worker-ownership-retry");
 const MAX_STORES = 64;
 export const SQLITE_WORKER_MAX_REQUESTS = 128;
 export const SQLITE_WORKER_MAX_QUEUED_BYTES = 64 * 1024 * 1024;
@@ -84,6 +86,8 @@ export class SqliteWorkerBroker {
     maxQueuedBytes: SQLITE_WORKER_MAX_QUEUED_BYTES,
     maxMessageBytes: SQLITE_WORKER_MAX_MESSAGE_BYTES,
   });
+  /** Serialize create/reuse per physical identity across concurrent lanes. */
+  private readonly ownershipTail = new Map<string, Promise<void>>();
   private draining?: Promise<void>;
 
   reserveInputPreparation(inputBytes: number): SqliteWorkerInputPreparation {
@@ -95,6 +99,7 @@ export class SqliteWorkerBroker {
     stateContext?: SqliteWorkerStateContext,
     assertCurrent?: () => void,
     custody: SqliteWorkerOpenCustody = {},
+    admissionLane: SqliteWorkerAdmissionLane = "shared",
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
     try {
       validateSqliteWorkerDatabaseLocator(options.databasePath);
@@ -124,8 +129,10 @@ export class SqliteWorkerBroker {
       return Promise.reject(toErrorObject(error, "SQLite worker input could not be serialized"));
     }
     return this.inputAdmission
-      .open(snapshot.input.byteLength + (snapshot.preparation?.byteLength ?? 0), () =>
-        this.openAdmitted<Operations>(snapshot, client),
+      .open(
+        snapshot.input.byteLength + (snapshot.preparation?.byteLength ?? 0),
+        () => this.openAdmitted<Operations>(snapshot, client, admissionLane),
+        admissionLane,
       )
       .catch((error: unknown) => {
         this.clients.delete(client);
@@ -136,6 +143,7 @@ export class SqliteWorkerBroker {
   private async openAdmitted<Operations extends SqliteWorkerOperations>(
     options: PreparedSqliteWorkerOpen,
     client: object,
+    admissionLane: SqliteWorkerAdmissionLane = "shared",
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
     options.assertCurrent?.();
     const { databasePath, inputHash, identity } =
@@ -154,98 +162,139 @@ export class SqliteWorkerBroker {
     }
     const { modulePath, moduleUrl } = await resolveSqliteWorkerModuleUrl(options.moduleUrl);
     options.assertCurrent?.();
-    let actor = this.actors.get(key);
-    if (actor?.retirementRequested) {
-      if (actor.retirement) {
-        await actor.retirement;
-        return this.openAdmitted(options, client);
-      }
-      throw new SqliteWorkerError("SQLite actor retirement must finish before reopening", "closed");
-    }
-    if (actor?.cleanupState === "pending") {
-      if (actor.closing) {
-        await actor.closing;
-        return this.openAdmitted(options, client);
-      }
-      throw new SqliteWorkerError(
-        "SQLite worker cleanup is pending; retry close before reopening",
-        "closed",
-      );
-    }
-    if (actor) {
-      assertSqliteWorkerActorReusable(actor, moduleUrl, inputHash, options.stateContext);
-      actor.references += 1;
-    } else {
-      const slot = await this.acquireSlot(options);
-      try {
-        options.assertCurrent?.();
-      } catch (error) {
-        return this.lifecycle.rejectSlotAdmission(slot, error);
-      }
-      const nativeStopped = createDeferredCore();
-      actor = {
-        runtimeGeneration: options.runtimeGeneration,
-        nativeStopped: nativeStopped.promise,
-        markNativeStopped: nativeStopped.resolve,
-        pendingStateLifecycles: new Set(),
-        id: ++this.nextActor,
-        key,
-        // Native ownership pins its opening paths even after the first client closes.
-        pathReferences: new Map([...admittedPaths].map((pathname) => [pathname, 1])),
-        moduleUrl,
-        inputHash,
-        slot,
-        references: 1,
-        opened: Promise.resolve(),
-        openDispatch: { dispatched: false },
-        initialized: false,
-        backendClosed: false,
-        databasePath,
-        stateContext: options.stateContext,
-        stateDatabasePath: options.stateDatabasePath,
-      };
-      this.actors.set(key, actor);
-      slot.actors.add(actor);
-      slot.pendingOpens -= 1;
-      const opening = actor;
-      opening.opened = this.enqueue(
-        slot,
-        {
-          type: "open",
-          actor: actor.id,
-          moduleUrl,
-          databasePath,
-          ...(options.createAdmission
-            ? { openAdmission: "input" as const }
-            : options.createOpenAdmission
-              ? { openAdmission: "identity" as const }
-              : {}),
-          ...(options.existingOnly ? { existingIdentity: key } : {}),
-          input,
-          ...(options.preparation ? { preparation: options.preparation } : {}),
-          ...(/\.[cm]?ts$/.test(modulePath)
-            ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
-            : {}),
-        },
-        input.byteLength + (options.preparation?.byteLength ?? 0),
-        {
-          dispatchState: opening.openDispatch,
-          assertCurrent: options.assertCurrent,
-          maintenanceScope: options.maintenanceScope,
-          createAdmission: options.createAdmission ?? options.createOpenAdmission,
-        },
-      ).then(async () => {
-        opening.initialized = true;
-        const physical = await resolveOpenedSqliteWorkerIdentity(databasePath, identity, (id) => {
-          const existing = this.actors.get(id);
-          return existing !== undefined && existing !== opening;
-        });
-        if (physical !== key) {
-          this.actors.delete(key);
-          opening.key = physical;
-          this.actors.set(physical, opening);
+    // Drain retirement/cleanup before taking the ownership lock so a nested
+    // openAdmitted retry cannot deadlock on ownershipTail for the same key.
+    {
+      let pending = this.actors.get(key);
+      while (pending?.retirementRequested || pending?.cleanupState === "pending") {
+        if (pending.retirementRequested) {
+          if (pending.retirement) {
+            await pending.retirement;
+            pending = this.actors.get(key);
+            continue;
+          }
+          throw new SqliteWorkerError(
+            "SQLite actor retirement must finish before reopening",
+            "closed",
+          );
         }
+        if (pending.closing) {
+          await pending.closing;
+          pending = this.actors.get(key);
+          continue;
+        }
+        throw new SqliteWorkerError(
+          "SQLite worker cleanup is pending; retry close before reopening",
+          "closed",
+        );
+      }
+    }
+    // Reserve physical ownership before awaiting worker capacity so concurrent
+    // cross-lane opens cannot both observe an empty registry and double-create.
+    let actor: Actor;
+    try {
+      actor = await this.withPhysicalOwnershipReservation(key, async () => {
+        let current = this.actors.get(key);
+        if (current?.retirementRequested || current?.cleanupState === "pending") {
+          throw OWNERSHIP_RETRY;
+        }
+        if (current) {
+          assertSqliteWorkerActorReusable(current, moduleUrl, inputHash, options.stateContext);
+          current.references += 1;
+          return current;
+        }
+        const slot = await this.acquireSlot(options, admissionLane);
+        // Recheck after awaiting capacity — another lane may have won ownership.
+        current = this.actors.get(key);
+        if (current) {
+          slot.pendingOpens -= 1;
+          await this.lifecycle.retireEmpty(slot);
+          if (current.retirementRequested || current.cleanupState === "pending") {
+            throw OWNERSHIP_RETRY;
+          }
+          assertSqliteWorkerActorReusable(current, moduleUrl, inputHash, options.stateContext);
+          current.references += 1;
+          return current;
+        }
+        try {
+          options.assertCurrent?.();
+        } catch (error) {
+          return this.lifecycle.rejectSlotAdmission(slot, error);
+        }
+        const nativeStopped = createDeferredCore();
+        const created: Actor = {
+          runtimeGeneration: options.runtimeGeneration,
+          nativeStopped: nativeStopped.promise,
+          markNativeStopped: nativeStopped.resolve,
+          pendingStateLifecycles: new Set(),
+          id: ++this.nextActor,
+          key,
+          // Native ownership pins its opening paths even after the first client closes.
+          pathReferences: new Map([...admittedPaths].map((pathname) => [pathname, 1])),
+          moduleUrl,
+          inputHash,
+          slot,
+          references: 1,
+          opened: Promise.resolve(),
+          openDispatch: { dispatched: false },
+          initialized: false,
+          backendClosed: false,
+          databasePath,
+          stateContext: options.stateContext,
+          stateDatabasePath: options.stateDatabasePath,
+        };
+        this.actors.set(key, created);
+        slot.actors.add(created);
+        slot.pendingOpens -= 1;
+        const opening = created;
+        opening.opened = this.enqueue(
+          slot,
+          {
+            type: "open",
+            actor: created.id,
+            moduleUrl,
+            databasePath,
+            ...(options.createAdmission
+              ? { openAdmission: "input" as const }
+              : options.createOpenAdmission
+                ? { openAdmission: "identity" as const }
+                : {}),
+            ...(options.existingOnly ? { existingIdentity: key } : {}),
+            input,
+            ...(options.preparation ? { preparation: options.preparation } : {}),
+            ...(/\.[cm]?ts$/.test(modulePath)
+              ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
+              : {}),
+          },
+          input.byteLength + (options.preparation?.byteLength ?? 0),
+          {
+            dispatchState: opening.openDispatch,
+            assertCurrent: options.assertCurrent,
+            maintenanceScope: options.maintenanceScope,
+            createAdmission: options.createAdmission ?? options.createOpenAdmission,
+          },
+        ).then(async () => {
+          opening.initialized = true;
+          const physical = await resolveOpenedSqliteWorkerIdentity(databasePath, identity, (id) => {
+            const existing = this.actors.get(id);
+            return existing !== undefined && existing !== opening;
+          });
+          if (physical !== key) {
+            this.actors.delete(key);
+            opening.key = physical;
+            this.actors.set(physical, opening);
+          }
+        });
+        return created;
       });
+    } catch (error) {
+      if (error === OWNERSHIP_RETRY) {
+        return this.openAdmitted(options, client, admissionLane);
+      }
+      throw error;
+    }
+    if (!actor) {
+      return undefined;
     }
     const admittedActor = actor;
     try {
@@ -395,12 +444,36 @@ export class SqliteWorkerBroker {
     );
   }
 
-  private async acquireSlot(options: PreparedSqliteWorkerOpen): Promise<Slot> {
+  private async withPhysicalOwnershipReservation<T>(
+    key: string,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.ownershipTail.get(key) ?? Promise.resolve();
+    const released = createDeferredCore();
+    const next = previous.then(() => released.promise);
+    this.ownershipTail.set(key, next);
+    try {
+      await previous;
+      return await run();
+    } finally {
+      released.resolve();
+      if (this.ownershipTail.get(key) === next) {
+        this.ownershipTail.delete(key);
+      }
+    }
+  }
+
+  private async acquireSlot(
+    options: PreparedSqliteWorkerOpen,
+    lane: SqliteWorkerAdmissionLane = "shared",
+  ): Promise<Slot> {
     options.assertCurrent?.();
-    const available = [...this.slots].filter(
-      (slot) =>
-        !slot.failed && !slot.retiring && slot.runtimeGeneration === options.runtimeGeneration,
-    );
+    const laneCompatible = (slot: Slot) =>
+      !slot.failed &&
+      !slot.retiring &&
+      slot.runtimeGeneration === options.runtimeGeneration &&
+      (slot.lane === undefined || slot.lane === lane);
+    const available = [...this.slots].filter(laneCompatible);
     // A retained updater cannot borrow another generation's carrier or evict its actors.
     // One extra slot belongs to the broker, not to each generation requesting one.
     const borrowedGenerationSlot =
@@ -409,16 +482,26 @@ export class SqliteWorkerBroker {
       available.length === 0 &&
       this.slots.size >= this.maxWorkers &&
       ![...this.slots].some((slot) => slot.borrowedGenerationSlot);
+    // One overflow slot lets an empty lane start when the pool is full of the other lane
+    // (e.g. foreign chat.db while shared workers are saturated) without waiting on shared exits.
+    const borrowedLaneSlot =
+      !process.versions.bun &&
+      !borrowedGenerationSlot &&
+      available.length === 0 &&
+      this.slots.size >= this.maxWorkers &&
+      this.slots.size < this.maxWorkers + 1 &&
+      ![...this.slots].some((slot) => slot.lane === lane);
     // Return Bun to shared workers after https://github.com/oven-sh/bun/pull/40005 ships.
     if (
       !borrowedGenerationSlot &&
+      !borrowedLaneSlot &&
       this.slots.size >= (process.versions.bun ? MAX_STORES : this.maxWorkers)
     ) {
       if (!available.length || process.versions.bun) {
         const retiring = [...this.slots].filter((slot) => Boolean(slot.failed || slot.retiring));
         if (retiring.length > 0) {
           await Promise.race(retiring.map(({ exit }) => exit));
-          return this.acquireSlot(options);
+          return this.acquireSlot(options, lane);
         }
         if (process.versions.bun) {
           throw new SqliteWorkerError("SQLite worker store capacity reached", "overloaded");
@@ -430,15 +513,18 @@ export class SqliteWorkerBroker {
       const selected = available.reduce((left, right) =>
         left.actors.size <= right.actors.size ? left : right,
       );
+      selected.lane = lane;
       selected.pendingOpens += 1;
       return selected;
     }
-    return this.lifecycle.createSlot(options, borrowedGenerationSlot, (slot) => ({
+    const created = this.lifecycle.createSlot(options, borrowedGenerationSlot, (slot) => ({
       fail: (reason, currentError, completed, openOutcome) =>
         this.fail(slot, reason, currentError, completed, openOutcome),
       finish: (job, error, value, settlement) => this.finish(job, error, value, settlement),
       dispatch: () => this.dispatch(slot),
     }));
+    created.lane = lane;
+    return created;
   }
 
   private enqueue(
