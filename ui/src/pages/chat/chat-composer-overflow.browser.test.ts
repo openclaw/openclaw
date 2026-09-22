@@ -12,6 +12,7 @@ import { renderChatComposer } from "./components/chat-composer.ts";
 import baseStyles from "../../styles/base.css?inline";
 import contextStripStyles from "../../styles/chat/composer-context-strip.css?inline";
 import goalStyles from "../../styles/chat/composer-progress.css?inline";
+import queueStyles from "../../styles/chat/composer-queue.css?inline";
 import composerSurfaceStyles from "../../styles/chat/composer-surface.css?inline";
 import composerStyles from "../../styles/chat/composer.css?inline";
 
@@ -539,10 +540,11 @@ describe("composer overflow presentation", () => {
     [390, "paused"],
     [560, "blocked"],
   ] as const)(
-    "keeps expanded %s px %s goal controls above the objective",
+    "aligns the expanded %s px %s header and keeps controls above the objective",
     async (width, status) => {
       await page.viewport(width, 800);
-      container.className = "agent-chat__goal-float";
+      styles.textContent += queueStyles;
+      container.className = "agent-chat__composer-shell";
       container.style.width = `${width - 32}px`;
       const state = getChatComposerState("mobile-actions");
       const goal: SessionGoal = {
@@ -561,12 +563,14 @@ describe("composer overflow presentation", () => {
       const onGoalEdit = vi.fn();
       const draw = () =>
         render(
-          renderChatGoal(state, goal, {
-            canAct: true,
-            onGoalAction,
-            onGoalEdit,
-            requestUpdate: draw,
-          }),
+          html`<div class="agent-chat__goal-float">
+            ${renderChatGoal(state, goal, {
+              canAct: true,
+              onGoalAction,
+              onGoalEdit,
+              requestUpdate: draw,
+            })}
+          </div>`,
           container,
         );
       draw();
@@ -578,7 +582,16 @@ describe("composer overflow presentation", () => {
       const commandBox = commands.getBoundingClientRect();
       expect(commandBox.height).toBeGreaterThan(0);
       expect(commandBox.bottom).toBeLessThanOrEqual(objective.getBoundingClientRect().top);
-      const cardBox = container.firstElementChild!.getBoundingClientRect();
+      const centers = [
+        ".agent-chat__goal-icon svg",
+        ".agent-chat__goal-label",
+        ".agent-chat__goal-expand svg",
+      ].map((selector) => {
+        const box = container.querySelector(selector)!.getBoundingClientRect();
+        return box.top + box.height / 2;
+      });
+      expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1);
+      const cardBox = container.querySelector(".agent-chat__goal")!.getBoundingClientRect();
       for (const button of commands.querySelectorAll<HTMLButtonElement>("button")) {
         const box = button.getBoundingClientRect();
         expect(box.left).toBeGreaterThanOrEqual(cardBox.left);

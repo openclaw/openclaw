@@ -258,6 +258,7 @@
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-copy {
     grid-row: 1;
     grid-column: 2;
+    align-items: center;
   }
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-actions {
@@ -444,7 +445,6 @@
   --chat-goal-status-color: var(--ok);
 }
 
-.agent-chat__goal--paused,
 .agent-chat__goal--blocked,
 .agent-chat__goal--budget_limited,
 .agent-chat__goal--usage_limited {
@@ -471,7 +471,6 @@
 
 .agent-chat__goal-float
   :is(
-    .agent-chat__goal--paused,
     .agent-chat__goal--blocked,
     .agent-chat__goal--budget_limited,
     .agent-chat__goal--usage_limited
