@@ -349,7 +349,7 @@ describe("Models provider login", () => {
   );
 
   it.each(["error", "input"] as const)(
-    "keeps recovery guidance in the next %s without replaying it in the ordinary alert",
+    "keeps recovery guidance in the next %s and exposes terminal errors directly",
     async (outcome) => {
       vi.spyOn(window, "open").mockReturnValue(null);
       const { context, request } = loginHarness();
@@ -386,18 +386,16 @@ describe("Models provider login", () => {
       await chooseLogin(page, "example-browser");
       await waitForFast(() =>
         expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-          outcome === "error" ? "Could not finish. Open Details" : guidance,
+          outcome === "error" ? "Certificate validation failed." : guidance,
         ),
       );
       if (outcome === "error") {
-        expect(page.querySelector("[role=alert]")?.textContent).not.toContain(guidance);
-        const details = page.querySelector<HTMLDetailsElement>("openclaw-modal-dialog details")!;
-        expect(details.open).toBe(false);
-        details.querySelector("summary")!.click();
-        expect(details.open).toBe(true);
-        expect(details.querySelector("p")?.textContent).toBe(
+        const alert = page.querySelector<HTMLElement>("[role=alert]")!;
+        expect(alert.querySelector(".model-setup-wizard__error-text")?.textContent).toBe(
           ["Certificate validation failed.", guidance].join("\n\n"),
         );
+        expect(alert.querySelector<HTMLButtonElement>('button[aria-label="Copy"]')).not.toBeNull();
+        expect(page.querySelector("openclaw-modal-dialog details")).toBeNull();
       }
       expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
         outcome === "error" ? "Certificate validation failed." : "Enter the client ID",

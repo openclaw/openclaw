@@ -5,6 +5,7 @@ import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
+import "../styles/copy-button.css";
 
 const COPIED_FOR_MS = 1500;
 const ERROR_FOR_MS = 2000;

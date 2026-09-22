@@ -812,7 +812,6 @@ img.chat-avatar {
 /* In chat these render bare (no .btn chrome) so the ghost footer-button rules
    above own their look; the muted color also covers .btn hosts like the file
    preview header. */
-.chat-copy-btn,
 .chat-reply-btn {
   color: var(--muted);
 }
@@ -824,43 +823,6 @@ img.chat-avatar {
   --chat-persistent-footer-opacity: 1;
 }
 
-.chat-copy-btn__icon {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  position: relative;
-}
-
-.chat-copy-btn__icon-copy,
-.chat-copy-btn__icon-check {
-  display: flex;
-  position: absolute;
-  top: 0;
-  left: 0;
-  transition: opacity 150ms ease;
-}
-
-.chat-copy-btn__icon-check,
-.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
-  opacity: 0;
-}
-
-.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
-  opacity: 1;
-}
-
-.chat-copy-btn[data-copy-state="copying"] {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.chat-copy-btn[data-copy-state="error"] {
-  border-color: var(--danger-subtle);
-  background: var(--danger-subtle);
-  color: var(--danger);
-}
-
-.chat-copy-btn[data-copy-state="copied"],
 .chat-group
   :is(.chat-group-footer-actions, .chat-message-actions-row)
   button[data-copy-state="copied"] {
@@ -870,21 +832,6 @@ img.chat-avatar {
   color: var(--ok);
 }
 
-/* The check is the visible confirmation; retain the live status for assistive
-   technology and the footer's transient-feedback disclosure. */
-.chat-group .chat-copy-btn[data-copy-state="copied"] + [data-copy-feedback] {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
-
-.chat-copy-btn:focus-visible,
 .chat-reply-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

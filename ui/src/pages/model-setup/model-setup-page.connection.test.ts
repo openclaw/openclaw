@@ -241,7 +241,7 @@ it.each([
   ["setup", "terminal"],
   ["setup", "request"],
 ] as const)(
-  "Model Setup keeps %s recovery context in Details after a %s failure",
+  "Model Setup shows %s recovery context directly after a %s failure",
   async (operation, failure) => {
     const { context, client, request, runtimeConfig } = createContext();
     vi.spyOn(window, "open").mockReturnValue(null);
@@ -337,23 +337,19 @@ it.each([
       expect(modal.textContent).not.toContain(guidance);
       expect(modal.textContent).not.toContain(url);
       finish.resolve();
+      const expectedError = [diagnostic, guidance, authorization].join("\n\n");
       await waitForFast(() =>
-        expect(modal.querySelector("[role=alert]")?.textContent?.trim()).toBe(
-          "Could not finish. Open Details to see what to do next.",
+        expect(modal.querySelector(".model-setup-wizard__error-text")?.textContent).toBe(
+          expectedError,
         ),
       );
       expect(modal.querySelector("h2")?.textContent?.trim()).toBe(label);
       expect(modal.querySelector(".wizard-step__sign-in")).toBeNull();
-      const details = modal.querySelector<HTMLDetailsElement>("details")!;
-      expect(details.open).toBe(false);
       const alert = modal.querySelector("[role=alert]")!;
-      expect(alert.textContent).not.toContain(guidance);
-      expect(alert.textContent).not.toContain(url);
-      details.querySelector("summary")!.click();
-      expect(details.open).toBe(true);
-      expect(details.querySelector("p")?.textContent).toBe(
-        [diagnostic, guidance, authorization].join("\n\n"),
-      );
+      expect(alert.textContent).toContain(guidance);
+      expect(alert.textContent).toContain(url);
+      expect(alert.querySelector<HTMLButtonElement>('button[aria-label="Copy"]')).not.toBeNull();
+      expect(modal.querySelector("details")).toBeNull();
       expect(reads).toBe(4);
       expect(
         request.mock.calls.some(([method]) => method === "openclaw.setup.activate.start"),

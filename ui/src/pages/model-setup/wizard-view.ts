@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { renderCopyButton } from "../../components/copy-button.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
@@ -72,58 +73,51 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                 ? html`<div role="status">
                     ${props.doneMessage ?? t(props.mode === "auth" ? "modelSetup.wizard.connected" : "modelSetup.wizard.checking")}
                   </div>`
-                : props.state.phase === "error" || props.state.phase === "cancelled"
-                  ? html`<div class="callout danger" role="alert">
-                        ${
-                          props.state.phase === "cancelled" || props.mode !== "auth"
-                            ? props.state.message
-                            : t("modelSetup.wizard.failed")
-                        }
+                : props.state.phase === "error" && props.mode === "auth"
+                  ? html`<div class="callout danger model-setup-wizard__error" role="alert">
+                      <p class="model-setup-wizard__error-text">${props.state.message}</p>
+                      <div class="model-setup-wizard__error-copy">
+                        ${renderCopyButton(props.state.message, t("modelSetup.wizard.copy"))}
                       </div>
-                      ${
-                        props.state.phase === "error" && props.mode === "auth"
-                          ? html`<details>
-                              <summary>${t("modelSetup.wizard.details")}</summary>
-                              <p>${props.state.message}</p>
-                            </details>`
-                          : nothing
-                      }`
-                  : html`
-                      ${
-                        props.state.validationError
-                          ? html`<div class="callout danger" role="alert">
-                              ${props.state.validationError}
-                            </div>`
-                          : nothing
-                      }
-                      ${renderWizardStepControls({
-                        step: props.state.step,
-                        externalAuthInput: props.state.externalAuthInput,
-                        value: props.value,
-                        busy: props.state.busy,
-                        inputId: WIZARD_TEXT_INPUT_ID,
-                        confirmAffirmativeLabel:
-                          props.mode === "prepare" && props.state.step.type === "confirm"
-                            ? t("modelSetup.wizard.continue")
-                            : undefined,
-                        leadingAction: html`<button
-                          type="button"
-                          class="btn"
-                          @click=${props.onCancel}
-                        >
-                          ${t("common.cancel")}
-                        </button>`,
-                        onValueChange: props.onValueChange,
-                        onAnswer: props.onAnswer,
-                      })}
-                      ${
-                        props.state.busy &&
-                        !props.state.step.externalUrl &&
-                        !props.state.step.deviceCode
-                          ? html`<div role="status">${t("modelSetup.wizard.working")}</div>`
-                          : nothing
-                      }
-                    `
+                    </div>`
+                  : props.state.phase === "error" || props.state.phase === "cancelled"
+                    ? html`<div class="callout danger" role="alert">${props.state.message}</div>`
+                    : html`
+                        ${
+                          props.state.validationError
+                            ? html`<div class="callout danger" role="alert">
+                                ${props.state.validationError}
+                              </div>`
+                            : nothing
+                        }
+                        ${renderWizardStepControls({
+                          step: props.state.step,
+                          externalAuthInput: props.state.externalAuthInput,
+                          value: props.value,
+                          busy: props.state.busy,
+                          inputId: WIZARD_TEXT_INPUT_ID,
+                          confirmAffirmativeLabel:
+                            props.mode === "prepare" && props.state.step.type === "confirm"
+                              ? t("modelSetup.wizard.continue")
+                              : undefined,
+                          leadingAction: html`<button
+                            type="button"
+                            class="btn"
+                            @click=${props.onCancel}
+                          >
+                            ${t("common.cancel")}
+                          </button>`,
+                          onValueChange: props.onValueChange,
+                          onAnswer: props.onAnswer,
+                        })}
+                        ${
+                          props.state.busy &&
+                          !props.state.step.externalUrl &&
+                          !props.state.step.deviceCode
+                            ? html`<div role="status">${t("modelSetup.wizard.working")}</div>`
+                            : nothing
+                        }
+                      `
           }
         </div>
         ${

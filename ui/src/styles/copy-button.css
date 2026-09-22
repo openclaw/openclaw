@@ -1,0 +1,66 @@
+/* Shared clipboard controls own their icon and async-result states so the same
+ * component works on chat and non-chat routes without entering startup CSS. */
+.chat-copy-btn {
+  color: var(--muted);
+}
+
+.chat-copy-btn__icon {
+  display: inline-flex;
+  position: relative;
+  width: 14px;
+  height: 14px;
+}
+
+.chat-copy-btn__icon-copy,
+.chat-copy-btn__icon-check {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  transition: opacity 150ms ease;
+}
+
+.chat-copy-btn__icon-check,
+.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
+  opacity: 0;
+}
+
+.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
+  opacity: 1;
+}
+
+.chat-copy-btn[data-copy-state="copying"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chat-copy-btn[data-copy-state="error"] {
+  border-color: var(--danger-subtle);
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.chat-copy-btn[data-copy-state="copied"] {
+  border-color: var(--ok-subtle);
+  background: var(--ok-subtle);
+  color: var(--ok);
+}
+
+/* The check icon is the visible success outcome. Keep the live status for
+ * assistive technology while leaving copy failures readable beside the button. */
+.chat-copy-btn[data-copy-state="copied"] + [data-copy-feedback] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.chat-copy-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

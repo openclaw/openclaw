@@ -2317,8 +2317,6 @@ export const en: TranslationMap & {
       prepareDialogLabel: "Local model setup",
       title: "Sign in with a provider",
       connected: "Account connected. Choose a model when you want to test a reply.",
-      failed: "Could not finish. Open Details to see what to do next.",
-      details: "Details",
       prepareTitle: "Set up a local model",
       starting: "Starting provider sign-in…",
       prepareStarting: "Starting local model setup…",
