@@ -366,6 +366,28 @@ describe("createAcpxRuntimeService", () => {
     expect(runtime.shutdown).toHaveBeenCalledOnce();
   });
 
+  it("ignores malformed persisted session filenames during startup", async () => {
+    const ctx = createServiceContext(testWorkspace.dir);
+    const stateDir = path.join(testWorkspace.dir, "custom-state");
+    const sessionsDir = path.join(stateDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(path.join(sessionsDir, "bad%ZZ.json"), "not a session");
+    await fs.writeFile(path.join(sessionsDir, "legacy%20session.json"), "not a session");
+    const service = createAcpxRuntimeService(ctx, {
+      pluginConfig: { stateDir },
+    });
+
+    await expect(service.start(ctx)).resolves.toBeUndefined();
+
+    expect(acpxRuntimeConstructorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openclawLegacyBareSessionKeys: new Set(["legacy session"]),
+      }),
+    );
+    expect(getAcpRuntimeBackend("acpx")?.runtime).toBeDefined();
+    await service.stop?.(ctx);
+  });
+
   it("reaps stale ACPX process leases from the generated wrapper root at startup", async () => {
     const ctx = createServiceContext(testWorkspace.dir);
     const runtime = createMockRuntime();
