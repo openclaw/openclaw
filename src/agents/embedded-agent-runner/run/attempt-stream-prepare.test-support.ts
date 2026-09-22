@@ -57,7 +57,7 @@ export function prepareCatalogExecutor(
         sessionManager: SessionManager.inMemory(),
         subscribe: () => () => {},
       } as never),
-    hookRunner: options?.hookRunner,
+    hookRunner: options?.hookRunner ?? null,
     hookAgentId: "main",
     diagnosticTrace: {} as never,
     diagnosticOwner: createDiagnosticEmbeddedRunOwner({
