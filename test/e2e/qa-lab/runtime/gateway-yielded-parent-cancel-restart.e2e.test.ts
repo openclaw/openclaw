@@ -1,5 +1,5 @@
 // Real-Gateway regression for #153271: stopping an ownerless yielded parent
-// must stay terminal across restart even when its child provider request settles late.
+// must close its held child and stay terminal across restart.
 import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -212,7 +212,6 @@ async function startProofProvider() {
     firstChildStarted: firstChildStarted.promise,
     firstChildClosed: firstChildClosed.promise,
     releaseYieldCall: () => releaseYieldCall.resolve(),
-    releaseFirstChild: () => releaseFirstChild.resolve(),
     markCancelCommitted: () => {
       afterCancel = true;
     },
@@ -262,7 +261,7 @@ describe("yielded parent cancellation across Gateway restart", () => {
     }
   });
 
-  it("keeps operator Stop terminal when the held child settles after restart", async () => {
+  it("keeps operator Stop terminal after the held child closes and the Gateway restarts", async () => {
     const provider = await startProofProvider();
     cleanups.push(() => provider.stop());
     const state = createQaBusState();
@@ -351,7 +350,6 @@ describe("yielded parent cancellation across Gateway restart", () => {
     expect(cancelledTask).toMatchObject({ runId: spawn.runId, status: "cancelled" });
 
     await gateway.restartAfterStateMutation(async () => {});
-    provider.releaseFirstChild();
 
     await transport.sendInbound({
       accountId: "default",
