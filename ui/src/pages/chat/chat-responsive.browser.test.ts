@@ -888,62 +888,79 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     });
   });
 
-  it("keeps transcript search icons compact", async () => {
-    await withBrowserPage(openBrowserPage(1024, 768), async (page) => {
-      await page.setContent(`<!doctype html>
+  it.each([
+    [320, 320],
+    [560, 560],
+    [1440, 1440],
+    [1440, 420],
+  ])(
+    "keeps transcript search compact and centered at viewport %s and pane %s",
+    async (viewportWidth, paneWidth) => {
+      await withBrowserPage(openBrowserPage(viewportWidth, 768), async (page) => {
+        await page.setContent(`<!doctype html>
         <html>
           <head><style>${readUiCss()}</style></head>
           <body>
-            <section class="chat">
+            <section class="chat" style="width: ${paneWidth}px">
               <div class="agent-chat__search-bar">
                 ${iconSvg()}
                 <input type="text" placeholder="Search messages" />
-                <button class="btn btn--ghost" type="button">${iconSvg()}</button>
+                <openclaw-tooltip><button class="btn btn--ghost" type="button">${iconSvg()}</button></openclaw-tooltip>
               </div>
             </section>
           </body>
         </html>`);
 
-      const searchBar = await getBoundingBox(page, ".agent-chat__search-bar");
-      const icons = await page.locator(".agent-chat__search-bar svg").all();
-      const input = page.locator(".agent-chat__search-bar input");
-      const cornerRadii = await page.locator(".chat").evaluate((chat) => {
-        const search = chat.querySelector<HTMLElement>(".agent-chat__search-bar");
-        if (!search) {
-          throw new Error("Expected transcript search bar");
-        }
-        const radii = (element: Element) => {
-          const style = getComputedStyle(element);
-          return [
-            style.borderTopLeftRadius,
-            style.borderTopRightRadius,
-            style.borderBottomRightRadius,
-            style.borderBottomLeftRadius,
-          ];
-        };
-        return { chat: radii(chat), search: radii(search) };
-      });
+        const searchBar = await getBoundingBox(page, ".agent-chat__search-bar");
+        const icons = await page.locator(".agent-chat__search-bar svg").all();
+        const input = page.locator(".agent-chat__search-bar input");
+        const cornerRadii = await page.locator(".chat").evaluate((chat) => {
+          const search = chat.querySelector<HTMLElement>(".agent-chat__search-bar");
+          if (!search) {
+            throw new Error("Expected transcript search bar");
+          }
+          const radii = (element: Element) => {
+            const style = getComputedStyle(element);
+            return [
+              style.borderTopLeftRadius,
+              style.borderTopRightRadius,
+              style.borderBottomRightRadius,
+              style.borderBottomLeftRadius,
+            ];
+          };
+          return { chat: radii(chat), search: radii(search) };
+        });
 
-      const searchRadius = `${14 * (await readCornerScale(page))}px`;
-      expect(searchBar.height).toBeLessThan(64);
-      expect(cornerRadii).toEqual({
-        chat: ["0px", "0px", "0px", "0px"],
-        search: ["0px", "0px", searchRadius, searchRadius],
+        const searchRadius = `${14 * (await readCornerScale(page))}px`;
+        const chat = await getBoundingBox(page, ".chat");
+        const inputBox = await getBoundingBox(page, ".agent-chat__search-bar input");
+        const closeButton = await getBoundingBox(page, ".agent-chat__search-bar button");
+        expect(searchBar.height).toBeLessThan(64);
+        expect(searchBar.width).toBeLessThanOrEqual(560);
+        expect(searchBar.x - chat.x).toBeGreaterThanOrEqual(16);
+        expect(searchBar.x + searchBar.width / 2).toBeCloseTo(chat.x + chat.width / 2, 1);
+        expect(inputBox.width).toBeGreaterThan(100);
+        expect(inputBox.x + inputBox.width).toBeLessThanOrEqual(closeButton.x);
+        expect(closeButton.x + closeButton.width).toBeLessThan(searchBar.x + searchBar.width);
+        expect(cornerRadii).toEqual({
+          chat: [searchRadius, searchRadius, searchRadius, searchRadius],
+          search: [searchRadius, searchRadius, searchRadius, searchRadius],
+        });
+        expect(icons).toHaveLength(2);
+        for (const icon of icons) {
+          const box = await icon.boundingBox();
+          expect(box?.width).toBeCloseTo(16, 3);
+          expect(box?.height).toBeCloseTo(16, 3);
+        }
+        await input.focus();
+        const focusRing = await page.locator(".agent-chat__search-bar").evaluate((element) => {
+          const style = getComputedStyle(element);
+          return style.boxShadow;
+        });
+        expect(focusRing).not.toBe("none");
       });
-      expect(icons).toHaveLength(2);
-      for (const icon of icons) {
-        const box = await icon.boundingBox();
-        expect(box?.width).toBeCloseTo(16, 3);
-        expect(box?.height).toBeCloseTo(16, 3);
-      }
-      await input.focus();
-      const outline = await input.evaluate((element) => {
-        const style = getComputedStyle(element);
-        return { style: style.outlineStyle, width: style.outlineWidth };
-      });
-      expect(outline).toEqual({ style: "solid", width: "2px" });
-    });
-  });
+    },
+  );
 
   it.each([
     [320, 568],
