@@ -17,10 +17,7 @@ import {
   registerSubagentRun,
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { clearSessionQueues, enqueueFollowupRun } from "../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
@@ -247,7 +244,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
         abortedLastRun: true,
         lastRunId: parentRunId,
       });
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       expect(getSubagentRunByChildSessionKey(childKey)?.killReconciliation).toMatchObject({
         suppressTaskDelivery: true,
       });
