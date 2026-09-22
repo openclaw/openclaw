@@ -233,6 +233,20 @@ export type MockOpenAiRequestSnapshot = {
 
 export type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
 
+/** Snapshot fields known before the mock decides an outcome or plans a tool. */
+export type MockOpenAiRequestSnapshotBase = Omit<
+  MockOpenAiRequestSnapshotInput,
+  | "outcome"
+  | "errorCode"
+  | "plannedToolCallId"
+  | "plannedToolItemId"
+  | "plannedToolName"
+  | "plannedWireToolName"
+  | "plannedToolArgs"
+  | "toolOutputCallId"
+  | "toolOutputStructuredError"
+>;
+
 // Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
 // This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
 export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
