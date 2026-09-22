@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
@@ -336,6 +337,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       assistantMessageIndex?: number;
       consumePendingToolMedia?: boolean;
       blockSourceText?: string;
+      blockSourceRange?: readonly [start: number, end: number];
     },
   ) => {
     flushAssistantStream();
@@ -375,6 +377,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
             trustedLocalMedia: true,
           });
     const assistantTranscriptMediaUrls = Array.from(new Set(payload.mediaUrls ?? []));
+    copyReplyPayloadMetadata(payload, blockPayload);
     const taggedPayload =
       options?.assistantMessageIndex !== undefined
         ? setReplyPayloadMetadata(blockPayload, {
@@ -383,7 +386,10 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
           })
         : blockPayload;
     if (blockPayload.text && options?.blockSourceText !== undefined) {
-      setReplyPayloadMetadata(taggedPayload, { blockSourceText: options.blockSourceText });
+      setReplyPayloadMetadata(taggedPayload, {
+        blockSourceText: options.blockSourceText,
+        blockSourceRange: options.blockSourceRange,
+      });
     }
     if (state.deferBlockReplyDelivery) {
       if (pendingToolMedia) {

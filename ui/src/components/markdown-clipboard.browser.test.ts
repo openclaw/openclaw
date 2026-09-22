@@ -1,5 +1,4 @@
-import { html, nothing, render } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { nothing, render } from "lit";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { renderMessageImages } from "../pages/chat/components/chat-message-images.ts";
@@ -10,7 +9,6 @@ import { renderCopyButton } from "./copy-button.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import "./markdown-mermaid.ts";
 import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 const owners: HTMLElement[] = [];
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
@@ -80,7 +78,12 @@ async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
     button = owner.querySelector(".code-block-copy");
   } else if (surface === "table") {
     render(
-      html`${unsafeHTML(toSanitizedMarkdownHtml("| Name |\n| --- |\n| Alpha |", { tableInteractions: "enabled" }))}`,
+      renderMessageMarkdown(
+        "| Name |\n| --- |\n| Alpha",
+        "stream",
+        { role: "assistant", isStreaming: true },
+        { tableInteractions: "enabled" },
+      ),
       owner,
     );
     owner.addEventListener("click", handleMarkdownTableInteraction);
@@ -282,25 +285,46 @@ describe("Markdown clipboard operation lifetime", () => {
     expect(clipboard).toBe("Current message");
   });
 
-  it("retires code replaced by the next streaming update", async () => {
-    const pending = delayFirstWrite();
-    const { owner, button } = await mountCopy("code");
-    button.click();
-    render(
-      renderMessageMarkdown(
-        "```ts\nconst answer = 42;\nconst next = 43;",
-        "stream",
-        { role: "assistant", isStreaming: true },
-        {},
-      ),
-      owner,
-    );
-    expect(button.isConnected).toBe(false);
-    expect(owner.querySelector("code")?.textContent).toContain("const next = 43;");
-    pending.reject(new Error("Synthetic clipboard rejection"));
-    await flushCopy();
-    expect(fallbackCopies).toEqual([]);
-  });
+  it.each(
+    (["code", "table"] as const).flatMap((surface) =>
+      (["resolve", "reject"] as const).map((settlement) => ({ surface, settlement })),
+    ),
+  )(
+    "retires stale $surface copying after pending write settlement: $settlement",
+    async ({ surface, settlement }) => {
+      const pending = delayFirstWrite();
+      const { owner, button } = await mountCopy(surface);
+      const idleLabel = button.getAttribute("aria-label");
+      button.click();
+      render(
+        renderMessageMarkdown(
+          surface === "code"
+            ? "```ts\nconst answer = 42;\nconst next = 43;"
+            : "| Name |\n| --- |\n| Alpha continued |",
+          "stream",
+          { role: "assistant", isStreaming: true },
+          { tableInteractions: "enabled" },
+        ),
+        owner,
+      );
+      expect(
+        owner.querySelector(surface === "code" ? ".code-block-copy" : ".markdown-table__copy"),
+      ).toBe(button);
+      expect(button.isConnected).toBe(true);
+      expect(owner.textContent).toContain(
+        surface === "code" ? "const next = 43;" : "Alpha continued",
+      );
+      if (settlement === "reject") {
+        pending.reject(new Error("Synthetic clipboard rejection"));
+      } else {
+        pending.resolve();
+      }
+      await flushCopy();
+      expect(fallbackCopies).toEqual([]);
+      expect(clipboard).toBe("original clipboard");
+      expect(button.getAttribute("aria-label")).toBe(idleLabel);
+    },
+  );
 
   it("retires an older fallback when the newer code-copy payload is empty", async () => {
     const pending = delayFirstWrite();

@@ -98,6 +98,7 @@ export async function commitBackgroundResultToSession(params: {
       }
       const unavailable = resolveSessionWorkStartError(sessionKey, current, {
         expectedSessionId,
+        purpose: "accepted-result-settlement",
       });
       if (unavailable) {
         return { ok: false, reason: unavailable };

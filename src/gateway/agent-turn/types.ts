@@ -58,6 +58,7 @@ export type AgentTurnContext = Pick<
   | "removeChatRun"
   | "requestEntryLifetime"
   | "resolveGatewayContext"
+  | "trackExecution"
   | "validateAgentRuntimeApprovalAuthority"
 >;
 

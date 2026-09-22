@@ -222,6 +222,7 @@ export async function buildStatusCommandReportData(params: {
       formatCliCommand,
       nodeOnlyGateway: params.surface.nodeOnlyGateway,
       gatewayReachable: params.surface.gatewayReachable,
+      gatewayStartupPhase: params.surface.gatewayProbe?.startupPhase,
     }),
   };
 }

@@ -9,8 +9,10 @@ import {
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isSessionMember, type SessionEntry } from "../config/sessions.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   authorizeGatewaySessionCreation,
   operatorSessionCap,
@@ -22,7 +24,7 @@ import {
   isGatewayClientProfilePending,
 } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { prepareSessionCreatorProfile } from "./session-creator.js";
+import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import {
   prepareGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetsReadOnly,
@@ -301,19 +303,50 @@ export function authorizeResolvedSessionMutation(params: {
   sessionKey: string;
   agentId?: string;
 }): ErrorShape | null {
+  return authorizeSessionMutationTarget(params, () => resolveSessionSharingTarget(params));
+}
+
+export type PreparedSessionMutationFacts = {
+  target: SessionSharingTarget | null;
+  membership: ReadonlySet<string>;
+};
+
+/** Prepared facts carry no decision; current caller and configuration still determine access. */
+export function authorizePreparedSessionMutation(
+  params: Parameters<typeof authorizeResolvedSessionMutation>[0],
+  facts: PreparedSessionMutationFacts,
+  prepared: {
+    policy: GatewayOperatorRoleDefinition | undefined;
+    aliases: ReadonlySet<string>;
+  },
+): ErrorShape | null {
+  return authorizeSessionMutationTarget(params, () => facts.target, {
+    ...prepared,
+    membership: facts.membership,
+  });
+}
+
+function authorizeSessionMutationTarget(
+  params: Parameters<typeof authorizeResolvedSessionMutation>[0],
+  readTarget: () => SessionSharingTarget | null,
+  prepared?: {
+    policy: GatewayOperatorRoleDefinition | undefined;
+    aliases: ReadonlySet<string>;
+    membership: ReadonlySet<string>;
+  },
+): ErrorShape | null {
   if (isGatewayAdmin(params.client) && !params.cfg.gateway?.roles) {
     return null;
   }
   if (isGatewayClientProfilePending(params.client)) {
     return authenticatedProfileUnavailableError();
   }
-  const target = resolveSessionSharingTarget(params);
+  const target = readTarget();
   if (target) {
-    const agentError = authorizeSessionAgentRun({
-      cfg: params.cfg,
-      client: params.client,
-      target,
-    });
+    const agentError = authorizeSessionAgentRun(
+      { cfg: params.cfg, client: params.client, target },
+      prepared,
+    );
     if (agentError) {
       return agentError;
     }
@@ -332,26 +365,64 @@ export function authorizeResolvedSessionMutation(params: {
   if (!target) {
     return null;
   }
-  return authorizeSessionSharingTarget({ cfg: params.cfg, client: params.client, target });
+  const sharing = { cfg: params.cfg, client: params.client, target };
+  if (!prepared) {
+    return authorizeSessionSharingTarget(sharing);
+  }
+  const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
+  const cap = { value: prepared.policy?.sessions.others };
+  return authorizeSessionSharingTarget(sharing, {
+    ...cap,
+    role: resolveSessionSharingRole(
+      { ...sharing, isMember: Boolean(identity && prepared.membership.has(identity.id)) },
+      cap,
+      prepareSessionCreatorProfile(identity?.id, prepared.aliases),
+    ),
+  });
 }
 
-export function authorizeSessionAgentRun(params: {
-  cfg: OpenClawConfig;
+/** Narrow mutation admission never borrows write access from sharing or membership. */
+export function authorizeOwnSessionMutation(params: {
   client: GatewayClient | null;
-  target: SessionSharingTarget;
+  target: SessionSharingTarget | null;
+  /** Preserve the admitted person even if the retained client's scopes or identity change. */
+  expectedProfileId?: string;
 }): ErrorShape | null {
-  const agentError = authorizeGatewaySessionCreation({
-    cfg: params.cfg,
-    client: params.client,
-    agentId: params.target.agentId,
-  });
+  if (params.expectedProfileId === undefined) {
+    return null;
+  }
+  const actor = resolveGatewayOperatorRoleActor(params.client);
+  return actor?.kind === "operator" &&
+    actor.profileId.trim() &&
+    operatorScopeSatisfied("operator.sessions.write", params.client?.connect?.scopes ?? []) &&
+    actor.profileId === params.expectedProfileId &&
+    (!params.target || isSessionCreatorProfile(params.target.entry.createdActor, actor.profileId))
+    ? null
+    : errorShape(ErrorCodes.FORBIDDEN, "Session-scoped writes require your own session.");
+}
+
+export function authorizeSessionAgentRun(
+  params: {
+    cfg: OpenClawConfig;
+    client: GatewayClient | null;
+    target: Pick<SessionSharingTarget, "agentId" | "canonicalKey"> & {
+      entry?: Pick<SessionEntry, "sandbox">;
+    };
+  },
+  prepared?: { policy: GatewayOperatorRoleDefinition | undefined },
+): ErrorShape | null {
+  const agentError = authorizeGatewaySessionCreation(
+    { cfg: params.cfg, client: params.client, agentId: params.target.agentId },
+    prepared,
+  );
   if (agentError) {
     return agentError;
   }
   if (
     params.cfg.gateway?.roles &&
-    params.target.entry.sandbox !== "required" &&
-    resolveOperatorRolePolicy(params.client, params.cfg)?.sandbox === "required"
+    params.target.entry?.sandbox !== "required" &&
+    (prepared ? prepared.policy : resolveOperatorRolePolicy(params.client, params.cfg))?.sandbox ===
+      "required"
   ) {
     return errorShape(
       ErrorCodes.FORBIDDEN,
@@ -388,13 +459,4 @@ export function authorizeSessionSharingTarget(
           visibility,
         },
       });
-}
-
-export function authorizeSessionSharing(
-  params: Parameters<typeof resolveSessionSharingTarget>[0] & { client: GatewayClient | null },
-): ErrorShape | null {
-  const target = resolveSessionSharingTarget(params);
-  return (
-    target && authorizeSessionSharingTarget({ cfg: params.cfg, client: params.client, target })
-  );
 }

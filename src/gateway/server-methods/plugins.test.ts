@@ -227,7 +227,11 @@ describe("plugin management Gateway handlers", () => {
       config,
       pluginId: inspection.plugin.id,
     });
-    expect(result).toEqual({ ok: true, response: inspection, error: undefined });
+    expect(result).toEqual({
+      ok: true,
+      response: { ...inspection, decisions: [] },
+      error: undefined,
+    });
   });
 
   it("classifies unknown plugin inspections as invalid requests", async () => {
@@ -282,7 +286,11 @@ describe("plugin management Gateway handlers", () => {
     const result = await callHandler("plugins.inspect", { pluginId: "community-plugin" });
 
     expect(catalogMocks.detail).not.toHaveBeenCalled();
-    expect(result).toEqual({ ok: true, response: inspection, error: undefined });
+    expect(result).toEqual({
+      ok: true,
+      response: { ...inspection, decisions: [] },
+      error: undefined,
+    });
   });
 
   it("maps plugin-only ClawHub search results to the public DTO", async () => {

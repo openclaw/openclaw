@@ -73,6 +73,72 @@ describe("repository checkpoint GitHub publication", () => {
     expect(mocks.resolveRepository).not.toHaveBeenCalled();
   });
 
+  it.each(["shared", "personal"] as const)(
+    "retains the accepted %s PR response after publication authority closes",
+    async (source) => {
+      const f = await repositoryFixture();
+      const person = source === "personal" ? await createPersonalPublicationFixture() : undefined;
+      if (person) {
+        f.runtime.accountId = personalPublicationAccount.accountId;
+      }
+      let current = true;
+      const transport = mocks.runCommand.getMockImplementation()!;
+      mocks.runCommand.mockImplementation(async (args: string[], options) => {
+        const result = await transport(args, options);
+        if (args.includes("repos/owner/repository/pulls") && args.includes("POST")) {
+          current = false;
+          if (person) {
+            person.runtime.live = false;
+          }
+        }
+        return result;
+      });
+      const coordinator = person?.coordinator ?? f.coordinator;
+      const request = () =>
+        person
+          ? coordinator.requestPersonalForSession(
+              {
+                sessionKey: SESSION_KEY,
+                idempotencyKey: "accepted-before-close",
+                selection: {
+                  source: "personal",
+                  generation: person.generation,
+                  account: personalPublicationAccount,
+                },
+              },
+              person.action,
+            )
+          : coordinator.requestForSession({
+              agentId: "main",
+              sessionKey: SESSION_KEY,
+              idempotencyKey: "accepted-before-close",
+              assertCurrent: () => {
+                if (!current) {
+                  throw new Error("Publication authority closed");
+                }
+              },
+            });
+      const published = await request();
+      expect(published).toMatchObject({ status: "published", url });
+      expect(readRepositoryGitHubPublication(published.requestId)).toMatchObject({
+        status: "published",
+        pull_request_url: url,
+        last_effect: "pull_request",
+        effect_state: "observed",
+        pushed_head_commit: f.runtime.head,
+      });
+      const commandCount = mocks.runCommand.mock.calls.length;
+      await coordinator.resumeSessionRequests();
+      current = true;
+      if (person) {
+        person.runtime.live = true;
+      }
+      expect(await request()).toEqual(published);
+      expect(mocks.runCommand.mock.calls).toHaveLength(commandCount);
+      expect(f.runtime.effects).toEqual(["push", "pull_request"]);
+    },
+  );
+
   it("replays only the original personal selection and content without new repository publication work", async () => {
     const f = await repositoryFixture();
     const person = await createPersonalPublicationFixture();
@@ -520,7 +586,7 @@ describe("repository checkpoint GitHub publication", () => {
       const retained = claimRepositoryGitHubPublication(
         readRepositoryGitHubPublication(first.requestId)!,
         "retained-execution",
-        () => {},
+        { assertCustody: () => {}, assertCurrent: () => {} },
       );
       await stale.closeSession(kind);
       if (kind === "reset") {
@@ -917,7 +983,10 @@ describe("repository checkpoint GitHub publication", () => {
         ).requestId;
       }
       const row = readRepositoryGitHubPublication(requestId)!;
-      const execution = claimRepositoryGitHubPublication(row, "current-instance", () => {});
+      const execution = claimRepositoryGitHubPublication(row, "current-instance", {
+        assertCustody: () => {},
+        assertCurrent: () => {},
+      });
       deletePersonalGitHubSessionReceipts({ agentId: "main", sessionKeys: [SESSION_KEY] });
       expect(execution.ownsExecution()).toBe(false);
       expect(() => execution.recordEffect("push")).toThrow();

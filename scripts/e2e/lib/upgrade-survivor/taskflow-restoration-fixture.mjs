@@ -26,6 +26,7 @@ export function createTaskflowFixture(now) {
       agentId: "main",
       requesterAgentId: "main",
       runId: `update-cell-run-0${index}`,
+      ...(index < 3 ? { childSessionKey: `agent:main:taskflow-child-0${index}` } : {}),
       label: `Task/flow survivor ${index} — 東京`,
       task: `Task/flow survivor ${index} — 東京`,
       status: "succeeded",
@@ -93,6 +94,18 @@ export function assertTaskflowSnapshot(actual, expected) {
   assert.deepEqual(normalizeTaskflowSnapshot(actual), normalizeTaskflowSnapshot(expected));
 }
 
+export function assertTaskflowIdentifiers(actual, fixture) {
+  assert.deepEqual(
+    actual,
+    fixture.tasks.map((task) => ({
+      task_id: task.taskId,
+      run_id: task.runId,
+      child_session_key: task.childSessionKey ?? null,
+    })),
+    "Task identifiers must be canonical before the candidate Gateway starts",
+  );
+}
+
 function runView(task) {
   const { taskId, requesterSessionKey, scopeKind, parentFlowId, task: title } = task;
   const fields = [
@@ -120,6 +133,7 @@ function runView(task) {
     scope: scopeKind,
     flowId: parentFlowId,
     title,
+    ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
     ...Object.fromEntries(fields.map((key) => [key, task[key]])),
   };
 }
@@ -208,6 +222,7 @@ export function assertTaskflowGatewayReads(pages, details, fixture) {
         "ownerKey",
         "agentId",
         "runId",
+        "childSessionKey",
         "sourceId",
         "createdAt",
         "startedAt",
@@ -224,7 +239,7 @@ export function assertTaskflowGatewayReads(pages, details, fixture) {
       assert.equal(result.flowId, task.parentFlowId);
       assert.equal(result.sessionKey, task.requesterSessionKey);
       assert.equal(result.updatedAt, task.lastEventAt);
-      // The protocol advertises a requester-session history route even without a transcript.
+      // A recorded session key exposes a history route even without a transcript.
       assert.equal(result.hasTranscript, true);
     }
     assert.equal(detailed.prompt, task.task);

@@ -13,6 +13,7 @@ import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js
 
 export type ForgetDatabase = {
   memory_index_chunks: {
+    chunk_rowid: number;
     id: string;
     path: string;
     source: string;
@@ -25,7 +26,7 @@ export type ForgetDatabase = {
     origin_class: "owner" | "agent" | "untrusted" | "system";
     session_kind: "interactive" | "cron" | "heartbeat" | "subagent" | "unknown";
   };
-  memory_index_chunks_fts: { id: string; path: string; source: string };
+  memory_index_chunks_fts: { rowid: number; id: string; path: string; source: string };
   memory_index_chunks_vec: { id: string };
   memory_embedding_cache: { hash: string };
   memory_index_state: { id: number; revision: number };
@@ -141,7 +142,14 @@ export async function planMemoryIndex(params: {
               kysely
                 .selectFrom("memory_index_chunks_fts")
                 .select((eb) => eb.fn.countAll<number>().as("count"))
-                .where("id", "in", chunkIds),
+                .where(
+                  "rowid",
+                  "in",
+                  kysely
+                    .selectFrom("memory_index_chunks")
+                    .select("chunk_rowid")
+                    .where("id", "in", chunkIds),
+                ),
             ).rows[0]!.count
           : 0;
       const hasVectorTable = tableExists(db, "memory_index_chunks_vec");

@@ -77,8 +77,8 @@ type OpenClawPluginNodeHostCommandBase = {
 export type OpenClawPluginNodeHostCommand = OpenClawPluginNodeHostCommandBase & {
   // Not a discriminated handle signature: a union of different arities makes
   // plain `command.handle(params)` uncallable for consumers holding the union.
-  // The node host enforces io presence for duplex commands at runtime.
-  duplex?: boolean;
+  // true requires IO; optional commands also retain their unary invocation.
+  duplex?: boolean | "optional";
   handle: (
     paramsJSON?: string | null,
     io?: OpenClawPluginNodeHostCommandIo,

@@ -363,7 +363,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       wallClockMs: number;
       maxToolCalls: number;
       label: string;
-      onExecutionStarted?: () => void;
+      onExecutionStarted?: () => void | Promise<void>;
     },
   ): Promise<
     | { kind: "completed"; result: Extract<CodeModeHeadlessResult, { status: "completed" }> }
@@ -430,7 +430,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
             });
             admitted = await admission.admit("gateway");
             bindGatewayContextResolver(admitted, deps.resolveGatewayContext);
-            params.executionIdentity?.onPostAdmission?.(admitted);
+            await params.executionIdentity?.onPostAdmission?.(admitted);
             assertAdmitted = resolveAdmittedRunActiveAssertion(admitted, evaluationScope.signal);
             caller = createAdmittedGatewayToolCallerIdentity({
               admittedRunContext: admitted,
@@ -515,7 +515,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         if (remainingWallClockMs <= 0) {
           throw new CodeModeHeadlessTimeoutError(`${params.label} timed out`);
         }
-        params.onExecutionStarted?.();
+        await params.onExecutionStarted?.();
         assertActive();
         const result = await runHeadless({
           ctx,

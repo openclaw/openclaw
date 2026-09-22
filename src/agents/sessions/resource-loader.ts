@@ -3,10 +3,11 @@
  *
  * Loads extensions, skills, prompts, themes, AGENTS files, and system prompt fragments for a cwd.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import chalk from "chalk";
+import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import type { Skill } from "../../skills/loading/session.js";
 import { loadSkills } from "../../skills/loading/session.js";
@@ -778,22 +779,16 @@ export class DefaultResourceLoader implements ResourceLoader {
     }
 
     try {
-      const entries = readdirSync(dir, { withFileTypes: true });
+      const { entries, failedDirs } = walkDirectorySync(dir, {
+        maxDepth: 1,
+        symlinks: "follow",
+        include: (entry) => entry.kind === "file" && entry.name.endsWith(".json"),
+      });
+      const failure = failedDirs[0];
+      if (failure) {
+        throw failure.error;
+      }
       for (const entry of entries) {
-        let isFile = entry.isFile();
-        if (entry.isSymbolicLink()) {
-          try {
-            isFile = statSync(join(dir, entry.name)).isFile();
-          } catch {
-            continue;
-          }
-        }
-        if (!isFile) {
-          continue;
-        }
-        if (!entry.name.endsWith(".json")) {
-          continue;
-        }
         this.loadThemeFromFile(join(dir, entry.name), themes, diagnostics);
       }
     } catch (error) {

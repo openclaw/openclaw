@@ -221,19 +221,22 @@ describe("canvas.document.preview", () => {
     expect(descriptor?.handler).toBe(canvasHandlers["canvas.document.preview"]);
   });
 
-  it.each(["", "a".repeat(256 * 1024), "🦀".repeat(64 * 1024)])(
-    "accepts empty HTML and the exact ASCII/multibyte UTF-8 limit (case %#)",
-    async (html) => {
-      const { invoke } = createPreviewHarness();
-      const respond = await invoke({ html });
-      expect(respond.mock.calls[0]).toEqual([
-        true,
-        { html, sandboxPort: 18790, sandboxUrl: expect.any(String) },
-      ]);
-    },
-  );
+  it.each([
+    "",
+    "a".repeat(2 * 1024 * 1024 - 1),
+    "a".repeat(2 * 1024 * 1024),
+    "🦀".repeat(512 * 1024),
+  ])("accepts empty HTML and the exact ASCII/multibyte UTF-8 limit (case %#)", async (html) => {
+    const { invoke } = createPreviewHarness();
+    const respond = await invoke({ html });
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]).toEqual([
+      true,
+      { html, sandboxPort: 18790, sandboxUrl: expect.any(String) },
+    ]);
+  });
 
-  it.each(["a".repeat(256 * 1024 + 1), "🦀".repeat(64 * 1024) + "a"])(
+  it.each(["a".repeat(2 * 1024 * 1024 + 1), "🦀".repeat(512 * 1024) + "a"])(
     "rejects oversized ASCII/multibyte bytes before provisioning (case %#)",
     async (html) => {
       const { context, invoke } = createPreviewHarness();

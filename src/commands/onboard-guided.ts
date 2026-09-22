@@ -649,7 +649,7 @@ async function runGuidedOnboardingFlow(
         })
       ).nextConfig;
     }
-    recommendationOutcome.commitResult();
+    await recommendationOutcome.commitResult();
   }
   const hatchWorkspace = handoffAgentId
     ? agentWorkspace

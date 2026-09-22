@@ -25,22 +25,24 @@ import {
 /** Register before the first await and drain through the parent's retained claim release. */
 export function withSqliteMutationWorkerLifetime<T>(
   options: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
-  run: (request: { assertCurrent: () => void; commitGate: SharedArrayBuffer }) => Promise<T>,
+  run: (request: {
+    assertCurrent: () => void;
+    commitGate: SharedArrayBuffer;
+    signal: AbortSignal;
+  }) => Promise<T>,
 ): Promise<T> {
   const completion = createDeferredCore();
   const state = captureOpenClawStateDatabaseReadAdmission(
     resolveOpenClawStateSqlitePath(options.env),
   );
   const commitGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-  let revoked = false;
+  const controller = new AbortController();
   const revoke = () => {
-    revoked = true;
     revokeSqliteReclamationCommit(commitGate);
+    controller.abort(new Error("SQLite mutation Worker request was revoked"));
   };
   const assertCurrent = () => {
-    if (revoked) {
-      throw new Error("SQLite mutation Worker request was revoked");
-    }
+    controller.signal.throwIfAborted();
     state.assertCurrent();
   };
   const unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({
@@ -66,9 +68,10 @@ export function withSqliteMutationWorkerLifetime<T>(
   return Promise.resolve()
     .then(() => {
       assertCurrent();
-      return run({ assertCurrent, commitGate });
+      return run({ assertCurrent, commitGate, signal: controller.signal });
     })
     .finally(() => {
+      revoke();
       completion.resolve();
       unregisterAgent();
       unregisterState();

@@ -27,10 +27,11 @@ import type {
   EmbeddedRunAttemptInternalParams,
 } from "./run/internal-params.js";
 
-function timeoutAttempt() {
+function timeoutAttempt(sessionIdUsed = "test-session") {
   const assistant = makeAssistantMessageFixture();
   assistant.usage = { ...assistant.usage, input: 180_000, totalTokens: 180_000 };
   return makeAttemptResult({
+    sessionIdUsed,
     terminal: { kind: "timeout", phase: "prompt", source: "idle", aborted: true },
     assistantTexts: [],
     lastAssistant: assistant,
@@ -209,7 +210,7 @@ describe("recovery cancellation through the public run owner", () => {
       let replacement: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
       const abort = new AbortController();
       const callerError = new Error("caller stopped after owner changed");
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(timeoutAttempt());
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(timeoutAttempt(runParams.sessionId));
       mockedCompactDirect.mockResolvedValueOnce(
         makeCompactionSuccess({ summary: "Committed before owner change", tokensAfter: 40 }),
       );
@@ -309,7 +310,7 @@ describe("recovery cancellation through the public run owner", () => {
               throw attemptError;
             }
             return {
-              ...timeoutAttempt(),
+              ...timeoutAttempt(attempt.sessionId),
               compactionCount: harness.subscription.getCompactionCount(),
               compactionTokensAfter: 80,
             };
@@ -332,7 +333,7 @@ describe("recovery cancellation through the public run owner", () => {
             harness.emit({ type: "message_start", message: assistant });
             harness.emit({ type: "message_end", message: assistant });
             await harness.subscription.waitForPendingEvents();
-            return makeAttemptResult();
+            return makeAttemptResult({ sessionIdUsed: attempt.sessionId });
           } finally {
             harness.subscription.unsubscribe();
           }

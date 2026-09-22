@@ -1,8 +1,10 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
+import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -24,32 +26,20 @@ function runProbe(home: string, args: string[]) {
     OPENCLAW_CONFIG_PATH: path.join(home, "openclaw.json"),
     OPENCLAW_STATE_DIR: path.join(home, "state"),
     OPENCLAW_TEST_FAST: "1",
-    MCP_TEST_ARGS_JSON: JSON.stringify(args),
   };
   delete env.VITEST;
   delete env.VITEST_POOL_ID;
   delete env.VITEST_WORKER_ID;
-  const mcpCliUrl = new URL("./mcp-cli.ts", import.meta.url).href;
-  const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
-  const script = `
-    import { Command } from "commander";
-    import { registerMcpCli } from ${JSON.stringify(mcpCliUrl)};
-    import { runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl)};
-    const program = new Command();
-    program.exitOverride();
-    registerMcpCli(program);
-    await runCliWithExitFinalization({
-      run: async () => {
-        await program.parseAsync(JSON.parse(process.env.MCP_TEST_ARGS_JSON), { from: "user" });
-      },
-      onError: (error) => { throw error; },
-    });
-  `;
-  return spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
-    encoding: "utf8",
+  // Config observation starts SQLite workers; use the prepared CLI graph so
+  // source compilation does not consume the command's exit deadline.
+  return runCliProcessChild({
+    nodeArgs: [
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
+      ...args,
+    ],
     env,
     maxBuffer: 4 * 1024 * 1024,
-    timeout: 30_000,
+    timeoutMs: 30_000,
   });
 }
 
@@ -60,10 +50,11 @@ describe("mcp probe process exit", () => {
       broken: { command: path.join(home, "missing-mcp-server") },
     });
 
-    const result = runProbe(home, ["mcp", "probe", "broken", "--json"]);
+    const result = await runProbe(home, ["mcp", "probe", "broken", "--json"]);
+    const failure = formatCliProcessFailure({ reason: "MCP probe child failed", ...result });
 
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(1);
+    expect(result.signal, failure).toBeNull();
+    expect(result.code, failure).toBe(1);
     const output = JSON.parse(result.stdout) as {
       diagnostics: Array<{ message: string; serverName: string }>;
       servers: Record<string, unknown>;

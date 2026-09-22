@@ -35,11 +35,15 @@ function assertValidConfig(next: Record<string, unknown>, action: string): OpenC
 }
 
 /** Removes a config path and returns whether anything changed. */
-export async function unsetConfigPath(path: string[]): Promise<boolean> {
+export async function unsetConfigPath(
+  path: string[],
+  assertCurrent?: () => void,
+): Promise<boolean> {
   try {
     await mutateConfigFileWithRetry({
       base: "source",
       afterWrite: { mode: "auto" },
+      writeOptions: { assertCurrent },
       mutate: (next) => {
         const removed = unsetConfigValueAtPath(next, path);
         if (!removed) {
@@ -58,10 +62,15 @@ export async function unsetConfigPath(path: string[]): Promise<boolean> {
 }
 
 /** Sets and validates a config path in the source config file. */
-export async function setConfigPath(path: string[], value: unknown): Promise<void> {
+export async function setConfigPath(
+  path: string[],
+  value: unknown,
+  assertCurrent?: () => void,
+): Promise<void> {
   await mutateConfigFileWithRetry({
     base: "source",
     afterWrite: { mode: "auto" },
+    writeOptions: { assertCurrent },
     mutate: (next) => {
       setConfigValueAtPath(next, path, value);
       assertValidConfig(next, "set");
@@ -75,15 +84,18 @@ export async function setPluginEnabledFromCommand(params: {
   enabled: boolean;
   action: "enable" | "disable";
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  assertCurrent?: () => void;
 }): Promise<void> {
   await transformConfigFileWithRetry({
     afterWrite: { mode: "auto" },
+    writeOptions: { assertCurrent: params.assertCurrent },
     transform: async (currentConfig) => {
       if (params.enabled) {
         await resolvePluginCapabilityConsent({
           config: currentConfig,
           pluginId: params.pluginId,
           onCapabilityConsent: params.onCapabilityConsent,
+          beforePersistentApply: params.assertCurrent,
         });
       }
       const next = setPluginEnabledInConfig(
@@ -123,10 +135,12 @@ export async function applyAllowlistConfigMutation(params: {
   action: "add" | "remove";
   entry: string;
   applyConfigEdit: ApplyAllowlistConfigEdit;
+  assertCurrent?: () => void;
 }): Promise<void> {
   await transformConfigFileWithRetry({
     base: "source",
     afterWrite: { mode: "auto" },
+    writeOptions: { assertCurrent: params.assertCurrent },
     transform: async (currentConfig) => {
       const latestParsedConfig = structuredClone(currentConfig) as Record<string, unknown>;
       const latestEditResult = await params.applyConfigEdit({

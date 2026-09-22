@@ -18,6 +18,7 @@ import type {
   TaskInitialWorkerCommand,
   TaskInitialWorkerOperations,
 } from "./task-initial-worker.types.js";
+import { acknowledgeTaskStateNotificationInDatabase } from "./task-notification.kernel.js";
 import { captureTaskCreationEventTarget } from "./task-registry-agent-event-target.js";
 import { createTaskRecordInDatabase } from "./task-registry-create.kernel.js";
 import { transitionTaskRecordInDatabase } from "./task-registry-transition.kernel.js";
@@ -53,6 +54,12 @@ export function executeTaskInitialMutation(
     return withSharedStateWriteCoordinator(
       { databasePath: database.path, existing: database.db, operationLabel: command.type },
       () => {
+        if (command.type === "tasks.acknowledgeStateChange") {
+          return acknowledgeTaskStateNotificationInDatabase(database.db, command.input, write, {
+            assertCurrent,
+            onCommitted: accept,
+          });
+        }
         if (command.type === "tasks.createRecord") {
           return createTaskRecordInDatabase(database.db, command.input, write, {
             assertCurrent,
@@ -75,6 +82,15 @@ export function executeTaskInitialMutation(
         return write(() => {
           let result: Result;
           switch (command.type) {
+            case "tasks.finalizeActive": {
+              result = transitionTaskRecordInDatabase(
+                database.db,
+                { kind: "state", ...command.input },
+                (operation) => operation(),
+                { assertCurrent, onCommitted() {} },
+              );
+              break;
+            }
             case "tasks.settleUnstarted": {
               const task = readTaskRecord(database.db, command.input.taskId);
               result =

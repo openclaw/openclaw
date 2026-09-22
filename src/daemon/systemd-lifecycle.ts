@@ -9,6 +9,7 @@ import type {
   GatewayServiceEnv,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
+  SystemdServiceIdentity,
 } from "./service-types.js";
 import {
   assertSystemdAvailable,
@@ -27,6 +28,7 @@ import {
   resolveSystemdUnitPath,
   resolveSystemdUnitPathForName,
 } from "./systemd-service-files.js";
+import { activateSystemdServiceIdentity } from "./systemd-service-identity.js";
 
 function isRunningAsRoot(): boolean {
   if (typeof process.geteuid === "function") {
@@ -46,8 +48,36 @@ async function runSystemdServiceAction(params: {
   label: string;
   onMutation?: () => void;
   assertCurrent?: () => void;
+  systemdIdentity?: SystemdServiceIdentity;
+  warn?: (message: string) => void;
 }) {
   const env = params.env ?? process.env;
+  if (params.systemdIdentity && params.action !== "stop") {
+    if (params.systemdIdentity.scope === "user") {
+      await assertNoSystemGatewayOwnership({
+        ...env,
+        OPENCLAW_SYSTEMD_UNIT: params.systemdIdentity.unitName,
+      });
+    }
+    if (params.systemdIdentity.scope === "system" && !isRunningAsRoot()) {
+      throw new Error(
+        `${params.systemdIdentity.unitName} is a system-scope unit (${params.systemdIdentity.unitPath}); run \`sudo systemctl ${params.action} ${params.systemdIdentity.unitName}\` to ${params.action} it`,
+      );
+    }
+    await activateSystemdServiceIdentity({
+      identity: params.systemdIdentity,
+      action: params.action,
+      assertCurrent: params.assertCurrent,
+      warn:
+        params.warn ??
+        ((message) => {
+          params.stdout.write(`${formatLine("Warning", message)}\n`);
+        }),
+    });
+    params.onMutation?.();
+    params.stdout.write(`${formatLine(params.label, params.systemdIdentity.unitName)}\n`);
+    return;
+  }
   const installed = await findInstalledSystemdGatewayScope(env);
   const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
   let runSystemctl: (args: string[]) => ReturnType<typeof execSystemctl>;
@@ -88,6 +118,8 @@ export async function startSystemdService({
   env,
   onMutation,
   assertCurrent,
+  systemdIdentity,
+  warn,
 }: GatewayServiceControlArgs): Promise<void> {
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await runSystemdServiceAction({
@@ -95,6 +127,8 @@ export async function startSystemdService({
     env,
     action: "start",
     assertCurrent,
+    systemdIdentity,
+    warn,
     label: "Started systemd service",
     onMutation: () => reportMutation("systemctl-start"),
   });
@@ -122,6 +156,8 @@ export async function restartSystemdService({
   env,
   onMutation,
   assertCurrent,
+  systemdIdentity,
+  warn,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   await runSystemdServiceAction({
@@ -129,6 +165,8 @@ export async function restartSystemdService({
     env,
     action: "restart",
     assertCurrent,
+    systemdIdentity,
+    warn,
     label: "Restarted systemd service",
     onMutation: () => reportMutation("systemctl-restart"),
   });

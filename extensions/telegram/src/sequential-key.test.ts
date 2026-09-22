@@ -238,6 +238,60 @@ describe("getTelegramSequentialKey", () => {
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/whoami" }) },
       "telegram:123:control",
     ],
+    // Interrupt commands keep the chat-wide control lane. `/approve` in particular must
+    // never queue behind the run that is blocked waiting on its own approval request.
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: 123 }),
+          text: "/approve exec:def456 allow-once",
+        }),
+      },
+      "telegram:123:control",
+    ],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 202,
+          text: "/approve exec:def456 deny",
+        }),
+      },
+      "telegram:-100:control",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/queue" }) },
+      "telegram:123:control",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/steer do the thing" }) },
+      "telegram:123:control",
+    ],
+    // Session-mutating commands must not share the chat-wide control lane: their writes
+    // stay ordered behind their own topic's pending input, `activeRunSafe` notwithstanding.
+    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/new" }) }, "telegram:123"],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/new sync tars" }) },
+      "telegram:123",
+    ],
+    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/reset" }) }, "telegram:123"],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/think high" }) },
+      "telegram:123",
+    ],
+    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/compact" }) }, "telegram:123"],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 202,
+          text: "/new sync tars",
+        }),
+      },
+      "telegram:-100:topic:202",
+    ],
     [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/diagnostics" }) },
       "telegram:123",

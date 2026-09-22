@@ -30,6 +30,7 @@ export function createSessionWriteObservation(
   revision: number,
   updatedAt: number | null,
   readCutoff?: number,
+  snapshotAt?: number,
 ): FieldObservation {
   return {
     source: {
@@ -37,16 +38,15 @@ export function createSessionWriteObservation(
       updatedAt,
       event: true,
       ...(readCutoff !== undefined ? { readCutoff } : {}),
+      ...(snapshotAt !== undefined ? { snapshotAt } : {}),
     },
   };
 }
 
 function isNewerSource(candidate: FieldSource, current: FieldSource) {
-  // Cached list pages keep their original sampling time even when requested later.
-  // Persisted updatedAt cannot order runtime-only changes between those pages.
+  // Event snapshots and cached list pages share the Gateway's sampling clock.
+  // Request/delivery order and persisted updatedAt cannot order runtime-only changes.
   if (
-    !candidate.event &&
-    !current.event &&
     candidate.snapshotAt !== undefined &&
     current.snapshotAt !== undefined &&
     candidate.snapshotAt !== current.snapshotAt

@@ -136,6 +136,7 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
       runId: "run-1",
     },
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir: "/tmp/openclaw-cli-context-engine-test",
     backendResolved: {
       id: "claude-cli",

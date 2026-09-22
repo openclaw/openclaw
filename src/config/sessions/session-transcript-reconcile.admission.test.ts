@@ -12,6 +12,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
@@ -70,6 +71,7 @@ async function fixture() {
 it("waits for a cold projection without superseding its native integrity admission", async () => {
   const { root, options, scope } = await fixture();
   closeOpenClawAgentDatabasesForTest(root);
+  clearOpenClawAgentIntegrityVerification(options.path, options.env);
   let parentChecks = 0;
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, openOptions) => {
     const database = realOpen(pathname, openOptions);

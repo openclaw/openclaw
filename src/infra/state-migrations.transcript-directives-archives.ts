@@ -143,11 +143,13 @@ function listArchiveBatch(
     .orderBy("generation", "asc")
     .limit(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
   if (cursor.sessionId) {
+    // Seek the composite key; OR branches rescan the visited prefix on every page.
     query = query.where((eb) =>
-      eb.or([
-        eb("session_id", ">", cursor.sessionId),
-        eb.and([eb("session_id", "=", cursor.sessionId), eb("generation", ">", cursor.generation)]),
-      ]),
+      eb(
+        eb.refTuple("session_id", "generation"),
+        ">",
+        eb.tuple(cursor.sessionId, cursor.generation),
+      ),
     );
   }
   return executeSqliteQuerySync(database, query).rows.map((row) => {

@@ -155,14 +155,16 @@ async function registerNotifySubscriber(params: {
   target: NotifyTarget;
   mode: NotifySubscription["mode"];
   refresh: boolean;
+  assertCurrent?: () => void;
 }): Promise<boolean> {
+  const assertCurrent = params.assertCurrent;
   const store = openNotifySubscriberStore(params.api);
   const key = notifySubscriberStoreKey(params.target);
   const current = await store.lookup(key);
   if (!params.refresh && current?.mode === params.mode) {
     return false;
   }
-  await store.register(key, nextNotifySubscription(params.target, params.mode));
+  await store.register(key, nextNotifySubscription(params.target, params.mode), { assertCurrent });
   return true;
 }
 
@@ -377,6 +379,7 @@ async function runNotifyPoll(api: OpenClawPluginApi): Promise<void> {
 export async function armPairNotifyOnce(params: {
   api: OpenClawPluginApi;
   ctx: {
+    assertOwnerCurrent?: () => void;
     channel: string;
     senderId?: string;
     from?: string;
@@ -398,6 +401,7 @@ export async function armPairNotifyOnce(params: {
     target,
     mode: "once",
     refresh: true,
+    assertCurrent: params.ctx.assertOwnerCurrent,
   });
   return true;
 }
@@ -405,6 +409,7 @@ export async function armPairNotifyOnce(params: {
 export async function handleNotifyCommand(params: {
   api: OpenClawPluginApi;
   ctx: {
+    assertOwnerCurrent?: () => void;
     channel: string;
     senderId?: string;
     from?: string;
@@ -414,6 +419,7 @@ export async function handleNotifyCommand(params: {
   };
   action: string;
 }): Promise<{ text: string }> {
+  const assertOwnerCurrent = params.ctx.assertOwnerCurrent;
   if (params.ctx.channel !== "telegram") {
     return { text: "Pairing notifications are currently supported only on Telegram." };
   }
@@ -432,6 +438,7 @@ export async function handleNotifyCommand(params: {
       target,
       mode: "persistent",
       refresh: false,
+      assertCurrent: assertOwnerCurrent,
     });
     return {
       text:
@@ -441,7 +448,7 @@ export async function handleNotifyCommand(params: {
   }
 
   if (params.action === "off" || params.action === "disable") {
-    await subscriberStore.delete(targetStoreKey);
+    await subscriberStore.delete(targetStoreKey, { assertCurrent: assertOwnerCurrent });
     return { text: "✅ Pair request notifications disabled for this Telegram chat." };
   }
 
@@ -466,6 +473,7 @@ export async function handleNotifyCommand(params: {
       listDevicePairing(),
     ]);
     const enabled = Boolean(current);
+    assertOwnerCurrent?.();
     const mode = current?.mode ?? "off";
     return {
       text: [

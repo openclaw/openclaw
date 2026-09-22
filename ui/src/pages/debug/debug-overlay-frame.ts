@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { DirectiveResult } from "lit/directive.js";
+import { icons } from "../../components/icons.ts";
 import {
   renderLazyViewError,
   type renderLazyElementModal,
@@ -8,6 +9,7 @@ import {
 import { DEBUG_OVERLAY_REQUEST_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/debug.css";
+import { debugOverlayLayout } from "./debug-overlay-layout.ts";
 import { renderDebugOverlayLoading as renderExpandedLoading } from "./debug-overlay-loading.ts";
 
 export type DebugOverlayMode = "expanded" | "minimized";
@@ -89,10 +91,11 @@ export function renderDebugOverlayFrame({
 }) {
   return html`
     <aside
+      ${debugOverlayLayout(mode)}
       class="debug-overlay ${mode === "minimized" ? "debug-overlay--minimized" : ""}"
       aria-label=${t("debug.overlay.title")}
     >
-      <header class="debug-overlay__header">
+      <header class="debug-overlay__header" tabindex="0" aria-label=${t("debug.overlay.move")}>
         <div>
           ${mode === "minimized" ? nothing : html`<div class="debug-overlay__eyebrow">${t("debug.overlay.eyebrow")}</div>`}
           <h2>${t("debug.overlay.title")}</h2>
@@ -105,7 +108,7 @@ export function renderDebugOverlayFrame({
             title=${t(mode === "minimized" ? "debug.overlay.expand" : "debug.overlay.minimize")}
             @click=${onToggleMode}
           >
-            <span aria-hidden="true">${mode === "minimized" ? "↗" : "↙"}</span>
+            ${mode === "minimized" ? icons.maximize : icons.minimize}
           </button>
           <button
             type="button"
@@ -113,7 +116,7 @@ export function renderDebugOverlayFrame({
             aria-label=${t("common.close")}
             @click=${onClose}
           >
-            ×
+            ${icons.x}
           </button>
         </div>
       </header>

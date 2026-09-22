@@ -151,6 +151,7 @@ describe("session pull-request state", () => {
 });
 
 const sharedPublisher = { source: "system-configured" as const, accountId: 1, login: "system-bot" };
+const publicationChanges = new WeakMap<GitHubPublicationBinding, () => Promise<void>>();
 function publicationHarness() {
   const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
     if (method === "sessions.github.options") {
@@ -177,11 +178,17 @@ function publicationHarness() {
     updatedAt: 1,
   });
   const attach = (session = row("publication")) => {
+    let changed = createDeferred();
     const binding = sessions.githubPublication.attach(
       session,
-      vi.fn(),
+      () => {
+        const previous = changed;
+        changed = createDeferred();
+        previous.resolve();
+      },
       GitHubPublicationController,
     )!;
+    publicationChanges.set(binding, () => changed.promise);
     binding.sync({
       canWrite: true,
       personalReady: true,
@@ -194,7 +201,14 @@ function publicationHarness() {
   return { ...harness, request, sessions, row, attach };
 }
 async function publicationSettled(binding: GitHubPublicationBinding) {
-  await vi.waitFor(() => expect(binding.view()?.activity).toBeNull());
+  const nextChange = publicationChanges.get(binding)!;
+  await vi.waitFor(async () => {
+    // Completion can start a queued refresh before this notification resumes us.
+    while (binding.view()?.activity !== null) {
+      await nextChange();
+    }
+    expect(binding.view()?.activity).toBeNull();
+  });
   return binding.view()!;
 }
 const publishedResult = {

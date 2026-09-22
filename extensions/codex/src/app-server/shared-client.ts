@@ -29,6 +29,10 @@ import {
   resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./auth-cache-key.js";
 import {
+  CodexAppServerAuthProfileUnavailableError,
+  formatCodexAuthProfileUnavailableMessage,
+} from "./auth-profile-recovery.js";
+import {
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerAuthProfileStore,
 } from "./auth-profile.js";
@@ -315,15 +319,6 @@ type ResolvedCodexAppServerClientStartContext = {
   pluginConfig?: unknown;
 };
 
-function inferAuthRequirement(
-  preparedAuth: CodexAppServerPreparedAuth | undefined,
-): CodexAppServerAuthRequirement | undefined {
-  if (preparedAuth?.kind === "api-key") {
-    return "api-key";
-  }
-  return preparedAuth?.kind === "profile" ? "subscription" : undefined;
-}
-
 async function resolveCodexAppServerClientStartContext(
   options?: CodexAppServerClientOptions,
 ): Promise<ResolvedCodexAppServerClientStartContext> {
@@ -347,8 +342,8 @@ async function resolveCodexAppServerClientStartContext(
     throw new Error("Prepared Codex auth cannot also select a legacy auth profile.");
   }
   if (preparedAuth?.kind === "profile" && !preparedAuth.store.profiles[preparedAuth.profileId]) {
-    throw new Error(
-      `Prepared Codex auth profile "${preparedAuth.profileId}" was not found. Select an existing OpenAI profile or sign in again with OpenClaw, then retry.`,
+    throw new CodexAppServerAuthProfileUnavailableError(
+      formatCodexAuthProfileUnavailableMessage(preparedAuth.profileId),
     );
   }
   if (preparedAuth?.kind === "api-key" && !preparedApiKey) {
@@ -360,7 +355,8 @@ async function resolveCodexAppServerClientStartContext(
     // ChatGPT account for token logins, so prepared auth must never reach it.
     throw new Error("Prepared Codex auth requires an isolated app-server home.");
   }
-  const preparedAuthRequirement = inferAuthRequirement(preparedAuth);
+  const preparedAuthRequirement =
+    preparedAuth && (preparedAuth.kind === "api-key" ? "api-key" : "subscription");
   if (
     options?.authRequirement &&
     preparedAuthRequirement &&
@@ -411,7 +407,7 @@ async function resolveCodexAppServerClientStartContext(
         })))
       : undefined;
   if (preparedAuth?.kind === "profile" && !preparedAuthProfileSnapshot) {
-    throw new Error(
+    throw new CodexAppServerAuthProfileUnavailableError(
       `Prepared Codex auth profile "${preparedAuth.profileId}" is unusable. Repair or replace the selected OpenAI profile, then retry.`,
     );
   }

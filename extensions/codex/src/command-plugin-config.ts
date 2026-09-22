@@ -24,7 +24,10 @@ export type CodexPluginsManagementIO = {
     enabled?: boolean;
     plugins?: Record<string, CodexPluginConfigEntry>;
   }>;
-  mutate: (update: (block: CodexPluginsConfigBlock) => void) => Promise<void>;
+  mutate: (
+    update: (block: CodexPluginsConfigBlock) => void,
+    assertCurrent?: () => void,
+  ) => Promise<void>;
 };
 
 type ConfiguredPluginKeyResolution =

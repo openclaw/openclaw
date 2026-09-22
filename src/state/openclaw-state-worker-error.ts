@@ -1,57 +1,30 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
-import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
-import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
-import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
-import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
-import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
-import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {
-  isOpenClawStateLeaseErrorCode,
-  OpenClawStateLeaseError,
-  type OpenClawStateLeaseErrorCode,
-} from "./openclaw-state-lease-error.js";
+  isSqliteNativeOpenFailure,
+  markSqliteNativeOpenFailure,
+} from "../infra/sqlite-error-diagnostics.js";
 import {
-  OpenClawStateExternalOwnershipError,
-  OpenClawStateOwnershipError,
-  OpenClawStateOwnershipMetadataError,
-} from "./openclaw-state-ownership.js";
-
-type MaintenanceKind = ConstructorParameters<typeof StartupMaintenanceRequiredError>[0];
-type StateMigrationKind = ConstructorParameters<
-  typeof OpenClawStateDatabaseSchemaMigrationRequiredError
->[0];
-type CoordinatorFamily = ConstructorParameters<typeof StateDatabaseCoordinatorContentionError>[0];
+  DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME,
+  OpenClawQuarantineReadCleanupError,
+} from "./openclaw-quarantine-error.js";
+import {
+  createError,
+  identifyError,
+  parseIdentity,
+  type ErrorIdentity,
+} from "./openclaw-state-worker-error-identity.js";
 
 type ErrorValue =
   | { ref: number }
   | { value: string | number | boolean | null }
   | { undefined: true };
 
-type ErrorIdentity =
-  | {
-      type:
-        | "error"
-        | "aggregate"
-        | "ownership"
-        | "newer-schema"
-        | "coordinator"
-        | "range-error"
-        | "skill-upload-request";
-    }
-  | { type: "coordinator-contention"; family: CoordinatorFamily }
-  | { type: "ownership-metadata"; databasePath: string }
-  | { type: "external-ownership"; databasePath: string; managerId: string }
-  | { type: "state-lease"; leaseCode: OpenClawStateLeaseErrorCode }
-  | { type: "maintenance"; kind: MaintenanceKind }
-  | { type: "state-migration"; kind: StateMigrationKind; pathname: string }
-  | { type: "agent-media-migration"; pathname: string; schemaVersion: number };
-
 type ErrorNode = ErrorIdentity & {
   name: string;
   message: string;
   code?: string | number;
   errcode?: number;
+  nativeOpen?: true;
   cause?: ErrorValue;
   errors?: ErrorValue[];
 };
@@ -64,54 +37,6 @@ export type OpenClawStateWorkerErrorPayload = {
 };
 
 type ErrorGraphOptions = { includeOrdinary?: boolean };
-
-function identifyError(error: Error): ErrorIdentity {
-  if (error instanceof SkillUploadRequestError) {
-    return { type: "skill-upload-request" };
-  }
-  if (error instanceof StateDatabaseCoordinatorContentionError) {
-    return { type: "coordinator-contention", family: error.family };
-  }
-  if (error instanceof SqliteCoordinatorError) {
-    return { type: "coordinator" };
-  }
-  if (error instanceof OpenClawStateLeaseError) {
-    return { type: "state-lease", leaseCode: error.code };
-  }
-  if (error instanceof OpenClawStateOwnershipMetadataError) {
-    return { type: "ownership-metadata", databasePath: error.databasePath };
-  }
-  if (error instanceof OpenClawStateExternalOwnershipError) {
-    return {
-      type: "external-ownership",
-      databasePath: error.databasePath,
-      managerId: error.managerId,
-    };
-  }
-  if (error instanceof OpenClawStateOwnershipError) {
-    return { type: "ownership" };
-  }
-  if (error instanceof SqliteSchemaVersionError) {
-    return { type: "newer-schema" };
-  }
-  if (error instanceof OpenClawStateDatabaseSchemaMigrationRequiredError) {
-    return { type: "state-migration", kind: error.kind, pathname: error.pathname };
-  }
-  if (error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError) {
-    return {
-      type: "agent-media-migration",
-      pathname: error.pathname,
-      schemaVersion: error.schemaVersion,
-    };
-  }
-  if (error instanceof StartupMaintenanceRequiredError) {
-    return { type: "maintenance", kind: error.kind };
-  }
-  if (error instanceof RangeError) {
-    return { type: "range-error" };
-  }
-  return { type: error instanceof AggregateError ? "aggregate" : "error" };
-}
 
 function isScalar(value: unknown): value is string | number | boolean | null {
   return (
@@ -155,7 +80,11 @@ export function encodeOpenClawStateWorkerError(
     encodeValue(error);
     for (const current of errors) {
       const identity = identifyError(current);
-      canonical ||= identity.type !== "error" && identity.type !== "aggregate";
+      const nativeOpen = isSqliteNativeOpenFailure(current);
+      canonical ||=
+        nativeOpen ||
+        current instanceof OpenClawQuarantineReadCleanupError ||
+        (identity.type !== "error" && identity.type !== "aggregate");
       const code = "code" in current ? current.code : undefined;
       const errcode = "errcode" in current ? current.errcode : undefined;
       nodes.push({
@@ -166,6 +95,7 @@ export function encodeOpenClawStateWorkerError(
           ? { code }
           : {}),
         ...(isNativeErrorCode(errcode) ? { errcode } : {}),
+        ...(nativeOpen ? { nativeOpen: true } : {}),
         ...("cause" in current ? { cause: encodeValue(current.cause) } : {}),
         ...(current instanceof AggregateError ? { errors: current.errors.map(encodeValue) } : {}),
       });
@@ -175,69 +105,6 @@ export function encodeOpenClawStateWorkerError(
       : undefined;
   } catch {
     return undefined;
-  }
-}
-
-function isMaintenanceKind(kind: unknown): kind is MaintenanceKind {
-  return (
-    kind === "newer-schema" ||
-    kind === "agent-media" ||
-    kind === "agent-databases-composite-primary-key" ||
-    kind === "audit-events-v2" ||
-    kind === "legacy-cron-run-logs" ||
-    kind === "legacy-workshop-review-index" ||
-    kind === "legacy-workspace" ||
-    kind === "legacy-session-store"
-  );
-}
-
-function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined {
-  switch (node.type) {
-    case "error":
-    case "aggregate":
-    case "ownership":
-    case "newer-schema":
-    case "coordinator":
-    case "range-error":
-    case "skill-upload-request":
-      return { type: node.type };
-    case "coordinator-contention":
-      return node.family === "gateway-lifecycle" ||
-        node.family === "state-lifecycle" ||
-        node.family === "state-handles"
-        ? { type: node.type, family: node.family }
-        : undefined;
-    case "ownership-metadata":
-      return typeof node.databasePath === "string"
-        ? { type: node.type, databasePath: node.databasePath }
-        : undefined;
-    case "external-ownership":
-      return typeof node.databasePath === "string" && typeof node.managerId === "string"
-        ? { type: node.type, databasePath: node.databasePath, managerId: node.managerId }
-        : undefined;
-    case "state-lease":
-      return isOpenClawStateLeaseErrorCode(node.leaseCode) && node.code === node.leaseCode
-        ? { type: node.type, leaseCode: node.leaseCode }
-        : undefined;
-    case "maintenance":
-      return isMaintenanceKind(node.kind) ? { type: node.type, kind: node.kind } : undefined;
-    case "state-migration":
-      return (node.kind === "agent-databases-composite-primary-key" ||
-        node.kind === "audit-events-v2" ||
-        node.kind === "legacy-cron-run-logs" ||
-        node.kind === "legacy-workshop-review-index") &&
-        typeof node.pathname === "string"
-        ? { type: node.type, kind: node.kind, pathname: node.pathname }
-        : undefined;
-    case "agent-media-migration":
-      return typeof node.pathname === "string" &&
-        typeof node.schemaVersion === "number" &&
-        Number.isSafeInteger(node.schemaVersion) &&
-        node.schemaVersion >= 0
-        ? { type: node.type, pathname: node.pathname, schemaVersion: node.schemaVersion }
-        : undefined;
-    default:
-      return undefined;
   }
 }
 
@@ -270,6 +137,7 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
     "message",
     "code",
     "errcode",
+    "nativeOpen",
     "cause",
   ]);
   const errors: ErrorValue[] = [];
@@ -291,6 +159,7 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
       typeof value.code !== "string" &&
       !(typeof value.code === "number" && Number.isFinite(value.code))) ||
     ("errcode" in value && !isNativeErrorCode(value.errcode)) ||
+    ("nativeOpen" in value && value.nativeOpen !== true) ||
     ("cause" in value && !isErrorValue(value.cause, count))
   ) {
     return undefined;
@@ -303,50 +172,10 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
       ? { code: value.code }
       : {}),
     ...(isNativeErrorCode(value.errcode) ? { errcode: value.errcode } : {}),
+    ...(value.nativeOpen === true ? { nativeOpen: true } : {}),
     ...(isErrorValue(value.cause, count) ? { cause: value.cause } : {}),
     ...(identity.type === "aggregate" ? { errors } : {}),
   };
-}
-
-function unreachableErrorNode(node: never): never {
-  throw new Error(`Unexpected shared-state worker error node: ${String(node)}`);
-}
-
-function createError(node: ErrorNode): Error {
-  switch (node.type) {
-    case "error":
-      return new Error(node.message);
-    case "range-error":
-      return new RangeError(node.message);
-    case "skill-upload-request":
-      return new SkillUploadRequestError(node.message);
-    case "aggregate":
-      return new AggregateError([], node.message);
-    case "coordinator":
-      return new SqliteCoordinatorError(node.message);
-    case "coordinator-contention":
-      return new StateDatabaseCoordinatorContentionError(node.family);
-    case "ownership":
-      return new OpenClawStateOwnershipError(node.message);
-    case "ownership-metadata":
-      return new OpenClawStateOwnershipMetadataError(node.databasePath, "");
-    case "external-ownership":
-      return new OpenClawStateExternalOwnershipError(node.databasePath, node.managerId);
-    case "newer-schema":
-      return new SqliteSchemaVersionError(node.message);
-    case "state-lease":
-      return new OpenClawStateLeaseError(node.message, { code: node.leaseCode });
-    case "maintenance":
-      return new StartupMaintenanceRequiredError(node.kind, node.message);
-    case "state-migration":
-      return new OpenClawStateDatabaseSchemaMigrationRequiredError(node.kind, node.pathname);
-    case "agent-media-migration":
-      return new OpenClawAgentDatabaseMediaMigrationRequiredError(
-        node.pathname,
-        node.schemaVersion,
-      );
-  }
-  return unreachableErrorNode(node);
 }
 
 function decodeErrorGraph(
@@ -383,7 +212,10 @@ function decodeErrorGraph(
       }
       visited.add(ref);
       const node = nodes[ref]!;
-      canonical ||= node.type !== "error" && node.type !== "aggregate";
+      canonical ||=
+        node.nativeOpen === true ||
+        (node.type === "aggregate" && node.name === DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME) ||
+        (node.type !== "error" && node.type !== "aggregate");
       for (const edge of [...(node.cause ? [node.cause] : []), ...(node.errors ?? [])]) {
         if ("ref" in edge) {
           pending.push(edge.ref);
@@ -400,6 +232,9 @@ function decodeErrorGraph(
       const error = errors[index]!;
       error.name = node.name;
       error.message = node.message;
+      if (node.nativeOpen) {
+        markSqliteNativeOpenFailure(error);
+      }
       if (node.code !== undefined) {
         Object.defineProperty(error, "code", {
           value: node.code,

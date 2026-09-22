@@ -83,7 +83,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
       expect(adopt).toHaveBeenCalledOnce();
       expect(getDeliveredFinalTexts()).toEqual(accepted ? [] : ["Waiting for the child result."]);
-      expect(draftStream.clear).toHaveBeenCalledTimes(accepted ? 0 : 1);
+      expect(draftStream.messageId()).toBeUndefined();
       expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("Late parent text");
     },
   );
@@ -211,8 +211,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith(
       "Investigating\n\n🛠️ Checked the pipeline.",
     );
-    expect(draftStream.stop).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.messageId()).toBeDefined();
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
@@ -488,7 +487,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith("🛠️ Exec: running", { complete: true });
     expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("Temporary note.");
     // Cleanup still removes the unfinished tool-progress draft at run end.
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.messageId()).toBeUndefined();
   });
 
   it("does not update Discord commentary progress after final answer delivery starts", async () => {
@@ -619,13 +618,12 @@ describe("processDiscordMessage draft streaming progress", () => {
     });
     // The delivered final consumed the draft; the later tool warning must not
     // resurrect it or produce a second visible reply.
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(draftStream.messageId()).toBeUndefined();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     expectFinalAnswerText("delivery survived");
   });
 
-  it("consumes a progress draft once across repeated final payloads", async () => {
+  it("clears progress before delivering later final payloads", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -635,6 +633,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
+      expect(draftStream.messageId()).toBeUndefined();
       await params?.dispatcher.sendFinalReply({ text: "second answer" });
       await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
@@ -648,11 +647,8 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    const finals = getDeliveredFinalTexts();
-    expect(finals).toHaveLength(2);
-    expect(finals[0]).toBe("first answer");
-    expect(finals[1]).toBe("second answer");
+    expect(draftStream.messageId()).toBeUndefined();
+    expect(getDeliveredFinalTexts()).toEqual(["first answer", "second answer"]);
   });
 
   it("keeps the progress draft uncollapsed when the first final delivery fails", async () => {
@@ -666,6 +662,8 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
+      expect(draftStream.messageId()).toBeDefined();
+      expect(draftStream.lastDeliveredText()).toContain("exec done");
       await params?.dispatcher.sendFinalReply({ text: "retry answer" });
       await params?.dispatcher.waitForIdle();
       return {
@@ -683,11 +681,8 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    const attemptedFinals = getDeliveredFinalTexts();
-    expect(attemptedFinals).toHaveLength(2);
-    expect(attemptedFinals[0]).toBe("first answer");
-    expect(attemptedFinals[1]).toBe("retry answer");
+    expect(draftStream.messageId()).toBeUndefined();
+    expect(getDeliveredFinalTexts()).toEqual(["first answer", "retry answer"]);
   });
 
   it("re-arms progress collapse for a queued assistant turn", async () => {
@@ -700,10 +695,14 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
+      expect(draftStream.messageId()).toBeUndefined();
       await params?.replyOptions?.onQueuedFollowupAdmitted?.();
       await params?.replyOptions?.onToolStart?.({ name: "read", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "second tool done" });
       await elapseProgressDraftStartDelay();
+      expect(draftStream.messageId()).toBeDefined();
+      expect(draftStream.lastDeliveredText()).toContain("second tool done");
+      expect(draftStream.lastDeliveredText()).not.toContain("first tool done");
       await params?.dispatcher.sendFinalReply({ text: "second answer" });
       await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
@@ -717,12 +716,8 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.clear).toHaveBeenCalledTimes(2);
-    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    const finals = getDeliveredFinalTexts();
-    expect(finals).toHaveLength(2);
-    expect(finals[0]).toBe("first answer");
-    expect(finals[1]).toBe("second answer");
+    expect(draftStream.messageId()).toBeUndefined();
+    expect(getDeliveredFinalTexts()).toEqual(["first answer", "second answer"]);
   });
 
   it("does not collapse a text-only queued assistant turn", async () => {
@@ -735,7 +730,9 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
+      expect(draftStream.messageId()).toBeUndefined();
       await params?.replyOptions?.onQueuedFollowupAdmitted?.();
+      expect(draftStream.messageId()).toBeUndefined();
       await params?.dispatcher.sendFinalReply({ text: "text-only answer" });
       await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
@@ -749,7 +746,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.messageId()).toBeUndefined();
     expect(getDeliveredFinalTexts()).toEqual(["first answer", "text-only answer"]);
   });
 
@@ -767,6 +764,8 @@ describe("processDiscordMessage draft streaming progress", () => {
       await params?.replyOptions?.onToolStart?.({ name: "read", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "queued work" });
       await elapseProgressDraftStartDelay();
+      expect(draftStream.messageId()).toBeDefined();
+      expect(draftStream.lastDeliveredText()).toContain("queued work");
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
@@ -778,8 +777,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(2);
+    expect(getDeliveredFinalTexts()).toEqual(["first answer"]);
     expect(draftStream.messageId()).toBeUndefined();
   });
 

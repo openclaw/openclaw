@@ -184,7 +184,7 @@ export async function maybeRepairLegacyRuntimeFiles(
               env,
               databasePath: entry.path,
               liveKeys: new Set(),
-              // Doctor retires old scopes only; current v2 rows are not prune candidates.
+              // Doctor retires old scopes only; current rows are not prune candidates.
               rows: [],
             }),
         });

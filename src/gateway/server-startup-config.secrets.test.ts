@@ -24,8 +24,8 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { providerResolutionError, refResolutionError } from "../secrets/resolve-errors.js";
 import { associateSecretResolutionErrorOwners } from "../secrets/runtime-degraded-state.js";
-import { activateProviderAuthRuntimeSnapshot } from "../secrets/runtime-provider-auth-activation.js";
 import {
+  activateProviderAuthRuntimeSnapshot,
   activateSecretsRuntimeSnapshotState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
   clearSecretsRuntimeSnapshotState,
@@ -37,7 +37,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   createRuntimeSecretsActivator,
   prepareGatewayStartupConfig,
-  publishRuntimeSecretsStateTransition,
 } from "./server-startup-config.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
@@ -462,7 +461,7 @@ describe("gateway startup config secret preflight", () => {
     const refreshedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
 
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(candidate, initialRevision, {
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(candidate, initialRevision, {
         reason: "reload",
         activate: true,
       }),
@@ -470,7 +469,7 @@ describe("gateway startup config secret preflight", () => {
     expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
 
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(candidate, refreshedRevision, {
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(candidate, refreshedRevision, {
         reason: "reload",
         activate: true,
       }),
@@ -864,7 +863,7 @@ describe("gateway startup config secret preflight", () => {
     activateSecretsRuntimeSnapshotForTest(initial);
 
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
         rolledBackCandidate,
         getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
@@ -875,7 +874,7 @@ describe("gateway startup config secret preflight", () => {
 
     activateSecretsRuntimeSnapshotForTest(initial);
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
         committedCandidate,
         getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
@@ -884,11 +883,11 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent).not.toHaveBeenCalled();
     expect(logSecrets.warn).not.toHaveBeenCalled();
 
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, rolledBackCandidate);
+    activateRuntimeSecrets.publishStateTransition(rolledBackCandidate);
     expect(emitStateEvent).not.toHaveBeenCalled();
     expect(logSecrets.warn).not.toHaveBeenCalled();
 
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, committedCandidate);
+    activateRuntimeSecrets.publishStateTransition(committedCandidate);
     expect(emitStateEvent).toHaveBeenCalledOnce();
     expect(emitStateEvent).toHaveBeenCalledWith(
       "SECRETS_RELOADER_DEGRADED",
@@ -934,7 +933,7 @@ describe("gateway startup config secret preflight", () => {
     });
     activateSecretsRuntimeSnapshotForTest(initial);
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
         degraded,
         getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
@@ -968,7 +967,7 @@ describe("gateway startup config secret preflight", () => {
     ).resolves.toBe(true);
     expect(emitStateEvent).not.toHaveBeenCalled();
 
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, degraded);
+    activateRuntimeSecrets.publishStateTransition(degraded);
     expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual(["SECRETS_RELOADER_DEGRADED"]);
   });
 
@@ -1001,7 +1000,7 @@ describe("gateway startup config secret preflight", () => {
     });
     activateSecretsRuntimeSnapshotForTest(initial);
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
         degraded,
         getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
@@ -1025,7 +1024,7 @@ describe("gateway startup config secret preflight", () => {
       }),
     ).resolves.toBe(true);
 
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, degraded);
+    activateRuntimeSecrets.publishStateTransition(degraded);
     expect(emitStateEvent).not.toHaveBeenCalled();
   });
 
@@ -1071,12 +1070,12 @@ describe("gateway startup config secret preflight", () => {
       activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
     });
     activateSecretsRuntimeSnapshotForTest(initial);
-    await activateRuntimeSecrets.activatePreparedSnapshot?.(fullDegraded, {
+    await activateRuntimeSecrets.activatePreparedSnapshot(fullDegraded, {
       reason: "reload",
       activate: true,
     });
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
         providerDegraded,
         getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
@@ -1101,7 +1100,7 @@ describe("gateway startup config secret preflight", () => {
     ).resolves.toBe(true);
     expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual(["SECRETS_RELOADER_DEGRADED"]);
 
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, providerDegraded);
+    activateRuntimeSecrets.publishStateTransition(providerDegraded);
     expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
       "SECRETS_RELOADER_DEGRADED",
       "SECRETS_RELOADER_RECOVERED",
@@ -1137,12 +1136,12 @@ describe("gateway startup config secret preflight", () => {
       activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
     });
     activateSecretsRuntimeSnapshotForTest(initial);
-    await activateRuntimeSecrets.activatePreparedSnapshot?.(degraded, {
+    await activateRuntimeSecrets.activatePreparedSnapshot(degraded, {
       reason: "reload",
       activate: true,
     });
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
         recovered,
         getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
@@ -1167,7 +1166,7 @@ describe("gateway startup config secret preflight", () => {
     ).resolves.toBe(true);
     expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual(["SECRETS_RELOADER_DEGRADED"]);
 
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, recovered);
+    activateRuntimeSecrets.publishStateTransition(recovered);
     expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
       "SECRETS_RELOADER_DEGRADED",
       "SECRETS_RELOADER_RECOVERED",
@@ -1238,7 +1237,7 @@ describe("gateway startup config secret preflight", () => {
       }),
     ).toBe(true);
 
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, sourceOnly, {
+    activateRuntimeSecrets.publishStateTransition(sourceOnly, {
       sourceOnly: true,
       expectedRevision: committedRevision,
     });
@@ -1289,7 +1288,7 @@ describe("gateway startup config secret preflight", () => {
     );
 
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(candidate, initialRevision, {
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(candidate, initialRevision, {
         reason: "reload",
         activate: true,
       }),
@@ -1319,7 +1318,7 @@ describe("gateway startup config secret preflight", () => {
         prepareRuntimeSecretsSnapshot: vi.fn(async ({ config }) => preparedSnapshot(config)),
         activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshotForTest,
       });
-      const activate = activator.activatePreparedSnapshotIfCurrent!;
+      const activate = activator.activatePreparedSnapshotIfCurrent;
       activateSecretsRuntimeSnapshotForTest(initial);
       const holding = createDeferred();
       const unlock = createDeferred();
@@ -1429,7 +1428,7 @@ describe("gateway startup config secret preflight", () => {
       await withEnvAsync(
         { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_STATE_DIR: root },
         async () => {
-          const outcome = activator.activatePreparedSnapshotIfCurrent!(
+          const outcome = activator.activatePreparedSnapshotIfCurrent(
             candidate,
             getActiveSecretsRuntimeSnapshotRevisionState(),
             { reason: "reload", activate: true },
@@ -1470,7 +1469,7 @@ describe("gateway startup config secret preflight", () => {
     const { promise: publicationBlocked, resolve: releasePublication } = createDeferred();
     const { promise: publicationEntered, resolve: publicationStarted } = createDeferred();
 
-    const candidateActivation = activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+    const candidateActivation = activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
       candidate,
       initialRevision,
       { reason: "reload", activate: true },
@@ -1482,7 +1481,7 @@ describe("gateway startup config secret preflight", () => {
     await publicationEntered;
     let laterActivated = false;
     const laterActivation = activateRuntimeSecrets
-      .activatePreparedSnapshot?.(later, { reason: "reload", activate: true })
+      .activatePreparedSnapshot(later, { reason: "reload", activate: true })
       .then(() => {
         laterActivated = true;
       });
@@ -2261,7 +2260,7 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent).toHaveBeenCalledTimes(1);
 
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(prepared, activeRevision, {
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(prepared, activeRevision, {
         reason: "reload",
         activate: true,
       }),
@@ -2308,7 +2307,7 @@ describe("gateway startup config secret preflight", () => {
       publishFailureAsDegraded: true,
     });
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(sourceOnly, sourceOnlyRevision, {
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(sourceOnly, sourceOnlyRevision, {
         reason: "reload",
         activate: true,
         deferStatePublication: true,
@@ -2327,7 +2326,7 @@ describe("gateway startup config secret preflight", () => {
         publishFailureAsDegraded: true,
       }),
     ).rejects.toThrow(missingSecretError.message);
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, sourceOnly);
+    activateRuntimeSecrets.publishStateTransition(sourceOnly);
     expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
       "SECRETS_RELOADER_DEGRADED",
       "SECRETS_RELOADER_RECOVERED",
@@ -2340,7 +2339,7 @@ describe("gateway startup config secret preflight", () => {
       activate: false,
     });
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(newerPrepared, newerRevision, {
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(newerPrepared, newerRevision, {
         reason: "reload",
         activate: true,
       }),
@@ -2382,17 +2381,13 @@ describe("gateway startup config secret preflight", () => {
     const revertedSnapshot = getActiveSecretsRuntimeSnapshotState()!;
     const revertedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
-        revertedSnapshot,
-        revertedRevision,
-        {
-          reason: "reload",
-          activate: true,
-          deferStatePublication: true,
-        },
-      ),
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(revertedSnapshot, revertedRevision, {
+        reason: "reload",
+        activate: true,
+        deferStatePublication: true,
+      }),
     ).resolves.toMatchObject({ sourceConfig });
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, revertedSnapshot, {
+    activateRuntimeSecrets.publishStateTransition(revertedSnapshot, {
       sourceOnly: true,
     });
     expect(emitStateEvent.mock.calls.map((call) => call[0]).slice(-2)).toEqual([
@@ -2430,13 +2425,13 @@ describe("gateway startup config secret preflight", () => {
     ).rejects.toThrow(missingSecretError.message);
     const unrelatedRevertedSnapshot = getActiveSecretsRuntimeSnapshotState()!;
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
         unrelatedRevertedSnapshot,
         getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toMatchObject({ sourceConfig });
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, unrelatedRevertedSnapshot, {
+    activateRuntimeSecrets.publishStateTransition(unrelatedRevertedSnapshot, {
       sourceOnly: true,
     });
     expect(emitStateEvent.mock.calls.map((call) => call[0]).slice(-2)).toEqual([
@@ -2454,7 +2449,7 @@ describe("gateway startup config secret preflight", () => {
     const unchangedSnapshot = getActiveSecretsRuntimeSnapshotState()!;
     const unchangedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
         unchangedSnapshot,
         unchangedRevision,
         {
@@ -2464,7 +2459,7 @@ describe("gateway startup config secret preflight", () => {
         },
       ),
     ).resolves.toMatchObject({ sourceConfig });
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, unchangedSnapshot, {
+    activateRuntimeSecrets.publishStateTransition(unchangedSnapshot, {
       sourceOnly: true,
     });
     expect(emitStateEvent.mock.calls.map((call) => call[0]).slice(-2)).toEqual([
@@ -2548,26 +2543,26 @@ describe("gateway startup config secret preflight", () => {
 
     const revertedSnapshot = preparedSnapshot(stableConfig);
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
         revertedSnapshot,
         getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toBe(revertedSnapshot);
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, revertedSnapshot, {
+    activateRuntimeSecrets.publishStateTransition(revertedSnapshot, {
       sourceOnly: true,
     });
     expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual(["SECRETS_RELOADER_DEGRADED"]);
 
     const fullyResolvedSnapshot = preparedSnapshot(stableConfig);
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
         fullyResolvedSnapshot,
         getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toBe(fullyResolvedSnapshot);
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, fullyResolvedSnapshot);
+    activateRuntimeSecrets.publishStateTransition(fullyResolvedSnapshot);
     expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
       "SECRETS_RELOADER_DEGRADED",
       "SECRETS_RELOADER_RECOVERED",
@@ -2592,13 +2587,13 @@ describe("gateway startup config secret preflight", () => {
 
     const secondRevertedSnapshot = preparedSnapshot(stableConfig);
     await expect(
-      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
         secondRevertedSnapshot,
         getActiveSecretsRuntimeSnapshotRevisionState(),
         { reason: "reload", activate: true, deferStatePublication: true },
       ),
     ).resolves.toBe(secondRevertedSnapshot);
-    publishRuntimeSecretsStateTransition(activateRuntimeSecrets, secondRevertedSnapshot, {
+    activateRuntimeSecrets.publishStateTransition(secondRevertedSnapshot, {
       sourceOnly: true,
     });
     expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
@@ -3011,7 +3006,7 @@ describe("gateway startup config secret preflight", () => {
       },
     );
     expect(prepared.authStores[0]?.store.profiles["openai:default"]).toEqual(credential);
-    await activateRuntimeSecrets.activatePreparedSnapshot?.(prepared, {
+    await activateRuntimeSecrets.activatePreparedSnapshot(prepared, {
       reason: "reload",
       activate: true,
       includeAuthStoreRefs: false,

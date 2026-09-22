@@ -1,7 +1,9 @@
 // Web search provider execution owns cancellation precedence and automatic fallback.
+import { isTrustedToolExecutionPreflightError } from "../agents/tool-result-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
+import { WebSearchProviderError } from "./runtime-error.js";
 import type { RunWebSearchResult } from "./runtime-types.js";
 
 type ExecuteWebSearchCandidatesParams = {
@@ -12,6 +14,7 @@ type ExecuteWebSearchCandidatesParams = {
   agentDir?: string;
   args: Record<string, unknown>;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   allowFallback: boolean;
 };
 
@@ -27,11 +30,11 @@ export async function executeWebSearchCandidates(
   params: ExecuteWebSearchCandidatesParams,
 ): Promise<RunWebSearchResult> {
   // Keep the selected provider's failure, including null or undefined rejections.
-  let firstFailure: { error: unknown } | undefined;
-  let sawUnavailableProvider = false;
+  let firstFailure: WebSearchProviderError | undefined;
 
   for (const candidate of params.candidates) {
     params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     try {
       const definition = candidate.createTool({
         config: params.config,
@@ -43,19 +46,23 @@ export async function executeWebSearchCandidates(
         if (!params.allowFallback) {
           throw new Error(`web_search provider "${candidate.id}" is not available.`);
         }
-        sawUnavailableProvider = true;
         continue;
       }
-      const executed = await definition.execute(params.args, { signal: params.signal });
+      const executed = await definition.execute(params.args, {
+        signal: params.signal,
+        ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
+      });
       // Cancellation wins races with provider completion or cleanup failures. Otherwise an
       // ignored signal could return stale work or trigger another provider fallback.
       params.signal?.throwIfAborted();
+      params.assertCurrent?.();
       if (params.allowFallback && isStructuredAvailabilityError(executed)) {
         // Some providers report missing credentials as structured tool output.
         // Treat that like unavailable only during auto-detected fallback.
-        firstFailure ??= {
-          error: new Error(`web_search provider "${candidate.id}" returned ${executed.error}`),
-        };
+        firstFailure ??= new WebSearchProviderError(
+          candidate.id,
+          new Error(`web_search provider "${candidate.id}" returned ${executed.error}`),
+        );
         continue;
       }
       return {
@@ -64,16 +71,16 @@ export async function executeWebSearchCandidates(
       };
     } catch (error) {
       params.signal?.throwIfAborted();
-      firstFailure ??= { error };
-      if (!params.allowFallback) {
+      params.assertCurrent?.();
+      if (isTrustedToolExecutionPreflightError(error)) {
         throw error;
+      }
+      firstFailure ??= new WebSearchProviderError(candidate.id, error);
+      if (!params.allowFallback) {
+        throw firstFailure;
       }
     }
   }
 
-  if (sawUnavailableProvider && firstFailure === undefined) {
-    throw new Error("web_search is enabled but no provider is currently available.");
-  }
-  const error = firstFailure?.error;
-  throw error instanceof Error ? error : new Error(String(error));
+  throw firstFailure ?? new Error("web_search is enabled but no provider is currently available.");
 }

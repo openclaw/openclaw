@@ -8,21 +8,60 @@ title: "Integrity, troubleshooting, and recovery"
 
 ## Integrity checks
 
-| When                                                    | Check                                                                                         |
-| ------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Every open                                              | Validate the `schema_meta` table and primary metadata row                                     |
-| First writable agent-database open per Gateway lifetime | Run full integrity, foreign-key, schema, and canonical-index checks                           |
-| Later physical writable agent-database opens            | Reuse integrity verification; recheck owner, version, schema, and canonical index definitions |
-| Before a pending migration                              | Run a full integrity, foreign-key, role, schema, and index scan                               |
-| Gateway background verifier                             | Run the full scan about once daily and log results                                            |
-| Doctor, backup verification, and compaction             | Run the full scan before accepting or rewriting the database                                  |
+| When                                        | Check                                                                                                                                           |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every open                                  | Validate the `schema_meta` table and primary metadata row                                                                                       |
+| Writable agent open and Gateway readiness   | Run full integrity and foreign-key checks after an update, unclean close, file replacement, or missing verification record                      |
+| Clean same-version agent reopen             | Recheck owner, version, schema, and canonical indexes; queue a child-process `quick_check` and foreign-key check after the Gateway is listening |
+| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan                                                                                 |
+| Gateway background verifier                 | Run the full scan about once daily and log results                                                                                              |
+| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database                                                                                    |
 
-Successful agent-database verification stays in memory across ordinary writes,
-connection closes, and cache eviction. Cleanup workers borrow that verification
-under their existing writer admission and return new verification to the Gateway
-after they finish. Reuse is bound to the agent and physical file identity; it does
-not hash database contents or create a persistent marker. A fresh Gateway process
-checks again, including after an unclean shutdown.
+The existing quarantine store keeps a reconstructible `agent_integrity_verifications`
+record: canonical database path, device, inode, OpenClaw version, verification time, and
+integer `clean_close`. It does not hash database contents. Agent lease admission
+durably clears cleanliness before opening; only the last graceful lease release
+can restore it after a successful WAL checkpoint and native close. Forced worker
+exit, failed cleanup, or uncertain ownership invalidates the record. This uses
+the existing single shared-state lease owner; independent Gateways must not share
+mutable agent databases across state directories.
+
+Within a live lifecycle, an admitted owner can still lend its revocable,
+file-bound runtime proof to another handle. This also requires a matching
+verification record and a live lease; deleted or mismatched records force a
+full check even when runtime proof remains in memory.
+Cleanup workers and native agent execution workers borrow that proof under their
+existing writer admission. Cleanup workers return new verification to the Gateway
+after they finish.
+Reclamation retains one Worker connection per database, so alternating agents
+reuse their admitted handles. Requests still share the archive FIFO. Each Worker
+retires after 30 idle minutes, on database close, or when idle under critical
+memory pressure; failed cleanup retains its original lease until settlement.
+Integrity revocation, schema checks, and update behavior are unchanged.
+Native execution workers can also borrow retained host proof after the host handle
+closes or is evicted. The receiving opener rechecks the physical file identity and
+shared revocation cell; a closed handle alone does not discard valid proof.
+When native execution establishes the first runtime proof, it returns that proof
+through its existing admission so later cleanup workers can reuse it without a
+host SQLite open. The host accepts it only for the admitted physical file and
+unchanged validation state; revocation during the open rejects the handoff.
+
+Cached opens, including later opens after startup, queue checks in the existing
+Gateway verifier. Background success is logged; only the full-check lease owner
+publishes verification metadata. Confirmed corruption uses the existing quarantine
+path and prevents the next open. Ordinary writes do not invalidate the file identity. Same-inode damage
+introduced after a clean close can therefore be detected after readiness by the
+quick check, SQLite operations, the daily full verifier, or explicit Doctor.
+`openclaw doctor` retains full checks and `doctor --fix` clears verification
+metadata with quarantine. A failed durable dirty-marker write refuses that open
+rather than leaving stale clean proof reusable after a crash.
+
+The table is additive in the quarantine store; agent and shared-state schema
+versions do not change. An update to a different OpenClaw version runs the full
+gate, and older builds ignore the new table and retain their full checks. Pending
+migrations, index repairs, shared-state readiness, and explicit copied-file
+preflight still perform their existing full checks. Snapshot-based agent
+readiness also conservatively retains its full gate.
 
 Startup certifies each database without a canonical-validation receipt once,
 including an empty session source with an empty pending-validation queue.
@@ -34,17 +73,16 @@ On later boots, unchanged empty and populated stores reuse that first proof and 
 the pending queue; ordinary canonical writes still mark changed rows for
 validation. Exact invalidation triggers remain required. Copies and replaced
 files need their own first proof, even when their imported pending queue is empty.
-The receipt does not certify physical integrity, change the first-writable-open
-checks above, or override explicit process-local revocation. Older readers can
+The receipt does not certify physical integrity, replace the integrity policy
+above, or override explicit process-local revocation. Older readers can
 ignore the nullable column; backup and rollback retain its existing row lifetime.
 
-Database replacement, explicit disposal, registry invalidation, quarantine, and
-failed admission discard remembered verification. Pending migrations still run
-full checks, and canonical index repairs verify their result before committing.
-Damage introduced into the same file after verification is detected by SQLite
-operations, the daily verifier, or explicit maintenance instead of a full scan
-on each reopen. Schema, ownership, and current write authority are never borrowed
-from the integrity result.
+Database replacement, quarantine, and failed admission discard applicable
+verification. Doctor maintenance discards remembered runtime verification after
+draining agent connections and before raw maintenance can run. Pending migrations
+still run full checks, and canonical index
+repairs verify their result before committing. Schema, ownership, and current
+write authority are never borrowed from the integrity result.
 
 Shared-state runtime opens and automatic startup preparation converge supported
 schema additions and preserve atomic upgrades from older schema versions. A
@@ -59,7 +97,7 @@ Shared-state integrity, schema, version, and ownership checks remain in place.
 
 Schema compatibility preflight can read agent schema headers without a full integrity scan. For ordinary rollback-mode agent databases and complete WAL families, a read-only child reads the schema version and optional writer build in one fresh SQLite transaction, including committed WAL changes, without copying unrelated database contents. Its source-reader lease stays held through native close; cancellation and timeout wait for child closure. Parent-side diagnostics do not open or close the live agent file, preserving the parent's SQLite locks. As with the previous online-backup reader, native SQLite may update SHM read marks or rebuild existing SHM after a quiescent family reopens; the database and WAL contents remain unchanged. The Gateway carries successful header facts from admission to its later compatibility preflight only while the database, WAL, and rollback-journal files are unchanged. Changed or uncertain files are inspected again. Full readiness and writable admission retain their existing validation and fresh authority checks.
 
-Private snapshots remain necessary inside owner-held source-exclusion or canonical-mutation scopes, for incomplete WAL families whose inspection would create source sidecars, and for rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. Shared-state preflight is unchanged. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
+Private snapshots remain necessary inside owner-held source-exclusion scopes, for incomplete WAL families whose inspection would create source sidecars, and for rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. Shared-state preflight is unchanged. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
 
 Concurrent asynchronous requests for the same physical live database share one
 snapshot operation. When the canonical runtime already owns an open SQLite
@@ -68,12 +106,40 @@ copying the live database family. Each caller retains an independent cleanup
 lease, and cancellation detaches only that caller while the shared operation and
 remaining leases keep their original owner and cleanup authority.
 
-Unavoidable raw copies first sample the main database and WAL for a short stable
-interval. A hard admission deadline then allows copying to proceed under sustained
-write load instead of waiting indefinitely. Source-change retries use bounded
-cancellable backoff without restarting that quiescence deadline. Snapshot debug
-telemetry contains only bounded operational metadata: operation and owner labels,
-main and WAL sizes, copied bytes, attempt, wait and duration, and outcome.
+Ordinary observed config loads, including runtime reload preparation, read pending
+plugin migration obligations through the existing live shared-state reader or
+worker rather than copying the database and WAL. Each read sees current committed
+rows; it does not cache obligations or grant publication authority. Unobserved
+inspection and inherited artifact-preserving scopes retain private snapshots.
+Migration publication still rechecks the current generation under its coordinator.
+
+Runtime config publication, including model-catalog worker generations, also reads
+Claw consent provenance through the live shared-state reader instead of copying
+the database and WAL for every generation. Each publication refreshes committed
+provenance; config-digest checks, failure handling, and publication admission remain
+unchanged. Explicit provenance inspection and inherited artifact-preserving scopes
+still use private snapshots. Neither optimization changes schemas, stored records,
+retention, or update migrations.
+
+Live snapshots use SQLite's online-backup owner and a read transaction to pin
+committed pages while writers continue. Native readers may update existing SHM
+read marks, so artifact-preserving planning and Doctor scopes use raw copies
+instead. A WAL copy captures main first, then a bounded WAL prefix, and verifies
+both within the same pinned WAL generation. Appended frames are allowed; resets,
+replacements, and changes to captured bytes require another attempt. SQLite
+interprets committed frames in the private copy. Source SHM stays untouched.
+Only raw copies reuse a scoped IPC child; native backups remain one-shot to avoid
+Node 26 completion stalls with persistent IPC. Incomplete WAL families, rollback
+crash residue, and owner-excluded sources also retain private copying and recovery.
+Existing WAL and rollback-journal files can coexist without write activity;
+inspection copies and verifies both before SQLite recovers the private family.
+It does not discard committed WAL pages, repair the source, or change plan identity.
+Snapshot debug telemetry reports operation and owner,
+main and WAL sizes, copied bytes, attempt, duration, and outcome.
+
+Synchronous CLI snapshots also pause between source-change retries, so a brief
+write burst does not exhaust all ten attempts immediately. These retries only
+repeat private snapshot preparation; they do not resend Gateway commands.
 
 Private snapshot files remain temporary artifacts: the creator registers cleanup
 before copying and publishes the finished copy by rename. Graceful shutdown
@@ -94,7 +160,10 @@ Reclamation runs in a SQLite worker, keeping directory traversal and removal off
 the Gateway event loop, and logs the copied-data byte count. Concurrent cleanup
 requests for one root share a pass. Reclamation requires verifiable inactive
 owner and worker tokens, applies a 15-minute grace period to current staging
-directories, and stops at a 512 MiB copied-byte budget per pass. Active, recent, over-budget, or
+directories, and uses a 512 MiB copied-byte budget per pass. The first reclaimed
+directory may exceed that budget, after the same ownership and age checks; the
+pass then stops, so oversized interrupted copies can make progress one at a time.
+Active, recent, over-budget, or
 structurally unknown directories remain untouched. Shutdown and the existing
 reclamation deadline stop at directory boundaries, after removal and token
 release settle together. Reclamation worker failures warn without preventing
@@ -130,6 +199,15 @@ The shared cache targets 64 handles, but live borrows, synchronous transactions,
 Concurrent runs normally share the cached writer for an agent database on the main thread. Workers and diagnostics can open additional connections to the same file; the connection count is operation-dependent. Canonical agent connections set SQLite's busy timeout before use. A timeout cannot resolve a worker holding a write transaction while waiting for a blocked main thread: synchronous transcript appends do not join the asynchronous session write queue. Transaction callbacks must finish synchronously, and a competing writer must not depend on the main event loop to release its lock.
 
 Periodic agent maintenance uses passive WAL checkpoints and bounded incremental vacuum. Session reclamation keeps deletion on a separate worker write connection and uses a passive checkpoint and bounded vacuum after commit; long deletion transactions can still contend with other writers. Full compaction belongs to offline Doctor maintenance. Run errors naming the Gateway state database retain a safe SQLite diagnosis; see [storage failure troubleshooting](/gateway/troubleshooting#agent-run-failed-with-a-storage-error).
+
+After an admitted periodic PASSIVE checkpoint completes, the WAL owner makes one
+zero-lock-wait TRUNCATE attempt if the observed WAL still exceeds its existing
+64 MiB recycling limit. A concurrent reader or writer can defer recycling to the
+next maintenance pass. The connection's busy timeout is restored afterward, and
+the existing checkpoint health records the result. This does not change
+durability, transaction contents, reader lifetimes, schemas, or history retention;
+it never unlinks a live WAL. Upgrades need no state migration, and older binaries
+can continue reading the same databases.
 
 Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
 
@@ -169,13 +247,13 @@ A 2 GiB database gets 2,860 seconds, and workers finish as soon as their work co
 
 Update schema inspection and candidate snapshots use this same allowance as an inactivity watchdog. Larger caller budgets remain available, and observed private-copy progress renews the deadline. See [How updates run](/cli/update/how-updates-run).
 
-The synchronous byte-neutral snapshot strategy is for small or quiescent databases. Inspections of a live agent database, including memory-core readiness, use the asynchronous online-backup worker.
+Live snapshots use the online-backup worker. Artifact-preserving scopes and synchronous snapshot copies keep source bytes unchanged, including WAL coordination state.
 
 Full startup readiness checks agent ownership, integrity, foreign keys, and schema
 in one fresh read-only transaction in a disposable child. Complete WAL families
 and rollback-mode databases without journals do not need a full private copy.
-Empty files, incomplete WAL families, rollback recovery, and source-exclusion or
-canonical-mutation scopes retain private snapshot inspection. The parent waits
+Empty files, incomplete WAL families, rollback recovery, and source-exclusion
+scopes retain private snapshot inspection. The parent waits
 for native close before accepting the result or releasing its scope. The source
 database and WAL remain unchanged; native WAL readers may update SHM read marks.
 Admission before the migration lease and the fresh check before migration writes
@@ -263,6 +341,15 @@ filesystem probes: each missing suffix permits up to 8,192 UTF-16 code units, wi
 at most 32,768 forward filesystem observations. Simplify unusually long paths if
 those limits are exceeded. Incomplete probe cleanup never becomes a cached
 path-identity result.
+
+### A mount probe times out while opening a local database
+
+On macOS, native filesystem inspection can confirm APFS after mount enumeration
+times out. For a canonical database directory, OpenClaw then keeps WAL enabled
+instead of attempting a rollback-mode transition that conflicts with other open
+connections. Unknown filesystems, failed native inspection, and aliased paths
+retain the conservative rollback policy. The existing rules for network and
+cross-VM filesystems, including the refusal to write through SSHFS, still apply.
 
 ### A legacy Workshop index prevents shared-state reads
 

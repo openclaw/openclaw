@@ -11,7 +11,6 @@ import {
 } from "../../config/sessions/conversation-delivery-store.js";
 import {
   registerConversationAddresses,
-  resolveConversation,
   resolveConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "../../config/sessions/conversation-route-fingerprint.js";
@@ -28,23 +27,21 @@ import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginHookHandlerMap } from "../../plugins/types.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
-import {
-  defaultConversationDeliveryDeps,
-  type ConversationDeliveryDeps,
-} from "./conversation-delivery.js";
+import { getDeliveryQueueEntryOwnersInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { deliverOutboundPayloadsInternal } from "./deliver.js";
 import {
   captureConversationDeliveryTarget,
   markDurableDeliveryQueued,
 } from "./delivery-completion.js";
+import { holdEnqueueReply } from "./delivery-queue-enqueue.worker.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { drainPendingDeliveriesCore } from "./delivery-queue-recovery.js";
 import {
   enqueueDeliveryOnce,
-  findDeliveryIntentOwner,
   loadPendingDelivery,
   loadUnfinishedDelivery,
 } from "./delivery-queue-storage.js";
@@ -53,6 +50,7 @@ import {
   installDeliveryQueueTmpDirHooks,
   readQueuedEntries,
 } from "./delivery-queue.test-helpers.js";
+import * as messageActionRunner from "./message-action-runner.js";
 
 describe("conversation completion through the real delivery queue", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
@@ -195,7 +193,11 @@ describe("conversation completion through the real delivery queue", () => {
       });
       const registry = installSender(sendText);
       const readState = () => {
-        const owner = findDeliveryIntentOwner(queueId, stateDir);
+        const owner = getDeliveryQueueEntryOwnersInDatabase(
+          openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+          [OUTBOUND_DELIVERY_QUEUE_NAME],
+          queueId,
+        ).get(OUTBOUND_DELIVERY_QUEUE_NAME);
         return {
           queueStatus: owner?.status,
           settlementPending: owner?.settlementPending === true,
@@ -452,41 +454,46 @@ describe("conversation completion through the real delivery queue", () => {
     installSender(sendText);
     let actionFailed = false;
     let actionError: unknown;
-    const runMessageAction = vi.fn<ConversationDeliveryDeps["runMessageAction"]>(async (input) => {
-      if (!input.deliveryIntentId) {
-        throw new Error("Gateway conversation send did not supply its queue intent");
-      }
-      const writer = holdConversationWriterForTest(scope);
-      custodyWriter = writer;
-      started.resolve({ writer, queueId: input.deliveryIntentId });
-      await writer.entered;
-      if (cleanupStarted) {
-        await writer.release();
-      }
-      // Gateway has created the operation and captured its target; every real
-      // action/send adapter below must retain those facts through its awaits.
-      vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
-      try {
-        return await defaultConversationDeliveryDeps.runMessageAction(input);
-      } catch (error) {
-        actionFailed = true;
-        actionError = error;
-        throw error;
-      }
+    const runMessageAction = messageActionRunner.runMessageAction;
+    const action = vi
+      .spyOn(messageActionRunner, "runMessageAction")
+      .mockImplementation(async (input) => {
+        if (!input.deliveryIntentId) {
+          throw new Error("Gateway conversation send did not supply its queue intent");
+        }
+        const writer = holdConversationWriterForTest(scope);
+        custodyWriter = writer;
+        started.resolve({ writer, queueId: input.deliveryIntentId });
+        await writer.entered;
+        if (cleanupStarted) {
+          await writer.release();
+        }
+        // Gateway has created the operation and captured its target; every real
+        // action/send adapter below must retain those facts through its awaits.
+        vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
+        try {
+          return await runMessageAction(input);
+        } catch (error) {
+          actionFailed = true;
+          actionError = error;
+          throw error;
+        }
+      });
+    onTestFinished(() => action.mockRestore());
+    const enqueueReply = holdEnqueueReply();
+    const enqueueCommitted = enqueueReply.held.then(() => {
+      enqueueReply.release();
     });
     let settled = false;
-    const delivery = runGatewayConversationSend(
-      {
-        config,
-        readCurrentConfig: () => config,
-        agentId: "main",
-        senderIsOwner: true,
-        operationId,
-        conversationRef: conversation.conversationRef,
-        message: "synthetic conversation",
-      },
-      { ...defaultConversationDeliveryDeps, resolveConversation, runMessageAction },
-    ).finally(() => {
+    const delivery = runGatewayConversationSend({
+      config,
+      readCurrentConfig: () => config,
+      agentId: "main",
+      senderIsOwner: true,
+      operationId,
+      conversationRef: conversation.conversationRef,
+      message: "synthetic conversation",
+    }).finally(() => {
       settled = true;
     });
     const outcome = delivery.then(
@@ -504,6 +511,8 @@ describe("conversation completion through the real delivery queue", () => {
       }
       const { queueId } = custody;
       await custody.writer.entered;
+      // Join the real committed enqueue before checking custody behind the held writer.
+      await Promise.race([enqueueCommitted, outcome]);
       await vi.waitFor(() =>
         expect(
           readQueuedEntries(originalRoot).length > 0 ||
@@ -557,7 +566,7 @@ describe("conversation completion through the real delivery queue", () => {
       expect(await outcome).toMatchObject({
         value: { status: "sent", messageId: "reef-delivered", queueId },
       });
-      expect(runMessageAction).toHaveBeenCalledOnce();
+      expect(action).toHaveBeenCalledOnce();
       expect(sendText).toHaveBeenCalledOnce();
       expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
         status: "sent",
@@ -569,10 +578,12 @@ describe("conversation completion through the real delivery queue", () => {
       expect(readQueuedEntries(replacementRoot)).toEqual([]);
     } finally {
       cleanupStarted = true;
+      enqueueReply.release();
       try {
         await Promise.all([custodyWriter?.release(), settlementWriter?.release()]);
       } finally {
         await outcome;
+        enqueueReply.restore();
       }
     }
   });

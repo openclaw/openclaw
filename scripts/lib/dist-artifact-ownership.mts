@@ -119,10 +119,13 @@ export const withDistArtifactOwnership: WithDistArtifactOwnership = async (rootD
  * An owning orchestrator calls the same implementation in a separately sized Node
  * process. It joins that child without re-entering the standalone CLI's lock.
  */
-export function distArtifactEntryArgs(script: string, args: string[] = []) {
+export function distArtifactEntryArgs(
+  script: string,
+  args: string[] = [],
+  { native = false }: { native?: boolean } = {},
+) {
   return [
-    "--import",
-    new URL("../tsx.mjs", import.meta.url).href,
+    ...(native ? [] : ["--import", new URL("../tsx.mjs", import.meta.url).href]),
     fileURLToPath(import.meta.url),
     pathToFileURL(path.resolve(script)).href,
     ...args,

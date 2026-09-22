@@ -61,7 +61,7 @@ describe("update run response races", () => {
       let admitted = false;
       const request = vi.fn<RequestFn>(async (method, _params, options) => {
         if (method === "update.run") {
-          options?.onSent?.();
+          options?.onSent?.("update-run-request");
           admitted = true;
           return admission.promise;
         }
@@ -228,7 +228,7 @@ describe("update run response races", () => {
       let requested = false;
       const request = vi.fn<RequestFn>(async (method, _params, options) => {
         if (method === "update.run") {
-          options?.onSent?.();
+          options?.onSent?.("update-run-request");
           requested = true;
           return admission.promise;
         }

@@ -66,7 +66,7 @@ export function preserveExpandedCatalogHost(
     return freshHost;
   }
   const { sessions: _freshSessions, nextCursor: _freshNextCursor, ...freshDetails } = freshHost;
-  const { nextCursor, ...previousDetails } = previous;
+  const { nextCursor, pending: _pending, ...previousDetails } = previous;
   return {
     ...previousDetails,
     ...freshDetails,
@@ -112,7 +112,12 @@ export function mergeSessionCatalogPage(params: {
     } else {
       advancedHostIds.push(host.hostId);
     }
-    const { nextCursor: _currentCursor, error: _currentError, ...currentHost } = host;
+    const {
+      nextCursor: _currentCursor,
+      error: _currentError,
+      pending: _pending,
+      ...currentHost
+    } = host;
     return {
       ...currentHost,
       ...pageHostDetails,
@@ -154,7 +159,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
         catalog.hosts.map(async (host) => {
           const pageDepth =
             params.pageDepths.get(sessionCatalogHostKey(catalog.id, host.hostId)) ?? 0;
-          if (pageDepth === 0) {
+          if (pageDepth === 0 || host.pending) {
             return host;
           }
           const previous = previousHosts.get(host.hostId);

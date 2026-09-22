@@ -751,10 +751,10 @@ describe("xAI OAuth", () => {
         accountId: "acct-1",
         access: expect.any(String),
       });
-      expect(result.defaultModel).toBe("xai/grok-4.6");
+      expect(result.defaultModel).toBe("xai/grok-4.7");
       expect(result.configPatch?.agents?.defaults?.model).toEqual(
         setup === "fresh" || credentialOnly
-          ? { primary: "xai/grok-4.6" }
+          ? { primary: "xai/grok-4.7" }
           : { primary: "other/selected", fallbacks: ["other/fallback"] },
       );
       expect(result.configPatch?.models?.providers?.xai).toMatchObject({
@@ -788,7 +788,7 @@ describe("xAI OAuth", () => {
       if (setup === "api") {
         expect(savedProvider?.request?.allowPrivateNetwork).toBe(false);
       }
-      expect(result.configPatch?.agents?.defaults?.models?.["xai/grok-4.6"]?.alias).toBe("Grok");
+      expect(result.configPatch?.agents?.defaults?.models?.["xai/grok-4.7"]?.alias).toBe("Grok");
       expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
       expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
     },

@@ -7,6 +7,7 @@ import {
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
+import { withInstallActivity } from "../infra/install-progress.js";
 import {
   buildNpmResolutionFields,
   formatNpmCommandFailureOutput,
@@ -73,6 +74,10 @@ import {
   auditDeclaredOpenClawHostDependency,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
+import {
+  findMissingRequiredPluginDependencies,
+  normalizePluginDependencySpecs,
+} from "./status-dependencies-core.js";
 
 export async function installPluginFromManagedNpmRoot(
   params: InstallSafetyOverrides & {
@@ -507,6 +512,18 @@ export async function installPluginFromManagedNpmRoot(
       };
     }
 
+    const missingRequired = await findMissingRequiredPluginDependencies({
+      rootDir: installRoot,
+      dependencyRootDir: npmRoot,
+      ...normalizePluginDependencySpecs(packageManifestResult.manifest ?? {}),
+    });
+    if (missingRequired.length > 0) {
+      return {
+        ok: false,
+        error: `npm install reported success but left required dependencies missing for ${params.packageName}: ${missingRequired.join(", ")}`,
+      };
+    }
+
     const newRootPackageDirs = [...(await listManagedNpmRootPackageNames(npmRoot))]
       .map((packageName) => resolveManagedNpmRootPackageDir(npmRoot, packageName))
       .toSorted((left, right) => left.localeCompare(right));
@@ -591,7 +608,9 @@ export async function installPluginFromManagedNpmRoot(
         afterCopy: (stageDir) => copyManagedNpmProjectInputs({ npmRoot: targetNpmRoot, stageDir }),
         afterInstall: async (stageDir) => {
           try {
-            staged.result = await runManagedNpmInstall(stageDir);
+            staged.result = await withInstallActivity(logger, "dependencies", () =>
+              runManagedNpmInstall(stageDir),
+            );
             return staged.result;
           } catch (error) {
             // The directory owner cleans its stage before the original consent/policy error escapes.

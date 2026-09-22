@@ -150,6 +150,13 @@ When the existing host config is valid but the newly installed plugin's own conf
 
 Managed npm installs prepare the package and its dependencies in a private staging directory. Integrity and platform-package checks, install policy, and artifact consent finish before the installed directory is replaced. Rejection or cancellation before publication leaves the previous project unchanged. Upgrades retain generation paths that running plugins may still need for later imports.
 
+When a managed npm plugin lacks package metadata or required dependencies, status
+and management report **install incomplete**. The finding and Doctor give
+`openclaw plugins install <package-selector> --force`, using the recorded package
+selector when available. A complete plugin can still require consent for
+capabilities you have not accepted. Add
+`--accept-capabilities` only after reviewing that consent request.
+
 If installation ownership ends during a backup copy, cleanup stops and preserves the complete backup and remaining original files. Failed restoration reports the recovery path. Keep those files until you have checked the current install; an older transaction cannot restore over a newer install or use a substituted backup.
 
 For recognized npm project corruption or incomplete install metadata, OpenClaw quarantines the affected `node_modules`, lockfile, and shrinkwrap files outside the staging directory and attempts one rebuild. The reported quarantine path remains available after failure; failed recovery leaves the previous project unchanged.

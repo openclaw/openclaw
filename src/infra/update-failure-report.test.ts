@@ -19,7 +19,7 @@ import {
   mockFallbackIssue,
   mockFallbackAfterIssueCreateNoStart,
 } from "./update-failure-report.test-support.js";
-import type { UpdateRunResult } from "./update-runner.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

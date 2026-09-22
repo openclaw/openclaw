@@ -1,4 +1,7 @@
 /** Channel Stop initiates native and ACP cancellation independently of either drain. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "../../gateway/server-methods/chat.abort-registry.test-support.js";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -25,7 +28,6 @@ import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/s
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { useChatAbortRegistryFixture } from "../../gateway/server-methods/chat.abort-registry.test-support.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
   captureActivePluginRegistrySnapshot,

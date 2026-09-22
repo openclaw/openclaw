@@ -6,9 +6,9 @@ import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-prefli
 
 it("bounds literal-tilde script reads when the file grows after inspection", async () => {
   await withTempDir("openclaw-exec-preflight-growth-", async (tmp) => {
-    const scriptPath = path.join(tmp, "~", "growing.js");
+    const scriptPath = path.join(tmp, "~", "growing.py");
     await fs.mkdir(path.dirname(scriptPath));
-    await fs.writeFile(scriptPath, 'console.log("ok");');
+    await fs.writeFile(scriptPath, 'print("ok")');
     const maxBytes = 512 * 1024;
     const growingContent = Buffer.alloc(maxBytes * 2, 0x62);
     growingContent[maxBytes + 1] = 0x61;
@@ -36,7 +36,7 @@ it("bounds literal-tilde script reads when the file grows after inspection", asy
     });
     try {
       await validateScriptFileForShellBleed({
-        command: 'node "~/growing.js"',
+        command: 'python3 "~/growing.py"',
         workdir: tmp,
       });
       expect(unreadByte).toBe(0x61);

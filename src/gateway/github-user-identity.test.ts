@@ -510,7 +510,7 @@ describe("authenticated GitHub identity sync", () => {
       }),
     },
     {
-      name: "non-GitHub IdP",
+      name: "unsupported IdP",
       access: githubResponse({
         id: 58493,
         email: "ada@example.com",

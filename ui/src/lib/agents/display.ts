@@ -51,6 +51,7 @@ type AgentConfigEntry = {
   workspace?: string;
   agentDir?: string;
   model?: unknown;
+  decisionModel?: string;
   models?: Record<string, { alias?: unknown }>;
   agentRuntime?: unknown;
   skills?: string[];
@@ -68,6 +69,7 @@ type ConfigSnapshot = {
     defaults?: {
       workspace?: string;
       model?: unknown;
+      decisionModel?: string;
       models?: Record<string, { alias?: unknown }>;
       skills?: string[];
     };

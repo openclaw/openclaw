@@ -813,7 +813,7 @@ describe("AgentSession compaction", () => {
         }
         const contextTokens = estimateContextTokens(session.messages).tokens;
         expect(contextTokens).toBeGreaterThan(0);
-        expect(committed).toMatchObject({ summary });
+        expect(committed).toMatchObject({ summary, tokensAfter: contextTokens });
         expect(committed.id).not.toBe(oldCompactionId);
         expect.soft(reportedCompactionId).toBe(committed.id);
         expect.soft(replacementTokens).toEqual([contextTokens]);

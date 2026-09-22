@@ -25,6 +25,7 @@ export type CiTestTimings = {
   };
   repoE2eFileSeconds: Record<string, number>;
   source: string;
+  toolingFileSeconds: { blacksmith: Record<string, number>; github: Record<string, number> };
   uiE2e: { fileSeconds: Record<string, number>; perFileOverheadSeconds: number };
   updatedAt: string;
   version: 1;
@@ -111,6 +112,7 @@ function isCiTestTimings(value: unknown): value is CiTestTimings {
       "runtimePlacementTimings",
       "repoE2eFileSeconds",
       "source",
+      "toolingFileSeconds",
       "uiE2e",
       "updatedAt",
       "version",
@@ -123,6 +125,7 @@ function isCiTestTimings(value: unknown): value is CiTestTimings {
     runtimePlacementTimings,
     repoE2eFileSeconds,
     source,
+    toolingFileSeconds,
     uiE2e,
     updatedAt,
     version,
@@ -144,6 +147,10 @@ function isCiTestTimings(value: unknown): value is CiTestTimings {
     uiE2e.perFileOverheadSeconds <= 5 &&
     isSecondsMap(uiE2e.fileSeconds) &&
     isSecondsMap(repoE2eFileSeconds) &&
+    isRecord(toolingFileSeconds) &&
+    hasExactKeys(toolingFileSeconds, ["blacksmith", "github"]) &&
+    isSecondsMap(toolingFileSeconds.blacksmith) &&
+    isSecondsMap(toolingFileSeconds.github) &&
     isRecord(compactGroupSeconds) &&
     hasExactKeys(compactGroupSeconds, ["blacksmith", "github"]) &&
     isSecondsMap(compactGroupSeconds.blacksmith) &&

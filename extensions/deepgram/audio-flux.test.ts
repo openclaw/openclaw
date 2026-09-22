@@ -20,8 +20,8 @@ const runCommandBuffered = vi.hoisted(() =>
 );
 const prepareWebSocket = vi.hoisted(() => vi.fn<() => Promise<void>>());
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+vi.mock("openclaw/plugin-sdk/media-ffmpeg", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-ffmpeg")>()),
   resolveFfmpegBin: () => "/usr/bin/ffmpeg",
 }));
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runCommandBuffered }));

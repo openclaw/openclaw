@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { afterEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import { defaultRuntime } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { registerConfigCli } from "./config-cli.js";
@@ -83,6 +84,9 @@ export function useConfigCliIntegrationHarness() {
   ): Promise<void> {
     const tempDir = tempDirs.make(prefix);
     const configPath = path.join(tempDir, "openclaw.json");
+    const tempRoot = vi
+      .spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir")
+      .mockReturnValue(tempDirs.make(`${prefix}coordinator-`));
     const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
     try {
       fs.writeFileSync(configPath, raw, "utf8");
@@ -92,6 +96,7 @@ export function useConfigCliIntegrationHarness() {
       clearRuntimeConfigSnapshot();
       await run({ configPath, tempDir });
     } finally {
+      tempRoot.mockRestore();
       envSnapshot.restore();
       clearConfigCache();
       clearRuntimeConfigSnapshot();

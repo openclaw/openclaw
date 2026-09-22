@@ -100,7 +100,7 @@ describe("session swarm activity", () => {
       const revisionBeforePhase = sessions.canonicalListRevision;
       emitChanged(note("phase", "Plan"));
       expect(sessions.canonicalListRevision).toBe(revisionBeforePhase);
-      await vi.advanceTimersByTimeAsync(199);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(request).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(2);
@@ -117,7 +117,7 @@ describe("session swarm activity", () => {
         },
       ];
       emitChanged(child("agent:main:subagent:planner", 3));
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(request).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(1);
       expect(sessions.state.result?.sessions.some((row) => row.key.endsWith(":planner"))).toBe(
@@ -130,7 +130,7 @@ describe("session swarm activity", () => {
       expect(displayRows()?.find((row) => row.key.endsWith(":planner"))?.swarmPhase).toBe("Plan");
 
       emitChanged(note("log", "Planning is complete."));
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(request).toHaveBeenCalledTimes(3);
       await vi.advanceTimersByTimeAsync(1);
       expect(
@@ -152,7 +152,7 @@ describe("session swarm activity", () => {
         },
       ];
       emitChanged(child("agent:main:subagent:builder", 4));
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(request).toHaveBeenCalledTimes(4);
       await vi.advanceTimersByTimeAsync(1);
       expect(sessions.state.result?.sessions.some((row) => row.key.endsWith(":builder"))).toBe(
