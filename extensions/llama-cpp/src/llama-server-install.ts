@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs, { type BigIntStats } from "node:fs";
 import fsp from "node:fs/promises";
@@ -16,6 +15,7 @@ import {
   type LlamaServerArchive,
   type LlamaServerAsset,
 } from "./llama-server-assets.js";
+import { listLlamaServerDevices, runLlamaServerCommand } from "./llama-server-command.js";
 import {
   extractLlamaServerArchive,
   extractLlamaServerDependencyArchive,
@@ -231,28 +231,6 @@ export async function downloadVerifiedFile(params: {
   }
 }
 
-async function runServerCommand(
-  command: string,
-  args: string[],
-  signal?: AbortSignal,
-  timeoutMs = VERSION_TIMEOUT_MS,
-): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    execFile(
-      command,
-      args,
-      { timeout: timeoutMs, signal, windowsHide: true },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(new Error(error.message, { cause: error }));
-        } else {
-          resolve(`${stdout}${stderr}`.trim());
-        }
-      },
-    );
-  });
-}
-
 function formatRuntimeDependencyError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error);
   if (process.platform === "linux") {
@@ -278,7 +256,7 @@ async function validateInstalledServer(
 ): Promise<void> {
   let version: string;
   try {
-    version = await runServerCommand(command, ["--version"], signal, versionTimeoutMs);
+    version = await runLlamaServerCommand(command, ["--version"], signal, versionTimeoutMs);
   } catch (error) {
     signal?.throwIfAborted();
     throw formatRuntimeDependencyError(error);
@@ -295,8 +273,8 @@ async function validateInstalledServer(
   if (asset.backend === "cuda") {
     // --version succeeds even if a dynamically loaded CUDA backend fails. Device
     // enumeration must prove CUDA is usable before this installation is published.
-    const devices = await runServerCommand(command, ["--list-devices"], signal);
-    if (!/^\s*CUDA\d+: .+\(\d+ MiB, \d+ MiB free\)$/mu.test(devices)) {
+    const devices = await listLlamaServerDevices({ command, signal });
+    if (!devices.some((device) => /^CUDA\d+$/u.test(device.id))) {
       throw new Error(
         "The verified llama-server could not initialize an NVIDIA CUDA device. Update the NVIDIA driver and rerun setup, or configure a compatible llama-server manually. CPU fallback was not activated.",
       );
@@ -335,6 +313,7 @@ async function installLlamaServer(
       url: assetUrl(asset),
       destination: archivePath,
       expectedSha256: asset.sha256,
+      expectedSize: asset.sizeBytes,
       signal: options.signal,
       onProgress: options.onProgress,
     });
@@ -353,6 +332,7 @@ async function installLlamaServer(
         url: assetUrl(dependency),
         destination: dependencyArchive,
         expectedSha256: dependency.sha256,
+        expectedSize: dependency.sizeBytes,
         signal: options.signal,
         onProgress: options.onProgress,
       });

@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type {
   OpenClawPluginApi,
   ProviderAuthMethodNonInteractiveContext,
@@ -47,15 +48,22 @@ function wrapLlamaCppStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefi
     return undefined;
   }
   return async (...args: Parameters<typeof inner>) => {
+    const signal = args[2]?.signal;
+    signal?.throwIfAborted();
     await ensureManagedLlamaServerForChat({
       provider: providerConfig,
       model: selectedModel,
+      ...(signal ? { signal } : {}),
     });
+    signal?.throwIfAborted();
     return inner(...args);
   };
 }
 
-export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
+export function registerLlamaCppProvider(
+  api: OpenClawPluginApi,
+  mediaProvider: MediaUnderstandingProvider,
+): void {
   api.registerProvider({
     id: LLAMA_CPP_PROVIDER_ID,
     label: LLAMA_CPP_PROVIDER_LABEL,
@@ -105,6 +113,16 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
         validateNonInteractive: validateLlamaServerNonInteractive,
         runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
           await configureLlamaServerNonInteractive(ctx),
+      },
+      {
+        id: "local-media",
+        label: "Managed local OCR and vision",
+        hint: "Recommend, install and verify local image models for this Gateway",
+        kind: "custom",
+        run: async (ctx) => {
+          const { runLlamaCppMediaSetup } = await import("./media-setup.js");
+          return await runLlamaCppMediaSetup(ctx, mediaProvider);
+        },
       },
     ],
     catalog: {
