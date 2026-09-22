@@ -115,7 +115,7 @@ describe("session selection hydration", () => {
           event: "sessions.changed",
           payload: { agentId: "writer", reason: "create" },
         });
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         if (recover) {
           subscription.resolve({ subscribed: false });
           await vi.advanceTimersByTimeAsync(1_000);

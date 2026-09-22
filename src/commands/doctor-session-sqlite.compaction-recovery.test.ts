@@ -15,10 +15,8 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import {
-  readOpenClawDatabaseQuarantine,
-  recordOpenClawDatabaseQuarantine,
-} from "../state/openclaw-quarantine-store.js";
+import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import { readPersistedQuarantineRow } from "../state/openclaw-quarantine-store.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createSessionSqliteMigrationRun } from "./doctor-session-sqlite-migration-run.js";
 import {
@@ -63,7 +61,7 @@ describe("runDoctorSessionSqlite", () => {
       expect(report.totals.issues).toBe(0);
       expect(report.targets[0]?.corruptRecovery).toBeUndefined();
       expect(fs.existsSync(sqlitePath)).toBe(true);
-      expect(readOpenClawDatabaseQuarantine(sqlitePath, { env: store.env })).toBeUndefined();
+      expect(readPersistedQuarantineRow(sqlitePath, { env: store.env })).toBeUndefined();
 
       const sqlite = nodeSqlite.requireNodeSqlite();
       const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
@@ -107,7 +105,7 @@ describe("runDoctorSessionSqlite", () => {
       ).toBe(true);
     }
     const quarantineBefore = [sqlitePath, laterPath].map((databasePath) =>
-      readOpenClawDatabaseQuarantine(databasePath, { env: store.env }),
+      readPersistedQuarantineRow(databasePath, { env: store.env }),
     );
     const agentDatabase = await import("../state/openclaw-agent-db.js");
     const migrate = agentDatabase.migrateOpenClawAgentDatabaseForMaintenance;
@@ -146,7 +144,7 @@ describe("runDoctorSessionSqlite", () => {
       expect(competingLeaseId).toBeDefined();
       expect(
         [sqlitePath, laterPath].map((databasePath) =>
-          readOpenClawDatabaseQuarantine(databasePath, { env: store.env }),
+          readPersistedQuarantineRow(databasePath, { env: store.env }),
         ),
       ).toEqual(quarantineBefore);
       expect(fs.readFileSync(laterPath)).toEqual(laterBytes);
@@ -295,7 +293,7 @@ describe("runDoctorSessionSqlite", () => {
         }),
       ]),
     );
-    expect(readOpenClawDatabaseQuarantine(sqlitePath, { env: store.env })?.reason).toBe(
+    expect(readPersistedQuarantineRow(sqlitePath, { env: store.env })?.reason).toBe(
       "stale secondary index",
     );
 

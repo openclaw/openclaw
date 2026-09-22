@@ -27,6 +27,58 @@ pnpm test:perf:profile:runner -- --output-dir .artifacts/profiles -- --config te
 
 Native imports also need the plugin's declared dependencies and a resolvable `openclaw` host package. The profiler does not install or link dependencies: missing dependencies remain import failures in the JSON report and cause a nonzero exit.
 
+### Kitchen Sink Gateway resource comparison
+
+The existing Kitchen Sink RPC walk can compare a fresh Gateway with plugins
+disabled against a fresh Gateway with only Kitchen Sink `conformance` active:
+
+```bash
+OPENCLAW_KITCHEN_SINK_NPM_SPEC=npm-pack:/fixtures/kitchen-sink.tgz \
+  pnpm test:plugins:kitchen-sink-rpc -- --resource-profile /out/resources.json
+```
+
+This mode requires Linux Node with `process.threadCpuUsage`, a built OpenClaw
+entry in the current package root, `dist/build-info.json` with a full source
+commit, and a local npm-pack fixture. It does not download a floating fixture.
+The normal RPC walk, including its Bun command, is unchanged.
+
+Run only in a prepared secretless container or remote runner. For example, bake
+the frozen built host, its dependencies and the pinned fixture into a reviewed
+image, then execute with explicit limits and networking disabled:
+
+```bash
+docker run --rm --network none --memory 4g --cpus 2 --pids-limit 512 \
+  -v "$PWD/proof-output:/out" -w /app \
+  -e OPENCLAW_KITCHEN_SINK_NPM_SPEC=npm-pack:/fixtures/kitchen-sink.tgz \
+  <prepared-image> \
+  node --import ./scripts/tsx.mjs scripts/e2e/kitchen-sink-rpc-walk.mts \
+  --resource-profile /out/resources.json
+```
+
+Prepare any managed npm installation prerequisites in the image; an offline
+install failure is blocked proof, not permission to copy credentials or enable
+network access. The harness supplies a minimal child environment, but does not
+enforce container isolation itself. Preserve the image digest and runner limits
+alongside the report.
+
+Each case records startup from the initialized measurement preload to HTTP
+readiness, one unmeasured health warmup, a 250 ms idle window, 20 completed
+`health` RPCs, and a 250 ms post-work window. The conformance case additionally
+creates a session and runs 20 asserted `kitchen_sink_text` calls with unique
+idempotency keys, followed by another observation window. Setup and package
+installation are outside measured phases; failed measured calls are not retried.
+
+The report preserves raw phase-boundary snapshots, completed/failed operation
+counts, provenance hashes and signed conformance-minus-empty deltas. CPU counters
+cover the Gateway process and main thread, excluding separate child processes.
+RSS is process-wide; other memory fields describe the main isolate. ArrayBuffers
+overlap external memory. Boundary samples are not peaks, and no forced GC occurs.
+The fixed post-work window is not a plugin drain receipt. Host shutdown is checked
+separately; post-disposal retention remains explicitly unsupported because the
+measured process exits. These observations establish neither a leak nor a budget
+violation. Repeat comparable pairs through the campaign owner before drawing
+performance conclusions; do not sum individual plugin costs.
+
 ### Zod schema compilation
 
 Compile individual schemas only after measuring a repeated validation path.

@@ -57,7 +57,7 @@ export function createMergeOutcomeFixtureHarness() {
     git(["init", "-q", "--bare", remote]);
     const base = commit(tree("before\n"), []);
     git(["update-ref", "refs/heads/main", base]);
-    return { repo, remote, base };
+    return { repo, remote, base, compileCache: join(root, "node-compile-cache") };
   }
 
   function fixture(
@@ -734,10 +734,13 @@ fi
     writeFileSync(join(bin, "gh"), '#!/bin/sh\nexec node "$FIXTURE_GH" direct "$@"\n', {
       mode: 0o755,
     });
+    const tracePath = join(root, "git.trace.jsonl");
     const env = {
       ...gitEnv,
       PATH: `${bin}:${gitEnv.PATH}`,
       TMPDIR: root,
+      // Reuse compiled owner modules across native children, never mutable fixture state.
+      NODE_COMPILE_CACHE: template.compileCache,
       FIXTURE_STATE: statePath,
       FIXTURE_ROOT: root,
       FIXTURE_REPO: repo,
@@ -747,7 +750,8 @@ fi
       FIXTURE_NODE: nodeExecutable,
       OPENCLAW_PR_MERGE_METHOD: "squash",
       OPENCLAW_PR_STRICT_DRIFT: "",
-      GIT_TRACE2_EVENT: join(root, "git.trace.jsonl"),
+      // Only partial-clone cases consume trace evidence to reject implicit hydration.
+      GIT_TRACE2_EVENT: promisor ? tracePath : undefined,
     };
     const run = (
       auto = false,
@@ -895,7 +899,7 @@ fi
       replacePreparedHead,
       ordinaryRead,
       trace: () =>
-        readFileSync(env.GIT_TRACE2_EVENT, "utf8")
+        readFileSync(tracePath, "utf8")
           .trim()
           .split("\n")
           .map((line): { event: string; sid: string; argv?: string[] } => JSON.parse(line)),

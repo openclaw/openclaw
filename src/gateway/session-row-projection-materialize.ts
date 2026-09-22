@@ -5,6 +5,7 @@ import { projectGatewaySessionEntry } from "../config/sessions/combined-store-ga
 import { readCommittedSessionEntryCache } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { resolveSessionKeyBySessionId } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { projectSqliteSessionParticipants } from "../config/sessions/session-accessor.sqlite-participant-projection.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -43,6 +44,7 @@ export function refreshSessionRowMaterializations(owner: {
   prepare: () => records.Inputs["cfg"];
   revision: () => number;
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
+  readEntry: (row: records.Row) => records.Row["storedEntry"];
   materialize: (
     row: records.Row,
     agentIds: Set<string>,
@@ -66,7 +68,7 @@ export function refreshSessionRowMaterializations(owner: {
       current &&
       owner.acquireEntry(
         databaseFacts ? { ...current, hasBoard: databaseFacts.hasBoard } : current,
-        owner.prepared ? databaseFacts?.entry : readSessionRowEntry(current),
+        owner.prepared ? databaseFacts?.entry : owner.readEntry(current),
       );
     if (row && isColdArchivedSessionRow(row)) {
       owner.dirty.delete(id);
@@ -170,12 +172,13 @@ export function readResidentSessionRow(
     fallbackModel: presentation.activeModel,
     facts,
     hasBoard: facts.hasBoard,
-    membership: new Set(
-      params.databaseFacts?.memberIdentityIds ??
-        listSessionMembers({ ...row.storeTarget, sessionKey: row.key }).map(
-          (member) => member.identityId,
-        ),
-    ),
+    membership: source
+      ? new Set(
+          listSessionMembers({ ...row.storeTarget, sessionKey: row.key }).map(
+            (member) => member.identityId,
+          ),
+        )
+      : row.membership,
   };
 }
 
@@ -186,9 +189,11 @@ export function readSessionRowEntry(row: records.Row) {
         row.generation = readOpenClawAgentDatabaseIdentity(database).identity;
       }
       const cache = readCommittedSessionEntryCache(database.db);
-      return cache
-        ? cache.get(row.key)
-        : readExactSessionEntryRow(database, row.key, "list")?.entry;
+      if (cache) {
+        const entry = cache.get(row.key);
+        return entry ? projectSqliteSessionParticipants(database.db, row.key, entry) : undefined;
+      }
+      return readExactSessionEntryRow(database, row.key, "list")?.entry;
     },
     { agentId: row.storeTarget.agentId, path: row.storeTarget.storePath },
   );

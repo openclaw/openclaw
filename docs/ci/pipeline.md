@@ -115,8 +115,11 @@ Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
 ordinary and isolated unit-fast lanes partition their existing file inventories: files with known Bun
 failures or additional skips stay on Node, and the compatible remainder runs on
 Bun. Those Node files still execute; they are not excluded from CI. The complete
-fake-timer lane also supports Bun. UI and other families retain Node until they
-pass on the pinned fork within their existing CI resource budgets. Precise PR targets use the existing
+fake-timer lane also supports Bun. Control UI retains two whole GC-sensitive
+files on Node (`chat-pane-retained-presentation.test.ts` and
+`usage-page-details.test.ts`) and runs the remaining files on Bun.
+Other families retain Node until they pass on the pinned fork within their
+existing CI resource budgets. Precise PR targets use the existing
 test-project planner to find their owners. Mixed or ambiguous selections retain
 Node, and no tests are removed from the selected inventory.
 
@@ -125,6 +128,30 @@ Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs
 the complete original selection on Node and its compatible portion on Bun
 within the same job and worker slot. Other selections run on Node. Main pushes retain Node. Historical targets
 without the runtime-selection capability keep their original Node behavior.
+The UI job probes its actual config and arguments through the target's runtime
+owner, so older unit-only helpers, helpers requiring the retired global FTL flag,
+and legacy compatibility targets retain Node.
+Its three native shards and three workers per row remain unchanged.
+The UI runtime partition is applied after Vitest selects each native shard, so
+files keep their original shard ownership. A shard with no Node-only files
+finishes that partition without running other UI files. Dual validation runs
+the complete UI selection on Node, then excludes only those two files from Bun;
+their assertions remain required on Node, with no added skips.
+
+The nonbrowser Control UI projects load `bun-css-tokenizer.setup.ts`. On Bun,
+this setup resolves jsdom's native CSS tokenizer and prevents inlining only its
+`endOfFile` predicate. The pinned fork can otherwise
+enter an unbounded CSS-tokenizer loop after an ordered sequence of UI files.
+Baseline, DFG, and FTL JIT remain enabled; Node and Chromium are unaffected.
+The UI runtime owner delays FTL compilation with warmup/soon thresholds of
+512000/8000. These short-lived workers benefit from less compilation work;
+the protected cache publisher uses the same policy when collecting its seven
+canonical UI seed files on Bun. PR jobs restore that Bun seed alongside the
+Node seed, with separate transform-cache leaves.
+The setup leaves tokenizer exports and CSS behavior unchanged. Remove it
+only after a corrected pinned runtime passes the original ordered reproduction,
+the complete UI config, and all three native shards within their existing memory
+budgets.
 
 The test-runtime setup action installs a checksum-pinned build of the Bun fork
 only for jobs that need it. The source commit, archive checksum, and executable
@@ -134,8 +161,8 @@ Vitest and its workers use the selected runtime. Bun and Node have separate
 transform-cache directories and timing identities. Either runtime failing fails
 the job. This adds no matrix rows or runner registrations.
 
-`NODE_OPTIONS` continues to limit Node heaps; Bun does not use that V8 heap
-limit. Compare observed memory use alongside elapsed time before admitting more
+`NODE_OPTIONS`, where configured, limits Node heaps; the UI lane retains Node's
+default heap limit. Bun does not use that V8 limit. Compare observed memory use alongside elapsed time before admitting more
 lanes. Compatibility evidence must use the exact fork build installed by CI;
 stock Bun results and different fork revisions are separate measurements.
 

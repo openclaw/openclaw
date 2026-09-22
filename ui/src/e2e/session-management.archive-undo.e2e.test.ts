@@ -235,6 +235,7 @@ suite.define(() => {
         const undo = page.getByRole("button", { name: "Undo", exact: true });
         await undo.waitFor({ state: "visible" });
         if (queued) {
+          await undo.hover();
           const listsBefore = (
             await gateway.getRequests("sessions.list", { agentId: "main", includeGlobal: true })
           ).length;

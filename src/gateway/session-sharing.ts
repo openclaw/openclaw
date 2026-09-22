@@ -525,6 +525,9 @@ export function resolveSessionMutationAuthorization(params: {
         if (!current) {
           return;
         }
+        const visibilityAuthorized =
+          VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
+          (operatorSessionCap(params.client, currentCfg) ?? "write") === "write";
         const error =
           (authorizesAgentRun
             ? authorizeSessionAgentRun({
@@ -538,11 +541,13 @@ export function resolveSessionMutationAuthorization(params: {
             sessionKey: targetRef.sessionKey,
             target: current,
           }) ??
-          authorizeSessionSharingTarget({
-            cfg: currentCfg,
-            client: params.client,
-            target: current,
-          });
+          (visibilityAuthorized
+            ? null
+            : authorizeSessionSharingTarget({
+                cfg: currentCfg,
+                client: params.client,
+                target: current,
+              }));
         if (error) {
           throw new SessionMutationAuthorizationChangedError(error);
         }

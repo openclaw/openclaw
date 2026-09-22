@@ -82,6 +82,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
         )) ||
       input.command.type === "agentDatabaseRegistry.read" ||
+      input.command.type === "sessionGroups.snapshot" ||
+      (input.command.type === "sessionGroups.members" && isRecord(input.command.cfg)) ||
       (input.command.type === "workerEnvironments.snapshot" &&
         (input.command.ids === undefined ||
           (Array.isArray(input.command.ids) &&

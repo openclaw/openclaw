@@ -21,9 +21,11 @@ import {
   sessionHistoryCleanupError,
   unwrapSessionTranscriptWorkerReply,
 } from "./session-history-worker-errors.js";
-import { listSessionMembers } from "./session-sharing-store.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import {
+  createSessionHistoryWorkerReaders,
+  type SessionHistoryWorkerRequestRunner,
+} from "./session-transcript-worker-readers.js";
 import {
   acquireHistoryDatabaseResource,
   armDatabaseWorkerIdleRetirement,
@@ -40,13 +42,10 @@ import {
   type SessionCostWorkerLane,
   type SessionDatabaseCleanup,
 } from "./session-transcript-worker-resources.js";
-import {
-  MAX_SESSION_ROW_FACTS_KEYS,
-  type SessionHistoryWorkerDatabase,
-  type SessionHistoryWorkerInput,
-  type SessionHistoryWorkerPreparedInput,
-  type SessionRowPresenceWorkerInput,
-  type SessionTranscriptWorkerValues,
+import type {
+  SessionHistoryWorkerDatabase,
+  SessionHistoryWorkerInput,
+  SessionRowPresenceWorkerInput,
 } from "./session-transcript-worker.types.js";
 
 export type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
@@ -99,24 +98,6 @@ export function prepareSessionEntryPresenceRead(input: SessionAccessScope): Read
   };
 }
 
-/** Full membership evidence shares the existing read-only agent database worker. */
-export async function listSessionMembersInWorker(
-  input: SessionAccessScope,
-): Promise<SessionMember[]> {
-  const env = { ...(input.env ?? process.env) };
-  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  const resolved = resolveSqliteScope({ ...input, env });
-  const options = toDatabaseOptions(resolved);
-  const databasePath = resolveOpenClawAgentSqlitePath(options);
-  if (isIncognitoOpenClawAgentSqlitePath(databasePath, options)) {
-    // Incognito SQLite exists only in this process and keeps its native owner.
-    return listSessionMembers({ ...input, env });
-  }
-  return await withSessionHistoryWorkerDatabase(options, (owner) =>
-    owner.readMembers({ sessionKey: resolved.sessionKey, env }),
-  );
-}
-
 /** Single and batch reads synchronously retain the same lane-aware database owner. */
 function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOptions) {
   const owned = acquireHistoryDatabaseResource(options);
@@ -137,13 +118,17 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
   };
   try {
     assertCurrent();
-    const runRequest = async <TResult>(
-      prepare: () => SessionHistoryWorkerPreparedInput,
-      inputBytes: number,
-      receive: (value: SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]]) => TResult,
-    ): Promise<TResult> => {
+    const runRequest: SessionHistoryWorkerRequestRunner = async (
+      prepare,
+      inputBytes,
+      receive,
+      signal,
+      onRequest,
+    ) => {
       assertCurrent();
+      const deadline = performance.now() + 60_000;
       let sequence = 0;
+      let executionRetired = false;
       try {
         const reply = await historyPages.run(
           () => {
@@ -154,7 +139,30 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
             owned.nativeSequences.set(historyLane, sequence);
             return { ...input, database };
           },
-          { inputBytes, timeoutMs: 60_000 },
+          {
+            inputBytes,
+            timeoutMs: 60_000,
+            signal,
+            onRequest: onRequest
+              ? async (value, context) => {
+                  context.signal.throwIfAborted();
+                  assertCurrent();
+                  onRequest(value);
+                  assertCurrent();
+                  const remaining = deadline - performance.now();
+                  if (remaining <= 0) {
+                    throw new WorkerTaskError("worker task timed out", "timeout");
+                  }
+                  return { input: null, timeoutMs: remaining };
+                }
+              : undefined,
+            onExecutionSettled: ({ retired }) => {
+              if (retired) {
+                executionRetired = true;
+                releaseRetiredDatabaseCustody(historyLane, sequence);
+              }
+            },
+          },
         );
         const value = receive(
           unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply),
@@ -166,7 +174,7 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
         assertCurrent();
         return value;
       } catch (error) {
-        if (sequence > 0) {
+        if (sequence > 0 && !executionRetired) {
           try {
             await rotateDatabaseWorkers(historyLane);
           } catch (cleanupError) {
@@ -177,194 +185,9 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
       }
     };
     const owner: SessionHistoryWorkerDatabase = {
-      searchTranscripts: async (params) =>
-        await runRequest(
-          () => ({ kind: "transcript-search", params }),
-          JSON.stringify(params).length * 2,
-          (value) => {
-            if (
-              typeof value === "boolean" ||
-              Array.isArray(value) ||
-              value.kind !== "transcript-search"
-            ) {
-              throw new Error("Session history worker returned another result instead of search");
-            }
-            return value.result;
-          },
-        ),
       generation: owned.generation,
       assertCurrent,
-      run: async (prepare, inputBytes) =>
-        await runRequest(prepare, inputBytes, (value) => {
-          if (
-            typeof value === "boolean" ||
-            Array.isArray(value) ||
-            value.kind === "session-preview" ||
-            value.kind === "session-title-fields" ||
-            value.kind === "session-entry-list" ||
-            value.kind === "session-exact-entries" ||
-            value.kind === "session-row-facts" ||
-            value.kind === "session-store-target" ||
-            value.kind === "session-target-inventory" ||
-            value.kind === "session-target-registry-required" ||
-            value.kind === "session-identity-evidence" ||
-            value.kind === "transcript-search" ||
-            value.kind === "usage-refresh-lock"
-          ) {
-            throw new Error("Session history worker returned metadata instead of history");
-          }
-          return value;
-        }),
-      readPreview: async (input) =>
-        await runRequest(
-          () => ({ kind: "session-preview", ...input }),
-          JSON.stringify(input).length * 2,
-          (value) => {
-            if (
-              typeof value === "boolean" ||
-              Array.isArray(value) ||
-              value.kind !== "session-preview"
-            ) {
-              throw new Error(
-                "Session history worker returned another result instead of a preview",
-              );
-            }
-            return value.items;
-          },
-        ),
-      readTitleFields: async (input) =>
-        await runRequest(
-          () => ({ kind: "session-title-fields", ...input }),
-          JSON.stringify(input).length * 2,
-          (value) => {
-            if (
-              typeof value === "boolean" ||
-              Array.isArray(value) ||
-              value.kind !== "session-title-fields"
-            ) {
-              throw new Error(
-                "Session history worker returned another result instead of title fields",
-              );
-            }
-            return value.fields;
-          },
-        ),
-      readUsageCache: async (input) =>
-        await runRequest(
-          () => ({ kind: "usage-cache", ...input }),
-          JSON.stringify(input).length * 2,
-          (value) => {
-            if (
-              typeof value === "boolean" ||
-              Array.isArray(value) ||
-              value.kind !== "usage-refresh-lock"
-            ) {
-              throw new Error(
-                "Session history worker returned another result instead of usage cache",
-              );
-            }
-            return value;
-          },
-        ),
-      readMembers: async (input) =>
-        await runRequest(
-          () => ({ kind: "session-members", ...input }),
-          JSON.stringify(input).length * 2,
-          (value) => {
-            if (!Array.isArray(value)) {
-              throw new Error("Session history worker returned another result instead of members");
-            }
-            return value;
-          },
-        ),
-      readEntryPresence: async (scope) =>
-        await runRequest(
-          () => ({ kind: "session-row-presence", scope }),
-          JSON.stringify(scope).length * 2,
-          (value) => {
-            if (typeof value !== "boolean") {
-              throw new Error(
-                "Session history worker returned history instead of metadata presence",
-              );
-            }
-            return value;
-          },
-        ),
-      readExactEntries: async (input) =>
-        await runRequest(
-          () => ({ kind: "session-exact-entries", ...input }),
-          JSON.stringify(input).length * 2,
-          (value) => {
-            if (
-              typeof value === "boolean" ||
-              Array.isArray(value) ||
-              value.kind !== "session-exact-entries"
-            ) {
-              throw new Error(
-                "Session history worker returned another result instead of exact entries",
-              );
-            }
-            return value;
-          },
-        ),
-      readRowFacts: async (input) => {
-        if (input.sessionKeys.length > MAX_SESSION_ROW_FACTS_KEYS) {
-          throw new Error(`Session row facts support at most ${MAX_SESSION_ROW_FACTS_KEYS} keys`);
-        }
-        const captured = {
-          env: { ...input.env },
-          sessionKeys: [...input.sessionKeys],
-          continuation: input.continuation ? { ...input.continuation } : undefined,
-        };
-        return await runRequest(
-          () => ({ kind: "session-row-facts", ...captured }),
-          JSON.stringify(captured).length * 2,
-          (value) => {
-            if (
-              typeof value === "boolean" ||
-              Array.isArray(value) ||
-              value.kind !== "session-row-facts"
-            ) {
-              throw new Error(
-                "Session history worker returned another result instead of row facts",
-              );
-            }
-            return value;
-          },
-        );
-      },
-      readEntries: async (scope) =>
-        await runRequest(
-          () => ({ kind: "session-entry-list", scope }),
-          JSON.stringify(scope).length * 2,
-          (value) => {
-            if (
-              typeof value === "boolean" ||
-              Array.isArray(value) ||
-              value.kind !== "session-entry-list"
-            ) {
-              throw new Error("Session history worker returned another result instead of entries");
-            }
-            return value.entries;
-          },
-        ),
-      readIdentityEvidence: async (input) =>
-        await runRequest(
-          () => ({ kind: "session-identity-evidence", ...input }),
-          JSON.stringify(input).length * 2,
-          (value) => {
-            if (
-              typeof value === "boolean" ||
-              Array.isArray(value) ||
-              value.kind !== "session-identity-evidence"
-            ) {
-              throw new Error(
-                "Session history worker returned another result instead of identity evidence",
-              );
-            }
-            return value.evidence;
-          },
-        ),
+      ...createSessionHistoryWorkerReaders(runRequest),
     };
     return { owner, release };
   } catch (error) {

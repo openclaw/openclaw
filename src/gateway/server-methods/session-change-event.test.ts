@@ -309,7 +309,7 @@ describe("sessions.changed coalescing", () => {
         event: "sessions.changed",
         payload: { sessionKey, reason: "patch" },
       });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       await vi.advanceTimersByTimeAsync(6_000);
       slow.resolve(initial);
       await vi.advanceTimersByTimeAsync(0);
@@ -552,7 +552,7 @@ describe("sessions.changed coalescing", () => {
         mocks.loadRow.mockReturnValue(latest);
         prepared.resolve();
         await flushPendingSessionsChangedEvents(context);
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(
           vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
         ).toMatchObject([

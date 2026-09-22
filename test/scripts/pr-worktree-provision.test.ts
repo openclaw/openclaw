@@ -40,9 +40,8 @@ it("extracts the complete eager runtime import closure without duplicate wrapper
 function coldFixture(perWorktreeConfig = true) {
   const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-provision-"), {
     perWorktreeConfig,
+    precreateWorktree: false,
   });
-  // Remove only this harness's disposable precreated checkout, before review-init.
-  f.git(f.canonical, "worktree", "remove", "--force", f.worktree);
   f.env.OPENCLAW_STATE_DIR = join(f.root, "state");
   f.env.OPENCLAW_CONFIG_PATH = join(f.root, "config.json");
   writeFileSync(f.env.OPENCLAW_CONFIG_PATH, "{}\n");

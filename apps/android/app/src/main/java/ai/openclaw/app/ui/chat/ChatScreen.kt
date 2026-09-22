@@ -2186,7 +2186,6 @@ internal fun ChatBubble(
       peerSenderLabel != null -> peerSenderLabel
       else -> null
     }
-  var visibleImageCount = 0
   val displayableContent =
     content.filter { part ->
       when (part.type) {
@@ -2195,9 +2194,7 @@ internal fun ChatBubble(
         }
 
         "image" -> {
-          val visible = visibleImageCount < 4
-          visibleImageCount += 1
-          visible
+          true
         }
 
         "canvas" -> {
@@ -2209,7 +2206,6 @@ internal fun ChatBubble(
         }
       }
     }
-  val omittedImageCount = (visibleImageCount - 4).coerceAtLeast(0)
   if (displayableContent.isEmpty()) return
 
   val messageText = chatMessagePlainText(displayableContent)
@@ -2227,6 +2223,7 @@ internal fun ChatBubble(
   ChatBubbleContainer(
     user = isUser,
     speaker = speaker,
+    separateContent = true,
     messageActions = { modifier, body ->
       ChatMessageActionHost(
         text = messageText,
@@ -2242,99 +2239,128 @@ internal fun ChatBubble(
       )
     },
   ) {
+    // One image window for the whole message, including separated assistant runs.
+    // Paging disposes previews instead of retaining every decoded bitmap in Compose.
+    val imageCount = displayableContent.count { it.type == "image" && it.isDetachedChatAttachment() }
+    var imagePage by rememberSaveable(messageId) { mutableStateOf(0) }
+    val lastImagePage = ((imageCount - 1) / CHAT_MESSAGE_IMAGE_WINDOW).coerceAtLeast(0)
+    val currentImagePage = imagePage.coerceIn(0, lastImagePage)
+    val orderedContent =
+      remember(displayableContent, isUser) {
+        if (isUser) {
+          displayableContent.filter { it.isDetachedChatAttachment() } + displayableContent.filterNot { it.isDetachedChatAttachment() }
+        } else {
+          displayableContent
+        }
+      }
+    val groups = remember(orderedContent) { chatMessageContentGroups(orderedContent) }
+    var imageOffset = 0
     caption?.let {
-      Text(
-        text = it,
-        style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium),
-        color = ClawTheme.colors.textMuted,
-      )
+      Text(it, modifier = Modifier.padding(horizontal = CHAT_MESSAGE_TEXT_INSET_DP.dp), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
-    if (collapsibleUserText && messageText.isNotBlank()) {
-      ChatUserMessageText(
-        textParts = displayableContent.mapNotNull { it.text },
-        plainText = messageText,
-        expanded = userMessageExpanded,
-        onExpandedChange = { userMessageExpanded = it },
-      )
-    }
-    displayableContent.forEach { part ->
-      when {
-        part.type == "text" && !collapsibleUserText -> {
-          ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
-        }
+    groups.forEach { parts ->
+      if (parts.first().isDetachedChatAttachment()) {
+        val groupImageOffset = imageOffset
+        imageOffset += parts.count { it.type == "image" }
+        ChatMessageAttachmentGroup(
+          parts = parts,
+          user = isUser,
+          firstImageIndex = groupImageOffset,
+          imagePage = currentImagePage,
+          resolverReady = inlineWidgetResolverReady,
+          loadImage = loadImageArtifact,
+        )
+      } else {
+        ChatMessageTextSurface(isUser) {
+          if (collapsibleUserText && messageText.isNotBlank()) {
+            ChatUserMessageText(
+              textParts = displayableContent.mapNotNull { it.text },
+              plainText = messageText,
+              expanded = userMessageExpanded,
+              onExpandedChange = { userMessageExpanded = it },
+            )
+          }
+          parts.forEach { part ->
+            when {
+              part.type == "text" && !collapsibleUserText -> {
+                ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+              }
 
-        part.type == "text" -> {}
+              part.type == "text" -> {}
 
-        part.isAudioAttachment() && part.hasPlayableMediaArtifact() -> {
-          ChatAudioPlayerCard(
-            content = part,
-            playbackBlocked = inlineMediaPlaybackBlocked,
-            loadMedia = loadMediaArtifact,
-          )
-        }
+              part.isAudioAttachment() && part.hasPlayableMediaArtifact() -> {
+                ChatAudioPlayerCard(
+                  content = part,
+                  playbackBlocked = inlineMediaPlaybackBlocked,
+                  loadMedia = loadMediaArtifact,
+                )
+              }
 
-        part.isVideoAttachment() && part.hasPlayableMediaArtifact() -> {
-          ChatVideoPlayerCard(
-            content = part,
-            playbackBlocked = inlineMediaPlaybackBlocked,
-            loadMedia = loadMediaArtifact,
-          )
-        }
+              part.isVideoAttachment() && part.hasPlayableMediaArtifact() -> {
+                ChatVideoPlayerCard(
+                  content = part,
+                  playbackBlocked = inlineMediaPlaybackBlocked,
+                  loadMedia = loadMediaArtifact,
+                )
+              }
 
-        part.isAudioAttachment() || part.isVideoAttachment() -> {
-          ChatMediaAttachmentLabel(content = part)
-        }
+              part.isAudioAttachment() || part.isVideoAttachment() -> {
+                ChatMediaAttachmentLabel(content = part)
+              }
 
-        part.type == "image" && !part.base64.isNullOrBlank() -> {
-          ChatBase64Image(base64 = part.base64, mimeType = part.mimeType)
-        }
+              part.type == "canvas" && normalizedRole == "assistant" -> {
+                ChatInlineWidget(
+                  preview = checkNotNull(part.widget),
+                  resolverReady = inlineWidgetResolverReady,
+                  resolveResource = resolveInlineWidgetResource,
+                )
+              }
 
-        part.type == "image" && !part.artifactId.isNullOrBlank() -> {
-          ChatManagedImage(
-            artifactId = part.artifactId,
-            label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
-            resolverReady = inlineWidgetResolverReady,
-            loadImage = loadImageArtifact,
-          )
-        }
-
-        part.type == "canvas" && normalizedRole == "assistant" -> {
-          ChatInlineWidget(
-            preview = checkNotNull(part.widget),
-            resolverReady = inlineWidgetResolverReady,
-            resolveResource = resolveInlineWidgetResource,
-          )
-        }
-
-        else -> {
-          Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+              else -> {
+                Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+              }
+            }
+          }
         }
       }
     }
-    if (omittedImageCount > 0) {
-      Text(
-        text = nativeString("Additional images hidden: \${omittedImageCount}", omittedImageCount),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-      )
+    if (imageCount > CHAT_MESSAGE_IMAGE_WINDOW) {
+      val imageNavigation = rememberChatReaderAction()
+      FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        TextButton(onClick = {
+          imageNavigation.pause()
+          imagePage = currentImagePage - 1
+        }, enabled = currentImagePage > 0) { Text(nativeString("Previous images")) }
+        TextButton(onClick = {
+          imageNavigation.pause()
+          imagePage = currentImagePage + 1
+        }, enabled = currentImagePage < lastImagePage) { Text(nativeString("Next images")) }
+        Text(
+          nativeString("Images \$first–\$last of \$count", currentImagePage * CHAT_MESSAGE_IMAGE_WINDOW + 1, minOf((currentImagePage + 1) * CHAT_MESSAGE_IMAGE_WINDOW, imageCount), imageCount),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+      }
     }
-    if (messageId != null) {
-      ChatSourcePreviews(sourcePreviews, sourcePreviewConfig, loadSourceFavicon)
-      ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent, excludedUrls = sourcePreviews.flatMap { it.aliases }.toSet())
-    }
-    disclosure()
-    messageSpeech?.let { speech ->
-      FullChatSpeechIndicator(
-        phase = speech.phase,
-        onToggle = { onToggleListen(checkNotNull(messageId), messageText) },
-      )
-    }
-    timestampMs?.let {
-      ChatMessageTimestamp(
-        timestampMs = it,
-        metadata = if (normalizedRole == "assistant" && !live) metadata else emptyList(),
-        modifier = Modifier.align(if (isUser) Alignment.End else Alignment.Start),
-      )
+    Column(Modifier.padding(horizontal = CHAT_MESSAGE_TEXT_INSET_DP.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      if (messageId != null) {
+        ChatSourcePreviews(sourcePreviews, sourcePreviewConfig, loadSourceFavicon)
+        ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent, excludedUrls = sourcePreviews.flatMap { it.aliases }.toSet())
+      }
+      disclosure()
+      messageSpeech?.let { speech ->
+        FullChatSpeechIndicator(
+          phase = speech.phase,
+          onToggle = { onToggleListen(checkNotNull(messageId), messageText) },
+        )
+      }
+      timestampMs?.let {
+        ChatMessageTimestamp(
+          timestampMs = it,
+          metadata = if (normalizedRole == "assistant" && !live) metadata else emptyList(),
+          modifier = Modifier.align(if (isUser) Alignment.End else Alignment.Start),
+        )
+      }
     }
   }
 }
@@ -4824,7 +4850,14 @@ private fun AttachmentStrip(
     val chipMaxWidth = maxWidth
     Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
       attachments.forEach { attachment ->
-        AttachmentChip(attachment = attachment, maxWidth = chipMaxWidth, onRemove = { onRemoveAttachment(attachment.id) })
+        if (attachment.mimeType.startsWith("image/")) {
+          Column(modifier = Modifier.width(minOf(160.dp, chipMaxWidth)), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            ChatBase64Image(base64 = attachment.base64, mimeType = attachment.mimeType, source = Base64ImageSource.Composer)
+            AttachmentChip(attachment = attachment, maxWidth = minOf(160.dp, chipMaxWidth), onRemove = { onRemoveAttachment(attachment.id) })
+          }
+        } else {
+          AttachmentChip(attachment = attachment, maxWidth = chipMaxWidth, onRemove = { onRemoveAttachment(attachment.id) })
+        }
       }
     }
   }

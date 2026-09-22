@@ -101,6 +101,9 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   if (command.type === "mcpOAuth.statuses") {
     return { type: command.type, input: [...command.input] };
   }
+  if (command.type === "sessionGroups.members") {
+    return { ...command, cfg: structuredClone(command.cfg) };
+  }
   if (command.type === "conversationBindings.inspect") {
     const { channel, accountId, conversationId, parentConversationId } = command.conversation;
     return {
@@ -217,6 +220,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     command.type === "mcpOAuth.countPrincipals"
   ) {
     return bytes + Buffer.byteLength(command.input, "utf8");
+  }
+  if (command.type === "sessionGroups.members") {
+    return bytes + Buffer.byteLength(JSON.stringify(command.cfg), "utf8");
   }
   if (command.type === "conversationBindings.inspect") {
     return (

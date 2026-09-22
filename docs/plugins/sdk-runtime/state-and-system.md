@@ -365,13 +365,15 @@ SessionManager operations still need an appropriate caller-owned write boundary.
 as an absolute lexical locator before reading the transcript or invoking
 `onTruncated`. Relative locators resolve against the process working directory
 at entry; `getSessionTarget()` returns that captured locator. Later working
-directory changes leave the manager bound to its original store. Existing
-`sessions.json` and custom-store routing and symlink spelling are preserved.
+directory changes leave the manager bound to its original store. The binding also
+captures the resolved state directory and supervisor mode; environment changes
+cannot redirect later writes. Existing `sessions.json` and custom-store routing
+and symlink spelling are preserved.
 
 File-backed model and thinking transcript writes execute through the canonical
 agent database worker. Queued extension actions retain their original runtime
-and session authority through transaction and commit admission. Session opening,
-final model-context validation, and incognito transcript persistence still use
+and session authority through transaction and commit admission. Synchronous session
+opening, final model-context validation, and incognito transcript persistence still use
 their native owners; an asynchronous method does not imply that every storage
 operation in the enclosing session flow runs off-thread.
 

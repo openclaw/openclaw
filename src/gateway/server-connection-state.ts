@@ -20,7 +20,7 @@ import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import { canReceiveSessionEvent } from "./session-sharing.js";
+import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "./session-sharing.js";
 
 /** Creates transport-independent connection, subscription, and run state. */
 export function createGatewayConnectionState(params: {
@@ -47,31 +47,30 @@ export function createGatewayConnectionState(params: {
     sessionMessageSubscribers,
     canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) => {
       try {
-        const projection =
-          event === "sessions.changed" || event === "session.message"
-            ? sessionRowProjection
-            : undefined;
+        const projection = sessionRowProjection;
+        const cfg = loadRuntimeConfig();
         const prepared = projection
-          ? prepareProjectedSessionPresentation(projection, client)
+          ? {
+              sharing: prepareProjectedSessionSharing({
+                cfg,
+                client,
+                isMember: (target, identity) =>
+                  projection.hasMembership(target.storePath, target.storeKey, identity),
+              }),
+              target: (key: string, owner?: string) => {
+                const scope = resolveSessionEventAgentScope(cfg, key, owner);
+                return scope?.[1] ? projection.sharingTarget({ key, agentId: scope[1] }) : null;
+              },
+            }
           : undefined;
         return canReceiveSessionEvent({
-          cfg: loadRuntimeConfig(),
+          cfg,
           client,
           sessionKeys,
           agentId,
           event,
           payload,
-          ...(prepared
-            ? {
-                prepared: {
-                  sharing: prepared.sharing,
-                  target: (key: string, owner?: string) => {
-                    const scope = resolveSessionEventAgentScope(loadRuntimeConfig(), key, owner);
-                    return scope?.[1] ? prepared.target({ key, agentId: scope[1] }) : null;
-                  },
-                },
-              }
-            : {}),
+          ...(prepared ? { prepared } : {}),
         });
       } catch {
         return false;

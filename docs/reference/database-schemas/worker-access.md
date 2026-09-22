@@ -109,8 +109,10 @@ all four Gateway/tool callers through the existing worker lifecycle. Each caller
 rechecks current scope and authorization after awaiting. Warm `sessions.list`
 selects resident projection rows without host Kysely reads. Background refreshes
 prepare up to 64 dirty persistent rows in the history worker: entry metadata,
-membership, board presence, and activity-summary watermarks share one read
-snapshot per physical store. The projection retains each store through consumption
+board presence, and activity-summary watermarks share one read snapshot per
+physical store. Membership comes from the worker-maintained compact projection,
+which also retains participant display facts for per-viewer reads. The projection
+retains each store through consumption
 and rejects replies after projection or registry invalidation. Rows replaced or
 refreshed by direct reads while a reply is pending keep their newer facts; a dirty
 replacement retries under its own generation. Related rows use resident facts and
@@ -187,3 +189,12 @@ owners; these reporting snapshots grant no execution or deletion authority.
 This execution cutover does not change schemas, stored bytes, retention, config,
 or update behavior. A change to those contracts follows the
 [storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).
+
+Administrative skill archive uploads use the shared-state worker for staging,
+expiry cleanup, commit, installation claims, lease renewal, and consumption. The
+host retains per-upload locks and temporary archive materialization. Installation
+completion joins accepted renewals before consuming or releasing the exact owner
+lease; database close joins the callback and its retained worker cleanup. Cleanup
+refuses a replacement physical database and cannot delete a successor's lease.
+Upload formats, expiry limits, installation permissions, and update behavior are
+unchanged.

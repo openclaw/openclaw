@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi, type Mock } from "vitest";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -160,7 +163,10 @@ type WorkerSessionToolTestMocks = {
   scopedSessionAccess: Mock<(params: { run: () => Promise<unknown> }) => Promise<unknown>>;
 };
 
-type WorkerSessionToolTestOptions = { collectExecutionIdentity?: boolean };
+type WorkerSessionToolTestOptions = {
+  collectExecutionIdentity?: boolean;
+  operatorProfileId?: string;
+};
 
 async function createWorkerSessionToolTestFixture(
   mocks: WorkerSessionToolTestMocks,
@@ -217,6 +223,14 @@ async function createWorkerSessionToolTestFixture(
           throw new Error("source worker run ended");
         }
       },
+      undefined,
+      options.operatorProfileId
+        ? createAdmittedRunOperatorAuthority({
+            profileId: options.operatorProfileId,
+            scopes: ["operator.write"],
+            assertCurrent: () => {},
+          })
+        : undefined,
     );
   });
   const identity: WorkerConnectionIdentity = {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -37,6 +37,64 @@ const appendedLogLine = JSON.stringify({
 });
 
 suite.define(() => {
+  it("pauses hidden log reads and catches up without overlapping a slow tail", async () => {
+    await suite.withPage({ viewport: { width: 1_200, height: 800 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "logs.tail": {
+            cursor: 1,
+            file: "/tmp/visible.log",
+            lines: ["initial"],
+            reset: true,
+          },
+        },
+      });
+      await page.clock.install();
+      await page.goto(`${suite.server.baseUrl}logs`);
+      await page.getByText("initial", { exact: true }).waitFor();
+      await pauseVirtualClock(page);
+      const reads = (await gateway.getRequests("logs.tail")).length;
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await page.clock.runFor(6_000);
+      expect(await gateway.getRequests("logs.tail")).toHaveLength(reads);
+
+      await gateway.deferNext("logs.tail");
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      const catchup = await gateway.getRequests("logs.tail");
+      expect(catchup).toHaveLength(reads + 1);
+      expect(catchup.at(-1)?.params).toMatchObject({ cursor: 1 });
+      await page.clock.runFor(6_000);
+      expect(await gateway.getRequests("logs.tail")).toHaveLength(reads + 1);
+      await gateway.resolveDeferred("logs.tail", {
+        cursor: 2,
+        file: "/tmp/visible.log",
+        lines: ["resumed"],
+      });
+      await page.getByText("resumed", { exact: true }).waitFor();
+      expect(await page.locator(".log-message").allTextContents()).toEqual(["initial", "resumed"]);
+
+      await page.evaluate(() => {
+        document.querySelector("openclaw-logs-page")!.remove();
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await page.clock.runFor(2_000);
+      expect(await gateway.getRequests("logs.tail")).toHaveLength(reads + 1);
+    });
+  });
+
   it("returns to the newest line when auto-follow is re-enabled", async () => {
     if (captureUiProof) {
       await mkdir(path.join(proofDir, "video"), { recursive: true });

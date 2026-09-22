@@ -6,23 +6,39 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { QaEvidenceIdentity } from "./evidence-summary-schema.js";
 
-// A wedged git (NFS hang, credential helper prompt) must not block evidence
-// metadata resolution; the caller already falls back to GITHUB_SHA/null.
+// Best-effort metadata uses a short probe; strict producers can budget for a cold checkout.
 const QA_EVIDENCE_GIT_PROBE_TIMEOUT_MS = 5_000;
 const execFileAsync = promisify(execFile);
 
 /** The source owner captures the actual checkout, including uncommitted inputs. */
-export async function captureQaEvidenceSourceIdentity(repoRoot: string) {
+export async function captureQaEvidenceSourceIdentity(
+  repoRoot: string,
+  params: { gitTimeoutMs?: number } = {},
+) {
+  const gitTimeoutMs = params.gitTimeoutMs ?? QA_EVIDENCE_GIT_PROBE_TIMEOUT_MS;
+  if (!Number.isSafeInteger(gitTimeoutMs) || gitTimeoutMs <= 0) {
+    throw new Error("Source identity Git timeout must be a positive integer.");
+  }
   const options = {
     cwd: repoRoot,
     encoding: "utf8" as const,
-    timeout: QA_EVIDENCE_GIT_PROBE_TIMEOUT_MS,
+    timeout: gitTimeoutMs,
     maxBuffer: 32 * 1024 * 1024,
   };
-  const { stdout: ref } = await execFileAsync("git", ["rev-parse", "HEAD"], options);
+  const runGit = async (args: string[]) => {
+    try {
+      return await execFileAsync("git", args, options);
+    } catch (cause) {
+      throw new Error(
+        `Source identity git ${args[0]} failed in ${repoRoot} (deadline ${gitTimeoutMs}ms).`,
+        { cause },
+      );
+    }
+  };
+  const { stdout: ref } = await runGit(["rev-parse", "HEAD"]);
   const [{ stdout: patch }, { stdout: untrackedOutput }] = await Promise.all([
-    execFileAsync("git", ["diff", "--binary", "HEAD", "--", "."], options),
-    execFileAsync("git", ["ls-files", "--others", "--exclude-standard", "-z"], options),
+    runGit(["diff", "--binary", "HEAD", "--", "."]),
+    runGit(["ls-files", "--others", "--exclude-standard", "-z"]),
   ]);
   const gitSha = ref.trim();
   const untracked = untrackedOutput.split("\0").filter(Boolean).toSorted();

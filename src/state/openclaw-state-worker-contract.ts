@@ -24,6 +24,10 @@ import type {
   ManagedImageRecordEntry,
 } from "../gateway/managed-image-record-store.types.js";
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
+import type {
+  SessionGroupCatalogMutation,
+  SessionGroupCatalogMutationResult,
+} from "../gateway/session-group-catalog.types.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
@@ -64,7 +68,7 @@ import type {
 } from "../sessions/session-state-events.kernel.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
-import type { commitSkillUploadInDatabase } from "../skills/lifecycle/upload-store-commit.js";
+import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker.js";
 import type * as curator from "../skills/workshop/curator.kernel.js";
 import type { listStoredSkillProposalEventsInDatabase } from "../skills/workshop/store-sqlite-event.js";
 import type { SkillProposalEvent, SkillProposalRecord } from "../skills/workshop/types.js";
@@ -111,6 +115,7 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
   TranscriptWriteOperations &
   NodeWorkerJournalWorkerOperations &
   TaskRegistryWorkerOperations &
+  SkillUploadWorkerOperations &
   OpenClawStateLeaseLifecycleOperations & {
     "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
@@ -121,10 +126,6 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
     "githubRepository.personalPending": {
       input: RepositoryGitHubPublicationPendingQuery;
       output: RepositoryGitHubPublicationStatusRow | undefined;
-    };
-    "skillUploads.commit": {
-      input: Parameters<typeof commitSkillUploadInDatabase>[0];
-      output: ReturnType<typeof commitSkillUploadInDatabase>;
     };
     "audit.events.list": {
       input: AuditEventListQuery;
@@ -190,7 +191,10 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
     "subagents.persistChanges": { input: SubagentRegistryWrite; output: { writeId: string } };
     "sessionUpstream.listWatched": { input: undefined; output: SessionUpstreamLink[] };
     "backup.recordOutcome": { input: PreparedBackupRunRecord; output: void };
-    "sessionGroups.register": { input: { name: string }; output: boolean };
+    "sessionGroups.mutate": {
+      input: SessionGroupCatalogMutation;
+      output: SessionGroupCatalogMutationResult;
+    };
     "projects.findRoot": { input: { repoRoot: string }; output: string | undefined };
     "projects.list": { input: undefined; output: ProjectRegistryRecord[] };
     "worktrees.list": { input: undefined; output: ManagedWorktreeRecord[] };
@@ -272,16 +276,17 @@ export type OpenClawStateWorkerInspectionOperations = {
   "database.inspectIdle": { input: undefined; output: "healthy" | "retire" };
 };
 
-/** Only the retiring native owner's host can dispatch its exact cleanup receipt. */
+/** Retiring owners dispatch only exact, physically bound cleanup receipts. */
 export type OpenClawStateWorkerCleanupOperations = Pick<
   OpenClawStateLeaseLifecycleOperations,
   "stateLease.release"
-> & {
-  "agentDatabases.releaseExitedLease": {
-    input: OpenClawAgentDatabaseWorkerLeaseReceipt;
-    output: void;
+> &
+  Pick<SkillUploadWorkerOperations, "skillUploads.release"> & {
+    "agentDatabases.releaseExitedLease": {
+      input: OpenClawAgentDatabaseWorkerLeaseReceipt;
+      output: void;
+    };
   };
-};
 
 export type OpenClawStateWorkerBackend = SqliteWorkerPreparedBackend<
   OpenClawStateWorkerOperations &

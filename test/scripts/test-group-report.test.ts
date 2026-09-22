@@ -1433,21 +1433,36 @@ describe("scripts/test-group-report run plans", () => {
   });
 
   it("isolates Vitest filesystem module caches for parallel report configs", () => {
-    const args = parseTestGroupReportArgs(["--config", "a.ts", "--config", "b.ts"]);
+    const args = parseTestGroupReportArgs([
+      "--config",
+      "a.ts",
+      "--config",
+      "b.ts",
+      "--config",
+      "a.ts",
+    ]);
     const specs = resolveReportRunSpecs(
       args,
       [
         { config: "a.ts", forwardedArgs: [], label: "a" },
         { config: "b.ts", forwardedArgs: [], label: "b" },
+        { config: "a.ts", forwardedArgs: [], label: "a-again" },
       ],
       { cwd: "/repo", env: {} },
     );
 
-    expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
-      path.join("/repo", ".cache", "vitest", "0-a.ts"),
-      path.join("/repo", ".cache", "vitest", "1-b.ts"),
-    ]);
-    expect(specs.map((spec) => spec.vitestArgs)).toEqual([[], []]);
+    const cachePaths = specs.map((spec) =>
+      expectDefined(spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH, "report cache path"),
+    );
+    expect(new Set(cachePaths).size).toBe(3);
+    for (const cachePath of cachePaths) {
+      const relative = path.relative(path.join("/repo", ".cache", "vitest"), cachePath);
+      expect(relative).not.toBe("");
+      expect(path.isAbsolute(relative)).toBe(false);
+      expect(relative.split(path.sep)).not.toContain("..");
+      expect(cachePaths.filter((other) => other.startsWith(`${cachePath}${path.sep}`))).toEqual([]);
+    }
+    expect(specs.map((spec) => spec.vitestArgs)).toEqual([[], [], []]);
   });
 
   it("uses leaf configs for full-suite profiling without requiring parallel env", () => {

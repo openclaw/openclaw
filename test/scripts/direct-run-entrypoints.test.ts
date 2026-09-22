@@ -16,6 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
+import { readWindowsProcessStartTimeSync } from "../../src/infra/windows-process-start.js";
 import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { createDeferred } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
@@ -465,7 +466,8 @@ process.exitCode = child.status ?? 1;
           String.raw`
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ args, pid: process.pid }) + "\n");
+const { readWindowsProcessStartTimeSync } = require(${JSON.stringify(path.resolve("src/infra/windows-process-start.ts"))});
+fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ args, pid: process.pid, startTimeMs: readWindowsProcessStartTimeSync(process.pid, 0) }) + "\n");
 const response = ${JSON.stringify(responses)}[args.join(" ")];
 if (response === undefined) throw new Error("Unexpected fixture command: " + JSON.stringify(args));
 process.stdout.write(response + "\n");
@@ -511,7 +513,10 @@ process.stdout.write(response + "\n");
         const invocations = readFileSync(invocationLog, "utf8")
           .trim()
           .split("\n")
-          .map((line) => JSON.parse(line) as { args: string[]; pid: number });
+          .map(
+            (line) =>
+              JSON.parse(line) as { args: string[]; pid: number; startTimeMs: number | null },
+          );
         expect(invocations.map(({ args }) => args)).toEqual([
           ["--version"],
           ["run", "--help"],
@@ -519,7 +524,17 @@ process.stdout.write(response + "\n");
           ["--version"],
         ]);
         for (const invocation of invocations) {
-          expect(isProcessAlive(invocation.pid)).toBe(false);
+          const alive = isProcessAlive(invocation.pid);
+          expect(
+            alive,
+            alive
+              ? `${JSON.stringify({
+                  invocation,
+                  observedStartTimeMs: readWindowsProcessStartTimeSync(invocation.pid, 0),
+                  invocations,
+                })}\n${formatShimResult(result)}`
+              : undefined,
+          ).toBe(false);
         }
         expect(readdirSync(state)).toEqual(["tools"]);
       });

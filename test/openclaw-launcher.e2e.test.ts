@@ -186,6 +186,114 @@ describe("openclaw launcher", () => {
     cleanupTempDirs(fixtureRoots);
   });
 
+  describe("browser native transport dispatch", () => {
+    it("uses only the fixed native artifact before pending package repair or ordinary CLI startup", async () => {
+      const root = await makeLauncherFixture(fixtureRoots);
+      const native = path.join(root, "dist", "extensions", "browser", "native-host-entry.js");
+      await fs.mkdir(path.dirname(native), { recursive: true });
+      await fs.writeFile(native, 'setTimeout(() => process.stdout.write("native-frame"), 10);');
+      await fs.writeFile(
+        path.join(root, "dist", "entry.js"),
+        'throw new Error("ordinary CLI must not load");',
+      );
+      await fs.writeFile(path.join(root, ".openclaw-lifecycle-pending"), "pending");
+      const child = spawnSync(
+        process.execPath,
+        [path.join(root, "openclaw.mjs"), "browser", "extension", "native-host"],
+        {
+          encoding: "utf8",
+          timeout: 20_000,
+          env: launcherEnv({ HOME: root, OPENCLAW_CONTAINER: "not-a-native-target" }),
+        },
+      );
+      expect(child.status, child.stderr).toBe(0);
+      expect(child.stdout).toBe("native-frame");
+      expect(await fs.readFile(path.join(root, ".openclaw-lifecycle-pending"), "utf8")).toBe(
+        "pending",
+      );
+    });
+
+    it("refuses an unsupported native runtime without installing or entering the CLI", async () => {
+      const root = await makeLauncherFixture(fixtureRoots);
+      const preload = path.join(root, "unsupported-node.mjs");
+      await fs.writeFile(
+        preload,
+        'Object.defineProperty(process.versions, "node", { value: "20.0.0" });',
+      );
+      await fs.writeFile(
+        path.join(root, "dist", "entry.js"),
+        'throw new Error("ordinary CLI must not load");',
+      );
+      const child = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          pathToFileURL(preload).href,
+          path.join(root, "openclaw.mjs"),
+          "browser",
+          "extension",
+          "native-host",
+        ],
+        {
+          encoding: "utf8",
+          timeout: 20_000,
+          env: launcherEnv({ HOME: root }),
+        },
+      );
+      expect(child.status).toBe(1);
+      expect(child.stdout).toBe("");
+      await expect(fs.stat(path.join(root, ".openclaw"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it.each(["missing", "broken"])(
+      "does not fall through when the native artifact is %s",
+      async (kind) => {
+        const root = await makeLauncherFixture(fixtureRoots);
+        await fs.writeFile(
+          path.join(root, "dist", "entry.js"),
+          'process.stdout.write("ordinary CLI");',
+        );
+        if (kind === "broken") {
+          const native = path.join(root, "dist", "extensions", "browser", "native-host-entry.js");
+          await fs.mkdir(path.dirname(native), { recursive: true });
+          await fs.writeFile(native, 'throw new Error("private native diagnostic");');
+        }
+        const child = spawnSync(
+          process.execPath,
+          [path.join(root, "openclaw.mjs"), "browser", "extension", "native-host"],
+          {
+            encoding: "utf8",
+            timeout: 20_000,
+            env: launcherEnv({ HOME: root }),
+          },
+        );
+        expect(child.status).toBe(1);
+        expect(child.stdout).toBe("");
+        expect(child.stderr).not.toContain("private native diagnostic");
+      },
+    );
+
+    it.each([
+      ["browser", "extension", "status"],
+      ["browser", "extension", "setup", "--action", "inspect"],
+      ["browser", "extension", "native-host-extra"],
+      ["browser", "status"],
+    ])("keeps sibling %j on ordinary CLI startup", async (...args) => {
+      const root = await makeLauncherFixture(fixtureRoots);
+      await fs.writeFile(
+        path.join(root, "dist", "entry.js"),
+        'process.stdout.write("ordinary CLI");',
+      );
+      const child = spawnSync(process.execPath, [path.join(root, "openclaw.mjs"), ...args], {
+        encoding: "utf8",
+        timeout: 20_000,
+        env: launcherEnv({ HOME: root }),
+      });
+      expect(child.status, child.stderr).toBe(0);
+      expect(child.stdout).toBe("ordinary CLI");
+    });
+  });
+
   describe.skipIf(process.platform === "win32")("Node.js update recovery", () => {
     async function prepareRecovery(
       params: {

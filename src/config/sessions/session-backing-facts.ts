@@ -3,12 +3,12 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { SessionMetadataUnavailableError } from "../../state/openclaw-agent-db-read-error.js";
 import {
   withOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
