@@ -16,6 +16,7 @@ import {
   collectUpdateDoctorFailureFacts,
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
+  DoctorMaintenanceRefusalError,
   UpdateDoctorError,
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
@@ -23,7 +24,11 @@ import { projectPublicUpdateFailureIdentifiers } from "../infra/update-failure-p
 import type { recordUpdateRunStep, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { redactPublicSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { resolveCommandProcessSignal, retainCommandProcessCleanup } from "../process/exec-spawn.js";
+import {
+  resolveCommandProcessSignal,
+  retainCommandProcessCleanup,
+  withCommandProcessScope,
+} from "../process/exec-spawn.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -258,11 +263,12 @@ afterEach(() => {
   }
 });
 
-function begin() {
+function begin(assertCurrent?: () => void) {
   return beginDoctorMaintenance({
     root,
     options: { repair: true, nonInteractive: true },
     runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+    assertCurrent,
   });
 }
 
@@ -303,6 +309,43 @@ it("does not suggest an unsafe manual stop after a reported write-custody refusa
   expect(error).toBeInstanceOf(Error);
   expect(String(error)).toContain(refusal.message);
   expect(String(error)).not.toContain("Stop the Gateway service and other OpenClaw processes");
+  expect(boundary.restart).not.toHaveBeenCalled();
+});
+
+it("releases its acquired coordinator without deferring a one-shot authority refusal", async () => {
+  const refused = new Error("Synthetic revoked update authority");
+  let revoked = false;
+  const assertCurrent = vi.fn(() => {
+    if (!revoked && boundary.gatewayAcquire.mock.calls.length) {
+      revoked = true;
+      throw refused;
+    }
+  });
+  await expect(begin(assertCurrent)).rejects.toBe(refused);
+  expect(boundary.release).toHaveBeenCalledOnce();
+  expect(boundary.stateAcquire).not.toHaveBeenCalled();
+  expect(boundary.restart).not.toHaveBeenCalled();
+  expect(boundary.stop).toHaveBeenCalledOnce();
+});
+
+it("preserves caller cancellation after a settled maintenance inspection", async () => {
+  const controller = new AbortController();
+  const cancelled = new Error("Synthetic update cancellation");
+  boundary.stop.mockImplementation(async () => {
+    controller.abort(cancelled);
+    return {
+      stopped: false,
+      inspected: false,
+      runtimeInspected: false,
+      running: false,
+      serviceUpdateVerdict: { kind: "unavailable", message: "Inspection was cancelled." },
+    };
+  });
+  boundary.gatewayAcquire.mockImplementation(() => {
+    throw new StateDatabaseCoordinatorContentionError("gateway-lifecycle");
+  });
+  await expect(withCommandProcessScope(() => begin(), controller.signal)).rejects.toBe(cancelled);
+  expect(boundary.stop).toHaveBeenCalledOnce();
   expect(boundary.restart).not.toHaveBeenCalled();
 });
 
@@ -582,14 +625,15 @@ it("fails closed on an unknown external lease observation without exposing priva
   });
   const refusal: unknown = await begin().catch((error: unknown) => error);
   expect(refusal).toMatchObject({ cause });
-  expect(refusal).not.toBeInstanceOf(UpdateDoctorError);
+  expect(refusal).toBeInstanceOf(DoctorMaintenanceRefusalError);
+  expect(refusal).toMatchObject({ refusal: { kind: "deferred", reason: "admission-unavailable" } });
   expect(collectUpdateDoctorFailureFacts(refusal)).toEqual([]);
   expect(
     redactPublicSupportDiagnosticLine(String(refusal), {
       env: {},
       stateDir: "/synthetic/private-state",
     }),
-  ).toBe("Error: Doctor could not enter maintenance.");
+  ).toBe("DoctorMaintenanceRefusalError: Doctor could not enter maintenance.");
   expect(boundary.gatewayAcquire).toHaveBeenCalledOnce();
   expect(boundary.stateAcquire).toHaveBeenCalledOnce();
   expect(boundary.lease).toHaveBeenCalledOnce();
@@ -781,14 +825,15 @@ it("does not classify a forged lease error name, code or message", async () => {
     throw cause;
   });
   const refusal: unknown = await begin().catch((error: unknown) => error);
-  expect(refusal).not.toBeInstanceOf(UpdateDoctorError);
+  expect(refusal).toBeInstanceOf(DoctorMaintenanceRefusalError);
+  expect(refusal).toMatchObject({ refusal: { kind: "deferred", reason: "admission-unavailable" } });
   expect(collectUpdateDoctorFailureFacts(refusal)).toEqual([]);
   expect(
     redactPublicSupportDiagnosticLine(String(refusal), {
       env: {},
       stateDir: "/synthetic/private-state",
     }),
-  ).toBe("Error: Doctor could not enter maintenance.");
+  ).toBe("DoctorMaintenanceRefusalError: Doctor could not enter maintenance.");
 });
 
 it.each([false, true])(
@@ -942,9 +987,9 @@ it.each(["drain", "acquired", "native-revoked", "install-drift"] as const)(
       stopCustody!();
       expect(gatewayHeld || stateHeld).toBe(false);
     });
-    await expect(begin()).rejects.toThrow(
-      /repair admission conflict|native operation custody retired/,
-    );
+    const refusal = await begin().catch((error: unknown) => error);
+    expect(String(refusal)).toMatch(/repair admission conflict|native operation custody retired/);
+    expect(refusal).not.toBeInstanceOf(DoctorMaintenanceRefusalError);
     expect(checkedUnderBoth).toBe(true);
     expect(boundary.restart).toHaveBeenCalledTimes(
       phase === "native-revoked" || phase === "install-drift" ? 0 : 1,
@@ -987,12 +1032,7 @@ it.each([false, true])(
       }
       return result;
     });
-    const refusal = await beginDoctorMaintenance({
-      root,
-      options: { repair: true, nonInteractive: true },
-      runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
-      assertCurrent: () => {},
-    }).catch((error: unknown) => error);
+    const refusal = await begin(() => {}).catch((error: unknown) => error);
 
     expect(refusal).toBeInstanceOf(Error);
     if (stopFailed) {

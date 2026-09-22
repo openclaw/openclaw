@@ -7,6 +7,7 @@ import {
   UPDATE_RUN_ID_ENV,
   readControlPlaneUpdateSentinelMeta,
 } from "../../infra/update-control-plane-sentinel.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { createManagedHandoffProcessIdentityReader } from "../../infra/update-managed-service-handoff-process.js";
@@ -276,6 +277,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
     ReturnType<typeof import("../../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
   let outcome: { pluginUpdate: PostCorePluginUpdateResult } | { error: unknown };
+  let producedPluginUpdate: PostCorePluginUpdateResult | undefined;
   try {
     outcome = {
       pluginUpdate: await withCommandProcessScope(async () => {
@@ -362,6 +364,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
             : undefined,
           assertCurrent,
         });
+        producedPluginUpdate = pluginUpdate;
         // Shipped parents can stop the child as soon as its result appears.
         // Their completion stays here, after the producer releases its lease.
         if (!parentOwnsCompletion) {
@@ -394,7 +397,36 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
       }),
     };
   } catch (error) {
-    outcome = { error };
+    outcome =
+      error instanceof DoctorMaintenanceRefusalError && error.refusal.kind === "deferred"
+        ? {
+            pluginUpdate: {
+              ...(producedPluginUpdate ?? {
+                changed: false,
+                sync: {
+                  changed: false,
+                  switchedToBundled: [],
+                  switchedToNpm: [],
+                  warnings: [],
+                  errors: [],
+                },
+                npm: { changed: false, outcomes: [] },
+                integrityDrifts: [],
+              }),
+              status: "warning",
+              warnings: [
+                ...(producedPluginUpdate?.warnings ?? []),
+                {
+                  reason: "doctor-advisory",
+                  message: error.message,
+                  guidance: [
+                    "After other OpenClaw processes release state, run `openclaw doctor --fix`.",
+                  ],
+                },
+              ],
+            },
+          }
+        : { error };
   }
   // A legacy parent can terminate this child as soon as its result appears.
   // Settle child work and restore service custody before publishing either outcome.

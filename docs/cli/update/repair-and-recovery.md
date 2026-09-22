@@ -200,7 +200,8 @@ Failed convergence leaves the selected rows intact. If any selected run resumes
 before reconciliation, the whole selection is preserved. Full finalization JSON
 includes `reconciledRuns` when rows were selected for recovery, listing the IDs
 newly acknowledged by that invocation, including already-terminal abandoned rows.
-Successful completion with nonfatal warnings also acknowledges those rows.
+Successful convergence with nonfatal warnings also acknowledges those rows.
+Deferred maintenance preserves the selected history and pending migration obligations.
 
 For full finalization, `update repair` runs `openclaw doctor --fix`, reloads the repaired config and
 install records, syncs tracked plugins for the active update channel, updates
@@ -237,9 +238,15 @@ With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Plugin-only
 availability, installation, or load failures appear in
 `postUpdate.plugins.warnings`; finalization reports `status: "warning"` and exits
-successfully when required checks pass. Failed required Doctor execution,
-invalid configuration or state, ownership errors, and failed required readiness
-checks still exit nonzero.
+successfully when required checks pass. Doctor maintenance admission refusals
+also finish with a warning when no data is at risk. Repair restores any service
+it stopped, leaves migrations pending, and names the next repair action. Errors
+after repair writes begin, unreadable state, active migration writes, unsettled
+cleanup, invalid configuration, and failed required readiness checks still exit nonzero.
+
+Recorded pending-migration warnings stop appearing after the migration owner
+records completion. Unrelated warnings and later or reintroduced obligations
+remain visible; the original update history is preserved.
 
 After post-update or finalization work fails and its child processes settle,
 OpenClaw probes the installed Gateway using the normal startup and readiness

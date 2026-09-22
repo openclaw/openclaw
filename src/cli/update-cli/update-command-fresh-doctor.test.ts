@@ -126,6 +126,32 @@ describe("post-plugin update readiness", () => {
     });
   });
 
+  it.each(["pre-plugin", "post-plugin"] as const)(
+    "preserves a settled %s maintenance deferral without running convergence checks",
+    async (phase) => {
+      const refusal = { kind: "deferred", reason: "coordinator-contention" };
+      const warning =
+        "Doctor maintenance is deferred; stop other OpenClaw processes and run openclaw doctor --fix.";
+      const onWarnings = vi.fn();
+      mocks.runExec.mockImplementationOnce(async (_command, _args, options) => {
+        await fs.writeFile(
+          options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+          JSON.stringify({ status: "ok", warnings: [warning], maintenanceRefusal: refusal }),
+        );
+        return { stdout: "", stderr: "" };
+      });
+      const run =
+        phase === "pre-plugin"
+          ? runUpdateFinalizationDoctorInFreshProcess({ ...updateOptions, phase, onWarnings })
+          : completePostCorePluginUpdate({ ...updateOptions, onWarnings });
+      await expect(run).rejects.toMatchObject({ refusal, message: warning });
+      expect(onWarnings).toHaveBeenCalledExactlyOnceWith([warning]);
+      expect(mocks.runExec).toHaveBeenCalledOnce();
+      expect(mocks.runUtf8).not.toHaveBeenCalled();
+      expect(mocks.readConfig).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps a fresh Doctor requester refusal terminal when later checks would pass", async () => {
     const isCurrent = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
     const opts: UpdateCommandOptions = {

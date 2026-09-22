@@ -21,6 +21,7 @@ import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-mo
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
+  DoctorMaintenanceRefusalError,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   UpdateDoctorError,
@@ -383,6 +384,13 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       defaultRuntime.error(result.stderr.trimEnd());
     }
   }
+  if (doctorResult?.status === "ok" && doctorResult.maintenanceRefusal) {
+    throw new DoctorMaintenanceRefusalError(
+      doctorResult.warnings?.[0] ??
+        "Doctor maintenance remains pending; run openclaw doctor --fix.",
+      doctorResult.maintenanceRefusal,
+    );
+  }
 }
 
 async function validatePostPluginConfigInFreshProcess(params: {
@@ -520,7 +528,11 @@ export async function completePostCorePluginUpdate(params: {
         }
       }
     } catch (err) {
-      if (authorityFailed || hasCommandProcessCleanupError(err)) {
+      if (
+        authorityFailed ||
+        hasCommandProcessCleanupError(err) ||
+        err instanceof DoctorMaintenanceRefusalError
+      ) {
         throw err;
       }
       // Lost updater authority must not become an advisory that starts more children.

@@ -99,20 +99,19 @@ still owns the selected state directory. A starting Gateway and a healthy servin
 Gateway retain that ownership for their entire process lifetime; waiting for
 readiness does not release the lock.
 
-Finalizers with this recovery wait for startup through the existing readiness
-observer. If the same holder is verified serving the installed version and build,
-the update finishes with a warning and leaves the Gateway running. Update history
-names the holder and records the skipped Doctor pass. Config and plugin maintenance
-remain pending. At the next maintenance window, stop that Gateway through its
-service or deployment owner, run `openclaw update repair`, then start it through
-the same owner. Check `openclaw update status --json` and
-`openclaw gateway status --deep` for the recorded warning and current health.
+Maintenance admission refusals finish the update with a recorded warning when
+no data is at risk, including contention from an unknown or non-serving holder.
+Repair restores a managed service it stopped before reporting that warning.
+Doctor and plugin maintenance remain pending. Resolve the reported ownership or
+availability problem, then run `openclaw update repair`. Check
+`openclaw update status --json` and `openclaw gateway status --deep` for pending
+migrations, the recorded warning, and current health.
 
 Do not delete lock files to force entry. A dead process releases the physical lock,
-and lease owners reclaim provably dead identities. Unknown ownership, an unreadable
-database, incompatible schemas, active database writers, or unconfirmed subprocess
-cleanup still require their named recovery action; a maintenance warning does not
-authorize concurrent repair or discard recovery backups.
+and lease owners reclaim provably dead identities. A maintenance warning never
+authorizes concurrent repair or discards recovery backups. Active migration
+writes, unreadable state, incomplete migrations, and unconfirmed subprocess
+cleanup retain their failure and recovery guidance.
 
 ## Node and global install permissions
 
