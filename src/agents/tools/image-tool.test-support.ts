@@ -1,3 +1,4 @@
+import { expect } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   resolveAutoMediaKeyProviders,
@@ -143,3 +144,33 @@ export const resolveConfiguredImageModelForTest: ResolveModelAsync = async (
     modelRegistry: {} as never,
   };
 };
+
+type ToolTextResult = {
+  content?: Array<{
+    type?: string;
+    text?: string;
+    image_url?: { url?: string };
+  }>;
+  details?: Record<string, unknown>;
+  resultContentSource?: "network";
+};
+
+export function expectToolText(result: unknown, text: string): void {
+  const content = (result as ToolTextResult).content ?? [];
+  expect(content.some((block) => block.type === "text" && block.text === text)).toBe(true);
+}
+
+export async function expectImageToolExecOk(
+  tool: {
+    execute: (toolCallId: string, input: { prompt: string; path: string }) => Promise<unknown>;
+  },
+  imagePath: string,
+) {
+  const result = await tool.execute("t1", {
+    prompt: "Describe the image.",
+    path: imagePath,
+  });
+  expectToolText(result, "ok");
+  expect((result as ToolTextResult).details).toMatchObject({ text: "ok" });
+  return result;
+}

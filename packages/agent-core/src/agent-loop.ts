@@ -1261,6 +1261,12 @@ async function finalizeExecutedToolCall(
 ): Promise<FinalizedToolCallOutcome> {
   let result = executed.result;
   let isError = executed.isError;
+  // Capture per-invocation provenance before hooks can replace the displayed
+  // result: a result-level source wins over the tool's static marker so a tool
+  // that only sometimes fetches remote content classifies each call precisely.
+  // The remote content was already exposed in this turn, so a later hook
+  // failure must not turn a tainted call into a trusted memory write.
+  const resultContentSource = result.resultContentSource ?? prepared.tool.resultContentSource;
 
   if (executed.executionStarted && batch.config.afterToolCall) {
     try {
@@ -1298,10 +1304,12 @@ async function finalizeExecutedToolCall(
       isError,
       executionStarted: executed.executionStarted,
       ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-      ...(executed.executionStarted &&
-      !executed.callerCancelled &&
-      prepared.tool.resultContentSource
-        ? { resultContentSource: prepared.tool.resultContentSource }
+      // Preserve main's caller-cancellation guard: provenance is only stamped
+      // when the tool actually ran and the caller did not abort it, but resolve
+      // the source per-invocation (result wins over the static tool marker) so
+      // mixed-source tools classify each call precisely.
+      ...(executed.executionStarted && !executed.callerCancelled && resultContentSource
+        ? { resultContentSource }
         : {}),
     },
     finalArgs,

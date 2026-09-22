@@ -42,6 +42,10 @@ import {
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
 import {
+  isCanonicalCandidateShadowedByExecutionAlias,
+  isExecutionAliasCandidateForProvider,
+} from "./image-tool.model-alias.js";
+import {
   buildImageToolReferenceDetails,
   buildNativeImageToolResult,
   type LoadedImageForTool,
@@ -134,42 +138,6 @@ function hasExplicitDefaultPrimaryModel(cfg?: OpenClawConfig): boolean {
     return model.trim().length > 0;
   }
   return typeof model?.primary === "string" && model.primary.trim().length > 0;
-}
-
-function modelRefProvider(candidate: string | null | undefined): string | undefined {
-  const trimmed = candidate?.trim();
-  if (!trimmed?.includes("/")) {
-    return undefined;
-  }
-  return trimmed.slice(0, trimmed.indexOf("/")).trim();
-}
-
-function isExecutionAliasCandidateForProvider(
-  candidate: string | null | undefined,
-  provider: string,
-): boolean {
-  const candidateProvider = modelRefProvider(candidate);
-  return Boolean(
-    candidateProvider &&
-    candidateProvider !== normalizeMediaProviderId(candidateProvider) &&
-    normalizeMediaProviderId(candidateProvider) === normalizeMediaProviderId(provider),
-  );
-}
-
-function isCanonicalCandidateShadowedByExecutionAlias(
-  candidate: string | null | undefined,
-  candidates: readonly (string | null | undefined)[],
-): boolean {
-  const candidateProvider = modelRefProvider(candidate);
-  if (!candidateProvider || candidateProvider !== normalizeMediaProviderId(candidateProvider)) {
-    return false;
-  }
-  if (!isMinimaxVlmProvider(candidateProvider)) {
-    return false;
-  }
-  return candidates.some((shadowCandidate) =>
-    isExecutionAliasCandidateForProvider(shadowCandidate, candidateProvider),
-  );
 }
 
 const testing = {
@@ -932,16 +900,23 @@ export function createImageTool(options?: {
           buffer: media.buffer,
           mimeType,
           resolvedImage,
+          ...(isHttpUrl ? { remoteSource: true } : {}),
           ...(rewrittenFrom ? { rewrittenFrom } : {}),
         });
       }
 
-      if (imageRoute.kind === "native") {
-        const result = await buildNativeImageToolResult(loadedImages, options?.config);
-        signal?.throwIfAborted();
-        return result;
-      }
+      // Per-invocation taint: only http(s) images are externally controlled
+      // (a prompt-injection vector via the visual description). Local paths,
+      // file://, and data: keep the default trusted classification.
+      const anyRemoteImageSource = loadedImages.some((img) => img.remoteSource);
 
+      if (imageRoute.kind === "native") {
+        const nativeResult = await buildNativeImageToolResult(loadedImages, options?.config);
+        signal?.throwIfAborted();
+        return anyRemoteImageSource
+          ? { ...nativeResult, resultContentSource: "network" as const }
+          : nativeResult;
+      }
       // Do not issue a paid vision-provider call for an already-aborted run.
       signal?.throwIfAborted();
       // Text-only runs delegate image understanding to the configured fallback model.
@@ -959,7 +934,10 @@ export function createImageTool(options?: {
         preparedModelRuntime: options?.preparedModelRuntime,
       });
 
-      return buildTextToolResult(result, buildImageToolReferenceDetails(loadedImages));
+      return {
+        ...buildTextToolResult(result, buildImageToolReferenceDetails(loadedImages)),
+        ...(anyRemoteImageSource ? { resultContentSource: "network" as const } : {}),
+      };
     },
   };
 }

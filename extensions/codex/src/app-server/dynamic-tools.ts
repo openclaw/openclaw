@@ -85,6 +85,8 @@ import {
   createFailedDynamicToolResponse,
   failedToolResult,
   type CodexDynamicToolRuntimeResponse,
+  isAsyncStartedToolResult,
+  isToolResultYield,
 } from "./dynamic-tool-response-state.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import type {
@@ -678,6 +680,10 @@ export function createCodexDynamicToolBridge(params: {
           diagnosticTerminalType: terminalType,
           diagnosticTerminalReason: resultFailureKind === "blocked" ? undefined : resultFailureKind,
           transcriptDetails: asOptionalRecord(sanitizeToolResult(result))?.details,
+          // Codex's protocol cannot carry host provenance; retain the executed
+          // result's per-invocation source (falling back to the tool's static
+          // marker) for the mirrored transcript only.
+          resultContentSource: rawResult.resultContentSource ?? tool.resultContentSource,
         };
         const toolConfirmedSourceReply =
           params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
@@ -1076,17 +1082,6 @@ function collectToolTelemetry(params: {
     });
   }
   return record;
-}
-function isToolResultYield(result: AgentToolResult<unknown>): boolean {
-  const details = result.details;
-  if (!isRecord(details) || typeof details.status !== "string") {
-    return false;
-  }
-  return details.status.trim().toLowerCase() === "yielded";
-}
-function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
-  const details = result.details;
-  return isRecord(details) && details.async === true && details.status === "started";
 }
 function normalizeToolResultMaxChars(maxChars: number): number {
   return typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0

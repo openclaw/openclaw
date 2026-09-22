@@ -121,6 +121,8 @@ describe("PDF tool native provider paths", () => {
       });
       expect(extractSpy).not.toHaveBeenCalled();
       expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+      // A local /tmp PDF is not externally controlled: no network taint.
+      expect(result.resultContentSource).toBeUndefined();
       expectFields(result.details, {
         native: true,
         model: ANTHROPIC_PDF_MODEL,

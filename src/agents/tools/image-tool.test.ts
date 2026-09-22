@@ -44,6 +44,8 @@ import { makeZeroUsageSnapshot } from "../usage.js";
 import { createImageTool } from "./image-tool.js";
 import {
   createMinimaxImageConfig,
+  expectImageToolExecOk,
+  expectToolText,
   ONE_PIXEL_PNG_B64,
   resolveConfiguredImageModelForTest,
   resolveImageModelConfigForTool,
@@ -749,34 +751,6 @@ function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelD
     contextWindow: 128_000,
     maxTokens: 8_192,
   };
-}
-
-async function expectImageToolExecOk(
-  tool: {
-    execute: (toolCallId: string, input: { prompt: string; path: string }) => Promise<unknown>;
-  },
-  imagePath: string,
-) {
-  const result = await tool.execute("t1", {
-    prompt: "Describe the image.",
-    path: imagePath,
-  });
-  expectToolText(result, "ok");
-  expect((result as ToolTextResult).details).toMatchObject({ text: "ok" });
-}
-
-type ToolTextResult = {
-  content?: Array<{
-    type?: string;
-    text?: string;
-    image_url?: { url?: string };
-  }>;
-  details?: Record<string, unknown>;
-};
-
-function expectToolText(result: unknown, text: string): void {
-  const content = (result as ToolTextResult).content ?? [];
-  expect(content.some((block) => block.type === "text" && block.text === text)).toBe(true);
 }
 
 function firstImageRequest(mock: { mock: { calls: unknown[][] } }): ImageDescriptionRequest {
@@ -2348,7 +2322,8 @@ describe("image tool implicit imageModel config", () => {
       };
       const tool = createRequiredImageTool({ config: cfg, agentDir });
 
-      await expectImageToolExecOk(tool, "http://198.18.0.153/reference.png");
+      const result = await expectImageToolExecOk(tool, "http://198.18.0.153/reference.png");
+      expect((result as { resultContentSource?: unknown }).resultContentSource).toBe("network");
       const [input, init] = fetchCallAt(fetch, 0);
       expect(input).toBe("http://198.18.0.153/reference.png");
       expect(typeof init).toBe("object");
@@ -2762,6 +2737,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     const text = res.content?.find((b) => b.type === "text")?.text ?? "";
     expect(text).toBe("ok");
+    expect(res.resultContentSource).toBeUndefined();
   });
 
   it("accepts paths[] for multi-image requests", async () => {
