@@ -3326,8 +3326,14 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       title: "routes fake-timer unit-fast tests to the serial fake-timer lane",
-      target: "src/acp/control-plane/manager.test.ts",
+      target: "src/acp/translator.stop-reason.test.ts",
       config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+      includePattern: "src/acp/translator.stop-reason.test.ts",
+    },
+    {
+      title: "routes ACP session signal tests to the host broker lane",
+      target: "src/acp/control-plane/manager.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
       includePattern: "src/acp/control-plane/manager.test.ts",
     },
   ])("$title", ({ target, config, includePattern }) => {

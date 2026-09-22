@@ -564,7 +564,7 @@ describe("sqlite WAL maintenance", () => {
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.mocked(db["exec"]).mockImplementation((sql) => {
-      if (sql === "PRAGMA incremental_vacuum(512);") {
+      if (sql === "PRAGMA incremental_vacuum(8);") {
         periodic.resolve([requestScope.getStore(), sessionScope.getStore()]);
       }
     });
@@ -581,7 +581,7 @@ describe("sqlite WAL maintenance", () => {
 
           expect(await periodic.promise).toEqual([undefined, undefined]);
           expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
-          expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(512);");
+          expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(8);");
           expect(maintenance.close()).toBe(true);
           expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
           expect(requestScope.getStore()).toBe(request);
@@ -827,7 +827,7 @@ describe("sqlite WAL maintenance", () => {
 
   it.runIf(process.platform === "linux").each(["EACCES", "EPERM"] as const)(
     "disables split-brain detection after a %s scan error",
-    (code) => {
+    async (code) => {
       vi.useFakeTimers();
       const tempDir = tempDirs.make("openclaw-sqlite-wal-tripwire-error-");
       const databasePath = path.join(tempDir, "state.sqlite");
@@ -846,7 +846,7 @@ describe("sqlite WAL maintenance", () => {
       try {
         writer.exec("CREATE TABLE events (value TEXT NOT NULL);");
 
-        expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+        await vi.advanceTimersByTimeAsync(100);
         expect(readdir).toHaveBeenCalledTimes(1);
         expect(() =>
           writer.prepare("INSERT INTO events VALUES (?)").run("still-open"),
@@ -854,7 +854,7 @@ describe("sqlite WAL maintenance", () => {
 
         fs.unlinkSync(`${databasePath}-wal`);
         fs.unlinkSync(`${databasePath}-shm`);
-        expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+        await vi.advanceTimersByTimeAsync(100);
 
         expect(readdir).toHaveBeenCalledTimes(1);
         expect(
@@ -896,7 +896,7 @@ describe("sqlite WAL maintenance", () => {
 
     vi.advanceTimersByTime(100);
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(FULL);");
-    expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(512);");
+    expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(8);");
 
     expect(maintenance.close({ checkpointMode: "PASSIVE" })).toBe(true);
     expect(db["prepare"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
