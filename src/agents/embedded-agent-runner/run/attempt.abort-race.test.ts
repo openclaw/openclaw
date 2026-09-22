@@ -42,6 +42,9 @@ describe("runEmbeddedAttempt abort races", () => {
     const publishedDeadlines: Array<{ kind: string; deadlineAtMs?: number }> = [];
     const broker = new EmbeddedPluginApprovalBroker();
     const approvalRequested = createDeferred();
+    const promptTimerInstalled = createDeferred();
+    const attemptAbortController = new AbortController();
+    let activeAttempt: ReturnType<typeof createContextEngineAttemptRunner> | undefined;
     const approvalEvents: string[] = [];
     const unsubscribe = broker.subscribe((event) => {
       approvalEvents.push(event.event);
@@ -67,13 +70,14 @@ describe("runEmbeddedAttempt abort races", () => {
     setEmbeddedPluginApprovalBroker(broker);
 
     try {
-      const resultPromise = createContextEngineAttemptRunner({
+      activeAttempt = createContextEngineAttemptRunner({
         contextEngine: createContextEngineBootstrapAndAssemble(),
         sessionKey: "agent:main:telegram:direct:approval-clock-step",
         tempPaths,
         sessionPrompt: async () => {
           await new Promise<void>((resolve) => {
             setTimeout(resolve, 40);
+            promptTimerInstalled.resolve();
           });
           const approvalPromise = runBeforeToolCallHook({
             toolName: "skill_workshop",
@@ -85,10 +89,7 @@ describe("runEmbeddedAttempt abort races", () => {
               config: { skills: { workshop: { approvalPolicy: "pending" } } },
             },
           });
-          await Promise.race([
-            approvalRequested.promise,
-            approvalPromise.then(() => undefined),
-          ]);
+          await Promise.race([approvalRequested.promise, approvalPromise.then(() => undefined)]);
           const approval = broker.listPending()[0];
           if (!approval) {
             throw new Error(
@@ -102,11 +103,14 @@ describe("runEmbeddedAttempt abort races", () => {
         },
         attemptOverrides: {
           timeoutMs: 1_000,
+          abortSignal: attemptAbortController.signal,
           onAttemptDeadlineChanged: (deadline) => publishedDeadlines.push(deadline),
         },
       });
 
+      await promptTimerInstalled.promise;
       await vi.advanceTimersByTimeAsync(40);
+      await approvalRequested.promise;
       const approval = broker.listPending()[0];
       if (!approval) {
         throw new Error("approval broker did not publish a pending request");
@@ -115,7 +119,7 @@ describe("runEmbeddedAttempt abort races", () => {
         throw new Error("approval broker did not resolve the pending request");
       }
       await vi.advanceTimersByTimeAsync(80);
-      const result = await resultPromise;
+      const result = await activeAttempt!;
 
       expect(result.terminal).toEqual({ kind: "ok" });
       expect(publishedDeadlines.map(({ kind }) => kind)).toEqual([
@@ -133,6 +137,20 @@ describe("runEmbeddedAttempt abort races", () => {
           `approvalLifecycle=${approvalEvents.join(",")}\n`,
       );
     } finally {
+      attemptAbortController.abort();
+      const pendingApproval = broker.listPending()[0];
+      if (pendingApproval) {
+        broker.resolve(pendingApproval.id, "deny");
+      }
+      await vi.runOnlyPendingTimersAsync();
+      const pendingApprovalAfterAbort = broker.listPending()[0];
+      if (pendingApprovalAfterAbort) {
+        broker.resolve(pendingApprovalAfterAbort.id, "deny");
+        await vi.runOnlyPendingTimersAsync();
+      }
+      if (activeAttempt) {
+        await activeAttempt.catch(() => undefined);
+      }
       unsubscribe();
       broker.stop();
       setEmbeddedPluginApprovalBroker(null);
