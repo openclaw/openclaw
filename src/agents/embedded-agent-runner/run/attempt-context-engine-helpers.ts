@@ -57,7 +57,13 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     params.bootstrapContextMode !== "lightweight" &&
     !isHeartbeatLifecycleRun &&
     params.bootstrapContextRunKind !== "cron" &&
-    params.deliversCompleteWorkspaceContext;
+    // A clean full bootstrap always recorded one. A setup-complete workspace is the new case:
+    // nothing was withheld, so its turns carry every workspace file even though onboarding left
+    // the mode at "none". Only continuation-skip can read the marker, so the widening stops there
+    // and installs on the default "always" mode gain no transcript entry per session.
+    (params.bootstrapMode === "full" ||
+      (params.contextInjectionMode === "continuation-skip" &&
+        params.deliversCompleteWorkspaceContext));
 
   const context = shouldSkipBootstrapInjection
     ? { bootstrapFiles: [], contextFiles: [] }

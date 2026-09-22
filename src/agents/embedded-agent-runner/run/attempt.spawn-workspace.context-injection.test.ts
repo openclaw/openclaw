@@ -163,14 +163,31 @@ describe("embedded attempt context injection", () => {
       contextInjectionMode: "continuation-skip",
       bootstrapMode: "none",
       deliversCompleteWorkspaceContext: true,
+      resolver: async () => ({
+        bootstrapFiles: [{ name: "AGENTS.md", content: "workspace rules" }],
+        contextFiles: [{ path: "AGENTS.md", content: "workspace rules" }],
+      }),
     });
 
     expect(result.isContinuationTurn).toBe(false);
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(true);
   });
 
+  it("does not record a completion marker for the default always-injection mode", async () => {
+    // "always" never reads the marker back, so a setup-complete workspace must not
+    // start appending one transcript entry per session under it.
+    const { result } = await resolveBootstrapContext({
+      contextInjectionMode: "always",
+      bootstrapMode: "none",
+      deliversCompleteWorkspaceContext: true,
+    });
+
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+  });
+
   it("does not let a cron maintenance turn record bootstrap completion", async () => {
     const { result } = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
       bootstrapContextRunKind: "cron",
       bootstrapMode: "none",
       deliversCompleteWorkspaceContext: true,
