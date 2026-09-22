@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
@@ -23,10 +24,8 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js"
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  deliveryContextFromSession,
-  normalizeSessionDeliveryState,
-} from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
@@ -50,7 +49,6 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
-import { resolveInternalSessionEffectsTarget } from "./internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
@@ -425,7 +423,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
 vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   expandExplicitSkillReferences: ({ text }: { text: string }) => ({ body: text, skills: [] }),
   hasSkillReferenceCandidate: () => true,
-  listSkillCommandsForWorkspace: (params: unknown) =>
+  prepareSkillCommandsForWorkspace: async (params: unknown) =>
     state.listSkillCommandsForWorkspaceMock(params),
   resolveEffectiveAgentSkillFilter: () => undefined,
 }));
@@ -4054,14 +4052,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       "session preparation failed",
     );
 
-    const target = resolveInternalSessionEffectsTarget({
+    const target = resolveInternalSessionEffectsIdentity({
       agentId: "default",
       runId: "model-run-prepare-failure",
-      storePath: "/tmp/openclaw-session-store.json",
     });
     expect(state.applySessionEntryLifecycleMutationMock).toHaveBeenCalledWith({
-      agentId: target.agentId,
-      storePath: target.storePath,
+      agentId: "default",
+      storePath: "/tmp/openclaw-session-store.json",
       removals: [
         {
           sessionKey: target.sessionKey,

@@ -122,6 +122,7 @@ export class DraftSubmissionFlow {
       () => this.setError(CHAT_COMPOSER_DRAFT_STORAGE_ERROR),
     );
     this.attachmentDraft = new NewSessionAttachmentDraft(callbacks.requestUpdate, () => {
+      this.rejectedPromptError = null;
       this.startedSession.current = null;
       this.draftPersistence.noteUserMutation();
     });

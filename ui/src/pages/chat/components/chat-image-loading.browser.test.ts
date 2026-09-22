@@ -2,9 +2,8 @@ import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
-import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
-import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import { projectMessageMedia, releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import "../../../test-helpers/load-styles.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -200,7 +199,9 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         </div>`,
         container,
       );
-      expect(geometry(container).height).toBe(74);
+      expect(geometry(container).height).toBeCloseTo(400 / 1.5, 1);
+      expect(frame(container).textContent?.trim()).toBe("");
+      expect(container.querySelector(".chat-image-skeleton")).not.toBeNull();
       response.resolve(svgResponse(800, 1600));
       await vi.waitFor(() => expect(container.querySelector("img")).not.toBeNull());
       await container.querySelector("img")!.decode();
@@ -210,7 +211,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
   );
 
   it.each(["attachment", "image block"])(
-    "keeps a local %s compact until metadata establishes that it is loadable",
+    "keeps a local %s as a plain skeleton while metadata is pending",
     async (kind) => {
       const container = mount(500);
       const response = createDeferred<Response>();
@@ -223,8 +224,8 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         render(
           html`${
               kind === "attachment"
-                ? renderAssistantAttachments(
-                    [
+                ? renderMessageImages(
+                    projectMessageMedia({}, [
                       {
                         type: "attachment",
                         attachment: {
@@ -235,7 +236,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
                           height: 800,
                         },
                       },
-                    ],
+                    ]).images,
                     { sessionKey: "image-proof", agentId: "main", onRequestUpdate: draw },
                   )
                 : renderMessageImages(
@@ -250,8 +251,10 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       subscribers.push(draw);
       draw();
       const before = geometry(container);
-      expect(before.height).toBe(74);
-      expect(container.querySelector(".chat-assistant-attachment-card")).not.toBeNull();
+      expect(before.height).toBeCloseTo(400 / 1.5, 1);
+      expect(frame(container).textContent?.trim()).toBe("");
+      expect(container.querySelector(".chat-image-skeleton")).not.toBeNull();
+      expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
       response.resolve(
         Response.json({
           available: true,
@@ -586,7 +589,6 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
           file.getBoundingClientRect().top - gallery.getBoundingClientRect().bottom,
         ).toBeCloseTo(parentGap, 1);
       }
-      const nextTop = container.querySelector("[data-next-message]")!.getBoundingClientRect().top;
       const cornerInsets = (element: HTMLElement) => {
         const rect = element.getBoundingClientRect();
         const radius = Number.parseFloat(getComputedStyle(element).borderTopLeftRadius);
@@ -636,10 +638,13 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         expect.objectContaining({ method: "POST" }),
       );
       expect(frame(container).getAttribute("aria-busy")).toBe("true");
-      expect(slots()).toEqual(before);
-      expect(container.querySelector("[data-next-message]")!.getBoundingClientRect().top).toBe(
-        nextTop,
-      );
+      expect(frame(container).textContent?.trim()).toBe("");
+      expect(frame(container).querySelector(".chat-image-skeleton")).not.toBeNull();
+      expect(
+        slots()
+          .slice(1)
+          .map(({ width, height }) => ({ width, height })),
+      ).toEqual(before.slice(1).map(({ width, height }) => ({ width, height })));
       allowed.resolve(Response.json({ available: true }));
       await vi.waitFor(() => expect(frame(container).querySelector("img")).not.toBeNull());
       for (const remaining of [...gallery.children].slice(1, count)) {

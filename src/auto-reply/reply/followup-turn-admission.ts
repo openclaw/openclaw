@@ -9,7 +9,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
@@ -119,12 +119,17 @@ export async function admitFollowupTurn(params: {
   defaults: FollowupRunnerParams;
   onCompactionNoticePayload?: (payload: ReplyPayload, turn: AdmittedFollowupTurn) => Promise<void>;
 }): Promise<FollowupAdmissionResult> {
+  const assertOperatorCurrent = () => {
+    params.queued.operatorAuthority?.assertCurrent();
+  };
+  assertOperatorCurrent();
   const resolvedConfig = await resolveQueuedReplyExecutionConfig(params.queued.run.config, {
     originatingChannel: params.queued.originatingChannel,
     messageProvider: params.queued.run.messageProvider,
     originatingAccountId: params.queued.originatingAccountId,
     agentAccountId: params.queued.run.agentAccountId,
   });
+  assertOperatorCurrent();
   const config = resolveQueuedReplyRuntimeConfig(resolvedConfig);
   const replySessionKey = params.queued.run.sessionKey ?? params.defaults.sessionKey;
   const initialStoredEntry = replySessionKey
@@ -174,6 +179,7 @@ export async function admitFollowupTurn(params: {
     // callbacks in that closure so retried non-routable items use the newest transport owner.
     queuedFollowupAdmitted = true;
     await params.defaults.opts?.onQueuedFollowupAdmitted?.();
+    assertOperatorCurrent();
     if (operation.sessionId !== run.sessionId) {
       run = {
         ...run,

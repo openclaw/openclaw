@@ -146,6 +146,8 @@ export function createSubagentRegistryCompletionRuntime(config: {
   async function finalizeInterruptedSubagentRun(params: {
     runId: string;
     expectedEntry?: SubagentRunRecord;
+    isRecoveryCurrent?: () => boolean;
+    isChildSessionEffectsCurrent?: () => boolean;
     error: string;
     endedAt?: number;
     suppressSessionEffects?: boolean;
@@ -160,7 +162,11 @@ export function createSubagentRegistryCompletionRuntime(config: {
         ? params.endedAt
         : Date.now();
     const entry = runs.get(runId);
-    if (!entry || (params.expectedEntry && entry !== params.expectedEntry)) {
+    if (
+      !entry ||
+      (params.expectedEntry && entry !== params.expectedEntry) ||
+      params.isRecoveryCurrent?.() === false
+    ) {
       return 0;
     }
     pendingLifecycle.clear(runId);
@@ -183,6 +189,8 @@ export function createSubagentRegistryCompletionRuntime(config: {
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
       recoverInterrupted: true,
+      isRecoveryCurrent: params.isRecoveryCurrent,
+      isChildSessionEffectsCurrent: params.isChildSessionEffectsCurrent,
       suppressSessionEffects: params.suppressSessionEffects,
     };
     try {

@@ -50,7 +50,6 @@ function titleParams(name: string) {
     sessionKey: `agent:main:dashboard:source-${name}`,
     storePath: "/synthetic/title-sessions.sqlite",
     userMessage: "Help me plan the release",
-    worktree: true,
   };
 }
 
@@ -110,90 +109,104 @@ beforeEach(() => {
 });
 
 describe("worktree title source lifecycle", () => {
-  it("leaves the generation source stage before continuation and uses fresh persistence authority", async () => {
-    const context = new AsyncLocalStorage<string>();
-    const owner = new AsyncWorkScope();
-    const source = sourceStages(context);
-    const started = createDeferredCore();
-    const continueGeneration = createDeferredCore();
-    const generationContexts: Array<string | undefined> = [];
-    let continuationAborted: boolean | undefined;
-    let writeContext: string | undefined;
-    let acceptanceContext: string | undefined;
-    let writeAssertions: string[] = [];
-    mocks.generate.mockImplementation(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
-      generationContexts.push(context.getStore());
-      started.resolve();
-      await continueGeneration.promise;
-      generationContexts.push(context.getStore());
-      continuationAborted = abortSignal?.aborted;
-      return "Scoped release planning";
-    });
-    mocks.load.mockImplementation(() => {
-      if (current.displayName) {
-        acceptanceContext = context.getStore();
+  it.each([false, true])(
+    "uses fresh source authority for persistence (late completion: %s)",
+    async (late) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const context = new AsyncLocalStorage<string>();
+      const owner = new AsyncWorkScope();
+      const source = sourceStages(context);
+      const started = createDeferredCore();
+      const continueGeneration = createDeferredCore();
+      const persisted = createDeferredCore();
+      const generationContexts: Array<string | undefined> = [];
+      let continuationAborted: boolean | undefined;
+      let writeContext: string | undefined;
+      let acceptanceContext: string | undefined;
+      let writeAssertions: string[] = [];
+      mocks.generate.mockImplementation(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        generationContexts.push(context.getStore());
+        started.resolve();
+        await continueGeneration.promise;
+        generationContexts.push(context.getStore());
+        continuationAborted = abortSignal?.aborted;
+        return "Scoped release planning";
+      });
+      mocks.load.mockImplementation(() => {
+        if (current.displayName) {
+          acceptanceContext = context.getStore();
+        }
+        return { ...current };
+      });
+      mocks.patch.mockImplementation(async (_scope, update, options) => {
+        const patch = await update({ ...current });
+        await Promise.resolve();
+        writeContext = context.getStore();
+        const before = source.asserted.length;
+        options.assertCommitAllowed?.();
+        writeAssertions = source.asserted.slice(before);
+        current = { ...current, ...patch };
+        return { ...current };
+      });
+      const onError = vi.fn();
+      const onPersisted = vi.fn(() => persisted.resolve());
+      const request = context.run("caller", () =>
+        owner.run(() =>
+          generateWorktreeSessionTitle({
+            ...titleParams("success"),
+            withSource: source.withSource,
+            onError,
+            onPersisted,
+          }),
+        ),
+      );
+      const settled = request.then(
+        () => undefined,
+        () => undefined,
+      );
+      try {
+        await Promise.race([
+          started.promise,
+          request.then(() => {
+            throw new Error("title completed before generation started");
+          }),
+        ]);
+        await nextTurn();
+        expect(source.entered.length).toBeGreaterThan(0);
+        expect(source.closed).toEqual(source.entered);
+        expect(source.active.size).toBe(0);
+        expect(mocks.patch).not.toHaveBeenCalled();
+        if (late) {
+          await vi.advanceTimersByTimeAsync(30_000);
+          await expect(request).resolves.toBeUndefined();
+          expect(onError).toHaveBeenCalledOnce();
+        }
+        continueGeneration.resolve();
+        await persisted.promise;
+        if (!late) {
+          await expect(request).resolves.toBe("Scoped release planning");
+          expect(source.entered).toContain(acceptanceContext);
+          expect(acceptanceContext).not.toBe(writeContext);
+          expect(acceptanceContext).not.toBe(source.entered[0]);
+          expect(onError).not.toHaveBeenCalled();
+        }
+        expect(generationContexts).toEqual(["caller", "caller"]);
+        expect(continuationAborted).toBe(false);
+        expect(source.entered).toContain(writeContext);
+        expect(writeContext).not.toBe(source.entered[0]);
+        expect(writeAssertions).toEqual([writeContext]);
+        expect(source.closed).toEqual(source.entered);
+        expect(onPersisted).toHaveBeenCalledOnce();
+        expect(current.displayName).toBe("Scoped release planning");
+      } finally {
+        continueGeneration.resolve();
+        await settled;
+        await owner.drain();
+        context.disable();
+        vi.useRealTimers();
       }
-      return { ...current };
-    });
-    mocks.patch.mockImplementation(async (_scope, update, options) => {
-      const patch = await update({ ...current });
-      await Promise.resolve();
-      writeContext = context.getStore();
-      const before = source.asserted.length;
-      options.assertCommitAllowed?.();
-      writeAssertions = source.asserted.slice(before);
-      current = { ...current, ...patch };
-      return { ...current };
-    });
-    const onError = vi.fn();
-    const onPersisted = vi.fn();
-    const request = context.run("caller", () =>
-      owner.run(() =>
-        generateWorktreeSessionTitle({
-          ...titleParams("success"),
-          withSource: source.withSource,
-          onError,
-          onPersisted,
-        }),
-      ),
-    );
-    const settled = request.then(
-      () => undefined,
-      () => undefined,
-    );
-    try {
-      await Promise.race([
-        started.promise,
-        request.then(() => {
-          throw new Error("title completed before generation started");
-        }),
-      ]);
-      await nextTurn();
-      expect(source.entered.length).toBeGreaterThan(0);
-      expect(source.closed).toEqual(source.entered);
-      expect(source.active.size).toBe(0);
-      expect(mocks.patch).not.toHaveBeenCalled();
-      continueGeneration.resolve();
-      await expect(request).resolves.toBe("Scoped release planning");
-      expect(generationContexts).toEqual(["caller", "caller"]);
-      expect(continuationAborted).toBe(false);
-      expect(source.entered).toContain(writeContext);
-      expect(writeContext).not.toBe(source.entered[0]);
-      expect(writeAssertions).toEqual([writeContext]);
-      expect(source.entered).toContain(acceptanceContext);
-      expect(acceptanceContext).not.toBe(writeContext);
-      expect(acceptanceContext).not.toBe(source.entered[0]);
-      expect(source.closed).toEqual(source.entered);
-      expect(onError).not.toHaveBeenCalled();
-      expect(onPersisted).toHaveBeenCalledOnce();
-      expect(current.displayName).toBe("Scoped release planning");
-    } finally {
-      continueGeneration.resolve();
-      await settled;
-      await owner.drain();
-      context.disable();
-    }
-  });
+    },
+  );
 
   it("keeps duplicate cancellation separate from the original title owner", async () => {
     const context = new AsyncLocalStorage<string>();
@@ -239,24 +252,21 @@ describe("worktree title source lifecycle", () => {
           throw new Error("title completed before generation started");
         }),
       ]);
-      const duplicate = await context.run("duplicate", () =>
+      const duplicate = context.run("duplicate", () =>
         duplicateOwner.run(() =>
           maybeGenerateSessionTitle({ ...params, withSource: duplicateSource }),
         ),
       );
-      expect(duplicate.kind).toBe("in-flight");
-      if (duplicate.kind !== "in-flight") {
-        throw new Error("expected the canonical in-flight title request");
-      }
       context.run("duplicate", () => duplicateOwner.beginClose(new Error("duplicate closed")));
       await duplicateOwner.drain();
       expect(signal?.aborted).toBe(false);
       expect(duplicateSources).toBe(0);
 
       const originalClosed = new Error("original title owner closed");
+      const duplicateRejected = expect(duplicate).rejects.toBe(originalClosed);
       context.run("unrelated", () => owner.beginClose(originalClosed));
       await expect(first).rejects.toBe(originalClosed);
-      await expect(duplicate.settled).rejects.toBe(originalClosed);
+      await duplicateRejected;
       expect(signal?.reason).toBe(originalClosed);
       expect(cancellationContext).toBe("owner");
       expect(mocks.generate).toHaveBeenCalledOnce();
@@ -356,8 +366,7 @@ describe("worktree title source lifecycle", () => {
     }
   });
 
-  it("cancels timed-out generation and joins its owned resource cleanup", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  it("cancels generation when its parent closes and joins its owned resource cleanup", async () => {
     const context = new AsyncLocalStorage<string>();
     const owner = new AsyncWorkScope();
     const source = sourceStages(context);
@@ -412,10 +421,11 @@ describe("worktree title source lifecycle", () => {
       await started.promise;
       await nextTurn();
       expect(source.closed).toEqual(source.entered);
-      await vi.advanceTimersByTimeAsync(8_000);
+      const cancellation = new Error("title owner closed");
+      context.run("unrelated", () => owner.beginClose(cancellation));
       await nextTurn();
       expect(signal?.aborted).toBe(true);
-      expect(signal?.reason).toEqual(new Error("worktree title generation timed out after 8000ms"));
+      expect(signal?.reason).toBe(cancellation);
       expect(cancellationContext).toBe("caller");
       await cleanupStarted.promise;
       expect(cleanupContext).toBe("caller");
@@ -433,7 +443,6 @@ describe("worktree title source lifecycle", () => {
         await outcome;
         await owner.drain();
       } finally {
-        vi.useRealTimers();
         context.disable();
       }
     }

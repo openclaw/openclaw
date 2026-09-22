@@ -11,6 +11,8 @@ import {
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { repairJson } from "@openclaw/ai/internal/runtime";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
@@ -86,11 +88,6 @@ const EditToolOutputSchema = Type.Union([
     { additionalProperties: false },
   ),
 ]);
-type LegacyEditToolInput = Record<string, unknown> & {
-  edits?: unknown;
-  oldText?: unknown;
-  newText?: unknown;
-};
 
 const EDIT_MISMATCH_MESSAGE = "Could not find the exact text in";
 const EDIT_MISMATCH_HINT_LIMIT = 800;
@@ -150,32 +147,38 @@ function prepareEditArguments(input: unknown): EditToolInput {
 
   const args = { ...(input as Record<string, unknown>) };
 
-  // Some models (Opus 4.6, GLM-5.1) send edits as a JSON string instead of an array
+  // Serialized replacements contain literal file text, so valid JSON escapes must
+  // survive rather than being reinterpreted by the repair owner's path heuristic.
   if (typeof args.edits === "string") {
     try {
-      const parsed = JSON.parse(args.edits);
+      const parsed = JSON.parse(repairJson(args.edits, { preserveValidControlEscapes: true }));
       if (Array.isArray(parsed)) {
         args.edits = parsed;
       }
     } catch {}
   }
 
-  const legacy = args as LegacyEditToolInput;
-  if (typeof legacy.oldText === "string" && typeof legacy.newText === "string") {
-    const edits = Array.isArray(legacy.edits) ? [...legacy.edits] : [];
-    edits.push({ oldText: legacy.oldText, newText: legacy.newText });
-    args.edits = edits;
-  }
-
-  const edits = Array.isArray(args.edits)
+  let edits = Array.isArray(args.edits)
     ? args.edits.map((edit) => {
-        if (!edit || typeof edit !== "object" || Array.isArray(edit)) {
+        if (!isRecord(edit)) {
           return edit;
         }
-        const candidate = edit as Record<string, unknown>;
-        return { oldText: candidate.oldText, newText: candidate.newText };
+        return { oldText: edit.oldText, newText: edit.newText };
       })
     : args.edits;
+
+  const { oldText, newText } = args;
+  if (typeof oldText === "string" && typeof newText === "string") {
+    const batch = Array.isArray(edits) ? edits : [];
+    if (
+      !batch.some(
+        (edit: unknown) => isRecord(edit) && edit.oldText === oldText && edit.newText === newText,
+      )
+    ) {
+      batch.push({ oldText, newText });
+    }
+    edits = batch;
+  }
 
   // Keep the strict provider schema while tolerating model-added metadata.
   return { path: args.path, edits } as EditToolInput;

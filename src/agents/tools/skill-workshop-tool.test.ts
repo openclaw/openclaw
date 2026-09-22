@@ -137,7 +137,7 @@ describe("skill_workshop tool", () => {
       },
     });
     expect(
-      listSkillProposalEvents({ config: {}, proposalId: details.id }).events.map(
+      (await listSkillProposalEvents({ config: {}, proposalId: details.id })).events.map(
         (event) => event.actor,
       ),
     ).toEqual([

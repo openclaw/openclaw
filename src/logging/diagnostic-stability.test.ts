@@ -1,7 +1,8 @@
 // Diagnostic stability tests cover stable diagnostic output under repeated events.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
+  emitInternalDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
@@ -35,6 +36,7 @@ describe("diagnostic stability recorder", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     stopDiagnosticStabilityRecorder();
     resetDiagnosticStabilityRecorderForTest();
     resetDiagnosticEventsForTest();
@@ -72,6 +74,12 @@ describe("diagnostic stability recorder", () => {
       final: true,
       durationMs: 12,
       byteLength: 345,
+    });
+    emitInternalDiagnosticEvent({
+      type: "diagnostic.child_process.spawn",
+      family: "node",
+      count: 2,
+      intervalMs: 60_000,
     });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -880,6 +888,19 @@ describe("diagnostic stability recorder", () => {
       }),
     ]);
     expect(JSON.stringify(getDiagnosticStabilitySnapshot())).not.toContain("private-");
+  });
+
+  it("rejects trusted non-model events before copying their payloads", () => {
+    startDiagnosticStabilityRecorder();
+    const clone = vi.spyOn(globalThis, "structuredClone");
+
+    emitTrustedDiagnosticEvent({ type: "model.usage", usage: { total: 42 } });
+    expect(clone).not.toHaveBeenCalled();
+    emitDiagnosticEvent({ type: "model.usage", usage: { total: 7 } });
+
+    expect(getDiagnosticStabilitySnapshot().events).toEqual([
+      expect.objectContaining({ type: "model.usage", seq: 2, usage: { total: 7 } }),
+    ]);
   });
 
   it("keeps async queue drop summaries after drained queued events for sinceSeq polling", async () => {

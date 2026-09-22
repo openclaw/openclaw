@@ -103,7 +103,14 @@ it.skipIf(process.platform === "win32").each([false, true])(
               fixHint: `Fix permissions on ${pluginPath}, then run \`openclaw doctor --fix\`.`,
             }),
           );
-          vi.spyOn(exec, "runExec").mockResolvedValue({ stdout: reportText, stderr: "" });
+          vi.spyOn(exec, "runUtf8CommandWithTimeout").mockResolvedValue({
+            stdout: reportText,
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+          });
           const readiness = await applyPostPluginUpdateReadiness({
             root,
             entryPath: path.join(root, "openclaw.mjs"),

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { recordGatewayBootStart } from "../../../infra/gateway-boot-lifecycle.js";
@@ -90,7 +90,10 @@ export function registerSubagentOrphanTaskCases({
       // exact host/process wording depends on authoritative kernel boot IDs.
       error: expect.stringContaining(`(previous boot ${priorBootId} ended without a clean stop)`),
     });
-    expect(announceSpy).toHaveBeenCalled();
+    await vi.waitFor(() => expect(announceSpy).toHaveBeenCalled(), {
+      timeout: 1_000,
+      interval: 10,
+    });
   });
 
   it("settles the linked task before retiring a stale orphan restored with a retained session", async () => {

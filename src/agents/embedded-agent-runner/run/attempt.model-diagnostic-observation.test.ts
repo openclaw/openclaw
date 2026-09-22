@@ -22,6 +22,7 @@ import {
 } from "../../../logging/diagnostic-run-activity.js";
 import { resetGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
+import { createModelObserver } from "./attempt.model-diagnostic-observation.js";
 
 async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
   // Diagnostics are emitted asynchronously; collect only public model-call
@@ -125,6 +126,65 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents observation", () => {
     resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it.each([
+    ["below the large-string threshold", "x".repeat(4095)],
+    ["at the large-string threshold", "x".repeat(4096)],
+    [
+      "escapes, Unicode, and lone surrogates",
+      (
+        Array.from({ length: 32 }, (_, code) => String.fromCharCode(code)).join("") +
+        '"\\日本語 café 🦞\ud800x\udfff'
+      ).repeat(128),
+    ],
+    [
+      "native JSON conversions",
+      {
+        omitted: undefined,
+        array: [undefined, Number.NaN, Symbol("omitted")],
+        date: new Date("2026-01-01T00:00:00Z"),
+        custom: { toJSON: (key: string) => key.repeat(1024) },
+      },
+    ],
+  ])("preserves exact diagnostic sizes for %s", (_name, value) => {
+    const messages = [{ role: "user", content: value }];
+    const observer = createModelObserver({
+      streamContext: { messages, tools: [value] },
+      capturePromptStats: true,
+    });
+    observer.assignRequestPayloadBytes(value);
+    observer.observeResponseChunk(Date.now(), value);
+
+    expect(observer.promptStats?.inputMessagesChars).toBe(JSON.stringify(messages).length);
+    expect(observer.promptStats?.toolDefinitionsChars).toBe(JSON.stringify([value]).length);
+    expect(observer.sizeTimingFields()).toMatchObject({
+      requestPayloadBytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
+      responseStreamBytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
+    });
+  });
+
+  it("does not assemble multi-megabyte JSON strings just to measure messages", () => {
+    const messages = Array.from({ length: 128 }, (_, index) => ({
+      role: "user",
+      content: `${index}: ${'A "quoted" line.\n'.repeat(1024)}`,
+    }));
+    const expectedChars = JSON.stringify(messages).length;
+    const expectedBytes = Buffer.byteLength(JSON.stringify({ messages }), "utf8");
+    const stringify = vi.spyOn(JSON, "stringify");
+    const observer = createModelObserver({
+      streamContext: { messages },
+      capturePromptStats: true,
+    });
+    observer.assignRequestPayloadBytes({ messages });
+    const largestJsonString = Math.max(
+      ...stringify.mock.results.map(({ value }) => (typeof value === "string" ? value.length : 0)),
+    );
+    stringify.mockRestore();
+
+    expect(observer.promptStats?.inputMessagesChars).toBe(expectedChars);
+    expect(observer.sizeTimingFields().requestPayloadBytes).toBe(expectedBytes);
+    expect(largestJsonString).toBeLessThan(64 * 1024);
   });
 
   it.each([

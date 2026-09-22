@@ -26,7 +26,6 @@ import {
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
-  canArchiveSessionRow,
   canDeleteSessionRows,
   isPinnableUiSessionRow,
   resolveUiConfiguredMainKey,
@@ -306,7 +305,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,
     });
-    const archiveAllowed = Boolean(row && canArchiveSessionRow(row, configuredMainKey));
+    const archiveAllowed = Boolean(row && this.canArchiveHeaderSession(row));
     const deleteAllowed = Boolean(row && canDeleteSessionRows([row], configuredMainKey));
     const pinnable = row != null && isPinnableUiSessionRow(row);
     const sessionActionDisabledReasons = row
@@ -634,6 +633,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
               .forkFromLastCompleted=${row.hasActiveRun === true}
               .archiveAllowed=${archiveAllowed}
+              .archiveShortcut=${this.active && this.presented && !this.onboarding}
               .deleteAllowed=${deleteAllowed}
               .onOpen=${() => {
                 void this.loadHeaderMenuData(row, agentWorkspace, workspaceGit);

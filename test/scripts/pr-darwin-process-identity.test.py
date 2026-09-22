@@ -141,7 +141,7 @@ class LockTests(unittest.TestCase):
         self.repo = self.root/'repo'; self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
         self.sources = self.root/'source'/'pr-lib';self.sources.mkdir(parents=True)
-        for file in (LOCK, RUNNER, PROVIDER, LOCK.with_name('host-tools.sh'), LOCK.with_name('github.sh'), LOCK.with_name('github.mjs')):
+        for file in (LOCK, RUNNER, PROVIDER, LOCK.with_name('host-tools.sh'), LOCK.with_name('github.sh'), LOCK.with_name('github.mjs'), LOCK.with_name('gh-api-preflight.mjs')):
             shutil.copyfile(file,self.sources/file.name)
         library = self.sources.parent/'lib';library.mkdir()
         # Preserve the supervisor's eager script imports without copying an app graph.

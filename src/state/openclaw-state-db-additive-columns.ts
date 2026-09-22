@@ -43,6 +43,9 @@ const lazyColumns = [
   ["session_watch_cursors", "watcher_store_path", "TEXT", true],
   ["subagent_runs", "requester_store_path", "TEXT", true],
   ["subagent_runs", "controller_store_path", "TEXT", true],
+  ["cron_jobs", "grant_definition_revision", "TEXT"],
+  ["cron_jobs", "grant_definition_generation", "INTEGER"],
+  ["cron_jobs", "grant_definition_updated_at", "INTEGER"],
 ] as const satisfies readonly LazyColumn[];
 
 function lazyColumnDefinitions(firstUseOnly?: boolean) {

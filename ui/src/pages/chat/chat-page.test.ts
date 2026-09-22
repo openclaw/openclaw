@@ -58,6 +58,7 @@ type RenderedPane = HTMLElement & {
   onFocusPane?: (paneId: string) => void;
   onClosePane?: (paneId: string) => void;
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
+  captureNavigationFace?: () => "chat" | "dashboard";
 };
 
 type RenderedDivider = HTMLElement & { orientation: "horizontal" | "vertical" };
@@ -592,11 +593,7 @@ describe("chat page split layout host", () => {
     expect(navigation.navigate).toHaveBeenCalledWith("dashboard", {
       pathname: "/dashboard/main/1234567890",
     });
-    expect(navigation.patch).toHaveBeenCalledWith(
-      WORK_SESSION_KEY,
-      { boardFace: "dashboard" },
-      { agentId: "main" },
-    );
+    expect(navigation.patch).not.toHaveBeenCalled();
   });
 
   it("passes an empty session key while route data is still unresolved", async () => {
@@ -659,6 +656,43 @@ describe("chat page split layout host", () => {
     itemAt(cells, 0, "split cell").dispatchEvent(new Event("focusin"));
     expect(navigation.replace).toHaveBeenCalledOnce();
   });
+
+  it.each(["pointer", "keyboard", "command", "close"] as const)(
+    "keeps the mounted pane's dashboard when activated by %s",
+    async (activation) => {
+      const page = new ChatPage();
+      const navigation = setNavigationContext(page);
+      page.data = { sessionKey: "main", face: "chat" };
+      document.body.append(page);
+      setLayout(page, setPaneSession(createSplitLayout("main"), "p1", WORK_SESSION_KEY));
+      await page.updateComplete;
+      const [dashboard, chat] = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+      expectDefined(dashboard, "dashboard pane").captureNavigationFace = () => "dashboard";
+      navigation.replace.mockClear();
+      if (activation === "command") {
+        window.dispatchEvent(
+          new CustomEvent(UI_COMMAND_EVENT, {
+            detail: { command: { kind: "focus", sessionKey: WORK_SESSION_KEY } },
+            cancelable: true,
+          }),
+        );
+      } else if (activation === "close") {
+        chat?.onClosePane?.(chat.paneId);
+      } else {
+        dashboard
+          ?.closest(".chat-split-view__cell")
+          ?.dispatchEvent(new Event(activation === "pointer" ? "pointerdown" : "focusin"));
+      }
+      expect(navigation.replace).toHaveBeenCalledExactlyOnceWith("dashboard", {
+        pathname: sessionNavigationTarget({
+          face: "dashboard",
+          sessionKey: WORK_SESSION_KEY,
+          fallbackAgentId: "main",
+        }).options.pathname,
+      });
+      expect(navigation.patch).not.toHaveBeenCalled();
+    },
+  );
 
   it("declares split panes, session switches, pane closes, and page disposal", async () => {
     const page = new ChatPage();

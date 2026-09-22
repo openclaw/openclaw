@@ -7,7 +7,9 @@ import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.t
 import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
 
 export type TaskFlowRegistryRead = {
+  assertOwnerCurrent(this: void): void;
   assertCurrent(this: void): void;
+  listTaskFlowIds(this: void): readonly string[];
   isTaskFlowCurrent(this: void, flowId: string): boolean;
   getTaskFlowById(this: void, flowId: string): TaskFlowRecord | undefined;
 };
@@ -44,8 +46,9 @@ export function createTaskFlowRegistryReaders(owner: {
     // Owner-key actions target live work before retained terminal history.
     return ownerFlows.find((flow) => !isTerminalTaskFlow(flow)) ?? ownerFlows[0];
   };
-  const prepareTaskFlowRegistryRead = async (): Promise<TaskFlowRegistryRead | undefined> => {
-    const context = captureOpenClawStateWorkerContext();
+  const prepareTaskFlowRegistryRead = async (
+    context = captureOpenClawStateWorkerContext(),
+  ): Promise<TaskFlowRegistryRead | undefined> => {
     const store = getTaskFlowRegistryStore();
     const accepted: Promise<void>[] = [];
     for (const pending of owner.pendingWrites.values()) {
@@ -94,7 +97,14 @@ export function createTaskFlowRegistryReaders(owner: {
     };
     assertCurrent();
     return {
+      assertOwnerCurrent: assertOwner,
       assertCurrent,
+      listTaskFlowIds() {
+        assertCurrent();
+        return [...owner.projection().flows.values()]
+          .toSorted((left, right) => right.createdAt - left.createdAt)
+          .map((flow) => flow.flowId);
+      },
       isTaskFlowCurrent(flowId) {
         assertCurrent();
         return !owner.projection().dirtyFlowIds.has(flowId);

@@ -538,17 +538,16 @@ async function runReconciledSentCommitHooks(params: {
   }
 }
 
-function recoveryPlatformAttemptId(
-  entry: QueuedDelivery,
-  claimedAttemptId?: string,
-): string | null | undefined {
+function recoveryPlatformAttemptId(entry: QueuedDelivery, claimedAttemptId?: string) {
   return claimedAttemptId !== undefined
     ? claimedAttemptId
     : typeof entry.platformSendAttemptId === "string"
       ? entry.platformSendAttemptId
-      : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
-        ? null
-        : undefined;
+      : entry.recoveryState === "producer_claimed" && typeof entry.producerClaimId === "string"
+        ? entry.producerClaimId
+        : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
+          ? null
+          : undefined;
 }
 
 async function resolveCompletedOwnerBeforeRecovery(
@@ -1349,9 +1348,8 @@ export async function drainPendingDeliveriesCore(
     shouldContinue?: () => boolean;
   },
   internalDeliver?: InternalRecoveryDeliver,
-  capturedState?: DeliveryQueueStateContext,
+  stateContext = captureDeliveryQueueStateContext(params.stateDir),
 ): Promise<void> {
-  const stateContext = capturedState ?? captureDeliveryQueueStateContext(params.stateDir);
   const opts = { ...params, stateDir: stateContext.stateDir };
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
     const now = Date.now();
@@ -1401,8 +1399,8 @@ export async function recoverPendingDeliveries(
     shouldContinue?: () => boolean;
   },
   internalDeliver?: InternalRecoveryDeliver,
+  stateContext = captureDeliveryQueueStateContext(params.stateDir),
 ): Promise<DeliveryRecoverySummary> {
-  const stateContext = captureDeliveryQueueStateContext(params.stateDir);
   const opts = { ...params, stateDir: stateContext.stateDir };
   const pending = await loadUnfinishedDeliveries(opts.stateDir, stateContext);
   if (pending.length === 0) {

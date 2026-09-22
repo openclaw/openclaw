@@ -53,7 +53,7 @@ describe("worker placement dispatch reclaim", () => {
     );
     const provisionStarted = createDeferredCore();
     const releaseProvision = createDeferredCore();
-    vi.mocked(harness.environments.create).mockImplementationOnce(async () => {
+    vi.mocked(harness.environments.createWithRequest).mockImplementationOnce(async () => {
       provisionStarted.resolve();
       await releaseProvision.promise;
       return harness.ready;

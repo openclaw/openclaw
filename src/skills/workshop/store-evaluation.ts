@@ -1,12 +1,9 @@
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import { assertProposalId } from "./store-record.js";
-import {
-  appendSkillProposalEvent,
-  listStoredSkillProposalEvents,
-  type NewSkillProposalEvent,
-} from "./store-sqlite-event.js";
+import { appendSkillProposalEvent, type NewSkillProposalEvent } from "./store-sqlite-event.js";
 import { parseSkillProposalRow, updateProposal } from "./store-sqlite-record.js";
 import {
   databaseOptions,
@@ -71,9 +68,20 @@ export function recordSkillProposalEvaluation(params: {
   );
 }
 
-export function readSkillProposalEvents(
+export async function readSkillProposalEvents(
   input: SkillProposalEventsListInput,
   options: SkillWorkshopStoreOptions = {},
-): SkillProposalEventsListResult {
-  return listStoredSkillProposalEvents(input, options);
+): Promise<SkillProposalEventsListResult> {
+  const context = captureOpenClawStateWorkerContext(databaseOptions(options));
+  const query = {
+    agentId: input.agentId,
+    proposalId: input.proposalId,
+    afterSequence: input.afterSequence,
+    limit: input.limit,
+  };
+  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
+  return await executeOpenClawStateWorker(context, {
+    type: "workshop.events.list",
+    input: query,
+  });
 }

@@ -8,6 +8,7 @@ import ai.openclaw.app.gateway.chatSendAckHistorySinceSeconds
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.i18n.LocaleResolvingStateFlow
 import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import android.Manifest
@@ -145,6 +146,7 @@ private data class TalkStatus(
   val state: TalkStatusState,
   val awaitingAgent: Boolean = false,
   val owner: TalkStatusOwner = TalkStatusOwner(),
+  val route: TalkModeRoute? = null,
 )
 
 private data class TalkConfigCache(
@@ -266,7 +268,10 @@ class TalkModeManager internal constructor(
 
   private val status = MutableStateFlow(TalkStatus(text = nativeText("Off"), state = TalkStatusState.Off))
   private val currentStatus: TalkStatus get() = status.value
-  val statusText: StateFlow<String> = LocaleResolvingStateFlow(status) { it.text.resolveNativeText() }
+  val statusText: StateFlow<String> =
+    LocaleResolvingStateFlow(status) {
+      joinedNativeText(" — ", listOfNotNull(it.text, it.route?.description)).resolveNativeText()
+    }
   val awaitingAgent: StateFlow<Boolean> = LocaleResolvingStateFlow(status) { it.awaitingAgent }
 
   /** Why Talk last failed, until Talk starts again; relay failures end Talk without any other visible trace. */
@@ -277,12 +282,13 @@ class TalkModeManager internal constructor(
     text: NativeText,
     state: TalkStatusState = TalkStatusState.Active,
     awaitingAgent: Boolean = false,
+    route: TalkModeRoute? = currentStatus.route,
   ) {
-    setStatus(TalkStatus(text = text, state = state, awaitingAgent = awaitingAgent))
+    setStatus(TalkStatus(text = text, state = state, awaitingAgent = awaitingAgent, route = route))
   }
 
   private fun setStatus(next: TalkStatus) {
-    status.value = next
+    status.value = if (next.state == TalkStatusState.Active) next else next.copy(route = null)
   }
 
   private fun setTalkFailure(text: NativeText) {
@@ -920,7 +926,9 @@ class TalkModeManager internal constructor(
     val pending = pendingRunId
     val knownRun = pending == runId || hasRunCompletion(runId)
     if (!knownRun) {
-      if (ttsOnAllResponses && state == "final") {
+      // A live realtime relay owns speech, including gateway-run consult answers;
+      // local TTS would repeat them on a media stream the mic's AEC does not cancel.
+      if (ttsOnAllResponses && state == "final" && realtimeSessionId == null) {
         val text = extractTextFromChatEventMessage(message)
         if (!text.isNullOrBlank()) {
           playTtsForText(text)
@@ -1020,10 +1028,11 @@ class TalkModeManager internal constructor(
         audioRetirement.await()
         ensureConfigLoaded()
         if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@launch
-        if (realtimeRelayModelSupported) {
+        val route = configCache.get().value.route
+        if (route == TalkModeRoute.RealtimeRelay) {
           startRealtimeRelay(generation)
         } else {
-          startNativeTalk(generation)
+          startNativeTalk(generation, route)
         }
       } catch (err: Throwable) {
         if (err is CancellationException) return@launch
@@ -1144,7 +1153,7 @@ class TalkModeManager internal constructor(
 
     synchronized(realtimeCapturePauseLock) {
       if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) throw CancellationException("realtime talk stopped while connecting")
-      setStatus(nativeText("Connecting…"), awaitingAgent = true)
+      setStatus(nativeText("Connecting…"), awaitingAgent = true, route = TalkModeRoute.RealtimeRelay)
     }
     val language = realtimeTranscriptionLanguage(resolvedSpeechLocaleTag())
     val lease = change?.lease ?: session.captureRequestLease(gatewayStableId()) ?: error("Gateway not connected")
@@ -1376,7 +1385,10 @@ class TalkModeManager internal constructor(
     }
   }
 
-  private suspend fun startNativeTalk(generation: Long) {
+  private suspend fun startNativeTalk(
+    generation: Long,
+    route: TalkModeRoute,
+  ) {
     if (!isConnected()) {
       disableRealtimeModeAndNotifyOwner(generation, nativeText("Gateway not connected"))
       return
@@ -1401,6 +1413,8 @@ class TalkModeManager internal constructor(
       synchronized(realtimeCapturePauseLock) {
         if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@withContext
         recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(recognitionListener(null, it)) }
+        // Record the admitted route, not a later config refresh, for this native speech loop.
+        setStatus(nativeText("Listening"), route = route)
         startListeningInternal(markListening = true)
         startSilenceMonitor()
       }

@@ -189,7 +189,7 @@ export type RedactedIngressAllowlistFacts = {
 type RouteGateState = "not-configured" | "matched" | "not-matched" | "disabled" | "lookup-failed";
 
 /** How a matched route affects sender allowlist evaluation. */
-export type RouteSenderPolicy = "inherit" | "replace" | "deny-when-empty";
+type RouteSenderPolicy = "inherit" | "replace" | "deny-when-empty";
 
 /** Source list used when a route sender policy contributes sender entries. */
 type RouteSenderAllowlistSource = "effective-dm" | "effective-group";

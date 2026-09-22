@@ -443,53 +443,68 @@ describe("createGatewayRequestContext", () => {
     expect(disconnectDeviceTransports).toHaveBeenCalledWith("device-1", undefined);
   });
 
-  it("disconnects only clients authenticated as the reassigned durable profile", () => {
-    const target = {
-      ...makeGatewayClient({
-        connId: "profile-target",
-        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+  it.each(["live", "disconnected"])(
+    "disconnects only authority for the reassigned durable profile (%s transport)",
+    (transport) => {
+      const target = {
+        ...makeGatewayClient({
+          connId: "profile-target",
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          scopes: ["operator.admin"],
+        }),
+        authenticatedUserProfile: {
+          profileId: "profile-ada",
+          displayName: "Ada",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      };
+      const unrelated = {
+        ...makeGatewayClient({
+          connId: "profile-unrelated",
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        }),
+        authenticatedUserProfile: {
+          profileId: "profile-grace",
+          displayName: "Grace",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      };
+      const unidentified = makeGatewayClient({
+        connId: "shared-secret",
+        clientId: GATEWAY_CLIENT_IDS.CLI,
         scopes: ["operator.admin"],
-      }),
-      authenticatedUserProfile: {
-        profileId: "profile-ada",
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-    };
-    const unrelated = {
-      ...makeGatewayClient({
-        connId: "profile-unrelated",
-        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      }),
-      authenticatedUserProfile: {
-        profileId: "profile-grace",
-        displayName: "Grace",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-    };
-    const unidentified = makeGatewayClient({
-      connId: "shared-secret",
-      clientId: GATEWAY_CLIENT_IDS.CLI,
-      scopes: ["operator.admin"],
-    });
-    const clients = new Set([target, unrelated, unidentified]) as never;
-    const context = createGatewayRequestContext(makeContextParams({ clients }));
-    target.socket.close.mockImplementation(() => {
+      });
+      const clients = new GatewayClientRegistry([target, unrelated, unidentified] as never);
+      const releases = Array.from(clients, (peer) => clients.retainRequest(peer));
+      onTestFinished(() => {
+        releases.forEach((release) => release());
+        expect([...clients.authorityClients]).toEqual([...clients]);
+      });
+      if (transport === "disconnected") {
+        clients.clear();
+      }
+      const context = createGatewayRequestContext(makeContextParams({ clients }));
+      target.socket.close.mockImplementation(() => {
+        expect((target as { invalidated?: boolean }).invalidated).toBe(true);
+      });
+
+      if (transport === "disconnected") {
+        expect(context.getClientConnIds?.()).toEqual(new Set());
+        expect(context.hasExecApprovalClients?.()).toBe(false);
+      }
+      context.disconnectClientsForUserProfile?.("profile-ada");
+
       expect((target as { invalidated?: boolean }).invalidated).toBe(true);
-    });
-
-    context.disconnectClientsForUserProfile?.("profile-ada");
-
-    expect((target as { invalidated?: boolean }).invalidated).toBe(true);
-    expect((target as { invalidatedReason?: string }).invalidatedReason).toBe(
-      "operator-role-changed",
-    );
-    expect(target.socket.close).toHaveBeenCalledWith(4001, "operator role changed");
-    expect(unrelated.socket.close).not.toHaveBeenCalled();
-    expect(unidentified.socket.close).not.toHaveBeenCalled();
-  });
+      expect((target as { invalidatedReason?: string }).invalidatedReason).toBe(
+        "operator-role-changed",
+      );
+      expect(target.socket.close).toHaveBeenCalledWith(4001, "operator role changed");
+      expect(unrelated.socket.close).not.toHaveBeenCalled();
+      expect(unidentified.socket.close).not.toHaveBeenCalled();
+    },
+  );
 
   it("invalidateClientsForDevice filters by role when provided", () => {
     const primary = makeDeviceClient("conn-primary", "device-1");

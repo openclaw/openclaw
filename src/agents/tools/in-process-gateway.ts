@@ -22,9 +22,9 @@ import type {
 import {
   dispatchGatewayMethodInProcess,
   getInProcessGatewayRequestContext,
-  hasInProcessGatewayContext,
   runWithOperatorToolGatewayCleanupContext,
-} from "../../gateway/server-plugins.js";
+  runWithOperatorToolGatewayContinuationContext,
+} from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -110,6 +110,18 @@ export function runWithGatewayToolCleanupContext<T>(
   );
 }
 
+/** Transfers accepted reply work to a bounded source-authority hold, not the tool lifetime. */
+export function runWithGatewayToolContinuationContext<T>(run: () => Promise<T>): Promise<T> {
+  const resolveGatewayContext = callerGatewayContextResolver();
+  return runWithOperatorToolGatewayContinuationContext(() =>
+    withoutGatewayToolCallerIdentity(() =>
+      resolveGatewayContext
+        ? withPluginRuntimeGatewayContextResolver(resolveGatewayContext, run)
+        : run(),
+    ),
+  );
+}
+
 function bindInProcessGatewayContext(
   method: string,
   resolveGatewayContext: GatewayContextResolver,
@@ -159,8 +171,7 @@ async function runBoundInProcessGatewayCall<T>(
 }
 
 export function hasInProcessGatewayToolContext(): boolean {
-  const resolveGatewayContext = callerGatewayContextResolver();
-  return resolveGatewayContext ? Boolean(resolveGatewayContext()) : hasInProcessGatewayContext();
+  return Boolean(getInProcessGatewayRequestContext(callerGatewayContextResolver()));
 }
 
 /** Whether Gateway routing belongs to this caller or the hosting process. */
@@ -176,8 +187,7 @@ export function hasGatewayToolRoutingContext(): boolean {
 export function getInProcessGatewayToolContext(
   explicitResolver?: GatewayContextResolver,
 ): GatewayRequestContext | undefined {
-  const resolveGatewayContext = callerGatewayContextResolver(explicitResolver);
-  return resolveGatewayContext ? resolveGatewayContext() : getInProcessGatewayRequestContext();
+  return getInProcessGatewayRequestContext(callerGatewayContextResolver(explicitResolver));
 }
 
 /**
@@ -212,7 +222,10 @@ async function callAgentToolGatewayRequestBound<T>(
   const boundGateway = resolveGatewayContext
     ? bindInProcessGatewayContext(method, resolveGatewayContext)
     : undefined;
-  if (forceTransport || !hasInProcessGatewayContext(boundGateway?.resolve)) {
+  if (forceTransport || !getInProcessGatewayRequestContext(boundGateway?.resolve)) {
+    if (getGatewayToolCallerIdentity()?.operatorAuthority) {
+      throw new Error("operator run authority requires its admitted Gateway");
+    }
     if (readInProcessSubagentResume(request)) {
       throw new Error("Task resume requires trusted in-process Gateway dispatch.");
     }
@@ -237,6 +250,8 @@ async function callAgentToolGatewayRequestBound<T>(
   }
   const scopes =
     request.scopes ?? resolveLeastPrivilegeOperatorScopesForMethod(method, request.params);
+  const syntheticScopeMode: "minimum" | "exact" =
+    request.scopes === undefined ? "minimum" : "exact";
   const timeoutMs =
     request.timeoutMs === null
       ? undefined
@@ -247,6 +262,7 @@ async function callAgentToolGatewayRequestBound<T>(
     ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),
     ...(request.agentToolCaller ? { agentToolCaller: request.agentToolCaller } : {}),
     syntheticScopes: scopes,
+    syntheticScopeMode,
     ...(request.expectFinal !== undefined ? { expectFinal: request.expectFinal } : {}),
     ...(request.onAccepted ? { onAccepted: request.onAccepted } : {}),
     ...(request.onSignalAbort
@@ -344,18 +360,22 @@ async function callInProcessGatewayToolBound<T>(
         }
       : undefined;
   assertCallerCurrent?.();
-  const sessionMutationCommitGuard = assertCallerCurrent
-    ? () => {
-        assertCallerCurrent();
-        options.sessionMutationCommitGuard?.();
-      }
-    : options.sessionMutationCommitGuard;
+  // The hosted creation dispatcher retains this receipt until child input commits,
+  // then keeps its issued source authority. Opaque caller guards remain enforced.
+  const transfersCreatedInput = method === "sessions.create" && agentToolCaller !== undefined;
+  const sessionMutationCommitGuard =
+    assertCallerCurrent && !transfersCreatedInput
+      ? () => {
+          assertCallerCurrent();
+          options.sessionMutationCommitGuard?.();
+        }
+      : options.sessionMutationCommitGuard;
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
   const resolveGatewayContext = callerGatewayContextResolver(options.resolveGatewayContext);
   const boundGateway = resolveGatewayContext
     ? bindInProcessGatewayContext(method, resolveGatewayContext)
     : undefined;
-  if (hasInProcessGatewayContext(boundGateway?.resolve)) {
+  if (getInProcessGatewayRequestContext(boundGateway?.resolve)) {
     return await runBoundInProcessGatewayCall(
       boundGateway,
       async (boundResolver) =>
@@ -363,6 +383,7 @@ async function callInProcessGatewayToolBound<T>(
           forceSyntheticClient: true,
           operatorRoleActor: { kind: "system" as const },
           syntheticScopes: scopes,
+          syntheticScopeMode: "minimum",
           ...(agentToolCaller ? { agentToolCaller } : {}),
           ...(options.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
           ...(sessionMutationCommitGuard ? { sessionMutationCommitGuard } : {}),
@@ -378,6 +399,9 @@ async function callInProcessGatewayToolBound<T>(
   }
   if (boundGateway) {
     throw new Error(`Gateway instance unavailable for ${method}`);
+  }
+  if (caller?.operatorAuthority) {
+    throw new Error("operator run authority requires its admitted Gateway");
   }
   return await runBoundInProcessGatewayCall(undefined, () => fallback(scopes), assertCallerCurrent);
 }
@@ -411,14 +435,17 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
     timeoutMs?: number | null;
   } = {},
 ): Promise<T> {
+  const requesterProfileId = getGatewayToolCallerIdentity()?.operatorAuthority?.profileId;
+  const trustedCreation =
+    creation.via === "spawn" && requesterProfileId ? { ...creation, requesterProfileId } : creation;
   return await callInProcessGatewayToolBound(
     method,
     params,
-    { ...options, sessionCreation: creation },
+    { ...options, sessionCreation: trustedCreation },
     async (scopes) => {
       // The fallback is a real local Gateway request. Carry spawn policy only in
       // the signed agent-runtime identity token, never in model-authored params.
-      if (creation.via !== "spawn" || !creation.inheritedToolPolicy) {
+      if (trustedCreation.via !== "spawn" || !trustedCreation.inheritedToolPolicy) {
         return await callGatewayTool<T>(method, {}, params, {
           scopes,
           ...(options.signal ? { signal: options.signal } : {}),
@@ -427,13 +454,18 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
       }
       return await runWithGatewaySessionSpawnContext(
         {
-          ...(creation.completionOwnerSessionKey
-            ? { completionOwnerSessionKey: creation.completionOwnerSessionKey }
+          ...(trustedCreation.requesterProfileId
+            ? { requesterProfileId: trustedCreation.requesterProfileId }
             : {}),
-          inheritedToolPolicy: creation.inheritedToolPolicy,
-          ...(creation.resolvedModel ? { resolvedModel: creation.resolvedModel } : {}),
-          ...(creation.spawnModelAutoSelection
-            ? { spawnModelAutoSelection: creation.spawnModelAutoSelection }
+          ...(trustedCreation.completionOwnerSessionKey
+            ? { completionOwnerSessionKey: trustedCreation.completionOwnerSessionKey }
+            : {}),
+          inheritedToolPolicy: trustedCreation.inheritedToolPolicy,
+          ...(trustedCreation.resolvedModel
+            ? { resolvedModel: trustedCreation.resolvedModel }
+            : {}),
+          ...(trustedCreation.spawnModelAutoSelection
+            ? { spawnModelAutoSelection: trustedCreation.spawnModelAutoSelection }
             : {}),
         },
         () =>

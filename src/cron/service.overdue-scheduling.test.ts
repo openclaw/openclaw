@@ -6,7 +6,7 @@ import {
   recomputeNextRunsForMaintenance,
 } from "./service/jobs-scheduling.js";
 import { reserveQueuedCronRun } from "./service/run-admission.js";
-import type { CronRunReceiptHandle } from "./store/run-receipt-store.js";
+import type { CronRunReceiptHandle } from "./store/run-receipt.types.js";
 import type { CronJob } from "./types.js";
 
 function createCronSystemEventJob(now: number, overrides: Partial<CronJob> = {}): CronJob {
@@ -111,7 +111,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
 
     // Should not have changed the past-due nextRunAtMs
     expect(job.state.nextRunAtMs).toBe(pastDue);
@@ -133,7 +133,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [], recomputeExpired: true });
 
     expect(typeof job.state.nextRunAtMs).toBe("number");
     expect((job.state.nextRunAtMs ?? 0) > now).toBe(true);
@@ -153,7 +153,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [], recomputeExpired: true });
 
     expect(job.state.nextRunAtMs).toBe(pastDue);
   });
@@ -168,7 +168,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
 
     // Should have computed a nextRunAtMs
     expect(typeof job.state.nextRunAtMs).toBe("number");
@@ -185,7 +185,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
 
     expect(typeof job.state.nextRunAtMs).toBe("number");
     expect(job.state.nextRunAtMs).toBeGreaterThan(now);
@@ -203,7 +203,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
 
     // Should have cleared nextRunAtMs for disabled job
     expect(job.state.nextRunAtMs).toBeUndefined();
@@ -222,7 +222,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
 
     // Should have cleared stuck running marker
     expect(job.state.runningAtMs).toBeUndefined();
@@ -242,7 +242,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state);
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
 
     expect(job.state.queuedAtMs).toBeUndefined();
   });
@@ -261,7 +261,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [], recomputeExpired: true });
 
     expect(job.state.runningAtMs).toBeUndefined();
     expect(job.state.nextRunAtMs).toBe(pastDue);
@@ -283,7 +283,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
         runReceipt: testReceipt(job.id, futureMarker),
       });
 
-      recomputeNextRunsForMaintenance(state);
+      recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
 
       expect(job.state[markerField]).toBe(futureMarker);
     },
@@ -302,7 +302,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       });
       const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
 
-      recomputeNextRunsForMaintenance(state);
+      recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
 
       expect(job.state[markerField]).toBe(futureMarker);
     },
@@ -344,7 +344,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
 
     const state = createMockCronStateForJobs({ jobs: [dueJob, malformedJob], nowMs: now });
 
-    expect(recomputeNextRunsForMaintenance(state)).toBe(true);
+    expect(recomputeNextRunsForMaintenance(state, { deferredNotifications: [] })).toBe(true);
     expect(dueJob.state.nextRunAtMs).toBe(pastDue);
     expect(malformedJob.state.nextRunAtMs).toBeUndefined();
     expect(malformedJob.state.scheduleErrorCount).toBe(1);
@@ -390,7 +390,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       jobs: [alreadyExecuted, neverExecuted],
       nowMs: now,
     });
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: [], recomputeExpired: true });
 
     expect((alreadyExecuted.state.nextRunAtMs ?? 0) > now).toBe(true);
     expect(neverExecuted.state.nextRunAtMs).toBe(pastDue);
@@ -419,7 +419,11 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     };
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, nowMs: now });
+    recomputeNextRunsForMaintenance(state, {
+      deferredNotifications: [],
+      recomputeExpired: true,
+      nowMs: now,
+    });
 
     expect(job.state.runningAtMs).toBeUndefined();
     expect(job.state.nextRunAtMs).toBe(pastDue);
@@ -448,7 +452,11 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     };
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, nowMs: now });
+    recomputeNextRunsForMaintenance(state, {
+      deferredNotifications: [],
+      recomputeExpired: true,
+      nowMs: now,
+    });
 
     expect(job.state.runningAtMs).toBeUndefined();
     expect((job.state.nextRunAtMs ?? 0) > now).toBe(true);

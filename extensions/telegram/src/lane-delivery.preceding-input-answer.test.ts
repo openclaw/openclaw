@@ -13,7 +13,7 @@ describe("createLaneTextDeliverer preceding input answers", () => {
     answer.update(latestAnswer);
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => latestAnswer,
+      resolveFinalPayloadCandidate: ({ payload }) => ({ ...payload, text: latestAnswer }),
     });
     harness.lanes.answer.hasStreamedMessage = true;
     const result = await harness.deliverLaneText({
@@ -34,7 +34,7 @@ describe("createLaneTextDeliverer preceding input answers", () => {
     answer.update(latestAnswer);
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => latestAnswer,
+      resolveFinalPayloadCandidate: ({ payload }) => ({ ...payload, text: latestAnswer }),
     });
     harness.lanes.answer.hasStreamedMessage = true;
     await harness.deliverLaneText({

@@ -78,8 +78,6 @@ type ProviderModelMergeOptions = {
   providerId: string;
   modelIdMatching?: "exact";
   sourceModelFields?: SourceModelFields;
-  preserveConfiguredModelMembership?: boolean;
-  retainDiscoveredModels?: boolean;
 };
 
 export function buildSourceModelFields(
@@ -176,14 +174,6 @@ export function mergeProviderModels(
         : "input" in explicitModel
           ? explicitModel.input
           : implicitModel.input;
-    if (options?.preserveConfiguredModelMembership) {
-      return Object.assign(
-        {},
-        explicitModel,
-        { cost },
-        sourceFields?.inputOmitted ? { input } : {},
-      );
-    }
 
     const contextWindow =
       asPositiveFiniteNumber(explicitModel.contextWindow) ??
@@ -257,15 +247,13 @@ export function mergeProviderModels(
     );
   });
 
-  if (!options?.preserveConfiguredModelMembership || options.retainDiscoveredModels) {
-    for (const implicitModel of implicitModels) {
-      const id = getModelId(implicitModel);
-      if (!id || seen.has(id)) {
-        continue;
-      }
-      seen.add(id);
-      mergedModels.push(implicitModel);
+  for (const implicitModel of implicitModels) {
+    const id = getModelId(implicitModel);
+    if (!id || seen.has(id)) {
+      continue;
     }
+    seen.add(id);
+    mergedModels.push(implicitModel);
   }
 
   return {

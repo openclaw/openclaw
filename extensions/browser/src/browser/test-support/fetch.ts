@@ -15,8 +15,7 @@ function isUsableFetch(value: unknown): value is FetchLike {
   return typeof value === "function" && !("mock" in (value as FetchLike));
 }
 
-/** Returns undici fetch when usable, falling back to an unmocked global fetch. */
-export function getBrowserTestFetch(): BrowserTestFetch {
+function loadBrowserTestUndici(): typeof import("undici") {
   const require = createRequire(import.meta.url);
   const vitest = (globalThis as { vi?: { doUnmock?: (id: string) => void } }).vi;
   vitest?.doUnmock?.("undici");
@@ -25,7 +24,20 @@ export function getBrowserTestFetch(): BrowserTestFetch {
   } catch {
     // Best-effort cache bust for shared-thread test workers.
   }
-  const { fetch } = require("undici") as typeof import("undici");
+  return require("undici") as typeof import("undici");
+}
+
+/** Owns the real HTTP client's connections until the test closes them. */
+export function createBrowserTestClient() {
+  const undici = loadBrowserTestUndici();
+  const dispatcher = new undici.Agent();
+  const fetch: typeof undici.fetch = (input, init) => undici.fetch(input, { ...init, dispatcher });
+  return { fetch, close: () => dispatcher.close() };
+}
+
+/** Returns undici fetch when usable, falling back to an unmocked global fetch. */
+export function getBrowserTestFetch(): BrowserTestFetch {
+  const { fetch } = loadBrowserTestUndici();
   if (isUsableFetch(fetch)) {
     return (input, init) => fetch(input, init);
   }

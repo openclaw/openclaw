@@ -6,7 +6,7 @@
  */
 import {
   asNullableRecord,
-  normalizeOptionalString,
+  readNonBlankString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -284,7 +284,9 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, "kind must be local|session");
     }
     const targetId = resolveTargetIdFromQuery(req.query);
-    const key = toStringOrEmpty(req.query.key);
+    const key = readNonBlankString(
+      readStringValue(req.query.key) ?? toStringOrEmpty(req.query.key),
+    );
 
     await withPlaywrightRouteContext({
       req,
@@ -298,7 +300,7 @@ export function registerBrowserAgentStorageRoutes(
           cdpUrl,
           targetId: tab.targetId,
           kind,
-          key: normalizeOptionalString(key),
+          key,
         });
         signal.throwIfAborted();
         res.json({ ok: true, targetId: tab.targetId, ...result });
@@ -311,7 +313,9 @@ export function registerBrowserAgentStorageRoutes(
     if (!mutation) {
       return;
     }
-    const key = toStringOrEmpty(mutation.body.key);
+    const key = readNonBlankString(
+      readStringValue(mutation.body.key) ?? toStringOrEmpty(mutation.body.key),
+    );
     if (!key) {
       return jsonError(res, 400, "key is required");
     }

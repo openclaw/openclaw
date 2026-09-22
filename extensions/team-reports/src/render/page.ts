@@ -5,6 +5,8 @@ import { REPORT_STYLES } from "./styles.js";
 
 export type PageContext = {
   basePath: string;
+  controlUiBasePath?: string;
+  mainKey?: string;
   nonce: string;
   absoluteUrl: string;
   displayTimezone: string;
@@ -149,13 +151,19 @@ export function shell(
   ctx: PageContext,
   title: string,
   body: string,
-  page: "home" | "report" | "people" | "person",
+  page: "home" | "report" | "people" | "person" | "sessions",
 ): string {
-  const active = page === "home" || page === "report" ? "Reports" : "People";
+  const active =
+    page === "sessions"
+      ? "Work sessions"
+      : page === "home" || page === "report"
+        ? "Reports"
+        : "People";
   const links = [
     ["Reports", `${ctx.basePath}/`],
     ["Latest", `${ctx.basePath}/latest/`],
     ["People", `${ctx.basePath}/people/`],
+    ["Work sessions", `${ctx.basePath}/sessions/`],
   ]
     .map(
       ([label, url]) =>

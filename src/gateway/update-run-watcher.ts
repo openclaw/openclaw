@@ -133,15 +133,15 @@ export function startUpdateRunWatcher(params: {
     if (work.isClosing) {
       return;
     }
+    timer = undefined;
+    // Candidate verification must not delay terminal observations or schema publication.
+    // Other abandonment still waits for candidate verification.
+    scan(false);
     if (polling) {
       pollAgain = true;
       return;
     }
     polling = true;
-    timer = undefined;
-    // Capture fast terminal changes and expire legacy admissions synchronously.
-    // Other abandonment waits for candidate verification.
-    scan(false);
     void work
       .track(async () => {
         const settled = await reconcileInterruptedUpdateRuns({ signal: work.signal });

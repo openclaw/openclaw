@@ -19,6 +19,7 @@ import { acpSessionActorKey, requireReadySessionMeta } from "./manager.utils.js"
 
 /** Cancels either the active ACP turn or the idle runtime handle for a session. */
 export async function runManagerCancelSession(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -33,6 +34,7 @@ export async function runManagerCancelSession(params: {
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   setSessionState: SetManagerSessionState;
 }): Promise<void> {
+  params.assertActive?.();
   const cancellationControl = captureTaskCancellationControl();
   const actorKey = acpSessionActorKey(params);
   const expectedRunId = params.expectedRunId?.trim();
@@ -71,7 +73,10 @@ export async function runManagerCancelSession(params: {
           acceptedTurn,
           reason: params.reason,
           revalidate: requireExpectedOwner,
-          assertCancellationAllowed: cancellationControl?.assertCurrent,
+          assertCancellationAllowed: () => {
+            params.assertActive?.();
+            cancellationControl?.assertCurrent();
+          },
         }),
       ),
     );
@@ -80,6 +85,7 @@ export async function runManagerCancelSession(params: {
   requireExpectedTurn(undefined);
 
   await params.withSessionActor(params, async (isCurrentActor) => {
+    params.assertActive?.();
     // The actor wait may admit queued work. Recheck exact authority only after
     // that wait, immediately before the idle-handle cancellation boundary.
     requireExpectedTurn(params.activeTurnBySession.get(actorKey));
@@ -91,12 +97,14 @@ export async function runManagerCancelSession(params: {
     });
     const resolvedMeta = requireReadySessionMeta(resolution);
     const { runtime, handle } = await params.ensureRuntimeHandle({
+      assertActive: params.assertActive,
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       meta: resolvedMeta,
       isCurrentActor,
     });
+    params.assertActive?.();
     try {
       requireExpectedOwner();
       await runtime.cancel({

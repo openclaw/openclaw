@@ -1,11 +1,15 @@
 // Control UI controller manages agent files gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsFilesGetResult, AgentsFilesSetResult } from "../../api/types.ts";
+import type {
+  AgentsFilesGetResult,
+  AgentsFilesListResult,
+  AgentsFilesSetResult,
+} from "../../api/types.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
-type AgentFilesState = {
+export type AgentFilesState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   requestGeneration: number;
@@ -20,6 +24,26 @@ type AgentFilesState = {
   agentFileSaving: boolean;
   agentFileWriteRevisions: Map<string, number>;
 };
+
+export type AgentFilesViewState = Pick<
+  AgentFilesState,
+  | "agentFilesLoading"
+  | "agentFilesError"
+  | "agentFileContents"
+  | "agentFileDrafts"
+  | "agentFileSaving"
+  | "agentFileConflict"
+> & {
+  agentFilesList: AgentsFilesListResult | null;
+  agentFileActive: string | null;
+};
+
+export function hasAgentFileContent(
+  state: Pick<AgentFilesState, "agentFileContents" | "agentFileDrafts">,
+  name: string,
+): boolean {
+  return Object.hasOwn(state.agentFileContents, name) || Object.hasOwn(state.agentFileDrafts, name);
+}
 
 export type RetainedAgentFileDrafts = {
   drafts: Record<string, string>;
@@ -75,7 +99,7 @@ async function requestAgentFile(
   const busy = saving ? "agentFileSaving" : "agentFilesLoading";
   const client = state.client;
   const agents = state.agents;
-  if (!client || !state.connected || state[busy]) {
+  if (!client || !state.connected || state[busy] || (saving && !hasAgentFileContent(state, name))) {
     return false;
   }
   if (
@@ -189,6 +213,9 @@ export function saveAgentFile(
 }
 
 export function resetAgentFile(state: AgentFilesState, name: string): void {
+  if (!Object.hasOwn(state.agentFileContents, name)) {
+    return;
+  }
   state.agentFileDrafts = {
     ...state.agentFileDrafts,
     [name]: state.agentFileContents[name] ?? "",

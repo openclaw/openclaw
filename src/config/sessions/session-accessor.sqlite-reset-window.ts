@@ -29,10 +29,13 @@ import {
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import {
-  projectModelContextNavigationSql,
-  projectResetBoundaryNavigationSql,
-} from "./session-model-context-projection.js";
+  transcriptEventJsonSql,
+  transcriptEventModelNavigationSql,
+  transcriptEventNavigationSql,
+  transcriptEventResetNavigationSql,
+} from "./transcript-payload.js";
 
 type VisibleMessagePositions = {
   boundaryActivePosition?: number;
@@ -238,10 +241,10 @@ function readBoundaryWindowFacts(
     projection.database.db,
     getActiveTranscriptKysely(projection.database)
       .selectFrom("transcript_events")
-      .select((eb) => [
-        projectResetBoundaryNavigationSql(eb.ref("event_json")).as("event_json"),
+      .select([
+        transcriptEventResetNavigationSql().as("event_json"),
         /* kysely-allow-raw: window accounting needs original bytes, not summary or reset payloads. */
-        sql<number>`OCTET_LENGTH(event_json) + 1`.as("serialized_bytes"),
+        sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
       ])
       .where("session_id", "=", projection.resolved.sessionId)
       .where("seq", "=", seq)
@@ -321,14 +324,14 @@ function findLatestResetMessageWindow(
               .onRef("event.session_id", "=", "active.session_id")
               .onRef("event.seq", "=", "active.event_seq"),
           )
-          .select((eb) => [
+          .select([
             "active.message_position",
             /* kysely-allow-raw: preserve JS-readable overdepth rows for existing tool-pairing validation. */
-            sql<string>`CASE WHEN json_valid(event.event_json)
-              THEN ${projectModelContextNavigationSql(eb.ref("event.event_json"))}
-              ELSE event.event_json END`.as("event_json"),
+            sql<string>`CASE WHEN json_valid(${transcriptEventNavigationSql("event")})
+              THEN ${transcriptEventModelNavigationSql("event")}
+              ELSE ${transcriptEventNavigationSql("event")} END`.as("event_json"),
             /* kysely-allow-raw: raw-byte accounting stays independent of the transient projection. */
-            sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
+            sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
           ])
           .where("active.session_id", "=", projection.resolved.sessionId)
           .where("active.active_position", ">=", firstKept.active_position)
@@ -558,6 +561,7 @@ export function* iterateVisibleMessageRange(
         ? iterateSqliteQuerySync(
             projection.database.db,
             selectMessagePayload(
+              projection.database,
               selectMessageRows(projection.database, projection.resolved.sessionId, range),
             ),
           )
@@ -604,12 +608,14 @@ export function assertVisibleMessageRangeJson(
     for (const row of iterateSqliteQuerySync(
       projection.database.db,
       selectMessagePayload(
+        projection.database,
         selectMessageRows(projection.database, projection.resolved.sessionId, range),
       ).where((eb) => {
         // The raw check rejects extra values; the enclosing array cannot end at a NUL.
-        const enclosed = eb(eb.val("["), "||", eb("event.event_json", "||", eb.val("]")));
+        const event = transcriptEventJsonSql(projection.database.db, "event");
+        const enclosed = eb(eb.val("["), "||", eb(event, "||", eb.val("]")));
         return eb.or([
-          eb(eb.fn<number>("json_valid", ["event.event_json"]), "=", 0),
+          eb(eb.fn<number>("json_valid", [event]), "=", 0),
           eb(eb.fn<number>("json_valid", [enclosed]), "=", 0),
         ]);
       }),
@@ -679,7 +685,7 @@ export function readVisibleTranscriptStats(projection: CurrentTranscriptProjecti
     .select((eb) => [
       eb.fn.count<number>("active.event_seq").as("event_count"),
       /* kysely-allow-raw: JSONL size includes one terminating newline per event. */
-      sql<number>`COALESCE(SUM(OCTET_LENGTH(event.event_json)), 0)
+      sql<number>`COALESCE(SUM(${transcriptEventReadBytesSql("event")} ), 0)
         + COUNT(*)`.as("size_bytes"),
     ])
     .where("active.session_id", "=", projection.resolved.sessionId)

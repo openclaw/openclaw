@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { expect, it, vi, type MockInstance } from "vitest";
+import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
 export const COLD_READ_COMMAND_PATHS: string[][] = [
   ["audit"],
@@ -18,7 +19,7 @@ export const COLD_READ_COMMAND_PATHS: string[][] = [
   ["models", "accounts", "clear-default", "openai"],
 ];
 
-export function registerColdReadCommandFixtures(program: Command, skills: Command): void {
+function registerColdReadCommandFixtures(program: Command, skills: Command): void {
   const models = expectDefined(
     program.commands.find((command) => command.name() === "models"),
     "Expected the models fixture",
@@ -124,4 +125,138 @@ export function registerNativeExecutorPreActionTests(
 
     expect(mocks.config).toHaveBeenCalledOnce();
   });
+}
+
+export function registerPreActionCommandFixtures(programLocal: Command): void {
+  const agent = programLocal
+    .command("agent")
+    .argument("[note]")
+    .requiredOption("-m, --message <text>")
+    .option("--agent <id>")
+    .option("--local")
+    .option("--json")
+    .action(() => {});
+  agent
+    .command("exec")
+    .argument("[message]")
+    .option("--json")
+    .action(() => {});
+  programLocal
+    .command("status")
+    .option("--json")
+    .action(() => {});
+  const acp = programLocal
+    .command("acp")
+    .option("--token <token>")
+    .option("--verbose")
+    .action(() => {});
+  acp
+    .command("client")
+    .option("--cwd <dir>")
+    .action(() => {});
+  programLocal
+    .command("mcp")
+    .command("serve")
+    .action(() => {});
+  const gateway = programLocal
+    .command("gateway")
+    .option("--port <port>")
+    .option("--token <token>")
+    .option("--allow-unconfigured")
+    .option("--force")
+    .option("--reset")
+    .action(() => {});
+  gateway
+    .command("run")
+    .option("--allow-unconfigured")
+    .option("--force")
+    .option("--reset")
+    .action(() => {});
+  gateway
+    .command("call")
+    .argument("<method>")
+    .option("--json")
+    .action(() => {});
+  gateway
+    .command("health")
+    .option("--json")
+    .action(() => {});
+  for (const gatewayCommand of ["stability", "usage-cost"]) {
+    gateway
+      .command(gatewayCommand)
+      .option("--json")
+      .action(() => {});
+  }
+  programLocal
+    .command("backup")
+    .command("create")
+    .option("--json")
+    .action(() => {});
+  programLocal
+    .command("doctor")
+    .option("--lint")
+    .action(() => {});
+  programLocal.command("completion").action(() => {});
+  programLocal.command("secrets").action(() => {});
+  const modelList = programLocal.command("models").command("aliases").command("list");
+  modelList.option("--plain").action(() => {});
+  const skills = programLocal.command("skills");
+  skills.option("--json").action(() => {});
+  for (const skillCommand of ["list", "check"]) {
+    skills
+      .command(skillCommand)
+      .option("--json")
+      .action(() => {});
+  }
+  registerColdReadCommandFixtures(programLocal, skills);
+  for (const skillCommand of ["install", "verify"]) {
+    skills
+      .command(skillCommand)
+      .argument("<skill-ref>")
+      .option("--version <version>")
+      .action(() => {});
+  }
+  programLocal
+    .command("qa")
+    .command("suite")
+    .action(() => {});
+  const agents = programLocal.command("agents");
+  agents
+    .command("list")
+    .option("--json")
+    .action(() => {});
+  agents
+    .command("bindings")
+    .option("--json")
+    .action(() => {});
+  programLocal
+    .command("approvals")
+    .command("pending")
+    .option("--json")
+    .action(() => {});
+  programLocal.command("configure").action(() => {});
+  programLocal.command("onboard").action(() => {});
+  const channels = programLocal.command("channels");
+  channels.command("add").action(() => {});
+  channels
+    .command("send")
+    .option("--json")
+    .action(() => {});
+  applyParentDefaultHelpAction(channels);
+  programLocal
+    .command("plugins")
+    .command("install")
+    .argument("<spec>")
+    .option("--marketplace <marketplace>")
+    .action(() => {});
+  programLocal
+    .command("update")
+    .command("status")
+    .option("--json")
+    .action(() => {});
+  programLocal
+    .command("message")
+    .command("send")
+    .option("--json")
+    .action(() => {});
 }

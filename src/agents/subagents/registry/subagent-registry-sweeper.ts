@@ -19,7 +19,6 @@ import type {
 } from "./subagent-registry-lifecycle.js";
 import { createInterruptedRecoveryCoordinator } from "./subagent-registry-restart-recovery-coordinator.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
-import type { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import {
   discardSuspendedPendingFinalDelivery,
   isSuspendedPendingFinalDelivery,
@@ -46,7 +45,6 @@ const restartRecoveryLoader = createLazyImportLoader(
   () => import("./subagent-registry-restart-recovery.js"),
 );
 const killRuntimeLoader = createLazyImportLoader(() => import("./subagent-control.runtime.js"));
-type RunManager = ReturnType<typeof createSubagentRunManager>;
 type CompletionRuntime = ReturnType<typeof createSubagentRegistryCompletionRuntime>;
 
 export function createSubagentRegistrySweeper(params: {
@@ -58,16 +56,6 @@ export function createSubagentRegistrySweeper(params: {
   sweepPendingLifecycle: (now: number) => void;
   completeSubagentRunWithRecovery: CompletionRuntime["completeSubagentRunWithRecovery"];
   getGatewayRecoveryRuntime: () => GatewayRecoveryRuntime | undefined;
-  abandonSubagentRestartRecoveryLaunch: RunManager["abandonSubagentRestartRecoveryLaunch"];
-  clearAcceptedSubagentRestartRecovery: RunManager["clearAcceptedSubagentRestartRecovery"];
-  clearPendingSubagentRecoveryNotice: RunManager["clearPendingSubagentRecoveryNotice"];
-  resumeSettledSubagentRestartRecovery: RunManager["resumeSettledSubagentRestartRecovery"];
-  replaceSubagentRunAfterSteer: RunManager["replaceSubagentRunAfterSteer"];
-  markSubagentRestartRecoveryLaunchAttempted: RunManager["markSubagentRestartRecoveryLaunchAttempted"];
-  markSubagentRestartRecoveryLaunchAccepted: RunManager["markSubagentRestartRecoveryLaunchAccepted"];
-  markSubagentRestartRecoveryLaunchConsumed: RunManager["markSubagentRestartRecoveryLaunchConsumed"];
-  reserveSubagentRestartRecoveryLaunch: RunManager["reserveSubagentRestartRecoveryLaunch"];
-  resetSubagentRestartRecoveryLaunchAttempt: RunManager["resetSubagentRestartRecoveryLaunchAttempt"];
   finalizeInterruptedSubagentRun: CompletionRuntime["finalizeInterruptedSubagentRun"];
   resumeRequesterSettleWake: SubagentLifecycleController["resumeRequesterSettleWake"];
   startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
@@ -152,16 +140,6 @@ export function createSubagentRegistrySweeper(params: {
     runs,
     getRunsForChildSession: params.getRunsForChildSession,
     getGatewayRuntime: params.getGatewayRecoveryRuntime,
-    abandonLaunch: params.abandonSubagentRestartRecoveryLaunch,
-    clearAcceptedRecovery: params.clearAcceptedSubagentRestartRecovery,
-    clearPendingNotice: params.clearPendingSubagentRecoveryNotice,
-    resumeAcceptedRecovery: params.resumeSettledSubagentRestartRecovery,
-    replaceRun: params.replaceSubagentRunAfterSteer,
-    markLaunchAttempted: params.markSubagentRestartRecoveryLaunchAttempted,
-    markLaunchAccepted: params.markSubagentRestartRecoveryLaunchAccepted,
-    markLaunchConsumed: params.markSubagentRestartRecoveryLaunchConsumed,
-    reserveLaunch: params.reserveSubagentRestartRecoveryLaunch,
-    resetLaunchAttempt: params.resetSubagentRestartRecoveryLaunchAttempt,
     finalizeRun: params.finalizeInterruptedSubagentRun,
     recoverRow: async (recoveryParams) =>
       (await restartRecoveryLoader.load()).recoverInterruptedSubagentRow(recoveryParams),
@@ -286,7 +264,6 @@ export function createSubagentRegistrySweeper(params: {
             : freezeSessionIdentity(entry.childSessionKey),
         );
       }
-      recovery.prune();
       for (const [runId, entry] of runEntries) {
         if (runs.get(runId) !== entry) {
           continue;
@@ -369,11 +346,10 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (
-          (entry.resumptionNotice !== undefined ||
-            entry.execution.restartRecovery?.phase === "accepted" ||
+          (entry.execution.restartRecovery !== undefined ||
             entry.terminalOwner === "interrupted-recovery" ||
             (!getAgentRunContext(runId) && typeof entry.execution.endedAt !== "number")) &&
-          (await recovery.recover(runId, entry, now))
+          (await recovery.recover(runId, entry))
         ) {
           continue;
         }
@@ -677,7 +653,6 @@ export function createSubagentRegistrySweeper(params: {
     runTick,
     reset() {
       stop();
-      recovery.reset();
       sweepInProgress = false;
       lastWarnedSuspendedCount = undefined;
     },

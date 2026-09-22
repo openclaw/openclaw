@@ -8,6 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { DEDUPE_MAX } from "../server-constants.js";
 import type { GatewayInflightResult } from "./inflight.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "./types.js";
 
 type SessionCreateAuthorization = { role: string | null; scopes: readonly string[] };
@@ -140,12 +141,18 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
     const work = Promise.resolve().then(async (): Promise<GatewayInflightResult> => {
       try {
         let result: GatewayInflightResult | undefined;
-        await handler({
-          ...request,
-          respond: (ok, payload, error, meta) => {
-            result = { ok, payload, error, meta };
-          },
-        });
+        await handler(
+          bindGatewayRequestHandlerMutationAuthority(
+            request,
+            {
+              ...request,
+              respond: (ok, payload, error, meta) => {
+                result = { ok, payload, error, meta };
+              },
+            },
+            undefined,
+          ),
+        );
         result ??= {
           ok: false,
           error: errorShape(ErrorCodes.UNAVAILABLE, "session creation was interrupted"),

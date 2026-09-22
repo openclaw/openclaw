@@ -27,9 +27,13 @@ export function resolveCliStartupPolicy(params: {
   jsonOutputMode: boolean;
   machineOutputMode?: boolean;
   env?: NodeJS.ProcessEnv;
+  /** Set only by the parsed, registered native capability action. */
+  nativeUpdateExecutorCheck?: boolean;
 }) {
   const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
-  const machineOutputMode = params.jsonOutputMode || params.machineOutputMode === true;
+  const nativeCheck = params.nativeUpdateExecutorCheck === true;
+  const machineOutputMode =
+    nativeCheck || params.jsonOutputMode || params.machineOutputMode === true;
   // Protocol commands own stdout from process startup, before their action installs later routing.
   const suppressDoctorStdout = machineOutputMode || commandPolicy.ownsProtocolStdout;
   const configGuard =
@@ -42,14 +46,18 @@ export function resolveCliStartupPolicy(params: {
     suppressDoctorStdout,
     hideBanner: hideBanner || isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER),
     skipConfigGuard:
-      configGuard === "skip" || (configGuard === "when-suppressed" && suppressDoctorStdout),
+      nativeCheck ||
+      configGuard === "skip" ||
+      (configGuard === "when-suppressed" && suppressDoctorStdout),
     ...(configGuard === "validate" ? { validateConfigOnly: true } : {}),
-    loadPlugins: shouldLoadPlugins({
-      argv: params.argv,
-      commandPath: params.commandPath,
-      jsonOutputMode: params.jsonOutputMode,
-      loadPlugins: commandPolicy.loadPlugins,
-    }),
+    loadPlugins:
+      !nativeCheck &&
+      shouldLoadPlugins({
+        argv: params.argv,
+        commandPath: params.commandPath,
+        jsonOutputMode: params.jsonOutputMode,
+        loadPlugins: commandPolicy.loadPlugins,
+      }),
     pluginRegistry: commandPolicy.pluginRegistry,
   };
 }

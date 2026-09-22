@@ -4,6 +4,7 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as fileDurability from "@openclaw/fs-safe/durability";
 import JSZip from "jszip";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +16,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("node:child_process", () => ({ execFile: mocks.execFile }));
+vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/durability")>()),
+}));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
@@ -124,23 +128,11 @@ describe("cached file integrity", () => {
     const original = Buffer.from("GGUFverified");
     const digest = createHash("sha256").update(original).digest("hex");
     await fs.writeFile(destination, original);
-    let scans = 0;
-    const createReadStream = nodeFs.createReadStream.bind(nodeFs);
-    vi.spyOn(nodeFs, "createReadStream").mockImplementation((...args) => {
-      scans += 1;
-      return createReadStream(...args);
-    });
-    injectFileHandle((handle) => {
-      const stream = handle.createReadStream.bind(handle);
-      handle.createReadStream = (...args) => {
-        scans += 1;
-        return stream(...args);
-      };
-    });
+    const scans = vi.spyOn(fileDurability, "sha256File");
 
     expect(await sha256File(destination)).toBe(digest);
     expect(await sha256File(destination)).toBe(digest);
-    expect(scans).toBe(1);
+    expect(scans).toHaveBeenCalledTimes(1);
     // Preserve length and mtime: inode/ctime changes must still invalidate verification.
     const previous = await fs.stat(destination);
     const replacement = `${destination}.replacement`;
@@ -152,7 +144,7 @@ describe("cached file integrity", () => {
     expect(await sha256File(destination)).toBe(digest);
     await fs.rm(destination);
     await expect(sha256File(destination)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(scans).toBe(3);
+    expect(scans).toHaveBeenCalledTimes(3);
   });
 
   it.each(["replacement", "cancellation"] as const)(
@@ -163,19 +155,15 @@ describe("cached file integrity", () => {
       await fs.writeFile(destination, Buffer.alloc(2 * 1024 * 1024, 1));
       await fs.writeFile(replacement, "replacement bytes");
       const controller = new AbortController();
-      injectFileHandle((handle) => {
-        const createReadStream = handle.createReadStream.bind(handle);
-        handle.createReadStream = (...args) => {
-          const stream = createReadStream(...args);
-          stream.once("data", () => {
-            if (mode === "cancellation") {
-              controller.abort();
-            } else {
-              nodeFs.renameSync(replacement, destination);
-            }
-          });
-          return stream;
-        };
+      const hashFile = fileDurability.sha256File;
+      vi.spyOn(fileDurability, "sha256File").mockImplementationOnce(async (...args) => {
+        const hashed = hashFile(...args);
+        if (mode === "cancellation") {
+          controller.abort();
+        } else {
+          nodeFs.renameSync(replacement, destination);
+        }
+        return await hashed;
       });
       await expect(sha256File(destination, controller.signal)).rejects.toThrow(
         mode === "cancellation" ? /abort/iu : "File changed during integrity verification",
@@ -198,10 +186,10 @@ describe("cached file integrity", () => {
       destination,
       expectedSha256: digest,
     });
-    const directScan = vi.spyOn(nodeFs, "createReadStream");
+    const scan = vi.spyOn(fileDurability, "sha256File");
     const opened = vi.spyOn(fs, "open");
     expect(await sha256File(destination)).toBe(digest);
-    expect(directScan).not.toHaveBeenCalled();
+    expect(scan).not.toHaveBeenCalled();
     expect(opened).not.toHaveBeenCalled();
   });
 });

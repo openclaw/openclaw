@@ -22,3 +22,5 @@ export {
 } from "../provider-options.js";
 export { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
 export type { ResponsesPromptObservation } from "../transports/openai-responses-contracts.js";
+
+export { responsesRequestLifecycle } from "../transports/openai-responses-request-lifecycle.js";

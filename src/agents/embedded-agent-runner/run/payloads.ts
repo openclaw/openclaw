@@ -11,6 +11,7 @@ import { buildProviderLoginRecovery } from "../../../auto-reply/provider-login-r
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  hasReplyPayloadSpeechContent,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
@@ -27,6 +28,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
+import { trimTextPreservingCode } from "../../../shared/text/text-projection.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
   formatAssistantErrorText,
@@ -261,8 +263,10 @@ export function buildEmbeddedRunPayloads(params: {
             ? parseReplyDirectives(fallbackAnswerSourceText)
             : null;
       const shouldUseCanonicalFinalAnswer = Boolean(
-        fallbackAnswerDirectiveState &&
-        normalizeTextForComparison(fallbackAnswerDirectiveState.text),
+        (fallbackAnswerDirectiveState &&
+          (normalizeTextForComparison(fallbackAnswerDirectiveState.text) ||
+            fallbackAnswerDirectiveState.mediaUrls?.length)) ||
+        storedDelivery?.tts?.text?.trim(),
       );
       const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
       const answerTexts =
@@ -399,7 +403,7 @@ export function buildEmbeddedRunPayloads(params: {
       const assistantMessageIndex =
         getReplyPayloadMetadata(item)?.assistantMessageIndex ?? params.assistantMessageIndex;
       const payload: ReplyPayload = copyReplyPayloadMetadata(item, {
-        text: normalizeOptionalString(item.text),
+        text: trimTextPreservingCode(item.text ?? "") || undefined,
       });
       const mediaUrl = item.mediaUrl ?? item.media?.[0];
       if (mediaUrl) {
@@ -501,7 +505,7 @@ export function buildEmbeddedRunPayloads(params: {
       if (payload.text && isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN)) {
         const silentText = payload.text;
         payload.text = undefined;
-        if (hasReplyPayloadContent(payload)) {
+        if (hasReplyPayloadContent(payload) || hasReplyPayloadSpeechContent(payload)) {
           return payload;
         }
         payload.text = silentText;
@@ -509,7 +513,7 @@ export function buildEmbeddedRunPayloads(params: {
       return payload;
     })
     .filter((p) => {
-      if (!hasReplyPayloadContent(p) && !getReplyPayloadMetadata(p)?.tts) {
+      if (!hasReplyPayloadContent(p) && !hasReplyPayloadSpeechContent(p)) {
         return false;
       }
       if (p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)) {

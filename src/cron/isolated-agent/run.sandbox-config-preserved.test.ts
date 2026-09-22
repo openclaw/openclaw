@@ -1,38 +1,31 @@
-// Sandbox config preservation tests cover cron runs keeping sandbox settings intact.
 import { describe, expect, it } from "vitest";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { resolveCronAgentConfig } from "./run-config.js";
 
-function makeCfg() {
-  return {
-    agents: {
-      defaults: {
-        sandbox: {
-          mode: "all" as const,
-          workspaceAccess: "rw" as const,
-          docker: {
-            network: "none",
-            dangerouslyAllowContainerNamespaceJoin: true,
-            dangerouslyAllowExternalBindSources: true,
-          },
-          browser: {
-            enabled: true,
-            autoStart: false,
-          },
-          prune: {
-            maxAgeDays: 7,
-          },
-        },
-      },
-    },
-  };
-}
+const defaultSandbox = {
+  mode: "all" as const,
+  workspaceAccess: "rw" as const,
+  docker: {
+    network: "none",
+    dangerouslyAllowContainerNamespaceJoin: true,
+    dangerouslyAllowExternalBindSources: true,
+  },
+  browser: {
+    enabled: true,
+    autoStart: false,
+  },
+  prune: {
+    maxAgeDays: 7,
+  },
+};
 
-function buildRunCfg(agentId: string, agentConfigOverride?: Record<string, unknown>) {
-  const cfg = makeCfg();
+function buildRunCfg(
+  agentId: string,
+  agentConfigOverride: Parameters<typeof resolveCronAgentConfig>[0]["agentConfigOverride"],
+) {
   const { cfgWithAgentDefaults } = resolveCronAgentConfig({
-    config: cfg,
-    agentConfigOverride: agentConfigOverride as never,
+    config: { agents: { defaults: { sandbox: structuredClone(defaultSandbox) } } },
+    agentConfigOverride,
   });
   return {
     ...cfgWithAgentDefaults,
@@ -41,31 +34,6 @@ function buildRunCfg(agentId: string, agentConfigOverride?: Record<string, unkno
       list: [{ id: agentId, ...agentConfigOverride }],
     },
   };
-}
-
-function expectDefaultSandboxPreserved(
-  runCfg:
-    | {
-        agents?: { defaults?: { sandbox?: unknown } };
-      }
-    | undefined,
-) {
-  expect(runCfg?.agents?.defaults?.sandbox).toEqual({
-    mode: "all",
-    workspaceAccess: "rw",
-    docker: {
-      network: "none",
-      dangerouslyAllowContainerNamespaceJoin: true,
-      dangerouslyAllowExternalBindSources: true,
-    },
-    browser: {
-      enabled: true,
-      autoStart: false,
-    },
-    prune: {
-      maxAgeDays: 7,
-    },
-  });
 }
 
 describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
@@ -77,7 +45,7 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
       heartbeat: undefined,
       tools: undefined,
     });
-    expectDefaultSandboxPreserved(runCfg);
+    expect(runCfg.agents.defaults?.sandbox).toEqual(defaultSandbox);
     const resolvedSandbox = resolveSandboxConfigForAgent(runCfg, "worker");
     expect(resolvedSandbox.mode).toBe("all");
     expect(resolvedSandbox.workspaceAccess).toBe("rw");
@@ -99,7 +67,7 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
     });
     const resolvedSandbox = resolveSandboxConfigForAgent(runCfg, "specialist");
 
-    expectDefaultSandboxPreserved(runCfg);
+    expect(runCfg.agents.defaults?.sandbox).toEqual(defaultSandbox);
     expect(resolvedSandbox.mode).toBe("all");
     expect(resolvedSandbox.workspaceAccess).toBe("rw");
     expect(resolvedSandbox.docker.image).toBe("ghcr.io/openclaw/sandbox:custom");

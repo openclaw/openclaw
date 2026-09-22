@@ -141,11 +141,11 @@ it.each(["runtime", "status", "delivery_status", "notify_policy"] as const)(
   },
 );
 
-it("keeps the first cron match in raw SQLite order, including nonterminal blockers and exact run IDs", () => {
+it("keeps the first cron match in raw SQLite order with exact persisted run IDs", () => {
   const cron = (
     taskId: string,
     sourceId: string,
-    runId: string,
+    runId: string | undefined,
     status: TaskStatus,
     createdAt: number,
   ) => {
@@ -164,10 +164,13 @@ it("keeps the first cron match in raw SQLite order, including nonterminal blocke
   cron("tie-\ue000", "tie", "shared", "failed", 10);
   cron("tie-target", "tie", "shared", "running", 30);
   cron("trimmed-run", "whitespace", "run", "failed", 10);
-  cron("exact-run", "whitespace", " run ", "succeeded", 20);
-  cron("whitespace-target", " whitespace ", " run ", "running", 30);
-  cron("blank-target", " missing ", " ", "queued", 30);
-  cron("blank-unrelated", "missing", " ", "succeeded", 10);
+  cron("different-run", "whitespace", "different-run", "succeeded", 0);
+  cron("exact-run", "whitespace", "run", "succeeded", 20);
+  cron("whitespace-target", " whitespace ", "run", "running", 30);
+  cron("blank-target", " missing ", undefined, "queued", 30);
+  cron("blank-unrelated", "missing", undefined, "succeeded", 10);
+  cron("legacy-target", "legacy", "run", "running", 30);
+  cron("legacy-canonical", "legacy", "run", "succeeded", 10);
   cron("lost-target", "lost", "same", "lost", 30);
   db.prepare("UPDATE task_runs SET error = ? WHERE task_id = ?").run(
     "Prior BACKING SESSION MISSING",
@@ -175,8 +178,20 @@ it("keeps the first cron match in raw SQLite order, including nonterminal blocke
   );
   cron("lost-recovered", "lost", "same", "succeeded", 10);
   store("other-runtime", { runtime: "cli", sourceId: "raw", runId: "shared", createdAt: 0 });
+  // Only Doctor may repair persisted identities and their cross-row bindings.
+  db.prepare("UPDATE task_runs SET run_id = ?, child_session_key = ? WHERE task_id = ?").run(
+    "\t run \u00a0",
+    " legacy-child ",
+    "legacy-target",
+  );
+  const before = db.prepare("SELECT * FROM task_runs ORDER BY task_id").all();
 
   const result = snapshot();
+  expect(result.candidates.find((row) => row.taskId === "legacy-target")).toMatchObject({
+    runId: "\t run \u00a0",
+    childSessionKey: " legacy-child ",
+  });
+  expect(db.prepare("SELECT * FROM task_runs ORDER BY task_id").all()).toEqual(before);
   for (const candidate of result.candidates) {
     const sourceId = candidate.sourceId?.trim();
     if (candidate.runtime !== "cron" || !sourceId) {
@@ -204,7 +219,8 @@ it("keeps the first cron match in raw SQLite order, including nonterminal blocke
   expect(result.cronRecoveryRows.get("blocked-target")?.status).toBe("queued");
   expect(result.cronRecoveryRows.get("raw-target")?.taskId).toBe("raw-first");
   expect(result.cronRecoveryRows.get("tie-target")?.taskId).toBe("tie-\ue000");
-  expect(result.cronRecoveryRows.get("whitespace-target")?.taskId).toBe("exact-run");
+  expect(result.cronRecoveryRows.get("whitespace-target")?.taskId).toBe("trimmed-run");
+  expect(result.cronRecoveryRows.get("legacy-target")?.taskId).toBe("legacy-target");
   expect(result.cronRecoveryRows.has("blank-target")).toBe(false);
   expect(result.cronRecoveryRows.get("lost-target")?.status).toBe("succeeded");
 });

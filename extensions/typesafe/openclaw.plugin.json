@@ -1,0 +1,141 @@
+{
+  "id": "typesafe",
+  "name": "TypeSafe AI",
+  "description": "Optional typed evaluations, not a conversational model provider.",
+  "categories": [
+    "developer-tools"
+  ],
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "typesafe_evaluate"
+    ],
+    "decisionProviders": [
+      "typesafe"
+    ]
+  },
+  "toolMetadata": {
+    "typesafe_evaluate": {
+      "optional": true
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "bundledDefaultEnabled": false,
+      "paths": [
+        {
+          "path": "apiKey",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    }
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "TypeSafe API credential",
+      "help": "Hosted Jev only. Select a SecretRef in Settings \u2192 Secrets. Ignored for a local baseUrl. Never paste credentials in chat.",
+      "sensitive": true
+    },
+    "model": {
+      "label": "Evaluation tool default model",
+      "help": "Default only for typesafe_evaluate: jev-latest for hosted Jev, kev-latest for local System One. Local model labels do not load checkpoints. Native decisions use the agent decisionModel selection."
+    },
+    "timeoutMs": {
+      "label": "Request timeout (ms)",
+      "advanced": true
+    },
+    "baseUrl": {
+      "label": "Local System One origin",
+      "help": "Optional loopback origin, such as http://127.0.0.1:8009, for a running Kev server. Omit for hosted Jev. Local requests do not use the TypeSafe credential; the server chooses the loaded checkpoint."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "apiKey": {
+        "type": "object",
+        "required": [
+          "source",
+          "provider",
+          "id"
+        ],
+        "properties": {
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "env"
+              },
+              {
+                "type": "string",
+                "const": "store"
+              },
+              {
+                "type": "string",
+                "const": "file"
+              },
+              {
+                "type": "string",
+                "const": "exec"
+              }
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "additionalProperties": false
+      },
+      "model": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[a-zA-Z0-9._/-]+$",
+        "description": "Tool default: jev-latest for hosted Jev, kev-latest for a local endpoint."
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 60000,
+        "default": 30000
+      },
+      "baseUrl": {
+        "type": "string",
+        "maxLength": 128,
+        "pattern": "^https?://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]{1,5})?/?$"
+      }
+    },
+    "additionalProperties": false
+  },
+  "skills": [
+    "./skills/typesafe-evaluate"
+  ],
+  "decisionModels": [
+    {
+      "provider": "typesafe",
+      "id": "jev-latest",
+      "name": "Jev"
+    },
+    {
+      "provider": "typesafe",
+      "id": "jev-1.13.0",
+      "name": "Jev 1.13.0"
+    },
+    {
+      "provider": "typesafe",
+      "id": "kev-latest",
+      "name": "Kev (local server)"
+    }
+  ]
+}

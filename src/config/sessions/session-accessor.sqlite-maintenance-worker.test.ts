@@ -370,7 +370,7 @@ it.each(
       });
       const withWorker = reclamationWorker.withSqliteReclamationWorker;
       vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
-        (options, claim, run, assertCurrent) =>
+        (options, claim, run, assertCurrent, signal) =>
           withWorker(
             options,
             claim,
@@ -407,6 +407,7 @@ it.each(
               }
             },
             assertCurrent,
+            signal,
           ),
       );
       const adoptedAfterMutation: Array<ageFacts.SessionEntryMaintenanceAgeFact | undefined> = [];
@@ -452,7 +453,7 @@ it("adopts age facts before synchronous publication reentry", async () => {
     const policy = resolveMaintenanceConfigFromInput({
       mode: "enforce",
       maxEntries: 100,
-      pruneAfter: "1s",
+      pruneAfter: "1d",
     });
     replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
     replaceSessionEntrySync(victim, { sessionId: "victim", updatedAt: Date.now() });

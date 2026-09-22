@@ -16,8 +16,10 @@ import {
   listTasksFromIndex,
 } from "./task-registry-records.js";
 import type {
+  TaskExecutionRestoreStore,
   TaskRegistryMutationScope,
   TaskRegistryObserverEvent,
+  TaskRegistryObservers,
 } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord, TaskRuntime } from "./task-registry.types.js";
 
@@ -25,6 +27,11 @@ export type PendingTaskRegistryMutation = {
   scope: TaskRegistryMutationScope;
   readEventTarget?: () => TaskAgentEventTarget | undefined;
   readIdentity?: "preserved";
+  readSettlement?: {
+    databaseKey: string;
+    store: TaskExecutionRestoreStore;
+    promise: Promise<void>;
+  };
   published: Map<string, Omit<TaskRecord, "detail"> | undefined>;
   publication?: {
     records: Map<string, TaskRecord>;
@@ -95,6 +102,7 @@ export type TaskProgressBatch = {
   abortController: AbortController;
   lastPublishedContent?: string;
   typingStarted?: boolean;
+  finalReplyDelivered?: true;
   members: Map<string, TaskProgressMember>;
   pendingItems: Map<string, TaskProgressItem>;
   pendingPlan?: TaskProgressPlan;
@@ -110,7 +118,8 @@ export type TaskProgressBatch = {
 
 export type TaskRegistryEventMutations = {
   prepare: () => { consume: () => void; release: () => void } | undefined;
-  pending: () => boolean;
+  pending: (taskId?: string) => boolean;
+  pendingTaskIds: () => readonly string[];
   captureReadFence: (admission: OpenClawStateDatabaseReadAdmission) => Promise<void>;
 };
 
@@ -122,6 +131,7 @@ type TaskRegistryProcessState = {
   taskIdsByOwnerKey: Map<string, Set<string>>;
   taskIdsByParentFlowId: Map<string, Set<string>>;
   taskIdsByRelatedSessionKey: Map<string, Set<string>>;
+  taskIdsByChildSessionKey: Map<string, Set<string>>;
   tasksWithPendingDelivery: Set<string>;
   /** Ephemeral live activity is intentionally discarded on gateway restart. */
   taskActivityByTaskId: Map<string, TaskActivityOverlayState>;
@@ -135,6 +145,8 @@ type TaskRegistryProcessState = {
     events: TaskRegistryEventMutations;
   };
   changeListeners: Set<(event?: TaskRegistryObserverEvent) => void>;
+  // SDK and Gateway module instances must publish to the same lifecycle observer.
+  observers: TaskRegistryObservers | null;
   projection: {
     epoch: number;
     dirty: boolean;
@@ -159,11 +171,13 @@ export function getTaskRegistryProcessState(): TaskRegistryProcessState {
     taskIdsByOwnerKey: new Map<string, Set<string>>(),
     taskIdsByParentFlowId: new Map<string, Set<string>>(),
     taskIdsByRelatedSessionKey: new Map<string, Set<string>>(),
+    taskIdsByChildSessionKey: new Map<string, Set<string>>(),
     tasksWithPendingDelivery: new Set<string>(),
     taskActivityByTaskId: new Map<string, TaskActivityOverlayState>(),
     taskProgressBatches: new Map<string, TaskProgressBatch>(),
     runOwners: new Map<string, TaskRunOwner>(),
     changeListeners: new Set(),
+    observers: null,
     projection: {
       epoch: 0,
       dirty: false,
@@ -217,7 +231,7 @@ export function addRunIdIndex(taskId: string, runId?: string) {
   ids.add(taskId);
 }
 
-export function deleteRunIdIndex(taskId: string, runId?: string): void {
+function deleteRunIdIndex(taskId: string, runId?: string): void {
   if (runId?.trim()) {
     deleteIndexedKey(indexState.taskIdsByRunId, runId.trim(), taskId);
   }
@@ -278,22 +292,61 @@ export function deleteParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "
 }
 
 export function addRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys) {
+  const child = normalizeOptionalString(task.childSessionKey);
+  if (child) {
+    addIndexedKey(indexState.taskIdsByChildSessionKey, child, taskId);
+  }
   for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
     addIndexedKey(indexState.taskIdsByRelatedSessionKey, sessionKey, taskId);
   }
 }
 
 export function deleteRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys) {
+  const child = normalizeOptionalString(task.childSessionKey);
+  if (child) {
+    deleteIndexedKey(indexState.taskIdsByChildSessionKey, child, taskId);
+  }
   for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
     deleteIndexedKey(indexState.taskIdsByRelatedSessionKey, sessionKey, taskId);
   }
 }
 
-export function rebuildRunIdIndex() {
-  indexState.taskIdsByRunId.clear();
-  for (const [taskId, task] of indexState.tasks.entries()) {
-    addRunIdIndex(taskId, task.runId);
+/** Update after installing next; previous is the row replaced at that write. */
+export function updateRunIdIndex(
+  previous: Pick<TaskRecord, "taskId" | "runId"> | undefined,
+  next: Pick<TaskRecord, "taskId" | "runId">,
+): void {
+  const previousRunId = normalizeOptionalString(previous?.runId);
+  const nextRunId = normalizeOptionalString(next.runId);
+  if (previous && previousRunId === nextRunId) {
+    return;
   }
+  if (previous) {
+    deleteRunIdIndex(previous.taskId, previousRunId);
+  }
+  if (!nextRunId) {
+    return;
+  }
+  if (!previous || !indexState.taskIdsByRunId.has(nextRunId)) {
+    addRunIdIndex(next.taskId, nextRunId);
+    return;
+  }
+  // Native create/reuse selects duplicate runs in task-map insertion order.
+  const ids = new Set<string>();
+  for (const [taskId, task] of indexState.tasks) {
+    if (normalizeOptionalString(task.runId) === nextRunId) {
+      ids.add(taskId);
+    }
+  }
+  indexState.taskIdsByRunId.set(nextRunId, ids);
+}
+
+export function clearTaskRegistryIndexes(): void {
+  indexState.taskIdsByRunId.clear();
+  indexState.taskIdsByOwnerKey.clear();
+  indexState.taskIdsByParentFlowId.clear();
+  indexState.taskIdsByRelatedSessionKey.clear();
+  indexState.taskIdsByChildSessionKey.clear();
 }
 
 export function removeTaskIndexes(task: TaskRecord): void {
@@ -308,6 +361,28 @@ export function addTaskIndexes(task: TaskRecord): void {
   addOwnerKeyIndex(task.taskId, task);
   addParentFlowIdIndex(task.taskId, task);
   addRelatedSessionKeyIndex(task.taskId, task);
+}
+
+/** Update a published row without disturbing unchanged index insertion order. */
+export function updateTaskIndexes(current: TaskRecord, next: TaskRecord): void {
+  const taskId = next.taskId;
+  updateRunIdIndex(current, next);
+  if (current.ownerKey !== next.ownerKey) {
+    deleteOwnerKeyIndex(taskId, current);
+    addOwnerKeyIndex(taskId, next);
+  }
+  if (current.parentFlowId !== next.parentFlowId) {
+    deleteParentFlowIdIndex(taskId, current);
+    addParentFlowIdIndex(taskId, next);
+  }
+  if (
+    current.ownerKey !== next.ownerKey ||
+    current.requesterSessionKey !== next.requesterSessionKey ||
+    current.childSessionKey !== next.childSessionKey
+  ) {
+    deleteRelatedSessionKeyIndex(taskId, current);
+    addRelatedSessionKeyIndex(taskId, next);
+  }
 }
 
 export function taskIdsInScope(scope?: TaskRegistryMutationScope): Iterable<string> {
@@ -329,6 +404,40 @@ export function matchesScope(task: TaskRecord, scope: TaskRegistryMutationScope)
     Boolean(scope.runId && task.runId?.trim() === scope.runId) ||
     Boolean(scope.childSessionKey && task.childSessionKey?.trim() === scope.childSessionKey)
   );
+}
+
+export function selectTaskRegistryScopes(scopes?: readonly TaskRegistryMutationScope[]): {
+  taskIds: Iterable<string>;
+  matches: (task: TaskRecord) => boolean;
+} {
+  if (!scopes) {
+    return { taskIds: indexState.tasks.keys(), matches: () => true };
+  }
+  const single = scopes[0];
+  if (scopes.length === 1 && single) {
+    return { taskIds: taskIdsInScope(single), matches: (task) => matchesScope(task, single) };
+  }
+  const taskIds = new Set(scopes.map((scope) => scope.taskId));
+  const runIds = new Set(scopes.flatMap((scope) => scope.runId || []));
+  const childSessionKeys = new Set(scopes.flatMap((scope) => scope.childSessionKey || []));
+  const candidates = new Set(taskIds);
+  for (const { keys, index } of [
+    { keys: runIds, index: indexState.taskIdsByRunId },
+    { keys: childSessionKeys, index: indexState.taskIdsByRelatedSessionKey },
+  ]) {
+    for (const key of keys) {
+      for (const taskId of index.get(key) ?? []) {
+        candidates.add(taskId);
+      }
+    }
+  }
+  return {
+    taskIds: candidates,
+    matches: (task) =>
+      taskIds.has(task.taskId) ||
+      runIds.has(task.runId?.trim() ?? "") ||
+      childSessionKeys.has(task.childSessionKey?.trim() ?? ""),
+  };
 }
 
 /** Restore transaction-local publication facts without replacing held witness objects. */
@@ -383,12 +492,17 @@ export function recordTaskRegistryProjectionWrite(
         ? "snapshot"
         : "refresh";
   for (const pending of indexState.projection.pending) {
+    const publication = pending.publication;
     const recovery = pending.recoveryWitness;
     if (recovery && kind !== "delivery" && kind !== "refresh") {
       if (taskId === undefined) {
         recovery.replaced = true;
+        for (const id of publication?.records.keys() ?? []) {
+          publication?.invalidated.add(id);
+        }
       } else if (taskId === pending.scope.taskId) {
         recovery.writtenTaskIds.add(taskId);
+        publication?.invalidated.add(taskId);
       }
     }
     const witness = pending.readWitness;
@@ -404,7 +518,6 @@ export function recordTaskRegistryProjectionWrite(
         witness.writtenTaskIds.add(taskId);
       }
     }
-    const publication = pending.publication;
     if (!publication || kind === "delivery") {
       continue;
     }

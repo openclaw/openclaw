@@ -8,7 +8,7 @@ import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
-import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { readConfiguredParsedLogTail } from "../logging/log-tail.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -20,6 +20,7 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { VERSION } from "../version.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { guardUpdateDoctorSchemaUpgrade } from "./doctor-update-schema-guard.js";
@@ -156,6 +157,7 @@ async function withFixture(
     candidate: string;
     schemas: OpenClawDatabaseSchemaPreflight;
   }) => Promise<void>,
+  running = true,
 ) {
   await withOpenClawTestState(
     {
@@ -186,7 +188,7 @@ async function withFixture(
         stopped: false,
         inspected: true,
         runtimeInspected: true,
-        running: true,
+        running,
         offline: false,
         serviceUpdateVerdict: {
           kind: "owned",
@@ -266,6 +268,43 @@ function expectRecovery(output: string, root: string, previous: string) {
 }
 
 describe("Doctor refusal recovery under the released Git update driver", () => {
+  it.each([
+    { platform: "darwin", running: true },
+    { platform: "darwin", running: false },
+    { platform: "linux", running: true },
+    { platform: "win32", running: true },
+  ] as const)(
+    "names the managed-service stop command when the Gateway is not offline on $platform (running=$running)",
+    async ({ platform, running }) => {
+      await withFixture(
+        "npm",
+        async ({ root }) => {
+          mockProcessPlatform(platform);
+          const error = await refusalError(
+            beginDoctorMaintenance({
+              root,
+              options: { repair: true, nonInteractive: true },
+              runtime,
+            }),
+          );
+          expect(error.message).toContain("openclaw gateway stop");
+          expect(error.message).toContain("openclaw update repair");
+          expect(error.message).toContain("If the stop command already returned successfully");
+          expect(error.message).toContain("managed-service shutdown did not complete");
+          if (platform === "darwin") {
+            expect(error.message).toContain(
+              `launchctl bootout gui/${process.getuid?.() ?? 501}/ai.openclaw.gateway`,
+            );
+          }
+          expect(maybeStopManagedServiceBeforeMutableUpdate).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ phase: "inspect" }),
+          );
+        },
+        running,
+      );
+    },
+  );
+
   it.each(["detached", "main-rebase", "expired"] as const)(
     "preserves the schema refusal and records recovery for %s switching",
     async (history) => {
@@ -329,7 +368,7 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
     });
   });
 
-  it("retains npm schema recovery and omits independent-shell advice for an update child", async () => {
+  it("retains npm schema recovery and omits direct Doctor recovery for an update child", async () => {
     await withFixture("npm", async ({ root, schemas, state }) => {
       const expectedSchema =
         "Doctor refused update-time schema repair driven by OpenClaw 2026.9.2: this updater reopens the ledger with old code after migration, and version publication could not be deferred safely. " +
@@ -340,17 +379,17 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
       expect(
         (await refusalError(guardUpdateDoctorSchemaUpgrade({ schemas, runtime }))).message,
       ).toBe(expectedSchema);
-      expect(
-        (
-          await refusalError(
-            beginDoctorMaintenance({
-              root,
-              options: { repair: true, nonInteractive: true },
-              runtime,
-            }),
-          )
-        ).message,
-      ).toBe(`Doctor could not enter maintenance. Error: ${activationReason}`);
+      const maintenanceError = await refusalError(
+        beginDoctorMaintenance({
+          root,
+          options: { repair: true, nonInteractive: true },
+          runtime,
+        }),
+      );
+      expect(maintenanceError.message).toContain(
+        `Doctor could not enter maintenance. Error: ${activationReason}`,
+      );
+      expect(maintenanceError.message).not.toContain(maintenanceSuffix);
       expect(await warnings()).toBe("");
     });
   });
@@ -400,4 +439,25 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
       });
     },
   );
+});
+
+it("preserves Git recovery instead of accepting its package-style early markers", async () => {
+  await withFixture("detached", async ({ root, previous, schemas }) => {
+    Object.assign(
+      process.env,
+      buildUpdateDoctorEnv({
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+        serviceRepairPolicy: "external",
+        deferConfiguredPluginInstallRepair: true,
+      }),
+    );
+    recordUpdateRunStep("3752a66b-275f-4fe0-b43b-1c9a7e6fe7ca", {
+      step: "openclaw doctor",
+      status: "in_progress",
+    });
+    const error = await refusalError(guardUpdateDoctorSchemaUpgrade({ schemas, runtime }));
+    expect(error).toMatchObject({ code: "update-schema-bump-unfenced" });
+    expectRecovery(error.message, root, previous);
+  });
 });

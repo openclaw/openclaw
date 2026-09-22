@@ -17,6 +17,7 @@ import {
   waitForReliabilityWorkerExit,
   waitForReliabilityWorkerMessage,
 } from "./sqlite-reliability-process.js";
+import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
 
 type RestoreCrashPoint = "after-publish" | "before-publish";
 type RestoreExit =
@@ -166,7 +167,7 @@ async function runCrashPoint(params: {
     ],
     {
       cwd: process.cwd(),
-      execArgv: ["--import", "tsx"],
+      execArgv: [...resolveForwardedNodeCompilerArgs(), "--import", "tsx"],
       serialization: "json",
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     },

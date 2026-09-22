@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../../build-info.ts";
-import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
+import {
+  createGateway,
+  createGatewayHarness,
+  createSessions,
+  mountSidebar,
+} from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
 type SidebarNativeGatewayTestSnapshot = {
@@ -40,15 +45,17 @@ function setNativeGatewayTestState(snapshot: SidebarNativeGatewayTestSnapshot): 
   nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = snapshot;
 }
 
-afterEach(() => {
-  const nativeWindow = window as SidebarNativeGatewayTestWindow;
-  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_WEB_CHROME__");
-  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_GATEWAYS__");
-  Object.assign(CONTROL_UI_BUILD_INFO as MutableControlUiBuildInfo, ORIGINAL_CONTROL_UI_BUILD_INFO);
-  vi.useRealTimers();
-});
-
 describe("AppSidebar gateway footer subtitle", () => {
+  afterEach(() => {
+    const nativeWindow = window as SidebarNativeGatewayTestWindow;
+    Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_WEB_CHROME__");
+    Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_GATEWAYS__");
+    Object.assign(
+      CONTROL_UI_BUILD_INFO as MutableControlUiBuildInfo,
+      ORIGINAL_CONTROL_UI_BUILD_INFO,
+    );
+  });
+
   const twoGateways = {
     gateways: [
       { id: "local", name: "Local Gateway", isPrimary: true, health: "ok" },
@@ -90,17 +97,20 @@ describe("AppSidebar gateway footer subtitle", () => {
     expect(sidebar.querySelector(".sidebar-identity-card__gateway")).toBeNull();
   });
 
-  it.each([false, true])("keeps plain web one line (offline: %s)", async (offline) => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.offline = offline;
-    await sidebar.updateComplete;
+  it.each([null, "reconnecting"] as const)(
+    "does not invent gateway metadata on the web (%s)",
+    async (connectionStatus) => {
+      const gateway = createGateway({} as GatewayBrowserClient);
+      const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+      sidebar.connectionStatus = connectionStatus;
+      await sidebar.updateComplete;
 
-    expect(
-      sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
-    ).not.toContain("Local Gateway");
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway")).toBeNull();
-  });
+      expect(
+        sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
+      ).not.toContain("Local Gateway");
+      expect(sidebar.querySelector(".sidebar-identity-card__gateway")).toBeNull();
+    },
+  );
 
   it("shows a single configured gateway below the identity name", async () => {
     setNativeGatewayTestState({ gateways: [twoGateways.gateways[0]!], currentId: "local" });
@@ -116,7 +126,7 @@ describe("AppSidebar gateway footer subtitle", () => {
     expect(detail?.querySelector(".sidebar-gateway-primary")?.textContent).toBe("primary");
   });
 
-  it("shows the current gateway health, name, and primary suffix", async () => {
+  it("shows gateway identity without treating aggregate health as this window’s status", async () => {
     setControlUiBuildInfo({ commit: CONTROL_UI_TEST_COMMIT, release: false });
     setNativeGatewayTestState(twoGateways);
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -128,57 +138,67 @@ describe("AppSidebar gateway footer subtitle", () => {
     const detail = sidebar.querySelector(".sidebar-identity-card__gateway");
     expect(detail?.textContent).toContain("Local Gateway");
     expect(detail?.querySelector(".sidebar-gateway-primary")?.textContent).toBe("primary");
-    expect(detail?.querySelector(".sidebar-gateway-health")?.getAttribute("data-health")).toBe(
-      "ok",
-    );
+    expect(detail?.querySelector(".sidebar-gateway-health")).toBeNull();
     expect(
       sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
     ).not.toContain("git@e8cbc62");
   });
 
-  it("shows reconnecting below the identity name and retains the offline retry action", async () => {
-    setControlUiBuildInfo({ commit: CONTROL_UI_TEST_COMMIT, release: false });
+  it.each([
+    ["reconnecting", "Reconnecting…"],
+    ["restarting", "Restarting…"],
+    ["suspending", "Suspending…"],
+    ["suspended", "Suspended"],
+    ["restoring", "Restoring…"],
+    ["reload-required", "Refresh required"],
+  ] as const)("shows one %s subtitle without delivery counts", async (connectionStatus, label) => {
     setNativeGatewayTestState(twoGateways);
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const onRetryConnect = vi.fn();
-    sidebar.offline = true;
-    sidebar.queuedOutboxCount = 3;
-    sidebar.lastError = "connection refused?token=footer-secret";
-    sidebar.onRetryConnect = onRetryConnect;
+    sidebar.connectionStatus = connectionStatus;
     await sidebar.updateComplete;
 
-    const status = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
-    expect(status?.textContent).toContain("Offline");
-    expect(status?.textContent).toContain("Reconnecting…");
-    expect(status?.textContent).toContain("3 queued");
-    expect(
-      (status?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)?.content,
-    ).toBe("connection refused?[redacted-credential]");
-    status?.click();
-    expect(onRetryConnect).toHaveBeenCalledOnce();
-    expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
-      "Identity and app menu for Owner: Reconnecting…",
-    );
-    const detail = sidebar.querySelector(".sidebar-identity-card__gateway");
-    expect(detail?.textContent?.trim()).toBe("Reconnecting…");
-    expect(detail?.querySelector(".sidebar-gateway-primary")).toBeNull();
-    expect(
-      sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
-    ).not.toContain("git@e8cbc62");
+    const footer = sidebar.querySelector(".sidebar-footer-bar");
+    expect(footer?.querySelectorAll(".gateway-status__label")).toHaveLength(1);
+    expect(footer?.querySelector(".gateway-status__label")?.textContent).toBe(label);
+    expect(footer?.querySelector("button [role=status]")).toBeNull();
+    expect(footer?.querySelector("[role=status]")?.textContent).toContain(label);
+    expect(footer?.querySelector("[role=status]")?.textContent).not.toContain("in outbox");
+    expect(footer?.textContent).not.toContain("Offline");
+    expect(footer?.querySelector(".gateway-status__outbox")).toBeNull();
+    expect(footer?.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Owner");
+    expect(footer?.querySelector(".sidebar-identity-card__gateway")).toBeNull();
+    expect(footer?.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("polite");
+    expect(footer?.querySelector("button button")).toBeNull();
   });
 
-  it("prioritizes an announced restart over the stable offline state", async () => {
+  it("keeps gateway identity after reconnect and redacts connection diagnostics", async () => {
+    setNativeGatewayTestState(twoGateways);
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.offline = true;
-    sidebar.restartPending = true;
+    sidebar.connectionStatus = "reconnecting";
+    sidebar.lastError = "connection refused?token=footer-secret";
     await sidebar.updateComplete;
+    const tooltip = sidebar.querySelector<HTMLElement & { content?: string }>(
+      ".gateway-status-tooltip",
+    );
+    expect(tooltip?.content).toBe("connection refused?[redacted-credential]");
 
-    const status = sidebar.querySelector(".sidebar-footer-bar__status--restarting");
-    expect(status?.textContent).toBe("Restarting…");
-    expect(status?.getAttribute("aria-live")).toBe("polite");
-    expect(sidebar.querySelector("button.sidebar-footer-bar__status")).toBeNull();
+    sidebar.connectionStatus = null;
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".gateway-status__label")).toBeNull();
+    expect(sidebar.querySelector(".gateway-status__outbox")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-identity-card__gateway")?.textContent).toContain(
+      "Local Gateway",
+    );
+    const connectedTooltip = sidebar.querySelector<HTMLElement & { content?: string }>(
+      ".gateway-status-tooltip",
+    );
+    expect(connectedTooltip).toBeNull();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card")?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-identity-menu__outbox")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-footer-bar")?.textContent).not.toContain("in outbox");
   });
 
   it("updates when the native gateway snapshot changes", async () => {
@@ -201,8 +221,49 @@ describe("AppSidebar gateway footer subtitle", () => {
     const detail = sidebar.querySelector(".sidebar-identity-card__gateway");
     expect(detail?.textContent).toContain("Remote Gateway");
     expect(detail?.querySelector(".sidebar-gateway-primary")).toBeNull();
-    expect(detail?.querySelector(".sidebar-gateway-health")?.getAttribute("data-health")).toBe(
-      "error",
+    expect(detail?.querySelector(".sidebar-gateway-health")).toBeNull();
+  });
+
+  it("retains display identity only for the same reconnecting connection", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    gateway.publish({ selfUser: { id: "profile-alex", name: "Alex" } });
+    const { sidebar } = await mountSidebar(
+      gateway.gateway,
+      createSessions("main", ["agent:main:main"]),
     );
+    const name = () => sidebar.querySelector(".sidebar-identity-card__name")?.textContent;
+    expect(name()).toBe("Alex");
+
+    gateway.publish({ phase: "reconnecting", selfUser: null });
+    sidebar.connectionStatus = "reconnecting";
+    await sidebar.updateComplete;
+    expect(name()).toBe("Alex");
+    expect(gateway.gateway.snapshot.selfUser).toBeNull();
+
+    Object.defineProperty(gateway.gateway, "connectionRevision", { value: 1 });
+    sidebar.sessionData.presenceInstanceId = "old-connection";
+    sidebar.sessionData.presencePayload = {
+      presence: [
+        { instanceId: "old-connection", ts: 1, user: { id: "profile-alex", name: "Alex" } },
+      ],
+    };
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+    expect(name()).toBe("Owner");
+    gateway.publish({ phase: "connected", selfUser: null });
+    sidebar.sessionData.presencePayload = {
+      presence: [
+        { instanceId: "old-connection", ts: 1, user: { id: "profile-alex", name: "Alex" } },
+      ],
+    };
+    await sidebar.updateComplete;
+    expect(name()).toBe("Owner");
+
+    gateway.publish({ phase: "connected", selfUser: { id: "profile-sam", name: "Sam" } });
+    await sidebar.updateComplete;
+    expect(name()).toBe("Sam");
+    gateway.publish({ phase: "stopped", selfUser: null });
+    await sidebar.updateComplete;
+    expect(name()).toBe("Owner");
   });
 });

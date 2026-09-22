@@ -648,6 +648,12 @@ openclaw-pending-session-create {
   content-visibility: auto;
 }
 
+.chat-virtual-row:focus-within {
+  /* Footer controls use a -4px block margin. Paint containment must clear
+     that overhang plus the 2px focus outline and its 3px offset. */
+  overflow-clip-margin: 10px;
+}
+
 /* Message jumps need real mounted-row sizes before their target settles.
    Native reader takeover restores ordinary overscan layout skipping. */
 .chat-thread-inner[data-measuring-rows] .chat-virtual-row {
@@ -1161,6 +1167,26 @@ openclaw-chat-video-player {
   padding: 14px 16px;
 }
 
+.chat-assistant-attachment-card.chat-assistant-attachment-card--voice-note {
+  width: 360px;
+}
+
+.chat-assistant-attachment-card--voice-note .chat-audio-player__timeline {
+  order: 1;
+}
+
+.chat-assistant-attachment-card--voice-note .chat-audio-player__time {
+  order: 2;
+}
+
+.chat-assistant-attachment-card--voice-note .chat-audio-player__volume {
+  order: 3;
+}
+
+.chat-assistant-attachment-card--audio .chat-media-preparing {
+  padding: 14px 16px;
+}
+
 .chat-audio-player:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
@@ -1588,7 +1614,10 @@ openclaw-chat-video-player {
   position: relative;
   grid-area: 1 / 1;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 14px;
+  /* Keep header and launch controls inside short panes while the body scrolls. */
+  max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
   padding: 14px 16px 17px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
@@ -1637,6 +1666,8 @@ openclaw-chat-video-player {
 
 .task-suggestion__body {
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
 
 .task-suggestion__eyebrow {
@@ -1706,14 +1737,14 @@ openclaw-chat-video-player {
 }
 
 .task-suggestion__summary {
-  display: -webkit-box;
+  /* Show the requested one or two sentences; bound only unusually verbose output. */
+  max-height: 16lh;
   margin-top: 6px;
-  overflow: hidden;
+  overflow: auto;
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
 }
 
 .task-suggestion__instructions {
@@ -1979,6 +2010,10 @@ openclaw-chat-video-player {
   min-height: 44px;
   margin: -10px -12px;
   padding: 10px 12px;
+}
+
+.chat-swarm__group--completed[open] .chat-swarm__summary {
+  margin-bottom: 0;
 }
 
 .chat-swarm__group--completed .chat-swarm__counts {
@@ -3162,4 +3197,28 @@ openclaw-chat-ci-details {
 .chat-annotation-editor .chat-annotation-editor__delete {
   margin-right: auto;
   padding: 4px;
+}
+
+.chat-provider-review-dialog__content {
+  overflow-y: auto;
+  max-height: 60dvh;
+}
+
+.chat-provider-review-dialog__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-provider-review-dialog h3 {
+  font-size: 13px;
+}
+
+.chat-provider-review-dialog blockquote {
+  margin-inline: 0;
+  padding-inline-start: 16px;
+  border-inline-start: 3px solid var(--border);
+}
+
+.chat-provider-review .chat-composer-neighbor-card__copy :is(strong, span) {
+  white-space: normal;
 }

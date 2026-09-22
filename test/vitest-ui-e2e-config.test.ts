@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TestSpecification } from "vitest/node";
+import type { CiTestTimings } from "../scripts/lib/ci-test-timings-schema.mts";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 
@@ -51,7 +52,8 @@ function timingFile(fileSeconds: Record<string, number>, perFileOverheadSeconds 
     compactGroupSeconds: { blacksmith: {}, github: {} },
     runtimePlacementTimings: { blacksmith: [], github: [] },
     repoE2eFileSeconds: {},
-  });
+    toolingFileSeconds: { blacksmith: {}, github: {} },
+  } satisfies CiTestTimings);
 }
 
 function specifications(
@@ -111,6 +113,7 @@ const qaLabFiles = [
 const realGatewayFiles = [
   "agent-file-lifecycle.real-gateway",
   "chat-agent-avatar.real-gateway",
+  "chat-collaborator-scroll.real-gateway",
   "chat-composer-websearch-kill-switch.real-gateway",
   "chat-flow.catalog-bootstrap",
   "chat-loading-performance.real-gateway",
@@ -134,6 +137,7 @@ const realGatewayFiles = [
   "profile-page.real-gateway",
   "provider-browser-login.real-gateway",
   "quota-reset-status.real-gateway",
+  "session-pr-reader-lifetime.real-gateway",
   "session-progress-hovercard.real-gateway",
   "usage-sessions-owner-attribution",
   "worker-initial-setup.real-gateway",
@@ -553,6 +557,13 @@ describe("Control UI E2E resource ownership", () => {
       }
       expect(result.files.filter((entry) => entry.phase === 1)).toEqual([
         {
+          file: "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
@@ -590,6 +601,13 @@ describe("Control UI E2E resource ownership", () => {
         {
           file: "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial",
           phase: 1,
           workers: 1,
           fileParallelism: false,

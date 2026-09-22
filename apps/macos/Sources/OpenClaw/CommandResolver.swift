@@ -257,12 +257,13 @@ enum CommandResolver {
     static func nodeHostWorkerLaunch(
         bundle: Bundle = .main,
         projectRoot: URL? = nil,
-        searchPaths: [String]? = nil) async throws -> MacNodeHostWorkerLaunch
+        searchPaths: [String]? = nil,
+        desktopSharingEnabled: Bool? = nil) async throws -> MacNodeHostWorkerLaunch
     {
         // Packaging and optimization are independent: even DEBUG apps must use
         // their signed payload, including after relocation or checkout removal.
         if bundle.bundleURL.pathExtension == "app" {
-            return try BundledNodeWorker.launch(bundle: bundle)
+            return try BundledNodeWorker.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
         }
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
@@ -274,7 +275,8 @@ enum CommandResolver {
         case let .success(runtime):
             return MacNodeHostWorkerLaunch(
                 command: self.nodeHostWorkerCommand(
-                    prefix: [runtime.path, sourceRunner.path]),
+                    prefix: [runtime.path, sourceRunner.path],
+                    desktopSharingEnabled: desktopSharingEnabled),
                 currentDirectoryURL: root)
         case let .failure(error):
             throw error
@@ -286,9 +288,14 @@ enum CommandResolver {
 
     static func nodeHostWorkerCommand(
         prefix: [String],
-        profile: AppProfile = .current) -> [String]
+        profile: AppProfile = .current,
+        desktopSharingEnabled: Bool? = nil) -> [String]
     {
-        profile.localCLICommand(prefix: prefix, arguments: ["node", "worker"])
+        var arguments = ["node", "worker"]
+        if let desktopSharingEnabled {
+            arguments.append(desktopSharingEnabled ? "--desktop-sharing" : "--no-desktop-sharing")
+        }
+        return profile.localCLICommand(prefix: prefix, arguments: arguments)
     }
 
     enum LocalCLIResolution {

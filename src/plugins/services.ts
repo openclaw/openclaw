@@ -575,7 +575,9 @@ async function startPreparedPluginServices({
       },
       serviceHealth: health,
       ...(getCron ? { getCron } : {}),
-      ...(nodeInvoker ? { invokeNode: nodeInvoker.invoke } : {}),
+      ...(nodeInvoker
+        ? { invokeNode: nodeInvoker.invoke, openNodeDuplex: nodeInvoker.openDuplex }
+        : {}),
       ...(gatewayEvents ? { gatewayEvents } : {}),
       ...(startupTrace
         ? {

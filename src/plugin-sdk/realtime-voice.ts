@@ -243,3 +243,9 @@ export {
   resamplePcm,
   resamplePcmTo8k,
 } from "../talk/audio-codec.js";
+
+export {
+  createRealtimeVoiceAudioPortSender,
+  type RealtimeVoiceAudioOutputPort,
+  type RealtimeVoiceAudioOutputMessage,
+} from "../talk/audio-output-port.js";

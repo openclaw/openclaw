@@ -1,63 +1,11 @@
-import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Server } from "node:net";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { createFileLockManager } from "../infra/file-lock-manager.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "../infra/file-lock.js";
-import { isLockOwnerDefinitelyStale } from "../infra/stale-lock-file.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { claimTestPortBlock, type TestPortClaim } from "./port-claim-lock.js";
 import { getDeterministicFreePortBlock } from "./ports.js";
 
-const portClaims = createFileLockManager("openclaw.test-gateway-ports");
-let portClaimOwnerStartTime: number | null | undefined;
-const isDefinitelyStalePortClaim = ({ payload }: { payload: unknown }) =>
-  isLockOwnerDefinitelyStale({ payload: isRecord(payload) ? payload : null });
-
-export type TestPortClaim = { port: number; release: () => Promise<void> };
-
-async function claimPortBlock(
-  port: number,
-  offsets: number[],
-  signal?: AbortSignal,
-): Promise<TestPortClaim> {
-  signal?.throwIfAborted();
-  const root = await fs.realpath(tmpdir());
-  const claims: Awaited<ReturnType<typeof portClaims.acquire>>[] = [];
-  const release = () =>
-    runQaGatewayFixture(async () => {}, ...claims.map((claim) => () => claim.release()));
-  try {
-    for (const offset of offsets) {
-      signal?.throwIfAborted();
-      claims.push(
-        await portClaims.acquire(path.join(root, `openclaw-test-port-${port + offset}`), {
-          retry: { retries: 0 },
-          staleMs: 30_000,
-          staleRecovery: "remove-if-unchanged",
-          shouldReclaim: isDefinitelyStalePortClaim,
-          shouldRemoveStaleLock: isDefinitelyStalePortClaim,
-          payload: () => {
-            if (portClaimOwnerStartTime === undefined) {
-              portClaimOwnerStartTime = getFileLockProcessStartTime(process.pid);
-            }
-            return {
-              pid: process.pid,
-              createdAt: new Date().toISOString(),
-              ...(portClaimOwnerStartTime === null ? {} : { starttime: portClaimOwnerStartTime }),
-            };
-          },
-        }),
-      );
-    }
-    signal?.throwIfAborted();
-    return { port, release };
-  } catch (error) {
-    return runQaGatewayFixture(async (): Promise<never> => {
-      throw error;
-    }, release);
-  }
-}
+export type { TestPortClaim } from "./port-claim-lock.js";
 
 /** Retain exclusive test ownership while a socket is handed to its eventual listener. */
 export async function acquireTestPortBlock(params: {
@@ -81,7 +29,7 @@ export async function acquireTestPortBlock(params: {
   }
   if (requestedPort !== undefined) {
     try {
-      return await claimPortBlock(requestedPort, offsets, signal);
+      return await claimTestPortBlock(requestedPort, offsets, signal);
     } catch (error) {
       if (!hasErrnoCode(error, FILE_LOCK_TIMEOUT_ERROR_CODE)) {
         throw error;
@@ -102,10 +50,77 @@ export async function acquireTestPortBlock(params: {
     }
     seen.add(port);
     try {
-      return await claimPortBlock(port, offsets, signal);
+      return await claimTestPortBlock(port, offsets, signal);
     } catch (error) {
       if (!hasErrnoCode(error, FILE_LOCK_TIMEOUT_ERROR_CODE)) {
         throw error;
+      }
+    }
+  }
+}
+
+/** Hold the real loopback listener as well as the cooperative port claim. */
+export async function reserveTestPortListener<T extends Server>(params: {
+  offsets: number[];
+  port?: number;
+  signal?: AbortSignal;
+  createListener: () => T;
+  verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
+}) {
+  const verifyCleanup = params.verifyCleanup ?? ((cleanup: () => Promise<void>) => cleanup());
+  const seen = new Set<number>();
+  while (true) {
+    const claim = await acquireTestPortBlock(params);
+    let reservation: { listener: T; releaseListener: () => Promise<void> } | undefined;
+    let bindError: unknown;
+    try {
+      if (seen.has(claim.port)) {
+        throw new Error("no unclaimed test Gateway port block available");
+      }
+      seen.add(claim.port);
+      params.signal?.throwIfAborted();
+      const listener = params.createListener();
+      const releaseListener = () =>
+        new Promise<void>((resolve, reject) => {
+          listener.close((error) => (error ? reject(error) : resolve()));
+        });
+      reservation = { listener, releaseListener };
+      await new Promise<void>((resolve, reject) => {
+        const failed = (error: Error) => {
+          bindError = error;
+          reject(error);
+        };
+        listener.once("error", failed);
+        listener.listen(claim.port, "127.0.0.1", () => {
+          listener.off("error", failed);
+          resolve();
+        });
+      });
+      params.signal?.throwIfAborted();
+      return { claim, ...reservation };
+    } catch (error) {
+      try {
+        await runQaGatewayFixture(
+          async (): Promise<never> => {
+            throw error;
+          },
+          () =>
+            reservation?.listener.listening
+              ? verifyCleanup(reservation.releaseListener)
+              : undefined,
+          () => verifyCleanup(claim.release),
+        );
+      } catch (rollbackError) {
+        // An unrelated listener can win after the free-port probe closes. Only
+        // initial automatic selection may move, after both provisional owners drain.
+        if (
+          rollbackError !== error ||
+          params.port !== undefined ||
+          error !== bindError ||
+          !hasErrnoCode(error, "EADDRINUSE")
+        ) {
+          throw rollbackError;
+        }
       }
     }
   }

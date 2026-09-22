@@ -19,6 +19,7 @@ import {
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessSideQuestionParams,
   type AgentHarnessSideQuestionParamsV2,
+  type AgentHarnessSessionForkParams,
   type AgentHarnessSupportContext,
   type AgentHarnessTerminalOutcomeClassification,
   type AgentHarnessV2,
@@ -167,6 +168,7 @@ describe("agent harness runtime SDK facade", () => {
   });
 
   it("keeps legacy harness implementations source-compatible while requiring capabilities in V2", () => {
+    type SessionForkParamsV2 = Parameters<NonNullable<AgentHarnessV2["sessionForkV2"]>["fork"]>[0];
     const legacyHarness = {
       id: "legacy-test",
       label: "Legacy test harness",
@@ -205,6 +207,13 @@ describe("agent harness runtime SDK facade", () => {
       > extends AgentHarnessSideQuestionParamsV2
         ? true
         : false
+    >().toEqualTypeOf<false>();
+
+    expectTypeOf<
+      Omit<SessionForkParamsV2, "assertCurrent">
+    >().toEqualTypeOf<AgentHarnessSessionForkParams>();
+    expectTypeOf<
+      Omit<SessionForkParamsV2, "assertCurrent"> extends SessionForkParamsV2 ? true : false
     >().toEqualTypeOf<false>();
 
     // v2026.8.1 queue/register callers need neither a source predicate nor V2.

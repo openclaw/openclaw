@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { consumeSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { StartedSessionNavigation } from "./started-session-navigation.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -10,6 +11,54 @@ afterEach(() => {
 });
 
 describe("confirmed session navigation", () => {
+  it.each(["leave", "stop"] as const)(
+    "settles a pending composer handoff when its route retires (%s)",
+    async (retire) => {
+      const { context } = createDraftFixture();
+      await context.router.navigate("chat", context);
+      const lifecycle = new AbortController();
+      Object.defineProperty(context, "lifecycleAbortSignal", { value: lifecycle.signal });
+      const navigation = new StartedSessionNavigation();
+      let committed!: Promise<void>;
+      vi.mocked(context.navigateAndWait).mockImplementation((routeId, options) => {
+        committed = context.router.navigate(
+          routeId,
+          context,
+          {},
+          {
+            pathname: options?.pathname ?? "/chat",
+            search: options?.search ?? "",
+            hash: options?.hash ?? "",
+          },
+        );
+        return committed;
+      });
+      const opening = navigation.navigate(context, {
+        client: context.gateway.snapshot.client!,
+        key: "agent:main:dashboard:pending-composer",
+        agentId: "main",
+      });
+      await committed;
+      if (retire === "stop") {
+        lifecycle.abort();
+      } else {
+        await context.router.navigate(
+          "chat",
+          context,
+          {},
+          {
+            pathname: "/chat/main/another-session",
+            search: "",
+            hash: "",
+          },
+        );
+      }
+      await opening;
+      expect(navigation.current).toBeNull();
+      expect(context.navigateAndWait).toHaveBeenCalledOnce();
+    },
+  );
+
   it("hands off the confirmed session without waiting for speculative preloading", async () => {
     const { context, flow } = createDraftFixture();
     const sessionKey = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";

@@ -154,8 +154,13 @@ export function guardSessionManager(
         message.role === "user"
           ? { ...message, __openclaw: { ...Reflect.get(message, "__openclaw") } }
           : undefined;
-      if (preparedMessage?.["__openclaw"].humanMentions !== undefined) {
-        // Hooks may mutate text and spans in place; compare against the submitted selection.
+      if (
+        preparedMessage &&
+        (preparedMessage["__openclaw"].humanMentions !== undefined ||
+          preparedMessage["__openclaw"].workContext !== undefined)
+      ) {
+        // Hooks may rewrite text in place; retained selections and context must
+        // compare against the submitted bytes, not the already-mutated array.
         preparedMessage.content = structuredClone(preparedMessage.content);
         preparedMessage["__openclaw"].humanMentions = structuredClone(
           preparedMessage["__openclaw"].humanMentions,

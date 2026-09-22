@@ -145,7 +145,8 @@ session key, a prepared fallback agent, or a persisted fixed-store owner.
 
 The older `resolveSessionAgentIds` and `resolveSessionAgentId` Plugin SDK
 exports preserve ambient system-agent fallback only when strict resolution
-fails because no owner was supplied. They do not override explicit,
+fails because no owner was supplied. These aliases treat empty or whitespace-only
+agent IDs as omitted; strict resolvers reject supplied blank IDs. They do not override explicit,
 agent-scoped, persisted, conflicting, or retired owner outcomes. These aliases
 are deprecated as of August 29, 2026, and remain available through November 29, 2026. Removal also requires a published-plugin reader sweep and explicit
 breaking-release approval.

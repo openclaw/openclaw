@@ -4,10 +4,14 @@ import { hasNonEmptyString as replayToolCallNonEmptyString } from "../../../../p
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   normalizeOpenAIResponsesToolCallIds,
+} from "../../embedded-agent-helpers/openai.js";
+import {
+  mergeConsecutiveUserMessages,
+  shouldAllowProviderOwnedThinkingReplay,
+  shouldMergeConsecutiveUserTurns,
   validateAnthropicTurns,
   validateGeminiTurns,
-} from "../../embedded-agent-helpers.js";
-import { mergeConsecutiveUserMessages } from "../../embedded-agent-helpers/turns.js";
+} from "../../embedded-agent-helpers/turns.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import {
   sanitizeToolUseResultPairing,
@@ -22,10 +26,6 @@ import {
   type ToolCallIdMode,
 } from "../../tool-call-id.js";
 import { createCompletedToolCallPredicate } from "../../tool-call-shared.js";
-import {
-  shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveUserTurns,
-} from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";

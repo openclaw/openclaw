@@ -1,11 +1,13 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, watch } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
@@ -45,17 +47,6 @@ async function open(databasePath: string, input?: FixtureOpenInput) {
   return store;
 }
 
-function observePreparation(markerPath: string) {
-  const started = createDeferredCore();
-  const watcher = watch(path.dirname(markerPath), () => {
-    if (existsSync(markerPath)) {
-      started.resolve();
-    }
-  });
-  watcher.once("error", started.reject);
-  return { started: started.promise, close: () => watcher.close() };
-}
-
 it.each([
   { mib: 0, owner: "client" },
   { mib: 40, owner: "client" },
@@ -68,7 +59,6 @@ it.each([
     const markerPath = path.join(root, "preparing");
     const gatePath = path.join(root, "release");
     const store = await open(databasePath, { type: "prepare", markerPath, gatePath });
-    const observation = observePreparation(markerPath);
     const activeCancel = new AbortController();
     const queuedCancel = new AbortController();
     const value = mib ? "x".repeat(mib * 1024 * 1024) : "first";
@@ -84,7 +74,7 @@ it.each([
     let closing: Promise<void> | undefined;
     try {
       await Promise.race([
-        observation.started,
+        waitForFixtureFile(markerPath, active),
         active.then(() => {
           throw new Error("Command executed before its code preparation");
         }),
@@ -127,7 +117,6 @@ it.each([
         [value, "second"].map(digest),
       );
     } finally {
-      observation.close();
       queuedCancel.abort();
       await writeFile(gatePath, "release for cleanup");
       await Promise.allSettled([active, canceled, following, closing]);
@@ -149,7 +138,6 @@ it.each(["revoked", "rejected"] as const)(
       guarded: true,
       reject: failure === "rejected",
     });
-    const observation = observePreparation(markerPath);
     let current = true;
     const refused = new Error("Authority revoked during code preparation");
     const operation = runSqliteWorkerStoreWrite(
@@ -165,7 +153,7 @@ it.each(["revoked", "rejected"] as const)(
     const outcome = Promise.allSettled([operation]);
     try {
       await Promise.race([
-        observation.started,
+        waitForFixtureFile(markerPath, operation),
         operation.then(() => {
           throw new Error("Command executed before its code preparation");
         }),
@@ -187,7 +175,6 @@ it.each(["revoked", "rejected"] as const)(
         await reopened.execute({ type: "append", input: { value: "after refusal" } }),
       ).toMatchObject({ writes: 1 });
     } finally {
-      observation.close();
       await writeFile(gatePath, "release for cleanup");
       await outcome;
     }
@@ -214,7 +201,6 @@ it.each(["abort-close", "reject", "reject-cleanup"] as const)(
         acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 }),
       );
     const broker = new SqliteWorkerBroker();
-    const observation = observePreparation(markerPath);
     const canceled = new AbortController();
     let active: Promise<FixtureOperations["append"]["output"]> | undefined;
     let following: Promise<string[]> | undefined;
@@ -303,7 +289,7 @@ if (!isMainThread) {
         },
       );
       await Promise.race([
-        observation.started,
+        waitForFixtureFile(markerPath, active),
         active.then(() => {
           throw new Error("Command executed before its code preparation");
         }),
@@ -360,7 +346,6 @@ if (!isMainThread) {
         mode === "abort-close" ? ["after preparation"] : [],
       );
     } finally {
-      observation.close();
       await writeFile(gatePath, "release for cleanup");
       await Promise.allSettled([active, following, closing]);
       try {
@@ -372,3 +357,51 @@ if (!isMainThread) {
     }
   },
 );
+
+type PreparedFixture = {
+  read: { input: undefined; output: { preparation?: { key: string }; input: unknown } };
+};
+
+it("captures preparation once without changing backend identity for ordinary reuse", async () => {
+  const root = dirs.make("openclaw-worker-opening-preparation-");
+  const databasePath = path.join(root, "fixture.sqlite");
+  const modulePath = path.join(root, "backend.mjs");
+  await writeFile(
+    modulePath,
+    `import { writeFileSync } from "node:fs";
+export function createSqliteWorkerBackend(input, context) {
+  const preparation = context.preparation;
+  writeFileSync(context.databasePath, preparation?.key ?? "ordinary");
+  return { execute: () => ({ preparation, input }), close() {} };
+}
+`,
+  );
+  const broker = new SqliteWorkerBroker();
+  const options = { moduleUrl: pathToFileURL(modulePath), databasePath, input: undefined };
+  const preparation = { key: "captured" };
+  try {
+    const opening = broker.open<PreparedFixture>(options, undefined, undefined, {
+      preparation,
+    });
+    preparation.key = "changed-after-admission";
+    const first = await opening;
+    assert.ok(first);
+    const ordinary = await broker.open<PreparedFixture>(options);
+    assert.ok(ordinary);
+    const anotherPreparation = await broker.open<PreparedFixture>(options, undefined, undefined, {
+      preparation: { key: "must-not-reinitialize" },
+    });
+    assert.ok(anotherPreparation);
+
+    expect(await readFile(databasePath, "utf8")).toBe("captured");
+    for (const store of [first, ordinary, anotherPreparation]) {
+      expect(await store.execute({ type: "read", input: undefined })).toEqual({
+        preparation: { key: "captured" },
+        input: undefined,
+      });
+    }
+    await Promise.all([first.close(), ordinary.close(), anotherPreparation.close()]);
+  } finally {
+    await broker.close();
+  }
+});

@@ -17,6 +17,7 @@ import type {
   SessionEntryReadSource,
 } from "../config/sessions/session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
+import type { ExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_AGENT_ID,
@@ -81,6 +82,7 @@ function resolveGatewaySessionStoreCandidates(
   excludeConfiguredFallback = false,
   env: NodeJS.ProcessEnv = process.env,
   registeredDatabases?: readonly { agentId: string; path: string }[],
+  resolveExistingTargets?: ExistingAgentSessionStoreTargetResolver,
 ): GatewaySessionStoreDiscovery {
   const cached = cache?.get(agentId);
   if (cached) {
@@ -91,16 +93,19 @@ function resolveGatewaySessionStoreCandidates(
     agentId,
     storePath: resolveSessionStorePathCore(storeConfig, { agentId, env }),
   };
+  // Cached discovery also serves existing-only deleted-main lookups.
+  const excludeStorePath =
+    !cache && excludeConfiguredFallback && !isPerAgentSessionStoreConfig(storeConfig)
+      ? fallback.storePath
+      : undefined;
   const discovery = {
-    existing: resolveExistingAgentSessionStoreTargetsSync(cfg, agentId, {
-      env,
-      registeredDatabases,
-      // Cached discovery also serves existing-only deleted-main lookups.
-      excludeStorePath:
-        !cache && excludeConfiguredFallback && !isPerAgentSessionStoreConfig(storeConfig)
-          ? fallback.storePath
-          : undefined,
-    }),
+    existing: resolveExistingTargets
+      ? resolveExistingTargets(agentId, excludeStorePath)
+      : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId, {
+          env,
+          registeredDatabases,
+          excludeStorePath,
+        }),
     fallback,
   };
   cache?.set(agentId, discovery);
@@ -119,6 +124,7 @@ export function resolveGatewaySessionStoreLookupCandidates(params: {
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   env?: NodeJS.ProcessEnv;
   registeredDatabases?: readonly { agentId: string; path: string }[];
+  resolveExistingTargets?: ExistingAgentSessionStoreTargetResolver;
 }): {
   configured: boolean;
   fallback: SessionStoreTarget;
@@ -154,6 +160,7 @@ export function resolveGatewaySessionStoreLookupCandidates(params: {
     configured,
     params.env,
     params.registeredDatabases,
+    params.resolveExistingTargets,
   );
   return {
     configured,
@@ -165,6 +172,7 @@ export function resolveGatewaySessionStoreLookupCandidates(params: {
 }
 
 type GatewaySessionStoreLookupParams = {
+  env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   key: string;
   agentId?: string;
@@ -256,6 +264,8 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
     params.cfg,
     legacyAgentId,
     params.targetDiscoveryCache,
+    false,
+    params.env,
   );
   const reads = existing
     .filter((target) => target.agentId === legacyAgentId)
@@ -346,7 +356,7 @@ function prepareGatewaySessionStoreTarget(
     agentId: params.agentId,
   });
   if (isIncognitoSessionKey(canonicalKey)) {
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: params.env });
     const read: GatewaySessionStoreRead = {
       storePath,
       agentId,
@@ -408,7 +418,40 @@ export function resolveGatewaySessionStoreTargetWithStore(
     deletedMain ?? prepareGatewaySessionStoreTarget(normalized).resolve(),
     params.includeStoreChildEntries,
     params.cfg,
+    params.env,
   );
+}
+
+/** Worker readers fill the same ordered lookup plan before its synchronous selection. */
+export async function prepareGatewaySessionStoreTargetReadOnly(
+  params: GatewaySessionStoreLookupParams & {
+    agentId: string;
+    targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
+  },
+  prepareReads: (reads: readonly GatewaySessionStoreRead[]) => Promise<void>,
+): Promise<GatewaySessionStoreTargetWithStore> {
+  const normalized = {
+    ...params,
+    key: normalizeOptionalString(params.key) ?? "",
+    exactRead: true,
+    readOnly: true,
+    projection: "list" as const,
+  };
+  const resolve = async <T>(plan: GatewaySessionStorePlan<T>) => {
+    await prepareReads(plan.reads);
+    if (plan.reads.some((read) => read.result === undefined)) {
+      throw new Error("Session lookup facts were not prepared");
+    }
+    return plan.resolve();
+  };
+  const deletedMain = prepareExplicitDeletedLegacyMainStoreTarget(normalized);
+  if (deletedMain) {
+    const target = await resolve(deletedMain);
+    if (target) {
+      return target;
+    }
+  }
+  return await resolve(prepareGatewaySessionStoreTarget(normalized));
 }
 
 /** Exact row owners supply missing parent facts without expanding their selected store. */
@@ -452,6 +495,7 @@ export function createGatewaySessionEntryReader(params: {
 
 /** Resolve one synchronous set of logical metadata targets using exact grouped reads. */
 export function resolveGatewaySessionStoreTargetsReadOnly(params: {
+  env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];
   projection?: SessionEntryListScope["projection"];
@@ -466,6 +510,7 @@ export function resolveGatewaySessionStoreTargetsReadOnly(params: {
 
 /** Read exact groups now, retaining logical errors for the caller's ordered visitor. */
 export function prepareGatewaySessionStoreTargetsReadOnly(params: {
+  env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];
   projection: SessionEntryListScope["projection"];
@@ -497,6 +542,7 @@ function readGatewaySessionStoreTargets(
       ...target,
       key: normalizeOptionalString(target.key) ?? "",
       cfg: params.cfg,
+      env: params.env,
       clone: false,
       readOnly: true,
       exactRead: true,
@@ -523,6 +569,7 @@ function includeDirectChildEntries(
   target: GatewaySessionStoreTargetWithStore,
   include: boolean | undefined,
   cfg: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
 ): GatewaySessionStoreTargetWithStore {
   if (!include) {
     return target;
@@ -533,6 +580,7 @@ function includeDirectChildEntries(
     for (const parentKey of parentKeys) {
       for (const { sessionKey, entry } of listSessionChildEntriesReadOnly({
         agentId: target.agentId,
+        env,
         clone: false,
         projection: "list",
         sessionKey: parentKey,
@@ -551,6 +599,7 @@ function includeDirectChildEntries(
     const targets = [...childKeys].filter((key) => !target.store[key]).map((key) => ({ key }));
     for (const child of resolveGatewaySessionStoreTargetsReadOnly({
       cfg,
+      env,
       targets,
       projection: "list",
     })) {

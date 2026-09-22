@@ -38,6 +38,7 @@ export type AgentDeliveryEvidence = {
   successfulCronAdds?: unknown;
   meta?: {
     yielded?: unknown;
+    continuationPending?: unknown;
     error?: unknown;
     aborted?: unknown;
     finalAssistantVisibleText?: unknown;

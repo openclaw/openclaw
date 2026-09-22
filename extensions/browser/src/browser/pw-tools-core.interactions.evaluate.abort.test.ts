@@ -112,9 +112,9 @@ describe("evaluateViaPlaywright (abort)", () => {
     await expect(p).rejects.toThrow("aborted by test");
     expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:9222",
+      page,
       targetId: undefined,
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-      reason: "evaluate aborted",
     });
   });
 

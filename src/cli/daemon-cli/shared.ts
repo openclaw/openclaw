@@ -1,4 +1,4 @@
-// Shared Gateway service CLI helpers: status styles, env filtering, port parsing, and hints.
+// Shared Gateway service CLI helpers: status styles, env filtering, and hints.
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import {
@@ -9,14 +9,15 @@ import {
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
 import "../../daemon/runtime-format.js";
 import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
+import type { GatewayServiceInstallationDrift } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-user-transport.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
+import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
-import "../shared/parse-port.js";
+import { parsePort } from "../shared/parse-port.js";
 import { createDaemonActionContext } from "./response.js";
 export { formatRuntimeStatus } from "../../daemon/runtime-format.js";
-export { parsePort } from "../shared/parse-port.js";
 
 /** Create install action context with JSON flag normalization. */
 export function createDaemonInstallActionContext(
@@ -24,9 +25,17 @@ export function createDaemonInstallActionContext(
   definitionBackup?: Parameters<typeof createDaemonActionContext>[0]["definitionBackup"],
 ) {
   const json = Boolean(jsonFlag);
+  const context = createDaemonActionContext({ action: "install", json, definitionBackup });
   return {
     json,
-    ...createDaemonActionContext({ action: "install", json, definitionBackup }),
+    ...context,
+    warn: (message: string) => {
+      if (json) {
+        context.warnings.push(message);
+      } else {
+        defaultRuntime.log(message);
+      }
+    },
   };
 }
 
@@ -60,6 +69,42 @@ export function resolveDaemonInstallBlockMessage(
     );
   }
   return undefined;
+}
+
+export function formatDaemonServiceInstallCommand(env: NodeJS.ProcessEnv, port?: number): string {
+  const servicePort = port ?? parsePort(env.OPENCLAW_GATEWAY_PORT);
+  return formatCliCommand(
+    `openclaw gateway install --force${servicePort ? ` --port ${servicePort}` : ""}`,
+    env,
+  );
+}
+
+export function resolveDaemonServiceInstallGuidance(
+  targetRole?: "target" | "diagnostic-only",
+  env: NodeJS.ProcessEnv = process.env,
+  service?: { stopped?: boolean; port?: number },
+): string | undefined {
+  if (targetRole === "diagnostic-only") {
+    return undefined;
+  }
+  return (
+    resolveDaemonInstallBlockMessage("gateway", env) ??
+    (service?.stopped
+      ? `Stopped service definitions are preserved; run \`${formatDaemonServiceInstallCommand(env, service.port)}\` from the active CLI. Installation may start the service.`
+      : `Run \`${formatCliCommand("openclaw doctor --fix", env)}\` or \`${formatDaemonServiceInstallCommand(env, service?.port)}\` from the active CLI.`)
+  );
+}
+
+export function formatGatewayServiceInstallationDrift(
+  drift: GatewayServiceInstallationDrift,
+  targetRole?: "target" | "diagnostic-only",
+  env: NodeJS.ProcessEnv = process.env,
+  service?: { stopped?: boolean; port?: number },
+): string {
+  const { serviceRoot, serviceVersion, activeRoot, activeVersion } = drift;
+  const facts = `Gateway service targets a different OpenClaw install: ${serviceRoot} (${serviceVersion ?? "version unknown"}); active CLI: ${activeRoot} (${activeVersion ?? "version unknown"}).`;
+  const guidance = resolveDaemonServiceInstallGuidance(targetRole, env, service);
+  return guidance ? `${facts} ${guidance}` : facts;
 }
 
 /** Build terminal style helpers for status output with no-color fallback. */

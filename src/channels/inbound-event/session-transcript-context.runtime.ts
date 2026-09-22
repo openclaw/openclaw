@@ -107,6 +107,7 @@ export async function mergeSessionTranscriptContext(params: {
   const options = params.ctx.SessionTranscriptContext;
   const limit = Math.max(0, Math.floor(options?.historyLimit ?? 0));
   if (
+    options?.historyKind === "recent" ||
     limit === 0 ||
     isSessionBoundaryCommandText(params.ctx.CommandBody ?? params.ctx.RawBody, {
       botUsername: params.ctx.BotUsername,
