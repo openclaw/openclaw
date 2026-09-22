@@ -39,7 +39,10 @@ import { deliverMattermostReplyPayload, joinMattermostVisibleContent } from "./r
 import type { HistoryEntry, ReplyPayload } from "./runtime-api.js";
 import { createChannelMessageReplyPipeline } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
-import { createMattermostSeparateProgressController } from "./separate-progress.js";
+import {
+  createMattermostSeparateProgressController,
+  discardMattermostSeparateProgressPending,
+} from "./separate-progress.js";
 import { recordMattermostThreadParticipation } from "./thread-participation.js";
 
 type MattermostInboundTurnParams = {
@@ -208,7 +211,12 @@ export async function dispatchMattermostInboundTurn(
           flush: draftStream.flush,
           id: draftStream.postId,
           seal: draftStream.seal,
-          discardPending: draftStream.discardPending,
+          discardPending: () =>
+            discardMattermostSeparateProgressPending({
+              enabled: separateProgressFinalDelivery,
+              discardPending: draftStream.discardPending,
+              logVerboseMessage: monitor.logVerboseMessage,
+            }),
           clear: draftStream.clear,
         }
       : undefined,
@@ -222,7 +230,7 @@ export async function dispatchMattermostInboundTurn(
     enabled: separateProgressFinalDelivery,
     pinnedLabel: pinnedProgressLabel,
     draftStream,
-    hasSuccessfulFinal: () => previewLifecycle.finalSucceeded,
+    hasAcceptedFinal: () => previewLifecycle.finalDelivered,
     logVerboseMessage: monitor.logVerboseMessage,
   });
 
@@ -420,6 +428,9 @@ export async function dispatchMattermostInboundTurn(
     },
     onError: (err, info) => {
       runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
+      if (info.kind === "final") {
+        separateProgress.observeDeliveryError();
+      }
     },
   };
   const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
@@ -578,6 +589,7 @@ export async function dispatchMattermostInboundTurn(
     throw error;
   } finally {
     try {
+      await separateProgress.settlePendingDeliveryError();
       await draftStream.stop();
       await previewLifecycle.cleanup();
     } catch (err) {
