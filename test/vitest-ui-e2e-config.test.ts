@@ -44,6 +44,7 @@ const realGatewayFiles = [
   "chat-loading-performance.real-gateway",
   "chat-managed-media-order.real-gateway",
   "chat-project-media.real-gateway",
+  "chat-reconnect-continuity.real-gateway",
   "chat-session-diff-folding.real-gateway",
   "chat-stop-finished-run.real-gateway",
   "chat-stop-owned-exec.real-gateway",
