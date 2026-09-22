@@ -46,7 +46,9 @@ import {
   type ChatAbortRequester,
 } from "./chat-abort-authorization.js";
 import {
+  abortedPartialPersistenceError,
   captureAbortedPartial,
+  withAbortedPartialPersistenceWarning,
   type AbortedPartialSnapshot,
   type ChatAbortOrigin,
   type ChatAbortSessionSnapshot,
@@ -106,10 +108,24 @@ export function descendantAbortError(
     : undefined;
 }
 
+type QueuedCollectorAbortOutcome = Result<
+  { aborted: boolean; runIds: string[]; warning?: string },
+  ErrorShape
+>;
+
+function withQueuedCollectorWarning(
+  outcome: QueuedCollectorAbortOutcome,
+  warning: string,
+): QueuedCollectorAbortOutcome {
+  return outcome.ok
+    ? { ok: true, value: { ...outcome.value, warning } }
+    : { ok: false, error: withAbortedPartialPersistenceWarning(outcome.error, warning) };
+}
+
 /** Queued collectors retain scheduler ownership while Gateway admission is still pending. */
 export function abortQueuedCollectorSession(
   params: Omit<ChatSessionAbortParams, "ops"> & { runId?: string },
-): Promise<Result<{ aborted: boolean; runIds: string[] }, ErrorShape>> | undefined {
+): Promise<QueuedCollectorAbortOutcome> | undefined {
   const entry = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
   if (
     !entry ||
@@ -182,7 +198,7 @@ export function abortQueuedCollectorSession(
           ErrorShape
         >
       | undefined;
-    let outcome: Result<{ aborted: boolean; runIds: string[] }, ErrorShape> = {
+    let outcome: QueuedCollectorAbortOutcome = {
       ok: false,
       error: errorShape(
         ErrorCodes.UNAVAILABLE,
@@ -331,7 +347,10 @@ export function abortQueuedCollectorSession(
       // after later owner failures; the transcript writer still fences the session.
       if (sessionAbort?.ok) {
         try {
-          await sessionAbort.value.plan.finish(sessionAbort.value.result);
+          const warning = await sessionAbort.value.plan.finish(sessionAbort.value.result);
+          if (warning) {
+            outcome = withQueuedCollectorWarning(outcome, warning);
+          }
         } catch (error) {
           if (outcome.ok) {
             outcome = {
@@ -401,6 +420,7 @@ type ChatSessionAbortResult = {
   runIds: string[];
   unauthorized: boolean;
   error?: ErrorShape;
+  warning?: string;
   descendants?: Awaited<ReturnType<typeof abortControlledSubagents>>;
 };
 
@@ -631,9 +651,10 @@ function prepareChatSessionAbort(
     result,
     abort: abortAuthorizedRuns,
     async finish(outcome: Pick<ChatSessionAbortResult, "aborted" | "runIds">) {
+      let warning: string | undefined;
       if (outcome.aborted && snapshots.length > 0) {
         const abortedRunIds = new Set(outcome.runIds);
-        await persistAbortedPartials({
+        warning = await persistAbortedPartials({
           context: params.context,
           snapshots: snapshots.filter((snapshot) => abortedRunIds.has(snapshot.runId)),
         });
@@ -641,6 +662,7 @@ function prepareChatSessionAbort(
       if (params.session && !params.session.ok) {
         throw params.session.error;
       }
+      return warning;
     },
   };
 }
@@ -684,8 +706,9 @@ export async function abortChatRunsForSessionKeyWithPartials(
     failure = { error };
   }
   // Cancellation consumed these buffers before awaited descendant work could fail.
+  let warning: string | undefined;
   try {
-    await plan.finish(result);
+    warning = await plan.finish(result);
   } catch (error) {
     if (!failure) {
       throw error;
@@ -695,7 +718,12 @@ export async function abortChatRunsForSessionKeyWithPartials(
     );
   }
   if (failure) {
-    throw failure.error;
+    throw abortedPartialPersistenceError(failure.error, warning);
   }
-  return { ...result, aborted: result.aborted || Boolean(descendants?.killed), descendants };
+  return {
+    ...result,
+    aborted: result.aborted || Boolean(descendants?.killed),
+    descendants,
+    ...(warning ? { warning } : {}),
+  };
 }

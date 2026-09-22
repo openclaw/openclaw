@@ -1079,7 +1079,12 @@ describePosix("scripts/pr per-PR operation lock", () => {
       controller.stdout!.on("data", (chunk) => (output += chunk));
       controller.stderr!.on("data", (chunk) => (output += chunk));
       try {
-        await once(controller, "close", { signal: AbortSignal.timeout(20_000) });
+        try {
+          await once(controller, "close", { signal: AbortSignal.timeout(20_000) });
+        } catch (error) {
+          console.error("PR controller output before close failure:\n", output);
+          throw error;
+        }
         if (
           command === "review-init" &&
           !existing &&

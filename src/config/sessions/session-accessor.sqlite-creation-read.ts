@@ -1,8 +1,6 @@
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  readSessionEntryCache,
-  type SessionEntryCacheSnapshot,
-} from "./session-accessor.sqlite-entry-cache.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
 import { iterateSessionEntriesForListing } from "./session-accessor.sqlite-entry-list.read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type {

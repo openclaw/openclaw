@@ -30,7 +30,9 @@ import {
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
+import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import {
   createChannelTestPluginBase,
@@ -217,8 +219,14 @@ export function installSpawnAuthorityFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
   let pluginSnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
+  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
 
   beforeEach(async () => {
+    // Failed cleanup retains the prior owner instead of replacing its live stores.
+    if (stateDir) {
+      throw new Error("Previous spawn authority fixture cleanup is incomplete");
+    }
     pluginSnapshot = captureActivePluginRegistrySnapshot();
     stateDir = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-spawn-authority-")));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -251,25 +259,47 @@ export function installSpawnAuthorityFixture() {
       }
       return await new Promise<never>(() => {});
     });
+    deliveries = captureTaskDeliveryWork();
   });
 
   afterEach(async () => {
-    await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    schedulerTesting.reset();
-    await cleanupSessionStateForTest({ stateDir });
-    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
-    vi.mocked(callGateway).mockReset();
-    spawnTesting.setDepsForTest();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    await flushLogger();
-    resetLogger();
-    await rm(stateDir, { recursive: true, force: true });
-    restoreActivePluginRegistrySnapshot(pluginSnapshot);
-    env.restore();
+    const failures: unknown[] = [];
+    try {
+      await settle();
+    } catch (error) {
+      failures.push(error);
+    }
+    // Settled delivery failures still permit cleanup; live roots retain their stores.
+    if (getActiveGatewayRootWorkCount() === 0) {
+      try {
+        resetSubagentRegistryForTests({ persist: false });
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        schedulerTesting.reset();
+        await cleanupSessionStateForTest({ stateDir });
+        vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+        vi.mocked(callGateway).mockReset();
+        spawnTesting.setDepsForTest();
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+        await flushLogger();
+        resetLogger();
+        await rm(stateDir, { recursive: true, force: true });
+        restoreActivePluginRegistrySnapshot(pluginSnapshot);
+        env.restore();
+        deliveries?.[Symbol.dispose]();
+        deliveries = undefined;
+        stateDir = "";
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Spawn authority fixture cleanup failed");
+    }
   });
 
   async function createBoundParent(runtime: "embedded" | "plugin-harness" = "embedded") {
@@ -329,6 +359,7 @@ export function installSpawnAuthorityFixture() {
   }
 
   return {
+    settle,
     parentSessionKey,
     parentRunId,
     groupId,
