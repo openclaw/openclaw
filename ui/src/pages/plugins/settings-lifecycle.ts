@@ -4,6 +4,7 @@ import { renderReasonedDisabledControl } from "../../components/reasoned-disable
 import { t } from "../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginCatalogItem, PluginsInspectResult } from "../../lib/plugins/index.ts";
+import { renderPluginAskAction } from "./overview.ts";
 import { pluginRowKey } from "./plugin-row-message.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 
@@ -16,6 +17,7 @@ type PluginLifecycleProps = {
   onSettings: () => void;
   settingsHref: string;
   onUninstall: (pluginId: string, rowKey: string) => void;
+  onAskPlugin?: () => void;
 };
 
 export function renderPluginLifecycle(
@@ -53,8 +55,12 @@ export function renderPluginLifecycle(
         ${pending === kind ? html`<span class="btn__spinner" aria-hidden="true"></span>` : nothing}${label}
       </button>`,
     );
+  // Keep the primary action first in visual and keyboard navigation order.
+  const askAction = renderPluginAskAction(props.onAskPlugin, plugin.enabled);
   return html`
+    ${plugin.enabled ? askAction : nothing}
     ${action(enableAction, t(enableAction === "disable" ? "pluginsPage.detailDisable" : "pluginsPage.detailEnable"), plugin.enabled ? "oc-action-secondary" : "primary oc-action-primary", props.mutationBlockedReason ?? (plugin.state === "needs-setup" ? t("pluginsPage.setupRequiredNotice") : null), props.canMutate && plugin.state !== "needs-setup", () => props.onSetEnabled(plugin.id, !plugin.enabled, key))}
+    ${!plugin.enabled ? askAction : nothing}
     ${plugin.removable ? action("uninstall", t("pluginsPage.uninstall"), "oc-action-secondary", props.mutationBlockedReason, props.canMutate, () => props.onUninstall(plugin.id, key)) : nothing}
     <a
       class="btn btn--icon oc-action oc-action-icon oc-action-secondary"
