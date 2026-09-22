@@ -3,6 +3,8 @@ import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
 import { createMattermostDraftStream } from "./draft-stream.js";
+import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
+import type { ReplyPayload } from "./runtime-api.js";
 import {
   createMattermostSeparateProgressController,
   discardMattermostSeparateProgressPending,
@@ -38,7 +40,7 @@ describe("createMattermostSeparateProgressController", () => {
     const { controller, retainTerminalText } = createController();
 
     await controller.prepareFinal(true);
-    await controller.settleFinal({ visibleReplySent: true }, true);
+    await controller.settleFinal({ outcome: "text", visibleReplySent: true }, true);
     await controller.settleTurnError();
 
     expect(retainTerminalText).toHaveBeenCalledExactlyOnceWith("Progress\n\nFailed.");
@@ -48,7 +50,7 @@ describe("createMattermostSeparateProgressController", () => {
     const { controller, retainTerminalText, markAccepted } = createController();
 
     markAccepted();
-    await controller.settleFinal({ visibleReplySent: true }, false);
+    await controller.settleFinal({ outcome: "text", visibleReplySent: true }, false);
     await controller.settleTurnError();
 
     expect(retainTerminalText).not.toHaveBeenCalled();
@@ -57,9 +59,9 @@ describe("createMattermostSeparateProgressController", () => {
   it("surfaces a missing terminal status when no visible final exists", async () => {
     const { controller } = createController({ retainTerminalText: async () => false });
 
-    await expect(controller.settleFinal({ visibleReplySent: false }, false)).rejects.toThrow(
-      "terminal progress was not retained",
-    );
+    await expect(
+      controller.settleFinal({ outcome: "empty", visibleReplySent: false }, false),
+    ).rejects.toThrow("terminal progress was not retained");
   });
 
   it("retains failed progress when the real dispatcher settles a rejected final", async () => {
@@ -81,6 +83,43 @@ describe("createMattermostSeparateProgressController", () => {
     await controller.settlePendingDeliveryError();
 
     expect(retainTerminalText).toHaveBeenCalledExactlyOnceWith("Progress\n\nFailed.");
+  });
+
+  it("leaves progress untouched when the delivery boundary suppresses a reasoning-only final", async () => {
+    const { controller, retainTerminalText } = createController();
+    const draft = {
+      flush: vi.fn(async () => {}),
+      id: vi.fn(() => "progress-post-1"),
+      seal: vi.fn(async () => {}),
+      discardPending: vi.fn(async () => {}),
+      clear: vi.fn(async () => {}),
+    };
+    const deliverPayload = vi.fn();
+    const previewLifecycle = createLivePreviewLifecycle<ReplyPayload, string>({
+      draft,
+      retainOnError: true,
+    });
+
+    const result = await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "> Reasoning:\n> hidden" } as never,
+      info: { kind: "final" },
+      kind: "channel",
+      client: {} as MattermostClient,
+      previewLifecycle,
+      separateProgressFinalDelivery: true,
+      resolvePreviewFinalText: () => undefined,
+      logVerboseMessage: vi.fn(),
+      deliverPayload,
+    });
+    await controller.settleFinal(result, false);
+
+    expect(result).toMatchObject({ outcome: "reasoning_skipped", visibleReplySent: false });
+    expect(deliverPayload).not.toHaveBeenCalled();
+    expect(draft.flush).not.toHaveBeenCalled();
+    expect(draft.seal).not.toHaveBeenCalled();
+    expect(draft.discardPending).not.toHaveBeenCalled();
+    expect(draft.clear).not.toHaveBeenCalled();
+    expect(retainTerminalText).not.toHaveBeenCalled();
   });
 });
 

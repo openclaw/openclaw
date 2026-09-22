@@ -2,6 +2,7 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { createMattermostDraftStream } from "./draft-stream.js";
 import { formatMattermostTerminalProgressText } from "./monitor-context.js";
+import type { MattermostReplyDeliveryResult } from "./reply-delivery.js";
 
 type SeparateProgressDraft = Pick<
   ReturnType<typeof createMattermostDraftStream>,
@@ -82,8 +83,13 @@ export function createMattermostSeparateProgressController(params: {
         logFailure(error);
       }
     },
-    settleFinal: async (result: { visibleReplySent: boolean }, isError: boolean) => {
-      if (!params.enabled || (result.visibleReplySent && !isError) || params.hasAcceptedFinal()) {
+    settleFinal: async (result: MattermostReplyDeliveryResult, isError: boolean) => {
+      if (
+        !params.enabled ||
+        result.outcome === "reasoning_skipped" ||
+        (result.visibleReplySent && !isError) ||
+        params.hasAcceptedFinal()
+      ) {
         return;
       }
       try {
