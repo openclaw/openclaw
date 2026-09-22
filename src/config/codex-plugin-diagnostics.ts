@@ -155,9 +155,12 @@ function configuredRefIsEffectiveForAgent(params: {
   if (!configuredRefTargetsAgent(params)) {
     return false;
   }
-  // Defaults may be shadowed by per-agent main/subagent selections. Keep only
-  // refs the runtime's inheritance rules leave reachable for this agent.
-  if (/^agents\.(?:defaults|list\.\d+)\.(?:model|subagents\.model)(?:\.|$)/.test(params.path)) {
+  // Keep only main/subagent refs reachable through this agent's native policy.
+  if (
+    /^agents\.(?:defaults|list\.\d+|entries\.[^.]+)\.(?:model|subagents\.model)(?:\.|$)/.test(
+      params.path,
+    )
+  ) {
     return params.selectedModelRefs.has(params.value);
   }
   const agent = resolveAgentConfig(params.cfg, params.agentId);
