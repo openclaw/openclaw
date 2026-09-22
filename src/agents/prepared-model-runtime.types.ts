@@ -231,7 +231,6 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
 export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
   runtimeModels: ReadonlyMap<string, readonly Model[]>;
-  configuredProviderModelIds: ReadonlyMap<string, readonly string[]>;
   key: string;
   pluginFingerprint: string;
   nativeSource: string;
