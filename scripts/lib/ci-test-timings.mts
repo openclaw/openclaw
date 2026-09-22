@@ -44,6 +44,12 @@ export function readUiE2eFileTimings(): {
   return readTestTimings()?.uiE2e ?? emptyUiTimings;
 }
 
+export function readToolingFileTimings(
+  profile: "blacksmith" | "github",
+): Readonly<Record<string, number>> {
+  return readTestTimings()?.toolingFileSeconds[profile] ?? emptyGroupTimings;
+}
+
 export function readCompactGroupTimings(
   profile: "blacksmith" | "github",
 ): Readonly<Record<string, number>> {

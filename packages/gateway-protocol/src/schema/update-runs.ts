@@ -32,6 +32,8 @@ const snapshotLocation = closedObject({
   directory: text,
 });
 const snapshotBytes = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+const destinationPath = Type.String({ maxLength: 240 });
+const nullableDestinationPath = Type.Union([destinationPath, Type.Null()]);
 
 /** Wire projection of the canonical update ledger record. */
 export const UpdateRunRecordSchema = closedObject({
@@ -99,6 +101,25 @@ export const UpdateRunRecordSchema = closedObject({
             pluginId: Type.Optional(Type.String({ maxLength: 80 })),
             errorName: Type.Optional(Type.Union([Type.String({ maxLength: 80 }), Type.Null()])),
             location: Type.Optional(Type.Union([Type.String({ maxLength: 160 }), Type.Null()])),
+            destination: Type.Optional(
+              closedObject({
+                ownership: Type.Enum(["foreign", "unknown"]),
+                cause: Type.Enum([
+                  "package-mismatch",
+                  "launcher-mismatch",
+                  "permission",
+                  "probe-failure",
+                  "unreadable-layout",
+                ]),
+                destinationKind: Type.Enum(["npm-global", "unknown"]),
+                prefix: nullableDestinationPath,
+                packageRoot: nullableDestinationPath,
+                runningRoot: destinationPath,
+                runningPrefix: nullableDestinationPath,
+                launcher: nullableDestinationPath,
+                launcherTarget: nullableDestinationPath,
+              }),
+            ),
           }),
           { maxItems: 5 },
         ),

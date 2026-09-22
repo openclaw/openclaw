@@ -9,6 +9,8 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../c
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -85,8 +87,14 @@ export function useSubagentRestartRecoveryFixture() {
 
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let tempStateDir: string | null = null;
+  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
+  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
 
   beforeEach(async () => {
+    // Retained stores still belong to the previous case until its cleanup succeeds.
+    if (tempStateDir !== null) {
+      throw new Error("Previous restart recovery fixture cleanup is incomplete");
+    }
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-orphan-integ-"));
@@ -95,26 +103,53 @@ export function useSubagentRestartRecoveryFixture() {
     vi.mocked(runSubagentAnnounceFlow).mockReset();
     vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
     vi.mocked(onAgentEvent).mockImplementation(() => () => undefined);
+    deliveries = captureTaskDeliveryWork();
     activateGatewayRuntime();
     dispatchAgent.mockReset();
   });
 
   afterEach(async () => {
-    await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
-    await cleanupSessionStateForTest({ stateDir: tempStateDir ?? undefined });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    vi.restoreAllMocks();
-    clearRuntimeConfigSnapshot();
-    if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-      tempStateDir = null;
+    const failures: unknown[] = [];
+    try {
+      await settle();
+    } catch (error) {
+      failures.push(error);
     }
-    envSnapshot.restore();
+    // Preserve stores and their environment while detached delivery still owns them.
+    if (getActiveGatewayRootWorkCount() === 0) {
+      try {
+        resetSubagentRegistryForTests({ persist: false });
+        await cleanupSessionStateForTest({ stateDir: tempStateDir ?? undefined });
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        clearRuntimeConfigSnapshot();
+        if (tempStateDir) {
+          await fs.rm(tempStateDir, {
+            recursive: true,
+            force: true,
+            maxRetries: 5,
+            retryDelay: 50,
+          });
+        }
+        envSnapshot.restore();
+        deliveries?.[Symbol.dispose]();
+        deliveries = undefined;
+        vi.restoreAllMocks();
+        tempStateDir = null;
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Subagent restart recovery cleanup failed");
+    }
   });
 
   return {
+    settle,
     activateGatewayRuntime,
     dispatchAgent,
     gatewayRuntime,

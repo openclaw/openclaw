@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   emitAgentEvent,
@@ -11,7 +12,11 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as taskDelivery from "./task-registry-delivery.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
+import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import { prepareTaskRegistryRead, prepareTaskRegistryReadOwner } from "./task-registry-read.js";
 import * as taskRegistryState from "./task-registry-state.js";
@@ -28,6 +33,11 @@ import {
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
 
+let deliveries: ReturnType<typeof captureTaskDeliveryWork>;
+beforeEach(() => {
+  deliveries = captureTaskDeliveryWork();
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   resetTaskRegistryForTests({ persist: false });
@@ -38,7 +48,13 @@ afterEach(() => {
 });
 
 async function joinEvents() {
-  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  // Scenario assertions own accepted-event errors; join that prefix before its notifications.
+  await Promise.allSettled([
+    captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission),
+  ]);
+  await deliveries.settle();
+  await setImmediate();
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
 }
 
 function emitTool(runId: string, name: string) {
@@ -215,6 +231,14 @@ describe("task agent event preparation", () => {
         const writes = vi.spyOn(store, "runAgentEventMutationAsync");
         vi.spyOn(taskRegistryState.taskRegistryLog, "warn").mockImplementation(() => {});
         let projectionReads = 0;
+        const readsBeforeNotifications: number[] = [];
+        const notify = taskDelivery.maybeDeliverTaskStateChangeUpdate;
+        vi.spyOn(taskDelivery, "maybeDeliverTaskStateChangeUpdate").mockImplementation(
+          (...args) => {
+            readsBeforeNotifications.push(projectionReads);
+            return notify(...args);
+          },
+        );
         vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
           const snapshot = await readSnapshot(...args);
           if (args[1] === undefined && ++projectionReads === 1) {
@@ -265,7 +289,9 @@ describe("task agent event preparation", () => {
           await joinEvents();
         }
         expect(await fence).toBe(outcome === "rollback" ? failure : undefined);
-        expect(projectionReads).toBe(1);
+        // Delivery starts after event settlement and owns any later projection preparation.
+        expect(readsBeforeNotifications).toEqual(outcome === "commit" ? [1] : []);
+        expect(readsBeforeNotifications[0] ?? projectionReads).toBe(1);
         expect(writes).not.toHaveBeenCalled();
         const durable = loadTaskRegistryStateFromSqliteReadOnly().tasks.get(task.taskId);
         expect(durable).toMatchObject({

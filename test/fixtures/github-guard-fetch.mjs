@@ -30,11 +30,16 @@ globalThis.fetch = async (url, options = {}) => {
     }
     throw new Error(`Unexpected GitHub request: ${key}`);
   }
-  const value = route.responses
-    ? route.responses.length > 1
-      ? route.responses.shift()
-      : route.responses[0]
+  const responseRoute = route.settlesAt
+    ? Date.now() < Date.parse(route.settlesAt)
+      ? route.before
+      : route.after
     : route;
+  const value = responseRoute.responses
+    ? responseRoute.responses.length > 1
+      ? responseRoute.responses.shift()
+      : responseRoute.responses[0]
+    : responseRoute;
   if (value?.recordStatusBeforeError) recordStatus();
   if (value?.transportError) {
     throw new TypeError("fetch failed", {

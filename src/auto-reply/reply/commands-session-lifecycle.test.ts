@@ -1,5 +1,7 @@
 // Tests conversation binding lifecycle updates and non-destructive detach.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { ChannelConversationBindingSupport } from "../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -142,17 +144,18 @@ const hoisted = vi.hoisted(() => {
     setIdleTimeoutBySessionKey: typeof setThreadBindingIdleTimeoutBySessionKeyMock,
     setMaxAgeBySessionKey: typeof setThreadBindingMaxAgeBySessionKeyMock,
   ) {
+    const conversationBindings: ChannelConversationBindingSupport = {
+      supportsCurrentConversationBinding: true,
+      setIdleTimeoutBySessionKey,
+      setMaxAgeBySessionKey,
+    };
     return {
       plugin: {
         id,
         meta: {},
         config: { hasPersistedAuthState: () => false },
         bindings: { resolveCommandConversation },
-        conversationBindings: {
-          supportsCurrentConversationBinding: true,
-          setIdleTimeoutBySessionKey,
-          setMaxAgeBySessionKey,
-        },
+        conversationBindings,
       },
     };
   }
@@ -213,39 +216,9 @@ vi.mock("../../channels/plugins/index.js", () => ({
   },
 }));
 
-vi.mock("../../channels/plugins/conversation-bindings.js", () => ({
-  setChannelConversationBindingIdleTimeoutBySessionKey: (params: {
-    channelId: string;
-    targetSessionKey: string;
-    accountId?: string | null;
-    idleTimeoutMs: number;
-  }) => {
-    return (
-      hoisted.runtimeChannelRegistry.channels
-        .find((entry) => entry.plugin.id === params.channelId)
-        ?.plugin.conversationBindings.setIdleTimeoutBySessionKey({
-          targetSessionKey: params.targetSessionKey,
-          accountId: params.accountId,
-          idleTimeoutMs: params.idleTimeoutMs,
-        }) ?? []
-    );
-  },
-  setChannelConversationBindingMaxAgeBySessionKey: (params: {
-    channelId: string;
-    targetSessionKey: string;
-    accountId?: string | null;
-    maxAgeMs: number;
-  }) => {
-    return (
-      hoisted.runtimeChannelRegistry.channels
-        .find((entry) => entry.plugin.id === params.channelId)
-        ?.plugin.conversationBindings.setMaxAgeBySessionKey({
-          targetSessionKey: params.targetSessionKey,
-          accountId: params.accountId,
-          maxAgeMs: params.maxAgeMs,
-        }) ?? []
-    );
-  },
+vi.mock("../../channels/plugins/registry.js", () => ({
+  getChannelPlugin: (channelId: string) =>
+    hoisted.runtimeChannelRegistry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
 }));
 
 vi.mock("../../infra/outbound/session-binding-service.js", () => {
@@ -254,7 +227,8 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => {
       bind: vi.fn(),
       getCapabilities: vi.fn(),
       listBySession: vi.fn(),
-      resolveByConversation: (ref: unknown) => hoisted.sessionBindingResolveByConversationMock(ref),
+      resolveByConversationAsync: async (ref: unknown) =>
+        hoisted.sessionBindingResolveByConversationMock(ref),
       touch: vi.fn(),
       unbind: hoisted.sessionBindingUnbindMock,
     }),
@@ -477,6 +451,10 @@ describe("/session conversation bindings", () => {
     hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock.mockReset();
     hoisted.sessionBindingResolveByConversationMock.mockReset().mockReturnValue(null);
     hoisted.sessionBindingUnbindMock.mockReset().mockResolvedValue([]);
+    for (const { plugin } of hoisted.runtimeChannelRegistry.channels) {
+      delete plugin.conversationBindings.setIdleTimeoutBySessionKeyAsync;
+      delete plugin.conversationBindings.setMaxAgeBySessionKeyAsync;
+    }
     vi.useRealTimers();
   });
 
@@ -740,6 +718,31 @@ describe("/session conversation bindings", () => {
     expect(result?.reply?.text).toContain(expiry);
   });
 
+  it.each(["idle off", "max-age off", "unbind"])(
+    "does not apply /session %s after cancellation during binding lookup",
+    async (action) => {
+      const lookup = createDeferred<SessionBindingRecord>();
+      const started = createDeferred();
+      const controller = new AbortController();
+      const reason = new Error("command canceled during binding lookup");
+      hoisted.sessionBindingResolveByConversationMock.mockImplementationOnce(() => {
+        started.resolve();
+        return lookup.promise;
+      });
+      const params = createThreadCommandParams(`/session ${action}`);
+      params.opts = { abortSignal: controller.signal };
+      const result = handleSessionCommand(params, true);
+      const failure = expect(result).rejects.toBe(reason);
+      await started.promise;
+      controller.abort(reason);
+      lookup.resolve(createThreadBinding());
+      await failure;
+      expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
+      expect(hoisted.setThreadBindingMaxAgeBySessionKeyMock).not.toHaveBeenCalled();
+      expect(hoisted.sessionBindingUnbindMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("disables max age when set to off", async () => {
     hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
       createThreadBinding({
@@ -772,6 +775,64 @@ describe("/session conversation bindings", () => {
     });
     expect(result?.reply?.text).toContain("Max age disabled");
   });
+
+  it.each([
+    { action: "idle", method: "setIdleTimeoutBySessionKeyAsync" },
+    { action: "max-age", method: "setMaxAgeBySessionKeyAsync" },
+  ] as const)(
+    "waits for $action persistence before acknowledging the update",
+    async ({ action, method }) => {
+      const mutation = createDeferred<Array<{ boundAt: number; lastActivityAt: number }>>();
+      const started = createDeferred();
+      const asyncUpdate = vi.fn(() => {
+        started.resolve();
+        return mutation.promise;
+      });
+      const bindings = hoisted.runtimeChannelRegistry.channels[0]!.plugin.conversationBindings;
+      bindings[method] = asyncUpdate;
+      hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
+      let settled = false;
+      const result = handleSessionCommand(
+        createThreadCommandParams(`/session ${action} off`),
+        true,
+      );
+      void result.then(() => {
+        settled = true;
+      });
+      await started.promise;
+      expect(settled).toBe(false);
+      mutation.resolve([{ boundAt: 1, lastActivityAt: 1 }]);
+      expect((await result)?.reply?.text).toContain(
+        action === "idle" ? "Idle timeout disabled" : "Max age disabled",
+      );
+      expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
+      expect(hoisted.setThreadBindingMaxAgeBySessionKeyMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { action: "idle", method: "setIdleTimeoutBySessionKeyAsync" },
+    { action: "max-age", method: "setMaxAgeBySessionKeyAsync" },
+  ] as const)(
+    "propagates $action persistence failure without acknowledging success",
+    async ({ action, method }) => {
+      const mutation = createDeferred<never>();
+      const started = createDeferred();
+      hoisted.runtimeChannelRegistry.channels[0]!.plugin.conversationBindings[method] = () => {
+        started.resolve();
+        return mutation.promise;
+      };
+      hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
+      const result = handleSessionCommand(
+        createThreadCommandParams(`/session ${action} off`),
+        true,
+      );
+      const failed = expect(result).rejects.toThrow("binding persistence failed");
+      await started.promise;
+      mutation.reject(new Error("binding persistence failed"));
+      await failed;
+    },
+  );
 
   it("is unavailable outside bindable channels", async () => {
     const params = buildSessionCommandParams("/session idle 2h");

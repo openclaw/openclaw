@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "../../../config/config.js";
 import { ADMIN_SCOPE } from "../../../gateway/method-scopes.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
@@ -20,11 +21,12 @@ import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { bindSwarmRunReservation, enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
-import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
+import { callSubagentRegistryGateway } from "./subagent-registry-deps.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
+import { restoreSubagentRunsFromDisk } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
@@ -52,7 +54,6 @@ export function isRestoredQueuedFailureSettlementClaimed(entry: SubagentRunRecor
 
 export function createSubagentRegistryRestorer(config: {
   runs: Map<string, SubagentRunRecord>;
-  deps: () => SubagentRegistryDeps;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   bindGatewayOwners: () => boolean;
   persist: (...runIds: string[]) => void;
@@ -89,7 +90,6 @@ export function createSubagentRegistryRestorer(config: {
 }) {
   const {
     runs,
-    deps,
     getGatewayContextResolver,
     bindGatewayOwners,
     persist,
@@ -158,7 +158,7 @@ export function createSubagentRegistryRestorer(config: {
     if (activated) {
       return;
     }
-    const cfg = deps().getRuntimeConfig();
+    const cfg = getRuntimeConfig();
     const requesterTurns = new Map<string, Map<string, SubagentRunRecord[]>>();
     const resolveRequesterAgentId = (entry: SubagentRunRecord) =>
       resolveSubagentRequesterAgentId(cfg, entry);
@@ -338,7 +338,7 @@ export function createSubagentRegistryRestorer(config: {
     restoreState = "in-progress";
     const runCountBeforeRestore = runs.size;
     try {
-      const restoredCount = deps().restoreSubagentRunsFromDisk({
+      const restoredCount = restoreSubagentRunsFromDisk({
         runs,
         mergeOnly: true,
       });
@@ -347,7 +347,7 @@ export function createSubagentRegistryRestorer(config: {
         completeRestore();
         return;
       }
-      const cfg = deps().getRuntimeConfig();
+      const cfg = getRuntimeConfig();
       // Hydration retains unfinished owners. Gateway-bound resume/sweep must
       // settle their canonical tasks before normal cleanup may retire them.
       let restoredStateChanged = false;
@@ -433,7 +433,7 @@ export function createSubagentRegistryRestorer(config: {
               return false;
             }
             const outcome = await deleteSubagentSessionForCleanup({
-              callGateway: deps().callGateway,
+              callGateway: callSubagentRegistryGateway,
               gatewayBinding: { resolveGatewayContext: getEntryGatewayContextResolver(entry) },
               isCurrent: ownsCleanup,
               childSessionKey: entry.childSessionKey,

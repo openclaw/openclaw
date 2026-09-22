@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
   selectChangedTsgoCoreTestShards,
   TSGO_CORE_GRAPHS,
@@ -20,7 +21,7 @@ import {
 } from "./native-boundary-fixture.js";
 
 describe("tsgo core test shards", () => {
-  it("covers the repository test roots exactly once with headroom below the hard cap", () => {
+  it("covers the repository test roots exactly once", () => {
     const roots = (config: string) => {
       const parsed = ts.getParsedCommandLineOfConfigFile(
         path.resolve(config),
@@ -49,11 +50,13 @@ describe("tsgo core test shards", () => {
     expect(
       findTsgoCoreTestShardViolations({
         canonicalRoots: roots("test/tsconfig/tsconfig.core.test.json"),
-        // Rebalance before the runner's 720-root cap blocks unrelated test-only PRs.
-        maxRoots: 700,
         shards,
       }),
     ).toEqual([]);
+    // Shard size is advisory: warn so a rebalance gets scheduled, never block a PR on it.
+    for (const warning of findOversizedTsgoCoreTestShards({ shards })) {
+      console.warn(`[tsgo-core-test-shards] warning: ${warning}`);
+    }
     for (const [file, owner] of [
       ["src/agents/sessions/settings-storage.test.ts", "agents-sessions"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
@@ -128,11 +131,10 @@ describe("tsgo core test shards", () => {
     );
   });
 
-  it("accepts an exact once-only partition within the root budget", () => {
+  it("accepts an exact once-only partition", () => {
     expect(
       findTsgoCoreTestShardViolations({
         canonicalRoots: ["src/a.test.ts", "src/b.test.ts"],
-        maxRoots: 1,
         shards: [
           { name: "a", roots: ["src/a.test.ts"] },
           { name: "b", roots: ["src/b.test.ts"] },
@@ -141,19 +143,32 @@ describe("tsgo core test shards", () => {
     ).toEqual([]);
   });
 
-  it("reports missing, duplicate, extra, and oversized shard roots", () => {
+  it("warns about oversized shards without treating them as violations", () => {
+    const shards = [
+      { name: "big", roots: ["src/a.test.ts", "src/b.test.ts"] },
+      { name: "small", roots: ["src/c.test.ts"] },
+    ];
+    expect(findOversizedTsgoCoreTestShards({ maxRoots: 1, shards })).toEqual([
+      "big: 2 test roots exceeds the advisory 1 limit; rebalance when convenient",
+    ]);
+    expect(
+      findTsgoCoreTestShardViolations({
+        canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
+        shards,
+      }),
+    ).toEqual([]);
+  });
+
+  it("reports missing, duplicate, and extra shard roots", () => {
     expect(
       findTsgoCoreTestShardViolations({
         canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/missing.test.ts"],
-        maxRoots: 1,
         shards: [
           { name: "first", roots: ["src/a.test.ts", "src/b.test.ts"] },
           { name: "second", roots: ["src/b.test.ts", "src/extra.test.ts"] },
         ],
       }),
     ).toEqual([
-      "first: 2 test roots exceeds the 1 limit",
-      "second: 2 test roots exceeds the 1 limit",
       "assigned 2 times (first, second): src/b.test.ts",
       "unassigned: src/missing.test.ts",
       "not in the canonical core-test graph (second): src/extra.test.ts",

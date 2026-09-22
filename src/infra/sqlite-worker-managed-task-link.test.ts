@@ -8,9 +8,11 @@ import { resetRuntimeTaskTestState } from "../plugins/runtime/runtime-task-test-
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { getDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "../tasks/task-executor-create.async.js";
 import { createRunningTaskRunCore } from "../tasks/task-executor.js";
+import { captureTaskRegistryReadFence } from "../tasks/task-registry-listener-state.js";
 import { updateTask } from "../tasks/task-registry-mutation.js";
 import { finalizeTaskRecordByRunId } from "../tasks/task-registry-record-api.js";
 import { tasks } from "../tasks/task-registry-state.js";
@@ -230,6 +232,7 @@ describe("registered async managed child linkage", () => {
       goal: "Independent child links",
     });
     const commands = new Map<string, number>();
+    const snapshots = vi.spyOn(getTaskRegistryStore(), "loadMutationSnapshotAsync");
     const original = workerStore.runSqliteWorkerStoreOperation;
     vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(
       <Operations extends SqliteWorkerOperations, T>(
@@ -271,7 +274,7 @@ describe("registered async managed child linkage", () => {
     expect(listTasksForFlowId(flow.flowId)).toHaveLength(count);
     console.log("Managed link worker commands", { count, commands: Object.fromEntries(commands) });
     expect(commands.get("flows.runTask")).toBe(count);
-    expect(commands.get("tasks.mutationSnapshot")).toBeLessThanOrEqual(count * 2);
+    expect(snapshots.mock.calls.length).toBeLessThanOrEqual(count * 2);
   });
 
   it("persists an unbacked link without warmed main-thread SQLite and reopens it", async () => {
@@ -485,6 +488,8 @@ describe("registered async managed child linkage", () => {
         expect(listTasksForFlowId(flow.flowId)).toMatchObject([
           { status: "succeeded", endedAt: 200 },
         ]);
+        // Durable readback can precede observers; finish accepted events before retiring admission.
+        await captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission);
         await closeOpenClawStateDatabaseAsync();
         if (completion === "record") {
           expect(onEvent).not.toHaveBeenCalled();
@@ -506,11 +511,13 @@ describe("registered async managed child linkage", () => {
                 .map((event) => ({ status: event.task.status, endedAt: event.task.endedAt })),
             );
           }
+          // Each task's lifecycle is ordered; independent task publications can interleave.
           expect(
             updates
               .filter((event) => event.task.status === "succeeded")
-              .map((event) => event.task.taskId),
-          ).toEqual([backing.taskId, receipt.task.taskId]);
+              .map((event) => event.task.taskId)
+              .toSorted(),
+          ).toEqual([backing.taskId, receipt.task.taskId].toSorted());
         }
         expect(
           await runtime.tasks.async.flows.bindSession({ sessionKey: ownerKey }).get(flow.flowId),
