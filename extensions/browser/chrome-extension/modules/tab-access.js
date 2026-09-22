@@ -35,6 +35,22 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
   let storageChain = Promise.resolve();
   const addTabToGroup = (tabId, created) =>
     addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, created });
+  const isSelected = async (tab) => {
+    const created = createdTabs.get(tab?.id);
+    if (created?.groupFallback) {
+      return true;
+    }
+    const selected = await isSelectedTab(tab);
+    if (created?.handedOff && !created.initialBlank) {
+      if (selected) {
+        createdTabs.delete(tab.id);
+      } else {
+        created.groupFallback = true;
+        return true;
+      }
+    }
+    return selected;
+  };
 
   const documents = createTabDocumentProvenance({
     access: {
@@ -50,9 +66,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         const created = createdTabs.get(tabId);
         if (created?.initialBlank && url !== "about:blank") {
           created.initialBlank = false;
-          if (created.handedOff) {
-            createdTabs.delete(tabId);
-          } else {
+          if (!created.handedOff) {
             invalidateTab(tabId);
           }
         }
@@ -105,11 +119,8 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         invalidateTab(tab.id);
       }
       created.initialBlank = false;
-      if (created.handedOff) {
-        createdTabs.delete(tab.id);
-        if (!created.isCurrent()) {
-          invalidateTab(tab.id);
-        }
+      if (!created.handedOff) {
+        invalidateTab(tab.id);
       }
     }
     const options = {
@@ -210,12 +221,21 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         pending.changedDocuments.add(tabId);
       }
     }
+    const created = createdTabs.get(tabId);
+    if (
+      created?.handedOff &&
+      typeof change.groupId === "number" &&
+      change.groupId !== created.groupId
+    ) {
+      created.groupFallback = true;
+    }
     const accessChanged =
       typeof change.url === "string" ||
       change.status === "loading" ||
-      (mode === ACCESS_MODE_SELECTED && typeof change.groupId === "number") ||
+      (mode === ACCESS_MODE_SELECTED &&
+        typeof change.groupId === "number" &&
+        !created?.groupFallback) ||
       (typeof tab?.pendingUrl === "string" && !eligibilityForTab(tab).eligible);
-    const created = createdTabs.get(tabId);
     if (!created) {
       return accessChanged;
     }
@@ -276,6 +296,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       handedOff: false,
       groupId: tab.groupId,
       grouping: false,
+      groupFallback: false,
       expectedGroupId: undefined,
       namingGroup: undefined,
       initialGroup: false,
@@ -465,7 +486,10 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
 
   function renewTabAccess(tabId, attachedEpoch, observedTab, change) {
     const tab = documents.resolveTabUpdate(tabId, observedTab, change);
-    const selectedGroupChange = mode === ACCESS_MODE_SELECTED && typeof change.groupId === "number";
+    const selectedGroupChange =
+      mode === ACCESS_MODE_SELECTED &&
+      typeof change.groupId === "number" &&
+      !createdTabs.get(tabId)?.groupFallback;
     const blankObservers =
       !selectedGroupChange &&
       !attachedEpoch &&
@@ -534,7 +558,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       return { accessible: false, eligible: false, denied: false, reason: eligibility.reason, tab };
     }
     const denied = mode === ACCESS_MODE_ALL && deniedTabIds.has(tabId);
-    const selected = mode === ACCESS_MODE_SELECTED ? await isSelectedTab(tab) : true;
+    const selected = mode === ACCESS_MODE_SELECTED ? await isSelected(tab) : true;
     // A lookup can observe removal before its event. Retire the same private
     // authority now, including the creator's right to roll back this tab.
     if (!selected && (document || createdTabs.get(tabId)?.epoch === epoch)) {
@@ -554,7 +578,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         return { accessible: false, eligible: false, denied, reason: "revoked", tab: current };
       }
       const currentEligible = eligibilityForTab(current).eligible;
-      const currentSelected = await isSelectedTab(current);
+      const currentSelected = await isSelected(current);
       if (!currentSelected && (document || createdTabs.get(tabId)?.epoch === epoch)) {
         invalidateTab(tabId);
       }
@@ -645,7 +669,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
           if (!deniedTabIds.has(tab.id)) {
             accessible.push(tab);
           }
-        } else if (await isSelectedTab(tab)) {
+        } else if (await isSelected(tab)) {
           accessible.push(tab);
         }
       }

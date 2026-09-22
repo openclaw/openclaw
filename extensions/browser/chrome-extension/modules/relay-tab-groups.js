@@ -18,14 +18,25 @@ export async function isTabSelected(tab) {
 
 export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, created }) {
   const assertCurrent = () => created?.assertCurrent();
+  const fallback = () => {
+    if (created) {
+      created.groupFallback = true;
+      created.grouping = false;
+      created.expectedGroupId = undefined;
+    }
+  };
   const tab = await chromeApi.tabs.get(tabId);
   assertCurrent();
   if (created && (tab.groupId !== created.groupId || tab.windowId !== created.tab.windowId)) {
     throw new Error(`tab ${tabId} changed during creation`);
   }
-  const groups = await chromeApi.tabGroups
-    .query({ title: OPENCLAW_TAB_GROUP_TITLE })
-    .catch(() => []);
+  let groups;
+  try {
+    groups = await chromeApi.tabGroups.query({ title: OPENCLAW_TAB_GROUP_TITLE });
+  } catch {
+    fallback();
+    return;
+  }
   assertCurrent();
   const group = groups.find((candidate) => candidate.windowId === tab.windowId);
   const color = group ? undefined : await getGroupColor();
@@ -35,10 +46,16 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
     created.initialGroup = !group;
     created.expectedGroupId = group?.id;
   }
-  const groupId = await chromeApi.tabs.group({
-    tabIds: [tabId],
-    ...(group ? { groupId: group.id } : {}),
-  });
+  let groupId;
+  try {
+    groupId = await chromeApi.tabs.group({
+      tabIds: [tabId],
+      ...(group ? { groupId: group.id } : {}),
+    });
+  } catch {
+    fallback();
+    return;
+  }
   assertCurrent();
   if (created) {
     if (created.expectedGroupId !== undefined && created.expectedGroupId !== groupId) {
@@ -51,7 +68,12 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
     if (created) {
       created.namingGroup = groupId;
     }
-    await chromeApi.tabGroups.update(groupId, { title: OPENCLAW_TAB_GROUP_TITLE, color });
+    try {
+      await chromeApi.tabGroups.update(groupId, { title: OPENCLAW_TAB_GROUP_TITLE, color });
+    } catch {
+      fallback();
+      return;
+    }
     assertCurrent();
   }
 }
