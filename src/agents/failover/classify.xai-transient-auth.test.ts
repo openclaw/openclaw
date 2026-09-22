@@ -9,9 +9,9 @@ describe("xAI transient auth through the full classifier", () => {
   });
 
   it("does not classify a status-prefixed Grok content refusal as auth", () => {
-    expect(
-      classifyFailoverReason("403 I can't help with that request.", { provider: "xai" }),
-    ).toBe("unclassified");
+    expect(classifyFailoverReason("403 I can't help with that request.", { provider: "xai" })).toBe(
+      "unclassified",
+    );
   });
 
   it("keeps an invalid API key on the auth path", () => {
