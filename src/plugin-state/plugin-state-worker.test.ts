@@ -114,7 +114,7 @@ describe("worker plugin state", () => {
   });
 
   it.each(["observe", "compareDelete"] as const)(
-    "waits for an overlapping host owner before worker lifecycle acquisition during %s",
+    "borrows live parent custody acquired after worker dispatch during %s",
     async (operation) => {
       await withOpenClawTestState({ label: "plugin-state-lock-custody" }, async (state) => {
         const assertActive = vi.fn();
@@ -146,8 +146,8 @@ describe("worker plugin state", () => {
               request.input instanceof Uint8Array &&
               asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
             ) {
-              // This owner arrives too late to be delegated. Fresh worker acquisition
-              // must wait for its release while the host keeps servicing authority checks.
+              // Parent custody arrives after dispatch preparation; the worker must
+              // borrow it through the checked lifecycle handshake.
               held = acquireStateDatabaseCoordinator({
                 databasePath: resolveOpenClawStateSqlitePath(state.env),
                 busyTimeoutMs: 0,
@@ -176,15 +176,17 @@ describe("worker plugin state", () => {
         );
         try {
           await vi.waitFor(() => expect(held).toBeDefined());
-          await vi.waitFor(() => expect(assertActive.mock.calls.length).toBeGreaterThan(4));
-          expect(completed).toBe(false);
-          held?.release();
-          held = undefined;
+          await vi.waitFor(() => expect(completed).toBe(true));
+          expect(assertActive).toHaveBeenCalled();
+          expect(held?.closed).toBe(false);
           if (operation === "observe") {
             await expect(pending).resolves.toMatchObject({ ok: true, value: { value: "owner" } });
           } else {
             await expect(pending).resolves.toEqual({ ok: true, value: { status: "applied" } });
           }
+          held?.release();
+          expect(held?.closed).toBe(true);
+          held = undefined;
         } finally {
           dispatch.mockRestore();
           held?.release();
