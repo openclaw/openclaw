@@ -28,6 +28,7 @@ import {
   isReleaseOnlyRuntimeTestFile,
   RELEASE_ONLY_RUNTIME_TEST_FILES,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import * as proofTestInventory from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { isRuntimePlacementIncludePatterns } from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { isExclusiveCiTestConfig } from "../../scripts/lib/local-check-runtime.mts";
@@ -1630,8 +1631,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("selects provisioning for extracted sources without replacing their test owners", () => {
-    const provision = "test/scripts/pr-worktree-provision.test.ts";
+  it("selects provisioning and closure guards without replacing source test owners", () => {
+    const guards = [
+      "test/scripts/pr-worktree-provision.test.ts",
+      "test/scripts/eager-import-closure.test.ts",
+    ];
     const manifest = "scripts/pr-lib/wrapper-components.txt";
     for (const changedPath of [
       "scripts/pr",
@@ -1639,19 +1643,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/plugins/discovery.ts",
       "src/plugins/discovery-availability.ts",
     ]) {
-      expect(resolvePolicyTestTargets([changedPath]), changedPath).toContain(provision);
+      const targets = resolvePolicyTestTargets([changedPath]);
+      for (const guard of guards) {
+        expect(targets, changedPath).toContain(guard);
+      }
       expect(isPolicyTestOwnedPath(changedPath), changedPath).toBe(false);
     }
-    expect(resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.ts"])).not.toContain(
-      provision,
-    );
+    const unrelatedTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.ts"]);
+    for (const guard of guards) {
+      expect(unrelatedTargets).not.toContain(guard);
+    }
     expect(isPolicyTestOwnedPath(manifest)).toBe(true);
     const shards = expectDefined(createChangedNodeTestShards([manifest]), "manifest test plan");
-    const owners = shards
-      .flatMap((shard) => shard.groups ?? [])
-      .filter((group) => group.includePatterns?.includes(provision));
-    expect(owners).toHaveLength(1);
-    expect(owners[0]?.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+    for (const guard of guards) {
+      const owners = shards
+        .flatMap((shard) => shard.groups ?? [])
+        .filter((group) => group.includePatterns?.includes(guard));
+      expect(owners).toHaveLength(1);
+      expect(owners[0]?.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+    }
   });
 
   it("matches policy owners only for exact changed paths", () => {
@@ -1781,17 +1791,83 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(payload.includePatterns).toBeGreaterThan(0);
   });
 
+  it("keeps reduced Gateway coverage under distinct complete timing parts", () => {
+    const isReleaseOnlyRuntime = proofTestInventory.isReleaseOnlyRuntimeTestFile;
+    vi.spyOn(proofTestInventory, "isReleaseOnlyRuntimeTestFile").mockImplementation(
+      (file) => file === "src/gateway/server.chat-cli-auth.test.ts" || isReleaseOnlyRuntime(file),
+    );
+    const options = {
+      includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyRuntimeTests: false,
+    };
+    const owner = expectDefined(
+      createNodeTestShards(options).find(
+        (shard) => shard.shardName === "agentic-gateway-server-isolated",
+      ),
+      "reduced Gateway owner",
+    );
+    const stripes = createNodeTestShardBundles(options).filter((shard) =>
+      shard.shardName.startsWith("agentic-gateway-server-isolated-"),
+    );
+    expect(stripes.length).toBeGreaterThan(1);
+    const timingKeys = stripes.map((stripe) =>
+      expectDefined(stripe.timing_key, "reduced Gateway stripe timing"),
+    );
+    expect(new Set(timingKeys).size).toBe(stripes.length);
+    expect(timingKeys).not.toContain(owner.timing_key);
+    expect(stripes.flatMap((stripe) => stripe.includePatterns ?? []).toSorted()).toEqual(
+      owner.includePatterns?.toSorted(),
+    );
+    const timingParts = timingKeys.map((key) =>
+      expectDefined(parseCompactSplitTimingKey(key), "reduced Gateway timing part"),
+    );
+    expect(timingParts.map((part) => part.parentShardName)).toEqual(
+      stripes.map(() => "changed-agentic-gateway-server-isolated"),
+    );
+    expect(new Set(timingParts.map((part) => part.generationKey)).size).toBe(1);
+    expect(timingParts.map((part) => part.expectedParts)).toEqual(
+      stripes.map(() => stripes.length),
+    );
+    expect(timingParts.map((part) => part.part).toSorted((a, b) => a - b)).toEqual(
+      stripes.map((_, index) => index + 1),
+    );
+  });
+
   it("bundles split shards with deterministic unique identities and unchanged coverage", () => {
     const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
     const bundled = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
+    const gatewayOwner = expectDefined(
+      base.find((shard) => shard.shardName === "agentic-gateway-server-isolated"),
+      "full Gateway owner",
+    );
+    const gatewayStripes = bundled.filter((shard) =>
+      shard.shardName.startsWith("agentic-gateway-server-isolated-"),
+    );
+    expect(gatewayStripes.length).toBeGreaterThan(1);
+    for (const stripe of gatewayStripes) {
+      expect(stripe.includePatterns!.length).toBeGreaterThan(0);
+      expect(stripe.includePatterns!.length).toBeLessThanOrEqual(64);
+      expect(stripe.configs).toEqual(gatewayOwner.configs);
+      expect(stripe.env).toEqual(gatewayOwner.env);
+      expect(stripe.pretestBuildMode).toBe(gatewayOwner.pretestBuildMode);
+      expect(stripe.runner).toBe(DEFAULT_NODE_TEST_RUNNER);
+      expect(stripe.timeoutMinutes).toBe(gatewayOwner.timeoutMinutes);
+      expect(stripe.planConcurrency).toBe(gatewayOwner.planConcurrency);
+    }
     const basePatterns = base
-      .flatMap((shard) => shard.includePatterns ?? [])
+      .flatMap(
+        (shard) =>
+          shard.includePatterns ??
+          (shard === gatewayOwner
+            ? [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles]
+            : []),
+      )
       .toSorted((a, b) => a.localeCompare(b));
     const bundledPatterns = bundled
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
 
-    expect(bundled.length).toBeLessThan(base.length);
+    expect(bundled.length - gatewayStripes.length).toBeLessThan(base.length - 1);
     expect(new Set(bundled.map((shard) => shard.checkName)).size).toBe(bundled.length);
     expect(bundledPatterns).toEqual(basePatterns);
     expect(

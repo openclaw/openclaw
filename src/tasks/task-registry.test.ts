@@ -58,7 +58,7 @@ import {
 import { createManagedTaskFlow } from "./task-flow-registry.test-support.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
-import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
+import type { SubagentAdminKillParams } from "./task-registry-control.types.js";
 import {
   captureTaskDeliveryWork,
   waitForAssertion,
@@ -172,9 +172,7 @@ vi.mock("./task-registry-control.runtime.js", () => ({
   cancelBackgroundExecSession: hoisted.cancelBackgroundExecSessionMock,
   cancelActiveCronTaskRun: hoisted.cancelActiveCronTaskRunMock,
   getAcpSessionManager: () => ({ cancelSession: hoisted.cancelSessionMock }),
-  killSubagentRunAdmin: async (
-    params: Parameters<TaskRegistryControlRuntime["killSubagentRunAdmin"]>[0],
-  ) => {
+  killSubagentRunAdmin: async (params: SubagentAdminKillParams) => {
     const result = await hoisted.killSubagentRunAdminMock(params);
     params.onResult?.(result);
     return result;

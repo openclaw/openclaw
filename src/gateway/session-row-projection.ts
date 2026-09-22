@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import {
   getSubagentSessionListReadSnapshotIdentity,
@@ -137,16 +136,11 @@ export async function createSessionRowProjection(params: {
     publish(row, fields) {
       const current = rows.get(records.identity(row));
       if (
-        current?.materialized &&
-        (current.lastMessagePreview !== fields.lastMessagePreview ||
-          !isDeepStrictEqual(current.fallbackModel, fields.fallbackModel))
+        records.ready(current) &&
+        records.publishTranscriptFields(current, fields, cfg, metadata.current)
       ) {
-        Object.assign(current, {
-          lastMessagePreview: fields.lastMessagePreview,
-          fallbackModel: fields.fallbackModel,
-        });
-        dirty.add(records.identity(current));
-        void ensureMaterialized().catch(() => {});
+        // Optional presentation leaves independently pending stored facts dirty.
+        revisionToken = undefined;
       }
     },
   });

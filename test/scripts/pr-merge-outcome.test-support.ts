@@ -268,6 +268,7 @@ export function createMergeOutcomeFixtureHarness() {
         user: { id: number; login: string; type: string };
       }>,
       issueCommentReads: 0,
+      tamperCorrectionAtFinalReview: false,
       issueCommentsErrorAt: 0,
       comments: [] as { body: string; html_url: string }[],
       posts: 0,
@@ -289,6 +290,7 @@ export function createMergeOutcomeFixtureHarness() {
         artifact?: string;
         artifactContents?: string;
         bodyPath?: string;
+        receiptField?: "LOCAL_PREP_HEAD_SHA" | "PREP_HEAD_SHA";
       },
       review: true,
       ready: true,
@@ -531,6 +533,7 @@ else if(args[0]==="pr"&&args[1]==="checks") {
     if(typeof s.duringChecks.artifactContents==="string") fs.writeFileSync(path,s.duringChecks.artifactContents);
     else fs.appendFileSync(path,"\\n# changed during checks\\n");
   }
+  if(s.duringChecks?.receiptField) { const receipt=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/prep.env"; fs.writeFileSync(receipt,fs.readFileSync(receipt,"utf8").replace(new RegExp("^"+s.duringChecks.receiptField+"=.*$","m"),s.duringChecks.receiptField+"="+main())); }
   out([{name:s.requiredCheckName,bucket:s.gates,state:s.gates==="pass"?"SUCCESS":"FAILURE"}]);}
 else if(args[0]==="pr"&&args[1]==="view") {
   const fields=args[args.indexOf("--json")+1].split(",");
@@ -645,6 +648,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
   } else {
     if(!args.includes("Cache-Control: max-age=0")) fail("missing live comment header");
     s.issueCommentReads++;
+    if(s.issueCommentReads>1&&s.tamperCorrectionAtFinalReview) fs.appendFileSync(process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/correction-review.json","\\n");
     if(s.tamperMergeBody) {
       const local=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/";
       for(const name of fs.readdirSync(local).filter(name=>name.startsWith("merge-body."))) fs.writeFileSync(local+name,"Tampered");
@@ -677,6 +681,7 @@ source "$script_parent_dir/pr-lib/operation-lock.sh"
 source "$script_parent_dir/pr-lib/common.sh"
 source "$script_parent_dir/pr-lib/merge.sh"
 source "$script_parent_dir/pr-lib/review.sh"
+source "$script_parent_dir/pr-lib/gates.sh"
 repo_root() { printf '%s\\n' "$FIXTURE_REPO"; }
 ensure_gh_api_auth() { :; }
 verify_prep_branch_matches_prepared_head() { [ "$(command git rev-parse HEAD)" = "$2" ]; }
@@ -725,7 +730,9 @@ pr_git() {
 export FIXTURE_LEADER="$$"
 acquire_pr_operation_lock 123
 begin_pr_operation_validation_phase
-if [ -n "\${5:-}" ]; then
+if [ "\${9:-}" = verify ]; then
+  merge_verify 123 '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
+elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
   merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}"
@@ -775,6 +782,7 @@ fi
       legacyDirectory = "",
       cancelAuto = false,
       refusalDirectory = "",
+      verifyOnly = false,
     ) => {
       const result = spawnSync(
         nodeExecutable,
@@ -791,6 +799,7 @@ fi
           legacyDirectory,
           String(cancelAuto),
           refusalDirectory,
+          verifyOnly ? "verify" : "",
         ],
         {
           cwd,
@@ -900,6 +909,7 @@ fi
       save,
       run,
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
+      verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
       cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),
       recover,
       advance,

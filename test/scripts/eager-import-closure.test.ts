@@ -3,9 +3,9 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
-  globSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -78,7 +78,20 @@ it("acquires and releases wrapper leases without the application command runtime
 
 it("resolves wrapper package exports and workspace aliases from the extracted dependency context", () => {
   const root = tempDirs.make("openclaw-pr-package-closure-");
-  copyPrWrapperSources(root);
+  const components = copyPrWrapperSources(root);
+  expect(components.filter((component, index) => components.indexOf(component) !== index)).toEqual(
+    [],
+  );
+  const files = readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => relative(root, join(entry.parentPath, entry.name)));
+  for (const entrypoint of [
+    "src/state/openclaw-state.worker.ts",
+    "src/state/openclaw-state-lease-worker.ts",
+    "src/infra/sqlite-store.worker.ts",
+  ]) {
+    expect(files).toContain(join(entrypoint));
+  }
   const pinned = spawnSync(
     process.execPath,
     [
@@ -89,10 +102,6 @@ it("resolves wrapper package exports and workspace aliases from the extracted de
     { encoding: "utf8" },
   );
   expect(pinned.status, pinned.stderr).toBe(0);
-  const files = globSync("**/*.{js,mjs,cjs,ts,mts,cts,tsx}", {
-    cwd: root,
-    exclude: ["node_modules/**"],
-  });
   const closure = collectRuntimeImportClosure(root, files, { validatePackages: true });
   expect(closure.filter((file) => file.startsWith("..") || !existsSync(join(root, file)))).toEqual(
     [],

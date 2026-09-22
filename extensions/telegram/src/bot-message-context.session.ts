@@ -321,8 +321,7 @@ export async function buildTelegramInboundContextPayload(params: {
   const replyTarget = describeReplyTarget(msg);
   const bufferedMessages = options?.bufferedMessages ?? [];
   const hasMultiMessageBatch = bufferedMessages.length > 1;
-  const shouldRenderBufferedBody =
-    hasMultiMessageBatch && options?.ingressBuffer !== "text-fragment";
+  const shouldRenderBufferedBody = hasMultiMessageBatch && options?.ingressBuffer !== "text-batch";
   const forwardOrigin = shouldRenderBufferedBody ? null : normalizeForwardedContext(msg);
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,

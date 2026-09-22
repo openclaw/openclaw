@@ -29,6 +29,7 @@ it.each([
     nextAction:
       "Selected npm destination /other-prefix is occupied by another OpenClaw installation: launcher /other-prefix/bin/openclaw. No selected managed service claims this destination. Switch the runtime back and run `node /original/openclaw/openclaw.mjs update`.",
   },
+  { reason: "global-install-foreign-destination", nextAction: undefined },
   {
     reason: "global-install-permission-denied",
     nextAction:
@@ -65,7 +66,13 @@ it.each([
     expect.stringContaining(`OpenClaw update failed: ${failure.reason}`),
     "Update history",
   );
-  expect(note).toHaveBeenCalledWith(expect.stringContaining(failure.nextAction), "Update history");
+  expect(note).toHaveBeenCalledWith(
+    expect.stringContaining(
+      failure.nextAction ??
+        "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
+    ),
+    "Update history",
+  );
 
   latest = {
     ...latest,
