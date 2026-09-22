@@ -63,10 +63,16 @@ vi.mock("./store.js", async (importOriginal) => ({
   getRuntimeAuthProfileStoreSnapshot: () => authStoreMocks.state.store,
   findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
     authStoreMocks.state.store.profiles[profileId],
+  resolveAuthProfileProviderForSelection: ({ profileId }: { profileId: string }) =>
+    authStoreMocks.state.store.profiles[profileId]?.provider,
   hasAnyAuthProfileStoreSource: authStoreMocks.hasAnyAuthProfileStoreSource,
 }));
 vi.mock("./store-runtime.js", () => ({
   ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,
+  prepareAuthProfileProviderForSelection: async ({ profileId }: { profileId: string }) => ({
+    profileId,
+    provider: authStoreMocks.state.store.profiles[profileId]?.provider,
+  }),
 }));
 
 vi.mock("./usage.js", () => ({

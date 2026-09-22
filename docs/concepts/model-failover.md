@@ -200,14 +200,16 @@ OpenClaw **pins the automatically chosen auth profile per session** to keep prov
 
 - the session is reset (`/new` / `/reset`)
 - the profile is in cooldown/disabled
+- the automatically selected credential has been removed; OpenClaw clears the automatic pin and selects another eligible profile
 
 Context compaction does not change the selected auth profile. A healthy profile remains pinned
-across compaction; auth failures and unavailable profiles still use the normal fallback order.
+across compaction. Temporary failures and cooldowns of existing credentials still use the normal
+fallback order. Removed user-selected credentials require the deliberate recovery described below.
 
-Manual selection via `/model …@<profileId> -s` sets a **user override**. A valid user pin survives `/new`, `/reset`, session rollover, compaction, and cooldown windows. It remains the first preference when eligible. While that exact profile is in cooldown or disabled, OpenClaw tries the next eligible same-provider profile without replacing the stored pin. OpenClaw clears the pin when the profile disappears, no longer matches the selected provider, or the user selects another explicit profile. `/model default -s` clears the model override while retaining a compatible auth pin and clearing an incompatible one.
+Manual selection via `/model …@<profileId> -s` sets a **user override**. A compatible user pin survives `/new`, `/reset`, session rollover, compaction, and cooldown windows. It remains the first preference when eligible. While its stored credential is in cooldown or disabled, OpenClaw may try another eligible same-provider profile without replacing the pin. If that credential is removed, the session retains the selection and admission reports the unavailable account instead of silently using another account. Restore the credential or explicitly select another profile for the session. OpenClaw clears an incompatible pin when the selected provider changes; selecting another explicit profile replaces it. `/model default -s` clears the model override while retaining a compatible auth pin and clearing an incompatible one.
 
 <Note>
-Auto-pinned and user-pinned auth profiles are both retry preferences. OpenClaw tries the selected profile first while it is eligible. It may then rotate to another same-provider profile on auth failures, rate limits, billing limits, or timeouts. A user pin stays persisted during that temporary rotation. New runs prefer it again after its cooldown expires, without changing the selected model or runtime. This auth rotation does not loosen model selection: an explicit user provider/model selection remains strict and reports failure after its same-provider auth profiles are exhausted.
+For profiles whose credentials still exist, auto-pinned and user-pinned auth profiles are both retry preferences. OpenClaw tries the selected profile first while it is eligible. It may then rotate to another same-provider profile on auth failures, rate limits, billing limits, or timeouts. A user pin stays persisted during that temporary rotation. New runs prefer it again after its cooldown expires, without changing the selected model or runtime. A removed explicit profile requires the deliberate recovery described above. This auth rotation does not loosen model selection: an explicit user provider/model selection remains strict and reports failure after its same-provider auth profiles are exhausted.
 </Note>
 
 ### OpenAI Codex subscription plus API-key backup
@@ -228,7 +230,7 @@ Use `auth.order.openai` for the user-facing order:
 
 Use `openai:*` for both ChatGPT/Codex OAuth profiles and OpenAI API-key profiles. When the subscription hits a Codex usage limit, OpenClaw records the exact reset time when Codex provides one. It tries the next ordered auth profile, and keeps the run inside the Codex harness. Once the reset time passes, the subscription profile is eligible again and the next automatic selection can return to it.
 
-Use a user-pinned profile to make one account/key the durable first preference for that session. If it becomes unavailable, OpenClaw temporarily rotates through the remaining eligible `auth.order.openai` profiles and returns to the pinned profile after recovery.
+Use a user-pinned profile to make one account/key the durable first preference for that session. During a temporary cooldown, disable window, or provider failure, OpenClaw temporarily rotates through the remaining eligible `auth.order.openai` profiles and returns to the pinned profile after recovery. If the credential is removed, restore it or explicitly select another account; OpenClaw does not silently choose the backup.
 
 ## Cooldowns
 

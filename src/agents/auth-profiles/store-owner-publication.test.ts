@@ -34,6 +34,7 @@ import {
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreWithoutExternalProfiles,
+  prepareAuthProfileProviderForSelection,
   saveAuthProfileStore,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
   updateAuthProfileStoreWithLock,
@@ -42,8 +43,10 @@ import { authProfileScopeCwdEntrypoint } from "./store-scope-cwd-runtime.test-su
 import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
 import {
   captureAuthProfileStorePersistenceSnapshot,
+  resolveAuthProfileProviderForSelection,
   restoreAuthProfileStorePersistenceSnapshot,
   withAuthProfileStoreAgentDir,
+  withEnvOnlyAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileCredential } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
@@ -51,7 +54,193 @@ import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 const { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedRoot } =
   createAuthOwnerTestFixtures();
 
+const selectionProviderReaders = [
+  { name: "synchronous SDK", resolveSelectionProvider: resolveAuthProfileProviderForSelection },
+  {
+    name: "prepared runtime",
+    resolveSelectionProvider: async (params: { agentDir?: string; profileId: string }) =>
+      (await prepareAuthProfileProviderForSelection(params)).provider,
+  },
+];
+
 describe("auth publication owner receipts", () => {
+  it.each(selectionProviderReaders)(
+    "resolves selection metadata from the selected owner ($name)",
+    async ({ resolveSelectionProvider }) => {
+      const first = await seedRoot("first");
+      const second = await seedRoot("second");
+      for (const [root, provider] of [
+        [first, "openai"],
+        [second, "anthropic"],
+      ] as const) {
+        await withEnvAsync(root.env, async () => {
+          writePersistedAuthProfileStoreRaw({
+            version: 1,
+            profiles: {
+              account: { ...apiKey("shared"), provider },
+              "shared-only": { ...apiKey("shared-only"), provider },
+            },
+          });
+          writePersistedAuthProfileStoreRaw(
+            { version: 1, profiles: { account: { ...apiKey("local"), provider: "google" } } },
+            root.agentDir,
+          );
+          // Selection uses the published provider first, then the same owner's persisted rows.
+          setRuntimeAuthProfileStoreSnapshot({
+            version: 1,
+            profiles: {
+              account: { ...apiKey("published-shared"), provider: "xai" },
+              runtime: { ...apiKey("runtime"), provider },
+            },
+          });
+          setRuntimeAuthProfileStoreSnapshot(
+            {
+              version: 1,
+              profiles: {
+                account: { ...apiKey("published-local"), provider: "anthropic" },
+                runtime: { ...apiKey("local-runtime"), provider: "xai" },
+              },
+            },
+            root.agentDir,
+          );
+          expect(await resolveSelectionProvider({ profileId: "account" })).toBe("xai");
+          expect(await resolveSelectionProvider({ profileId: "runtime" })).toBe(provider);
+          expect(
+            await resolveSelectionProvider({ agentDir: root.agentDir, profileId: "account" }),
+          ).toBe("anthropic");
+          expect(
+            await resolveSelectionProvider({ agentDir: root.agentDir, profileId: "runtime" }),
+          ).toBe("xai");
+          expect(
+            await resolveSelectionProvider({
+              agentDir: root.agentDir,
+              profileId: "shared-only",
+            }),
+          ).toBe(provider);
+          expect(await resolveSelectionProvider({ profileId: "missing" })).toBeUndefined();
+        });
+      }
+    },
+  );
+
+  it.each(selectionProviderReaders)(
+    "keeps the captured portable shared view ($name)",
+    async ({ resolveSelectionProvider }) => {
+      const root = await seedRoot("original");
+      await persistAuthProfileBatch({
+        stateDir: root.stateDir,
+        profiles: [
+          { profileId: "account", credential: apiKey("shared") },
+          {
+            profileId: "portable",
+            credential: { type: "token", provider: "anthropic", token: "fixture-token" },
+          },
+          { profileId: "private", credential: { ...apiKey("private"), copyToAgents: false } },
+          {
+            profileId: "oauth",
+            credential: {
+              type: "oauth",
+              provider: "openai",
+              access: "fixture-access",
+              refresh: "fixture-refresh",
+              expires: Date.now() + 3_600_000,
+              copyToAgents: true,
+            },
+          },
+        ],
+      });
+      await persistAuthProfileBatch({
+        stateDir: root.stateDir,
+        agentDir: root.agentDir,
+        profiles: [
+          { profileId: "account", credential: { ...apiKey("local"), provider: "google" } },
+        ],
+      });
+      withEnv(root.env, () =>
+        setRuntimeAuthProfileStoreSnapshot(
+          {
+            version: 1,
+            profiles: {
+              account: { ...apiKey("ambient-account"), provider: "xai" },
+              portable: { ...apiKey("ambient-portable"), provider: "xai" },
+              oauth: apiKey("ambient-oauth"),
+              "runtime-only": apiKey("ambient-runtime"),
+            },
+          },
+          root.agentDir,
+        ),
+      );
+      const before = snapshotAt(root.agentPath);
+      const assertOuterUnchanged = unreadableOuter("future");
+      await withAuthProfileStoreAgentDir(root.agentDir, root.stateDir, async () => {
+        for (const agentDir of [undefined, tempDirs.make("openclaw-auth-unselected-agent-")]) {
+          expect(await resolveSelectionProvider({ agentDir, profileId: "account" })).toBe("google");
+          expect(await resolveSelectionProvider({ agentDir, profileId: "portable" })).toBe(
+            "anthropic",
+          );
+          for (const profileId of ["private", "oauth", "runtime-only"]) {
+            expect(await resolveSelectionProvider({ agentDir, profileId })).toBeUndefined();
+          }
+        }
+      });
+      expect(snapshotAt(root.agentPath)).toEqual(before);
+      assertOuterUnchanged();
+    },
+  );
+
+  it.each(selectionProviderReaders)(
+    "retains legacy bounded runtime-only providers ($name)",
+    async ({ resolveSelectionProvider }) => {
+      const stateDir = tempDirs.make("openclaw-auth-selection-legacy-");
+      const agentDir = tempDirs.make("openclaw-auth-selection-legacy-agent-");
+      const unrelatedAgentDir = tempDirs.make("openclaw-auth-selection-unrelated-agent-");
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: undefined },
+        async () => {
+          writePersistedAuthProfileStoreRaw(
+            {
+              version: 1,
+              profiles: { persisted: { ...apiKey("persisted"), provider: "anthropic" } },
+            },
+            agentDir,
+          );
+          setRuntimeAuthProfileStoreSnapshot(
+            { version: 1, profiles: { runtime: { ...apiKey("runtime"), provider: "google" } } },
+            agentDir,
+          );
+          setRuntimeAuthProfileStoreSnapshot(store("unrelated"), unrelatedAgentDir);
+          await withAuthProfileStoreAgentDir(agentDir, stateDir, async () => {
+            expect(
+              await resolveSelectionProvider({
+                agentDir: unrelatedAgentDir,
+                profileId: "runtime",
+              }),
+            ).toBe("google");
+            expect(await resolveSelectionProvider({ profileId: "persisted" })).toBe("anthropic");
+            expect(await resolveSelectionProvider({ profileId: "shared" })).toBeUndefined();
+          });
+        },
+      );
+    },
+  );
+
+  it.each(selectionProviderReaders)(
+    "does not read ambient stores for env-only selection ($name)",
+    async ({ resolveSelectionProvider }) => {
+      const root = await seedRoot("original");
+      const before = snapshotAt(root.agentPath);
+      const assertOuterUnchanged = unreadableOuter("future");
+      await withEnvOnlyAuthProfileStore(async () => {
+        expect(
+          await resolveSelectionProvider({ agentDir: root.agentDir, profileId: "local" }),
+        ).toBeUndefined();
+        expect(await resolveSelectionProvider({ profileId: "shared" })).toBeUndefined();
+      });
+      expect(snapshotAt(root.agentPath)).toEqual(before);
+      assertOuterUnchanged();
+    },
+  );
+
   it.each(["prepare", "activate"] as const)(
     "requires a recorded migration diagnosis discovered at %s before empty-owner activation",
     async (discoveredAt) => {

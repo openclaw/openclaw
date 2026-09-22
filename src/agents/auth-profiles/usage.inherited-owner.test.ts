@@ -27,6 +27,7 @@ import { writePersistedAuthProfileStateRaw, writePersistedAuthProfileStoreRaw } 
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import {
   findPersistedAuthProfileCredential,
+  resolveAuthProfileProviderForSelection,
   withAuthProfileStoreAgentDir,
   withEnvOnlyAuthProfileStore,
 } from "./store.js";
@@ -236,6 +237,12 @@ describe("inherited auth-profile usage persistence", () => {
 
   it("does not carry personal credentials into isolated auth scopes", async () => {
     const personalId = connectPersonalAccount(ensureProfileForEmail("alice@example.test").id);
+    expect(resolveAuthProfileProviderForSelection({ profileId: personalId })).toBe("anthropic");
+    expect(
+      withEnvOnlyAuthProfileStore(() =>
+        resolveAuthProfileProviderForSelection({ agentDir: childAgentDir, profileId: personalId }),
+      ),
+    ).toBeUndefined();
     expect(
       withEnvOnlyAuthProfileStore(
         () => ensureAuthProfileStore(childAgentDir, { profileId: personalId }).profiles[personalId],
@@ -248,7 +255,9 @@ describe("inherited auth-profile usage persistence", () => {
       expect(
         findPersistedAuthProfileCredential({ agentDir: childAgentDir, profileId: personalId }),
       ).toBeUndefined();
+      expect(resolveAuthProfileProviderForSelection({ profileId: personalId })).toBeUndefined();
     });
+    expect(readUserModelAuthProfile(personalId)?.credential.provider).toBe("anthropic");
   });
 
   it("rejects personal account removal through the shared CLI boundary without deleting shared profiles", async () => {

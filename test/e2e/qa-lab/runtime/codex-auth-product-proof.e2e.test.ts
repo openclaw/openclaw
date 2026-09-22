@@ -1,8 +1,11 @@
 // QA Lab Codex auth product proof exercises doctor, SQLite, Gateway, and app-server together.
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createJsonlRequestTailer } from "../../../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
+import { resolveSessionStorePathCore } from "../../../../src/config/sessions/paths.js";
+import { loadSessionEntryReadOnly } from "../../../../src/config/sessions/session-accessor.js";
 import { GatewayClient } from "../../../../src/gateway/client.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { loadBundledPluginFacade } from "../../../../src/test-utils/bundled-plugin-public-surface.js";
@@ -15,7 +18,10 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../helpers/openclaw-test-instance.js";
-import { runCodexAuthDoctorMigrationProof } from "./codex-auth-product-proof.test-support.js";
+import {
+  findCodexFixtureTurnAccountEvidence,
+  runCodexAuthDoctorMigrationProof,
+} from "./codex-auth-product-proof.test-support.js";
 
 const oauthAccess = "test-oauth-access";
 const ACCOUNT_ID = "qa-codex-account";
@@ -34,6 +40,7 @@ type AppServerLogEntry = {
   method?: string;
   params?: unknown;
   result?: unknown;
+  fixtureAuthOperation?: unknown;
 };
 
 type AppServerRequestLog = { read(): AppServerLogEntry[] };
@@ -44,6 +51,12 @@ type GatewayHistory = Record<string, unknown> & {
 };
 
 type GatewayEvent = { event?: string; payload?: unknown };
+type CodexLifecyclePayload = {
+  runId?: unknown;
+  sessionKey?: unknown;
+  stream?: unknown;
+  data?: { phase?: unknown; threadId?: unknown; clientId?: unknown };
+};
 
 function expectBoundedMissingProfileRecovery(
   value: unknown,
@@ -361,10 +374,21 @@ describe("Codex auth product proof", () => {
     },
   );
 
-  it(
-    "returns bounded recovery after the explicitly selected profile is removed",
+  it.each([
+    {
+      name: "the configured account",
+      configuredProfileId: MISSING_PROFILE_ID,
+      configuredAccountId: ACCOUNT_ID,
+    },
+    {
+      name: "a distinct selected account",
+      configuredProfileId: "openai:configured",
+      configuredAccountId: "qa-codex-configured-account",
+    },
+  ])(
+    "returns bounded recovery after removing $name",
     { timeout: 180_000 },
-    async () => {
+    async ({ configuredProfileId, configuredAccountId }) => {
       const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
         CODEX_APP_SERVER_VERSION: string;
       }>({ pluginId: "codex", artifactBasename: "test-api.js" });
@@ -400,7 +424,7 @@ describe("Codex auth product proof", () => {
           },
           agents: {
             defaults: {
-              model: { primary: `${MODEL}@${MISSING_PROFILE_ID}`, fallbacks: [] },
+              model: { primary: `${MODEL}@${configuredProfileId}`, fallbacks: [] },
               models: { [MODEL]: { agentRuntime: { id: "codex" } } },
               workspace: "~/workspace",
               skipBootstrap: true,
@@ -417,11 +441,15 @@ describe("Codex auth product proof", () => {
       await instance.state.writeAuthProfiles({
         version: 1,
         profiles: {
+          [configuredProfileId]: {
+            type: "token",
+            provider: "openai",
+            token: chatgptAccessToken(configuredAccountId),
+          },
           [MISSING_PROFILE_ID]: {
             type: "token",
             provider: "openai",
             token: chatgptAccessToken(ACCOUNT_ID),
-            accountId: ACCOUNT_ID,
           },
         },
       });
@@ -435,25 +463,219 @@ describe("Codex auth product proof", () => {
       let failedHistory: GatewayHistory | undefined;
       try {
         const testInstance = instance;
-        const runConfiguredTurn = async (idempotencyKey: string) => {
-          const setup = await client.request<{ runId?: string; status?: string }>("chat.send", {
-            sessionKey,
-            message: `Reply with ${PRODUCT_OUTPUT}.`,
-            deliver: false,
-            idempotencyKey,
+        const nativeLifecycleForRun = (targetRunId: string) =>
+          events.filter((event) => {
+            const payload = event.payload as CodexLifecyclePayload | undefined;
+            // A misrouted or unlabelled frame must not hide native work for this run.
+            return (
+              payload?.runId === targetRunId && payload.stream === "codex_app_server.lifecycle"
+            );
           });
-          expect(setup).toMatchObject({ runId: expect.any(String), status: "started" });
-          const setupTerminal = await client.request(
-            "agent.wait",
-            { runId: setup.runId, timeoutMs: REQUEST_TIMEOUT_MS },
-            { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
-          );
-          expect(
-            setupTerminal,
-            `${JSON.stringify(setupTerminal)}\n${JSON.stringify(appServerLog.read())}\n${testInstance.logs()}`,
-          ).toMatchObject({ runId: setup.runId, status: "ok" });
+        const runConfiguredTurn = async (
+          idempotencyKey: string,
+          targetSessionKey = sessionKey,
+          expectedAccountId?: string,
+        ) => {
+          let setupRunId = "";
+          let controlFailed = false;
+          let captureFailure: { error: unknown } | undefined;
+          let controlCursor: { index: number; prefix: string } | undefined;
+          let controlProof: unknown;
+          try {
+            const controlStartEntries = appServerLog.read();
+            const controlStartIndex = controlStartEntries.length;
+            const controlStartPrefix = JSON.stringify(controlStartEntries);
+            controlCursor = { index: controlStartIndex, prefix: controlStartPrefix };
+            if (expectedAccountId !== undefined) {
+              expect(controlStartIndex, "app-server history reached the tailer cap").toBeLessThan(
+                1024,
+              );
+              expect(
+                (await fs.stat(requestLog)).size,
+                "app-server log reached the read cap",
+              ).toBeLessThan(2 * 1024 * 1024);
+            }
+            const setup = await client.request<{ runId?: string; status?: string }>("chat.send", {
+              sessionKey: targetSessionKey,
+              message: `Reply with ${PRODUCT_OUTPUT}.`,
+              deliver: false,
+              idempotencyKey,
+            });
+            expect(setup).toMatchObject({ runId: expect.any(String), status: "started" });
+            setupRunId = setup.runId ?? "";
+            expect(setupRunId).toMatch(/\S/);
+            const setupTerminal = await client.request(
+              "agent.wait",
+              { runId: setup.runId, timeoutMs: REQUEST_TIMEOUT_MS },
+              { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
+            );
+            expect(
+              setupTerminal,
+              `${JSON.stringify(setupTerminal)}\n${JSON.stringify(appServerLog.read())}\n${testInstance.logs()}`,
+            ).toMatchObject({ runId: setup.runId, status: "ok" });
+            if (expectedAccountId !== undefined) {
+              const proof = await vi.waitFor(
+                () => {
+                  const matching = nativeLifecycleForRun(setupRunId)
+                    .filter(
+                      (event) =>
+                        event.event === "agent" &&
+                        (event.payload as CodexLifecyclePayload).sessionKey === targetSessionKey,
+                    )
+                    .map((event) => event.payload as CodexLifecyclePayload);
+                  const startup = matching.findIndex(
+                    (payload) => payload.data?.phase === "startup",
+                  );
+                  const ready = matching.findIndex(
+                    (payload, index) => index > startup && payload.data?.phase === "thread_ready",
+                  );
+                  expect(startup).toBeGreaterThanOrEqual(0);
+                  expect(ready).toBeGreaterThan(startup);
+                  expect(matching[ready]?.data).toMatchObject({
+                    threadId: expect.stringMatching(/\S/),
+                    clientId: expect.stringMatching(/\S/),
+                  });
+                  const entries = appServerLog.read();
+                  expect(entries.length, "app-server history reached the tailer cap").toBeLessThan(
+                    1024,
+                  );
+                  expect(entries.length).toBeGreaterThanOrEqual(controlStartIndex);
+                  expect(
+                    JSON.stringify(entries.slice(0, controlStartIndex)) === controlStartPrefix,
+                    "app-server history changed before the control cursor",
+                  ).toBe(true);
+                  const threadId = matching[ready]?.data?.threadId;
+                  const accountEvidence = findCodexFixtureTurnAccountEvidence(entries, {
+                    afterIndex: controlStartIndex,
+                    threadId: typeof threadId === "string" ? threadId : "",
+                    accountId: expectedAccountId,
+                  });
+                  expect(
+                    accountEvidence,
+                    "missing unique completed native turn with the selected account",
+                  ).toBeDefined();
+                  return structuredClone({
+                    lifecycle: [matching[startup], matching[ready]],
+                    accountEvidence,
+                  });
+                },
+                { interval: 25, timeout: REQUEST_TIMEOUT_MS },
+              );
+              controlProof = proof;
+              expect(
+                (await fs.stat(requestLog)).size,
+                "app-server log reached the read cap",
+              ).toBeLessThan(2 * 1024 * 1024);
+            }
+          } catch (error) {
+            controlFailed = true;
+            throw error;
+          } finally {
+            if (expectedAccountId !== undefined) {
+              let correlationDiagnostic: unknown = { status: "capture-not-complete" };
+              try {
+                const entries = appServerLog.read();
+                const diagnosticStart = Math.max(0, entries.length - 1024);
+                const fixtureOperations = entries
+                  .slice(diagnosticStart)
+                  .flatMap((entry, offset) => {
+                    if (!isRecord(entry) || !isRecord(entry.fixtureAuthOperation)) {
+                      return [];
+                    }
+                    const value = entry.fixtureAuthOperation;
+                    const account = isRecord(value.account) ? value.account : undefined;
+                    return [
+                      {
+                        index: diagnosticStart + offset,
+                        version: typeof value.version === "number" ? value.version : null,
+                        instanceId: typeof value.instanceId === "string" ? value.instanceId : null,
+                        sequence: typeof value.sequence === "number" ? value.sequence : null,
+                        operation: typeof value.operation === "string" ? value.operation : null,
+                        account: account
+                          ? {
+                              type: typeof account.type === "string" ? account.type : null,
+                              accountId:
+                                typeof account.accountId === "string" ? account.accountId : null,
+                            }
+                          : null,
+                        threadId: typeof value.threadId === "string" ? value.threadId : null,
+                        turnId: typeof value.turnId === "string" ? value.turnId : null,
+                      },
+                    ];
+                  });
+                correlationDiagnostic = {
+                  controlStartIndex: controlCursor?.index ?? null,
+                  observedEntryCount: entries.length,
+                  omittedEntryCount: diagnosticStart,
+                  fixtureOperations,
+                  lifecycle: setupRunId
+                    ? nativeLifecycleForRun(setupRunId)
+                        .slice(-1024)
+                        .map((event) => {
+                          const payload = event.payload as CodexLifecyclePayload;
+                          return {
+                            event: event.event,
+                            runId: payload.runId,
+                            sessionKey: payload.sessionKey,
+                            phase: payload.data?.phase,
+                            threadId: payload.data?.threadId,
+                            clientId: payload.data?.clientId,
+                          };
+                        })
+                    : null,
+                };
+                expect(entries.length, "app-server history reached the tailer cap").toBeLessThan(
+                  1024,
+                );
+                if (controlCursor) {
+                  expect(entries.length).toBeGreaterThanOrEqual(controlCursor.index);
+                  expect(
+                    JSON.stringify(entries.slice(0, controlCursor.index)) === controlCursor.prefix,
+                    "app-server history changed before the control cursor",
+                  ).toBe(true);
+                }
+                expect(
+                  (await fs.stat(requestLog)).size,
+                  "app-server log reached the read cap",
+                ).toBeLessThan(2 * 1024 * 1024);
+                console.log(
+                  `[qa-codex-native-account-control] ${JSON.stringify({
+                    runId: setupRunId || null,
+                    sessionKey: targetSessionKey,
+                    expectedAccountId,
+                    controlFailed,
+                    captureComplete: true,
+                    controlProof,
+                    correlationDiagnostic,
+                  })}`,
+                );
+              } catch (captureError) {
+                console.error(
+                  `[qa-codex-native-account-capture-failure] ${JSON.stringify({
+                    runId: setupRunId || null,
+                    sessionKey: targetSessionKey,
+                    expectedAccountId,
+                    controlFailed,
+                    captureComplete: false,
+                    controlProof,
+                    correlationDiagnostic,
+                  })}`,
+                );
+                if (!controlFailed) {
+                  captureFailure = { error: captureError };
+                }
+              }
+            }
+          }
+          if (captureFailure) {
+            throw captureFailure.error;
+          }
+          return setupRunId;
         };
         await runConfiguredTurn("qa-codex-profile-binding-setup");
+        expect(
+          appServerLog.read().find((request) => request.method === "account/login/start")?.params,
+        ).toMatchObject({ type: "chatgptAuthTokens", chatgptAccountId: configuredAccountId });
         await expect(
           client.request("models.list", { agentId: "main", refresh: true }),
         ).resolves.toMatchObject({
@@ -474,8 +696,11 @@ describe("Codex auth product proof", () => {
           },
         });
         // A metadata patch alone does not prove the selected profile reaches native execution.
-        await runConfiguredTurn("qa-codex-profile-binding-pinned");
-
+        const pinnedRunId = await runConfiguredTurn(
+          "qa-codex-profile-binding-pinned",
+          sessionKey,
+          ACCOUNT_ID,
+        );
         const logoutResult = await client.request("models.authLogout", {
           provider: "openai",
           agentId: "main",
@@ -486,7 +711,17 @@ describe("Codex auth product proof", () => {
           removedProfiles: [MISSING_PROFILE_ID],
           abortedRunIds: [],
         });
-        await fs.writeFile(requestLog, "", "utf8");
+        // The fixture restores durable threads from this log across account processes.
+        // Freeze an evidence cursor instead of deleting the history needed by fallback.
+        const beforeFailedTurn = appServerLog.read().length;
+        const beforeFailedTurnPrefix = JSON.stringify(
+          appServerLog.read().slice(0, beforeFailedTurn),
+        );
+        expect(beforeFailedTurn, "app-server history reached the tailer cap").toBeLessThan(1024);
+        expect(
+          (await fs.stat(requestLog)).size,
+          "app-server log reached the read cap",
+        ).toBeLessThan(2 * 1024 * 1024);
         events.length = 0;
         await client.request("sessions.messages.subscribe", { key: sessionKey });
         await client.request("sessions.subscribe", {});
@@ -498,13 +733,15 @@ describe("Codex auth product proof", () => {
         });
         expect(started).toMatchObject({ runId: expect.any(String), status: "started" });
         runId = started.runId ?? "";
+        expect(runId).toMatch(/\S/);
+        expect(runId).not.toBe(pinnedRunId);
         terminal = await client.request(
           "agent.wait",
           { runId: started.runId, timeoutMs: REQUEST_TIMEOUT_MS },
           { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
         );
         expect(terminal).toMatchObject({ runId, status: "error" });
-        await vi.waitFor(
+        const settledLifecyclePayload = await vi.waitFor(
           () => {
             expect(
               events.find(
@@ -516,84 +753,256 @@ describe("Codex auth product proof", () => {
                   (event.payload as { state?: unknown }).state === "error",
               ),
             ).toBeDefined();
-            expect(
-              events.find(
-                (event) =>
-                  event.event === "session.message" &&
-                  event.payload !== null &&
-                  typeof event.payload === "object" &&
-                  (event.payload as { sessionKey?: unknown }).sessionKey === sessionKey &&
-                  (event.payload as { session?: { lastRunId?: unknown } }).session?.lastRunId ===
-                    runId &&
-                  (event.payload as { session?: { status?: unknown } }).session?.status ===
-                    "failed",
-              ),
-            ).toBeDefined();
+            const lifecycleEvent = events.find((event) => {
+              if (
+                event.event !== "sessions.changed" ||
+                event.payload === null ||
+                typeof event.payload !== "object"
+              ) {
+                return false;
+              }
+              const payload = event.payload as {
+                sessionKey?: unknown;
+                lastRunId?: unknown;
+                status?: unknown;
+                hasActiveRun?: unknown;
+                activeRunIds?: unknown;
+              };
+              return (
+                payload.sessionKey === sessionKey &&
+                payload.lastRunId === runId &&
+                payload.status === "failed" &&
+                payload.hasActiveRun === false &&
+                Array.isArray(payload.activeRunIds) &&
+                payload.activeRunIds.length === 0
+              );
+            });
+            expect(lifecycleEvent).toBeDefined();
+            const lifecyclePayload = lifecycleEvent?.payload as
+              | { lastRunError?: unknown }
+              | undefined;
+            expectBoundedMissingProfileRecovery(lifecyclePayload?.lastRunError, {
+              allowSessionTruncation: true,
+            });
+            // Transcript and session-state events cover separate projections of the same failure.
+            const transcriptEvent = events.find(
+              (event) =>
+                event.event === "session.message" &&
+                event.payload !== null &&
+                typeof event.payload === "object" &&
+                (event.payload as { sessionKey?: unknown }).sessionKey === sessionKey &&
+                (event.payload as { session?: { lastRunId?: unknown } }).session?.lastRunId ===
+                  runId &&
+                (event.payload as { session?: { status?: unknown } }).session?.status === "failed",
+            );
+            expect(transcriptEvent).toBeDefined();
+            expectBoundedMissingProfileRecovery(
+              (transcriptEvent?.payload as { session?: { lastRunError?: unknown } } | undefined)
+                ?.session?.lastRunError,
+              { allowSessionTruncation: true },
+            );
+            return lifecyclePayload;
           },
           { interval: 20, timeout: 5_000 },
         );
 
+        await vi.waitFor(
+          async () => {
+            const listed = await client.request<{
+              sessions?: Array<{
+                key?: unknown;
+                lastRunError?: unknown;
+                lastRunId?: unknown;
+                status?: unknown;
+              }>;
+            }>("sessions.list", { limit: 20 });
+            const session = listed.sessions?.find((entry) => entry.key === sessionKey);
+            expect(session).toMatchObject({ key: sessionKey, lastRunId: runId, status: "failed" });
+            expectBoundedMissingProfileRecovery(session?.lastRunError, {
+              allowSessionTruncation: true,
+            });
+          },
+          { interval: 50, timeout: REQUEST_TIMEOUT_MS },
+        );
         failedHistory = await client.request<GatewayHistory>(
           "chat.history",
           { agentId: "main", sessionKey, limit: 50 },
           { timeoutMs: 5_000 },
         );
+        const readOriginalSession = () =>
+          loadSessionEntryReadOnly({
+            agentId: "main",
+            sessionKey,
+            storePath: resolveSessionStorePathCore(undefined, {
+              agentId: "main",
+              env: testInstance.env,
+            }),
+            env: testInstance.env,
+            readConsistency: "latest",
+            hydrateSkillPromptRefs: false,
+          });
+        const failedSession = readOriginalSession();
+        expect(failedSession).toMatchObject({
+          authProfileOverride: MISSING_PROFILE_ID,
+          authProfileOverrideSource: "user",
+          status: "failed",
+          lastRunId: runId,
+        });
+        const failedRunLifecycle = structuredClone(nativeLifecycleForRun(runId));
+        expect(failedRunLifecycle).toEqual([]);
+        const retainedFailureEntries = appServerLog.read();
+        const beforeConfiguredControl = retainedFailureEntries.length;
+        expect(beforeConfiguredControl, "app-server history reached the tailer cap").toBeLessThan(
+          1024,
+        );
+        expect(beforeConfiguredControl).toBeGreaterThanOrEqual(beforeFailedTurn);
+        expect(
+          (await fs.stat(requestLog)).size,
+          "app-server log reached the read cap",
+        ).toBeLessThan(2 * 1024 * 1024);
+        expect(
+          JSON.stringify(retainedFailureEntries.slice(0, beforeFailedTurn)) ===
+            beforeFailedTurnPrefix,
+          "app-server history changed before the failure cursor",
+        ).toBe(true);
+        const beforeConfiguredControlPrefix = JSON.stringify(retainedFailureEntries);
+        const failureEntries = retainedFailureEntries.slice(beforeFailedTurn);
+        const failureMethods = failureEntries.flatMap((entry) =>
+          typeof entry.method === "string" ? [entry.method] : [],
+        );
+        // The shared log includes catalog discovery; retain its methods as diagnostics
+        // before a new session proves A is still usable, without attributing them to B.
+        let configuredRunId: string | undefined;
+        if (configuredProfileId !== MISSING_PROFILE_ID) {
+          configuredRunId = await runConfiguredTurn(
+            "qa-codex-configured-account-survives",
+            `${sessionKey}-configured`,
+            configuredAccountId,
+          );
+          expect(configuredRunId).not.toBe(pinnedRunId);
+          expect(configuredRunId).not.toBe(runId);
+          const controlEntries = appServerLog.read();
+          expect(controlEntries.length, "app-server history reached the tailer cap").toBeLessThan(
+            1024,
+          );
+          expect(controlEntries.length).toBeGreaterThanOrEqual(beforeConfiguredControl);
+          expect(
+            (await fs.stat(requestLog)).size,
+            "app-server log reached the read cap",
+          ).toBeLessThan(2 * 1024 * 1024);
+          expect(
+            JSON.stringify(controlEntries.slice(0, beforeConfiguredControl)) ===
+              beforeConfiguredControlPrefix,
+            "app-server history changed before the control cursor",
+          ).toBe(true);
+        }
+        const finalEvent = events.find(
+          (event) =>
+            event.event === "chat" &&
+            event.payload !== null &&
+            typeof event.payload === "object" &&
+            (event.payload as { runId?: unknown }).runId === runId &&
+            (event.payload as { state?: unknown }).state === "error",
+        );
+        expectBoundedMissingProfileRecovery(finalEvent?.payload);
+        // OpenClaw can settle an admitted run before provider operational RPC;
+        // host lifecycle publication does not imply provider execution.
+        expectBoundedMissingProfileRecovery(settledLifecyclePayload?.lastRunError, {
+          allowSessionTruncation: true,
+        });
+        expectBoundedMissingProfileRecovery(terminal);
+        expectBoundedMissingProfileRecovery(failedHistory?.sessionInfo?.lastRunError, {
+          allowSessionTruncation: true,
+        });
+        expect(JSON.stringify(failedHistory)).not.toContain(MISSING_PROFILE_ID);
+        expect(JSON.stringify(failedHistory)).not.toContain("Codex app-server auth profile");
+
+        let recoveryRunId: string | undefined;
+        if (configuredProfileId !== MISSING_PROFILE_ID) {
+          // Recovery must repair the failed session, not succeed only in a fresh session.
+          const originalSession = readOriginalSession();
+          expect(originalSession).toMatchObject({
+            authProfileOverride: MISSING_PROFILE_ID,
+            authProfileOverrideSource: "user",
+            status: "failed",
+            lastRunId: runId,
+          });
+          const originalSessionId = originalSession?.sessionId;
+          const originalLifecycleRevision = originalSession?.lifecycleRevision;
+          expect(originalSessionId).toMatch(/\S/);
+          const recoveredSelection = {
+            sessionId: originalSessionId,
+            lifecycleRevision: originalLifecycleRevision,
+            authProfileOverride: configuredProfileId,
+            authProfileOverrideSource: "user",
+          };
+          await expect(
+            client.request("sessions.patch", {
+              key: sessionKey,
+              expectedSessionId: originalSessionId,
+              ...(originalLifecycleRevision !== undefined
+                ? { expectedLifecycleRevision: originalLifecycleRevision }
+                : {}),
+              model: `${MODEL}@${configuredProfileId}`,
+            }),
+          ).resolves.toMatchObject({ ok: true, key: sessionKey, entry: recoveredSelection });
+          expect(readOriginalSession()).toMatchObject(recoveredSelection);
+          recoveryRunId = await runConfiguredTurn(
+            "qa-codex-original-session-recovered",
+            sessionKey,
+            configuredAccountId,
+          );
+          expect(recoveryRunId).not.toBe(pinnedRunId);
+          expect(recoveryRunId).not.toBe(runId);
+          expect(recoveryRunId).not.toBe(configuredRunId);
+          await vi.waitFor(
+            () => {
+              const recoveredSession = readOriginalSession();
+              expect(recoveredSession).toMatchObject({
+                ...recoveredSelection,
+                status: "done",
+                lastRunId: recoveryRunId,
+              });
+              expect(recoveredSession?.lastRunError).toBeUndefined();
+              expect(
+                events.find(
+                  (event) =>
+                    event.event === "chat" &&
+                    isRecord(event.payload) &&
+                    event.payload.runId === recoveryRunId &&
+                    event.payload.sessionKey === sessionKey &&
+                    event.payload.state === "final",
+                ),
+              ).toBeDefined();
+            },
+            { interval: 25, timeout: REQUEST_TIMEOUT_MS },
+          );
+          console.log(
+            `[qa-codex-original-session-recovery] ${JSON.stringify({
+              sessionKey,
+              ...recoveredSelection,
+              runId: recoveryRunId,
+              accountId: configuredAccountId,
+              status: "done",
+            })}`,
+          );
+        }
+
+        console.log(
+          `[qa-codex-missing-auth-profile] ${JSON.stringify({
+            assistantOutput: SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT,
+            configuredAccountControl:
+              configuredProfileId !== MISSING_PROFILE_ID ? "passed" : "same-account-removed",
+            historySessionKey: sessionKey,
+            recoveryRunId: recoveryRunId ?? null,
+            appServerInitialized: failureMethods.includes("initialize"),
+            failedRunNativeLifecycleCount: failedRunLifecycle.length,
+            observedAppServerMethods: failureMethods,
+          })}`,
+        );
       } finally {
         client.stop();
       }
-
-      const failureAppServerLog = createJsonlRequestTailer<AppServerLogEntry>(requestLog);
-      const finalEvent = events.find(
-        (event) =>
-          event.event === "chat" &&
-          event.payload !== null &&
-          typeof event.payload === "object" &&
-          (event.payload as { runId?: unknown }).runId === runId &&
-          (event.payload as { state?: unknown }).state === "error",
-      );
-      const lifecycleEvent = events.find(
-        (event) =>
-          event.event === "session.message" &&
-          event.payload !== null &&
-          typeof event.payload === "object" &&
-          (event.payload as { sessionKey?: unknown }).sessionKey === sessionKey &&
-          (event.payload as { session?: { lastRunId?: unknown } }).session?.lastRunId === runId &&
-          (event.payload as { session?: { status?: unknown } }).session?.status === "failed",
-      );
-      expectBoundedMissingProfileRecovery(finalEvent?.payload);
-      // Native lifecycle publishes the failed session snapshot before broadcasting chat.error.
-      expectBoundedMissingProfileRecovery(
-        (lifecycleEvent?.payload as { session?: { lastRunError?: unknown } } | undefined)?.session
-          ?.lastRunError,
-        { allowSessionTruncation: true },
-      );
-      expectBoundedMissingProfileRecovery(terminal);
-      expectBoundedMissingProfileRecovery(failedHistory?.sessionInfo?.lastRunError, {
-        allowSessionTruncation: true,
-      });
-      expect(JSON.stringify(failedHistory)).not.toContain(MISSING_PROFILE_ID);
-      expect(JSON.stringify(failedHistory)).not.toContain("Codex app-server auth profile");
-
-      const failureMethods = failureAppServerLog
-        .read()
-        .flatMap((entry) => (typeof entry.method === "string" ? [entry.method] : []));
-      const operationalMethods = failureMethods.filter(
-        (method) => method !== "initialize" && method !== "initialized",
-      );
-      // App-server may perform read-only capability discovery before OpenClaw rejects the
-      // removed profile, but it must not start or resume a conversation turn.
-      expect(
-        operationalMethods.filter((method) => method !== "model/list" && method !== "account/read"),
-      ).toEqual([]);
-
-      console.log(
-        `[qa-codex-missing-auth-profile] ${JSON.stringify({
-          assistantOutput: SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT,
-          historySessionKey: sessionKey,
-          appServerInitialized: failureMethods.includes("initialize"),
-          appServerOperationalRpcCount: operationalMethods.length,
-        })}`,
-      );
     },
   );
 });

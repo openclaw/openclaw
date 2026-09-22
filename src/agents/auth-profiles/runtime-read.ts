@@ -49,6 +49,7 @@ import {
 } from "./runtime-snapshot-owner.js";
 import {
   captureRuntimeAuthProfileLocalPin,
+  getRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   runtimeAuthProfileRowsCache,
 } from "./runtime-snapshots.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
@@ -144,6 +145,7 @@ export function resolveExternalCliOverlayOptions(
 type RuntimeReadHost = {
   isEnvOnlyAuthProfileRuntime: () => boolean;
   getScopedAuthProfileEnv: () => NodeJS.ProcessEnv | undefined;
+  getScopedSharedAuthStore: () => AuthProfileStore | undefined;
   resolveRuntimeAuthProfileAgentDir: (agentDir?: string) => string | undefined;
   resolveRuntimeAuthProfileLoadOptions: (
     options?: LoadAuthProfileStoreOptions,
@@ -167,6 +169,7 @@ type RuntimeReadHost = {
 export function createAuthProfileStoreRuntimeReader({
   isEnvOnlyAuthProfileRuntime,
   getScopedAuthProfileEnv,
+  getScopedSharedAuthStore,
   resolveRuntimeAuthProfileAgentDir,
   resolveRuntimeAuthProfileLoadOptions,
   loadAuthProfileStoreForAgent,
@@ -254,10 +257,35 @@ export function createAuthProfileStoreRuntimeReader({
     agentDir?: string,
     options?: Omit<LoadAuthProfileStoreOptions, "database" | "onReadOwner" | "syncExternalCli">,
   ): Promise<AuthProfileStore> {
+    return (await prepareAuthProfileStoreForRuntimeAsync(agentDir, options)).store;
+  }
+
+  /** Carry an explicit provider fact, including absence, into synchronous selection decisions. */
+  async function prepareAuthProfileProviderForSelection(params: {
+    agentDir?: string;
+    profileId: string;
+  }): Promise<{ profileId: string; provider: string | undefined }> {
+    const prepared = await prepareAuthProfileStoreForRuntimeAsync(
+      params.agentDir,
+      { profileId: params.profileId, allowKeychainPrompt: false, externalCli: { mode: "none" } },
+      params.profileId,
+    );
+    return { profileId: params.profileId, provider: prepared.selectedProfileProvider };
+  }
+
+  async function prepareAuthProfileStoreForRuntimeAsync(
+    agentDir?: string,
+    options?: Omit<LoadAuthProfileStoreOptions, "database" | "onReadOwner" | "syncExternalCli">,
+    selectionProfileId?: string,
+  ): Promise<{ store: AuthProfileStore; selectedProfileProvider?: string }> {
     if (isEnvOnlyAuthProfileRuntime()) {
-      return createEmptyAuthProfileStore();
+      return { store: createEmptyAuthProfileStore() };
     }
     const scope = captureScope();
+    if (selectionProfileId && isUserModelAuthProfileId(selectionProfileId) && scope.isolated) {
+      return { store: createEmptyAuthProfileStore() };
+    }
+    const scopedSharedStore = getScopedSharedAuthStore();
     const env = cloneEnvWithPlatformSemantics(getScopedAuthProfileEnv() ?? process.env);
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
     const reusePersistedRows =
@@ -272,6 +300,18 @@ export function createAuthProfileStoreRuntimeReader({
     const selectedAgentPath = effectiveAgentDir
       ? resolveAgentAuthPath(effectiveAgentDir)
       : undefined;
+    if (
+      selectionProfileId &&
+      !isUserModelAuthProfileId(selectionProfileId) &&
+      !scopedSharedStore &&
+      selectedAgentPath
+    ) {
+      const snapshot = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(selectedAgentPath);
+      const provider = snapshot?.profiles[selectionProfileId]?.provider;
+      if (snapshot && provider !== undefined) {
+        return { store: snapshot, selectedProfileProvider: provider };
+      }
+    }
     const scopedOptions = resolveRuntimeAuthProfileLoadOptions(options);
     const inheritedDir = scopedOptions?.inheritedAuthDir;
     const inheritedAuthDir = inheritedDir
@@ -328,6 +368,38 @@ export function createAuthProfileStoreRuntimeReader({
     } catch (error) {
       // Capture now, but preserve selected-store refusal before an inherited-owner failure.
       sharedPreparationFailure = { error };
+    }
+    if (selectionProfileId && personalProfileId) {
+      if (sharedPreparationFailure) {
+        throw sharedPreparationFailure.error;
+      }
+      const personal = await readUserModelAuthProfileAsync(personalProfileId, sharedContext!);
+      sharedContext!.admission.assertCurrent();
+      return {
+        store: materializePreparedPersonalAuthProfile(
+          createEmptyAuthProfileStore(),
+          personalProfileId,
+          personal,
+        ),
+        selectedProfileProvider: personal?.credential.provider,
+      };
+    }
+    let preparedSharedOwnership:
+      | Awaited<ReturnType<typeof resolveSharedAuthStoreOwnershipAsync>>
+      | undefined;
+    if (selectionProfileId && !selectedAgentPath) {
+      if (sharedPreparationFailure) {
+        throw sharedPreparationFailure.error;
+      }
+      preparedSharedOwnership = await resolveSharedAuthStoreOwnershipAsync(sharedContext!);
+      sharedContext!.admission.assertCurrent();
+      const snapshot = scopedSharedStore
+        ? undefined
+        : getRuntimeAuthProfileStoreSnapshotAtDatabasePath(resolveSharedAuthPath(env));
+      const provider = snapshot?.profiles[selectionProfileId]?.provider;
+      if (snapshot && provider !== undefined) {
+        return { store: snapshot, selectedProfileProvider: provider };
+      }
     }
     const legacySharedPath = resolveAgentAuthPath(resolveSharedMainAuthAgentDir(env));
     const agentReads = new Map(
@@ -465,15 +537,59 @@ export function createAuthProfileStoreRuntimeReader({
         readStore: () => loadPersistedAuthProfileStoreFromRows(rows, databasePath),
       });
     };
+    const readPreparedProfile = (databasePath: string, requestedProfileId: string) => {
+      const prepared = stores.get(databasePath);
+      const owner = readOwners.get(databasePath);
+      if (!prepared) {
+        throw new Error("Auth profile selection changed its prepared database owner");
+      }
+      if (!prepared.ok) {
+        throw prepared.error;
+      }
+      if (!owner) {
+        throw new Error("Auth profile selection changed its prepared database owner");
+      }
+      return { store: prepared.value, credential: owner.readStore()?.profiles[requestedProfileId] };
+    };
+    const assertReadOwnersCurrent = (paths: readonly string[]) => {
+      for (const databasePath of paths) {
+        rowReaders.get(databasePath)?.assertCurrent();
+        const owner = readOwners.get(databasePath);
+        // A later owner read can yield after these fixed legacy paths were checked.
+        assertAuthProfileMigrationCandidates({
+          databasePath,
+          candidates: owner?.candidates ?? [],
+          hasCredentials: () => Object.keys(owner?.readStore()?.profiles ?? {}).length > 0,
+          provider: capturedOptions.migrationProvider,
+          config: capturedOptions.config,
+          deferScopedRefusals: capturedOptions.deferScopedMigrationRefusals,
+        });
+      }
+    };
     const loadPrepared = async () => {
       if (selectedAgentPath) {
         await readOwner(effectiveAgentDir, selectedAgentPath, agentReads.get(selectedAgentPath)!);
+        if (selectionProfileId) {
+          const requested = readPreparedProfile(selectedAgentPath, selectionProfileId);
+          // A selected credential or captured shared scope needs no ambient shared owner.
+          if (requested.credential || scopedSharedStore) {
+            const selected =
+              requested.credential ?? scopedSharedStore?.profiles[selectionProfileId];
+            const assertCurrent = () => assertReadOwnersCurrent([selectedAgentPath]);
+            assertCurrent();
+            return {
+              store: requested.store,
+              selectedProfileProvider: selected?.provider,
+              assertCurrent,
+            };
+          }
+        }
       }
       if (needsSharedStore && sharedPreparationFailure) {
         throw sharedPreparationFailure.error;
       }
       const sharedOwnership = needsSharedStore
-        ? await resolveSharedAuthStoreOwnershipAsync(sharedContext!)
+        ? (preparedSharedOwnership ?? (await resolveSharedAuthStoreOwnershipAsync(sharedContext!)))
         : undefined;
       const sharedPath = sharedOwnership ? resolveSharedAuthPath(env) : undefined;
       const requestedPath = selectedAgentPath ?? sharedPath!;
@@ -505,21 +621,24 @@ export function createAuthProfileStoreRuntimeReader({
       }
       const assertCurrent = () => {
         sharedContext?.admission.assertCurrent();
-        for (const databasePath of paths) {
-          rowReaders.get(databasePath)?.assertCurrent();
-          const owner = readOwners.get(databasePath);
-          // A later owner read can yield after these fixed legacy paths were checked.
-          assertAuthProfileMigrationCandidates({
-            databasePath,
-            candidates: owner?.candidates ?? [],
-            hasCredentials: () => Object.keys(owner?.readStore()?.profiles ?? {}).length > 0,
-            provider: capturedOptions.migrationProvider,
-            config: capturedOptions.config,
-            deferScopedRefusals: capturedOptions.deferScopedMigrationRefusals,
-          });
-        }
+        assertReadOwnersCurrent(paths);
       };
       assertCurrent();
+      if (selectionProfileId) {
+        // Metadata uses raw owner rows: composing stores can reconcile away a local OAuth ID.
+        const requested = readPreparedProfile(requestedPath, selectionProfileId);
+        const selected = scopedSharedStore
+          ? (requested.credential ?? scopedSharedStore.profiles[selectionProfileId])
+          : (requested.credential ??
+            (effectiveAgentDir && requestedPath !== inheritedPath
+              ? readPreparedProfile(inheritedPath, selectionProfileId).credential
+              : undefined));
+        return {
+          store: requested.store,
+          selectedProfileProvider: selected?.provider,
+          assertCurrent,
+        };
+      }
       const load = () =>
         loadRuntimeAuthProfileStore(
           effectiveAgentDir,
@@ -553,7 +672,10 @@ export function createAuthProfileStoreRuntimeReader({
         assertCurrent,
       };
     };
-    let result: Result<{ store: AuthProfileStore; assertCurrent: () => void }, unknown>;
+    let result: Result<
+      { store: AuthProfileStore; selectedProfileProvider?: string; assertCurrent: () => void },
+      unknown
+    >;
     try {
       result = { ok: true, value: await loadPrepared() };
     } catch (error) {
@@ -583,8 +705,12 @@ export function createAuthProfileStoreRuntimeReader({
       throw result.error;
     }
     result.value.assertCurrent();
-    return result.value.store;
+    return result.value;
   }
 
-  return { loadAuthProfileStoreForRuntime, loadAuthProfileStoreForRuntimeAsync };
+  return {
+    loadAuthProfileStoreForRuntime,
+    loadAuthProfileStoreForRuntimeAsync,
+    prepareAuthProfileProviderForSelection,
+  };
 }

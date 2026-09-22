@@ -6,6 +6,7 @@ export const {
   loadAuthProfileStore,
   loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreForRuntimeAsync,
+  prepareAuthProfileProviderForSelection,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
   ensureAuthProfileStore,

@@ -42,6 +42,10 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
+import {
+  prepareUnavailableSessionAuthProfileOverride,
+  shouldPreserveUnavailableSessionAuthProfileOverride,
+} from "../../sessions/auth-profile-preservation.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import * as storedModelOverrides from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -451,13 +455,11 @@ export async function createModelSelectionState(params: {
     sessionEntry.authProfileOverride
   ) {
     const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
-    const store = ensureAuthProfileStore(
-      params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined,
-      {
-        allowKeychainPrompt: false,
-        profileId: sessionEntry.authProfileOverride,
-      },
-    );
+    const agentDir = params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined;
+    const store = ensureAuthProfileStore(agentDir, {
+      allowKeychainPrompt: false,
+      profileId: sessionEntry.authProfileOverride,
+    });
     logStage("auth-profile-store-loaded", `profiles=${Object.keys(store.profiles).length}`);
     const profile = store.profiles[sessionEntry.authProfileOverride];
     const authConfig = resolveModelProviderAuthConfig({ config: cfg, provider, modelId: model });
@@ -473,16 +475,33 @@ export async function createModelSelectionState(params: {
       harnessRuntime: harnessPolicy.runtime,
       config: cfg,
     }).map(normalizeProviderId);
+    const preparation = prepareUnavailableSessionAuthProfileOverride({
+      agentDir,
+      entry: sessionEntry,
+      store,
+      sessionStore,
+      sessionKey,
+    });
+    const preparedProfile = preparation ? await preparation : undefined;
     // Provider aliases must preserve the same credential across native and embedded runtimes.
-    const overrideStillEligible =
-      profile != null &&
-      acceptedAuthProviders.some((accepted) =>
-        isStoredCredentialCompatibleWithAuthProvider({
-          cfg: authConfig,
-          provider: accepted,
-          credential: profile,
-        }),
-      );
+    const overrideStillEligible = acceptedAuthProviders.some((accepted) =>
+      profile != null
+        ? isStoredCredentialCompatibleWithAuthProvider({
+            cfg: authConfig,
+            provider: accepted,
+            credential: profile,
+          })
+        : preparedProfile &&
+          shouldPreserveUnavailableSessionAuthProfileOverride({
+            cfg: authConfig,
+            agentDir,
+            entry: sessionEntry,
+            currentProvider: provider,
+            provider: accepted,
+            store,
+            preparedProfile,
+          }),
+    );
     // Admission rejects a missing personal account; clearing its pin here would bill the next participant.
     const missingPersonalProfile =
       !profile && isUserModelAuthProfileId(sessionEntry.authProfileOverride);

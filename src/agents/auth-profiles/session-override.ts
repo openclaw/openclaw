@@ -4,7 +4,10 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderModelRouteAuthRequirement } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
-import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessions/auth-profile-preservation.js";
+import {
+  prepareUnavailableSessionAuthProfileOverride,
+  shouldPreserveUnavailableSessionAuthProfileOverride,
+} from "../../sessions/auth-profile-preservation.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveUserProfileAuthLink } from "../../state/user-model-accounts.js";
@@ -357,7 +360,16 @@ async function resolveSessionAuthProfileOverride(params: {
         "This session's personal model account is unavailable. Select another account for this session, or reconnect your account and start a new session.",
       );
     }
+    const preparation = prepareUnavailableSessionAuthProfileOverride({
+      agentDir,
+      entry: sessionEntry,
+      store,
+      sessionStore,
+      sessionKey,
+    });
+    const preparedProfile = preparation ? await preparation : undefined;
     if (
+      preparedProfile &&
       providers.some((candidateProvider) =>
         shouldPreserveUnavailableSessionAuthProfileOverride({
           cfg,
@@ -366,6 +378,7 @@ async function resolveSessionAuthProfileOverride(params: {
           store,
           currentProvider: sessionEntry.providerOverride ?? provider,
           provider: candidateProvider,
+          preparedProfile,
         }),
       )
     ) {

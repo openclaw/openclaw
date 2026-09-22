@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect } from "vitest";
 import { loadPersistedSharedAuthProfileStore } from "../../../../src/agents/auth-profiles/persisted.js";
 import type { OpenClawTestInstance } from "../../../helpers/openclaw-test-instance.js";
@@ -71,4 +72,100 @@ export async function runCodexAuthDoctorMigrationProof(
   expect(canonicalStore?.profiles[LEGACY_OAUTH_PROFILE_ID]).toBeUndefined();
   await expect(fs.access(legacyAuthPath)).rejects.toMatchObject({ code: "ENOENT" });
   return canonicalStore;
+}
+
+export type CodexFixtureTurnAccountEvidence = {
+  instanceId: string;
+  threadId: string;
+  turnId: string;
+  threadOperation: "thread_started" | "thread_resumed";
+  threadSequence: number;
+  startedSequence: number;
+  completedSequence: number;
+  account: { type: "chatgptAuthTokens"; accountId: string };
+};
+
+export function findCodexFixtureTurnAccountEvidence(
+  entries: readonly unknown[],
+  params: { afterIndex: number; threadId: string; accountId: string },
+): CodexFixtureTurnAccountEvidence | undefined {
+  if (
+    !Number.isSafeInteger(params.afterIndex) ||
+    params.afterIndex < 0 ||
+    params.afterIndex > entries.length ||
+    !params.threadId.trim() ||
+    !params.accountId.trim()
+  ) {
+    return undefined;
+  }
+  const operations = entries.flatMap((entry, index) =>
+    isRecord(entry) && isRecord(entry.fixtureAuthOperation)
+      ? [{ index, value: entry.fixtureAuthOperation }]
+      : [],
+  );
+  const turns = operations.filter(
+    ({ index, value }) =>
+      index >= params.afterIndex &&
+      value.threadId === params.threadId &&
+      (value.operation === "turn_started" || value.operation === "turn_completed"),
+  );
+  const started = turns[0];
+  const completed = turns[1];
+  if (turns.length !== 2 || !started || !completed) {
+    return undefined;
+  }
+  if (
+    started.value.operation !== "turn_started" ||
+    completed.value.operation !== "turn_completed" ||
+    started.value.version !== 1 ||
+    completed.value.version !== 1 ||
+    typeof started.value.instanceId !== "string" ||
+    !started.value.instanceId.trim() ||
+    completed.value.instanceId !== started.value.instanceId ||
+    typeof started.value.turnId !== "string" ||
+    !started.value.turnId.trim() ||
+    completed.value.turnId !== started.value.turnId ||
+    typeof started.value.sequence !== "number" ||
+    !Number.isSafeInteger(started.value.sequence) ||
+    started.value.sequence <= 0 ||
+    typeof completed.value.sequence !== "number" ||
+    !Number.isSafeInteger(completed.value.sequence) ||
+    completed.value.sequence <= started.value.sequence ||
+    !isRecord(started.value.account) ||
+    started.value.account.type !== "chatgptAuthTokens" ||
+    started.value.account.accountId !== params.accountId ||
+    !isRecord(completed.value.account) ||
+    completed.value.account.type !== "chatgptAuthTokens" ||
+    completed.value.account.accountId !== params.accountId
+  ) {
+    return undefined;
+  }
+  // A warm thread can predate this control; only its new turn must follow the cursor.
+  const thread = operations.findLast(
+    ({ index, value }) =>
+      index < started.index &&
+      value.instanceId === started.value.instanceId &&
+      value.threadId === params.threadId &&
+      (value.operation === "thread_started" || value.operation === "thread_resumed"),
+  )?.value;
+  if (
+    !thread ||
+    thread.version !== 1 ||
+    typeof thread.sequence !== "number" ||
+    !Number.isSafeInteger(thread.sequence) ||
+    thread.sequence <= 0 ||
+    thread.sequence >= started.value.sequence
+  ) {
+    return undefined;
+  }
+  return {
+    instanceId: started.value.instanceId,
+    threadId: params.threadId,
+    turnId: started.value.turnId,
+    threadOperation: thread.operation as "thread_started" | "thread_resumed",
+    threadSequence: thread.sequence,
+    startedSequence: started.value.sequence,
+    completedSequence: completed.value.sequence,
+    account: { type: "chatgptAuthTokens", accountId: started.value.account.accountId },
+  };
 }

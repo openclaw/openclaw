@@ -13,7 +13,10 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../sessions/agent-harness-session-key.js";
-import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessions/auth-profile-preservation.js";
+import {
+  prepareUnavailableSessionAuthProfileOverride,
+  shouldPreserveUnavailableSessionAuthProfileOverride,
+} from "../../sessions/auth-profile-preservation.js";
 import {
   applyModelOverrideToSessionEntry,
   ModelSelectionLockedError,
@@ -466,15 +469,26 @@ export async function resolveEmbeddedModelSelection(params: {
           credential: profile,
         }),
       );
-    const preserveUnavailableSelection = shouldPreserveUnavailableSessionAuthProfileOverride({
-      store,
-      cfg: authConfig,
+    const preparation = prepareUnavailableSessionAuthProfileOverride({
       agentDir,
       entry,
-      currentProvider: entry.providerOverride ?? defaultProvider,
-      provider: providerForAuthProfileValidation,
-      metadataSnapshot: params.pluginsEnabled ? params.manifestMetadataSnapshot : { plugins: [] },
+      store,
+      sessionStore: params.sessionStore,
+      sessionKey: params.sessionKey,
     });
+    const preparedProfile = preparation ? await preparation : undefined;
+    const preserveUnavailableSelection =
+      preparedProfile &&
+      shouldPreserveUnavailableSessionAuthProfileOverride({
+        store,
+        cfg: authConfig,
+        agentDir,
+        entry,
+        currentProvider: entry.providerOverride ?? defaultProvider,
+        provider: providerForAuthProfileValidation,
+        metadataSnapshot: params.pluginsEnabled ? params.manifestMetadataSnapshot : { plugins: [] },
+        preparedProfile,
+      });
     if (!profileMatchesRuntime && !preserveUnavailableSelection) {
       if (hasExplicitRunOverride || autoFallbackPrimaryProbe) {
         sessionEntryForAttempt = {

@@ -1,5 +1,6 @@
 // Tests model selection resolution from directives, config, and session state.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import {
   getContextWindowCaches,
   providerContextTokenCacheKey,
@@ -16,6 +17,10 @@ import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js
 import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thinking.js";
 import { isThinkingLevelSupported } from "../thinking.js";
 import { prepareModelSelectionRuntime } from "./model-runtime-normalization.js";
+import {
+  registerHeartbeatAuthProfilePreservationTest,
+  registerModelSelectionAuthProfileTests,
+} from "./model-selection.auth-profile.test-support.js";
 import {
   createInitialState,
   makeConfiguredModel,
@@ -38,6 +43,7 @@ const DEFAULT_MOCK_CATALOG_ENTRIES = vi.hoisted(() => [
 
 const sessionPersistenceMocks = vi.hoisted(() => ({
   persistReplySessionEntry: vi.fn<PersistReplySessionEntry>(),
+  patchSessionEntryCore: vi.fn(),
 }));
 
 const catalogRuntimeMocks = vi.hoisted(() => {
@@ -79,12 +85,26 @@ vi.mock("./session-entry-persistence.js", () => ({
   persistReplySessionEntry: sessionPersistenceMocks.persistReplySessionEntry,
 }));
 
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  patchSessionEntryCore: sessionPersistenceMocks.patchSessionEntryCore,
+}));
+
 const authProfileStoreMock = vi.hoisted(() => {
   let store = { version: 1, profiles: {} } as {
     version: 1;
     profiles: Record<string, { type: "api_key"; provider: string; key: string }>;
   };
   const ensureAuthProfileStore = vi.fn(() => store);
+  const prepareAuthProfileProviderForSelection = vi.fn(
+    async ({ profileId }: { profileId: string }) => ({
+      profileId,
+      provider: store.profiles[profileId]?.provider,
+    }),
+  );
+  const resolveAuthProfileProviderForSelection = vi.fn(
+    ({ profileId }: { agentDir?: string; profileId: string }) =>
+      store.profiles[profileId]?.provider,
+  );
   return {
     get store() {
       return store;
@@ -93,15 +113,36 @@ const authProfileStoreMock = vi.hoisted(() => {
       store = next;
     },
     ensureAuthProfileStore,
+    prepareAuthProfileProviderForSelection,
+    resolveAuthProfileProviderForSelection,
     reset() {
       store = { version: 1, profiles: {} };
       ensureAuthProfileStore.mockClear();
+      prepareAuthProfileProviderForSelection
+        .mockReset()
+        .mockImplementation(async ({ profileId }) => ({
+          profileId,
+          provider: store.profiles[profileId]?.provider,
+        }));
+      resolveAuthProfileProviderForSelection.mockClear();
     },
   };
 });
 
 vi.mock("../../agents/auth-profiles.runtime.js", () => ({
   ensureAuthProfileStore: authProfileStoreMock.ensureAuthProfileStore,
+}));
+
+vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
+  prepareAuthProfileProviderForSelection:
+    authProfileStoreMock.prepareAuthProfileProviderForSelection,
+}));
+
+vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+  resolveAuthProfileProviderForSelection:
+    authProfileStoreMock.resolveAuthProfileProviderForSelection,
 }));
 
 // Alias-aware stub: mirrors the real isStoredCredentialCompatibleWithAuthProvider
@@ -139,6 +180,7 @@ vi.mock("../../agents/auth-profiles/order.js", () => ({
 afterEach(() => {
   getContextWindowCaches().discoveredTokenCache.clear();
   sessionPersistenceMocks.persistReplySessionEntry.mockReset();
+  sessionPersistenceMocks.patchSessionEntryCore.mockReset();
   authProfileStoreMock.reset();
   vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
 });
@@ -1862,37 +1904,12 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginModel).toBeUndefined();
   });
 
-  it("preserves user auth profile when clearing a stale heartbeat auto-failover override", async () => {
-    authProfileStoreMock.store = {
-      version: 1,
-      profiles: {
-        "mac-studio:local": {
-          type: "api_key",
-          provider: defaultProvider,
-          key: "test-key",
-        },
-      },
-    };
-    const { state, sessionStore } = await resolveStateWithOverride({
-      providerOverride: "openrouter",
-      modelOverride: "minimax/minimax-m2.7",
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: "openai",
-      modelOverrideFallbackOriginModel: "gpt-5.3",
-      authProfileOverride: "mac-studio:local",
-      authProfileOverrideSource: "user",
-      provider: "openrouter",
-      model: "minimax/minimax-m2.7",
-      isHeartbeat: true,
-    });
-
-    expect(state.provider).toBe(defaultProvider);
-    expect(state.model).toBe(defaultModel);
-    expect(state.resetModelOverride).toBe(true);
-    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
-    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
-    expect(sessionStore[sessionKey]?.authProfileOverride).toBe("mac-studio:local");
-    expect(sessionStore[sessionKey]?.authProfileOverrideSource).toBe("user");
+  registerHeartbeatAuthProfilePreservationTest({
+    authProfileStoreMock,
+    defaultProvider,
+    defaultModel,
+    sessionKey,
+    resolveStateWithOverride,
   });
 
   it("keeps heartbeat auto-failover override when the fallback origin still matches default", async () => {
@@ -2141,49 +2158,11 @@ describe("createModelSelectionState auto-failover overrides", () => {
   });
 });
 
-describe("createModelSelectionState auth-profile override flapping regression", () => {
-  const sessionKey = "agent:main:telegram:direct:1";
-
-  it("keeps alias-compatible authProfileOverride when stored credential provider is 'anthropic' for a claude-cli session", async () => {
-    // Regression: the old code compared profile.provider directly to acceptedAuthProviders,
-    // which cleared an 'anthropic' credential when the session ran under the 'claude-cli'
-    // provider. The alias (claude-cli -> anthropic) must be respected so the override is kept.
-    authProfileStoreMock.store = {
-      version: 1,
-      profiles: {
-        "anthropic:claude-cli": {
-          type: "api_key",
-          provider: "anthropic",
-          key: "test-cli-oauth-token",
-        },
-      },
-    };
-    const sessionEntry: SessionEntry = {
-      sessionId: "s-cli",
-      updatedAt: 1,
-      authProfileOverride: "anthropic:claude-cli",
-    };
-    const sessionStore = { [sessionKey]: sessionEntry };
-
-    await createModelSelectionState({
-      agentId: "main",
-      cfg: {} as OpenClawConfig,
-      agentCfg: undefined,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      defaultProvider: "claude-cli",
-      defaultModel: "claude-opus-4-7",
-      provider: "claude-cli",
-      model: "claude-opus-4-7",
-      hasModelDirective: false,
-    });
-
-    // The override must NOT have been cleared — the anthropic credential is
-    // alias-compatible with the claude-cli provider.
-    expect(sessionStore[sessionKey]?.authProfileOverride).toBe("anthropic:claude-cli");
-    expect(sessionEntry.authProfileOverride).toBe("anthropic:claude-cli");
-  });
+registerModelSelectionAuthProfileTests({
+  createModelSelectionState,
+  resolveAgentDir,
+  authProfileStoreMock,
+  sessionPersistenceMocks,
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {

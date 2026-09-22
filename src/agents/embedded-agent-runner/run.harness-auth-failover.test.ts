@@ -1,7 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resolveOpenAICodexAuthIdentity } from "../../plugin-sdk/provider-openai-chatgpt-auth.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { AgentHarness } from "../harness/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -25,6 +27,15 @@ beforeAll(async () => {
 
 const failedProfile = "openai:failed";
 const backupProfile = "openai:backup";
+const tokenProfileA = "openai:configured";
+const tokenProfileB = "openai:missing";
+
+function chatgptAccessToken(accountId: string): string {
+  const payload = Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+  ).toString("base64url");
+  return `e30.${payload}.test-signature`;
+}
 
 function permanentAuthFailure(): Error {
   return Object.assign(new Error("API key has been revoked"), {
@@ -128,6 +139,161 @@ describe("native harness auth failover", () => {
     );
     return params;
   }
+
+  function prepareTokenAccountRun(includeSelectedB: boolean) {
+    const runEmbeddedAgent = prepareAuthFailoverRun();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [tokenProfileA]: {
+          type: "token",
+          provider: "openai",
+          token: chatgptAccessToken("qa-codex-configured-account"),
+        },
+      },
+      order: { openai: [tokenProfileA] },
+    };
+    if (includeSelectedB) {
+      store.profiles[tokenProfileB] = {
+        type: "token",
+        provider: "openai",
+        token: chatgptAccessToken("qa-codex-account"),
+      };
+      store.order!.openai!.push(tokenProfileB);
+    }
+    mockedEnsureAuthProfileStore.mockReturnValue(store);
+    mockedResolveAuthProfileOrder.mockReturnValue([
+      tokenProfileA,
+      ...(includeSelectedB ? [tokenProfileB] : []),
+    ]);
+    mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
+      apiKey: chatgptAccessToken(
+        profileId === tokenProfileB ? "qa-codex-account" : "qa-codex-configured-account",
+      ),
+      profileId: profileId ?? tokenProfileA,
+      source: "test",
+      mode: "token",
+    }));
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "OK" }]);
+    mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ assistantTexts: ["OK"] }));
+    return { runEmbeddedAgent, store };
+  }
+
+  it("rejects unavailable user-pinned token B before native dispatch despite usable token A", async () => {
+    const { runEmbeddedAgent } = prepareTokenAccountRun(false);
+    await expect(
+      runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        agentHarnessId: "codex",
+        agentHarnessRuntimeOverride: "codex",
+        authProfileId: tokenProfileB,
+        authProfileIdSource: "user",
+        runId: "run-missing-token-b",
+      }),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      code: "selected_auth_profile_unavailable",
+      reason: "auth",
+      status: undefined,
+      profileId: tokenProfileB,
+      provider: "openai",
+      model: "gpt-5.6-luna",
+    });
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
+  it("dispatches user-pinned token B exactly once while usable token A is ordered first", async () => {
+    const { runEmbeddedAgent } = prepareTokenAccountRun(true);
+    await expect(
+      runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        agentHarnessId: "codex",
+        agentHarnessRuntimeOverride: "codex",
+        authProfileId: tokenProfileB,
+        authProfileIdSource: "user",
+        runId: "run-selected-token-b",
+      }),
+    ).resolves.toMatchObject({ payloads: [{ text: "OK" }] });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      authProfileId: tokenProfileB,
+      runtimePlan: { observability: { harnessId: "codex" } },
+      authProfileStore: {
+        profiles: {
+          [tokenProfileB]: {
+            type: "token",
+            provider: "openai",
+            token: chatgptAccessToken("qa-codex-account"),
+          },
+        },
+      },
+    });
+    const credential =
+      mockedRunEmbeddedAttempt.mock.calls[0]?.[0].authProfileStore?.profiles[tokenProfileB];
+    if (credential?.type !== "token" || typeof credential.token !== "string") {
+      throw new Error("expected forwarded token B");
+    }
+    expect(resolveOpenAICodexAuthIdentity({ access: credential.token })).toEqual({
+      accountId: "qa-codex-account",
+    });
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
+  it("dispatches unpinned token A exactly once without retaining the prior B pin", async () => {
+    const { runEmbeddedAgent } = prepareTokenAccountRun(true);
+    const params = createOverflowRunParams(state);
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: params.sessionKey },
+      { sessionId: params.sessionId, updatedAt: 1 },
+    );
+    await expect(
+      runEmbeddedAgent({
+        ...params,
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        agentHarnessId: "codex",
+        agentHarnessRuntimeOverride: "codex",
+        authProfileId: undefined,
+        authProfileIdSource: undefined,
+        runId: "run-unpinned-token-a",
+      }),
+    ).resolves.toMatchObject({ payloads: [{ text: "OK" }] });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      authProfileId: tokenProfileA,
+      runtimePlan: { observability: { harnessId: "codex" } },
+      authProfileStore: {
+        profiles: {
+          [tokenProfileA]: {
+            type: "token",
+            provider: "openai",
+            token: chatgptAccessToken("qa-codex-configured-account"),
+          },
+        },
+      },
+    });
+    const credential =
+      mockedRunEmbeddedAttempt.mock.calls[0]?.[0].authProfileStore?.profiles[tokenProfileA];
+    if (credential?.type !== "token" || typeof credential.token !== "string") {
+      throw new Error("expected forwarded token A");
+    }
+    expect(resolveOpenAICodexAuthIdentity({ access: credential.token })).toEqual({
+      accountId: "qa-codex-configured-account",
+    });
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
 
   it.each(["auto", "user"] as const)(
     "plans divergent native host-auth model selection while retaining %s profile strictness",
