@@ -7,6 +7,7 @@ import {
   resetPluginRuntimeStateForTest,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { summarizeInStages } from "../compaction.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
@@ -45,6 +46,7 @@ beforeEach(() => {
   compactionLogger.warn.mockClear();
 });
 afterEach(() => {
+  vi.useRealTimers();
   testing.setSummarizeInStagesForTest();
   resetPluginRuntimeStateForTest();
 });
@@ -184,13 +186,12 @@ async function runCompactionScenario(params: {
 
 describe("compaction semantic observer wiring", () => {
   it("joins both Decision requests before propagating caller cancellation", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const controller = new AbortController();
     const abortError = new Error("cancel asymmetric semantic observation");
     let started = 0;
-    let releaseSlowRequest: (() => void) | undefined;
-    const slowRequest = new Promise<void>((resolve) => {
-      releaseSlowRequest = resolve;
-    });
+    const bothRequestsStarted = createDeferredCore();
+    const slowRequest = createDeferredCore();
     const { config, builder } = installDecisionFixture("preserved", async (_batch, context) => {
       started += 1;
       if (started === 1) {
@@ -208,7 +209,8 @@ describe("compaction semantic observer wiring", () => {
           );
         });
       }
-      await slowRequest;
+      bothRequestsStarted.resolve();
+      await slowRequest.promise;
     });
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue("The report remains pending.");
@@ -237,19 +239,20 @@ describe("compaction semantic observer wiring", () => {
       (error: unknown) => ({ status: "rejected" as const, error }),
     );
 
-    await vi.waitFor(() => expect(started).toBe(2));
-    controller.abort(abortError);
-    await expect(
-      Promise.race([
-        completion.then(() => "settled" as const),
-        new Promise<"pending">((resolve) => {
-          setTimeout(() => resolve("pending"), 20);
-        }),
-      ]),
-    ).resolves.toBe("pending");
-    expect(builder.registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(1);
-
-    releaseSlowRequest?.();
+    const completed = vi.fn();
+    void completion.then(completed);
+    try {
+      await bothRequestsStarted.promise;
+      expect(started).toBe(2);
+      controller.abort(abortError);
+      // Drain the abort's promise reactions without waiting on wall-clock scheduling.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(completed).not.toHaveBeenCalled();
+      expect(builder.registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(1);
+    } finally {
+      slowRequest.resolve();
+      await completion;
+    }
     await expect(completion).resolves.toEqual({ status: "rejected", error: abortError });
     expect(builder.registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);
   });
