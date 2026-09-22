@@ -93,9 +93,13 @@ choosing a real provider, diagnosing cancellation, or reconciling failed cleanup
 
 ## 4. Judge and report
 
-For the API probe, require `ok: true` and `leaseReleased: true`. Report this as
-bot identity and read-access proof, not mutation or Gateway E2E. Its private
-`result.json` contains leased identities and check results, not tokens or history.
+For the API probe, require `status: ready` and `leaseReleased: true`.
+An empty history list is `inconclusive` (exit 2): it can mean an empty channel
+or missing Read Message History permission. Use QA Lab doctor to distinguish
+those cases; do not call either one a proven permission failure.
+Report a ready result as bot identity and observed read-access proof, not
+mutation or Gateway E2E. Private `result.json` contains leased identities and
+check statuses, not tokens or history.
 
 For QA Lab, inspect `qa-suite-summary.json`, `qa-suite-report.md`, the Gateway/provider
 artifacts, and each private `discord-e2e-*/events.ndjson` under the output directory.

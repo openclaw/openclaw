@@ -30,7 +30,7 @@ async function main() {
   await fs.mkdir(path.dirname(outputDir), { recursive: true, mode: 0o700 });
   await fs.mkdir(outputDir, { mode: 0o700 });
   const artifactPath = path.join(outputDir, "result.json");
-  const report = { ok: false, checks: [], leaseReleased: false };
+  const report = { checks: [], leaseReleased: false };
   const cancellation = new AbortController();
   const interrupt = () => cancellation.abort();
   process.once("SIGINT", interrupt);
@@ -43,7 +43,7 @@ async function main() {
     lease.assertHealthy();
   };
   const check = (name, valid, message) => {
-    report.checks.push({ name, ok: Boolean(valid) });
+    report.checks.push({ name, status: valid ? "passed" : "failed" });
     if (!valid) {
       throw new ProbeError(message);
     }
@@ -129,11 +129,22 @@ async function main() {
       );
       phase = `${actor} channel history`;
       const history = await request(`/channels/${payload.channelId}/messages?limit=1`, token);
-      check(
-        phase,
-        Array.isArray(history),
-        "Discord did not return channel history for the leased bot.",
-      );
+      if (Array.isArray(history) && history.length === 0) {
+        report.checks.push({
+          name: phase,
+          status: "inconclusive",
+          detail:
+            "No messages returned: the channel may be empty or Read Message History may be missing. Use the existing QA Lab doctor for effective permission checks.",
+        });
+      } else {
+        check(
+          phase,
+          Array.isArray(history) &&
+            snowflake(history[0]?.id) &&
+            history[0].channel_id === payload.channelId,
+          "Discord did not return a valid history message from the leased channel.",
+        );
+      }
     }
   } catch (error) {
     failure = cancellation.signal.aborted
@@ -153,7 +164,12 @@ async function main() {
     process.removeListener("SIGINT", interrupt);
     process.removeListener("SIGTERM", interrupt);
   }
-  report.ok = !failure && !cancellation.signal.aborted;
+  report.status =
+    failure || cancellation.signal.aborted
+      ? "failed"
+      : report.checks.some((entry) => entry.status === "inconclusive")
+        ? "inconclusive"
+        : "ready";
   report.phase = phase;
   if (failure) {
     report.error = failure;
@@ -161,7 +177,7 @@ async function main() {
   await fs.writeFile(artifactPath, JSON.stringify(report, null, 2), { mode: 0o600, flag: "wx" });
   console.log(
     JSON.stringify({
-      ok: report.ok,
+      status: report.status,
       phase,
       checks: report.checks,
       leaseReleased: report.leaseReleased,
@@ -169,8 +185,8 @@ async function main() {
       artifactPath,
     }),
   );
-  if (!report.ok) {
-    process.exitCode = cancellation.signal.aborted ? 130 : 1;
+  if (report.status !== "ready") {
+    process.exitCode = cancellation.signal.aborted ? 130 : report.status === "inconclusive" ? 2 : 1;
   }
 }
 
