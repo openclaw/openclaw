@@ -13,6 +13,7 @@ import type {
 } from "../../api/types.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { UiSettings } from "../../app/settings.ts";
+import { installTitleTooltips } from "../../components/tooltip-title.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
@@ -6765,8 +6766,24 @@ describe("chat model controls", () => {
 
       expect(container.querySelector("[data-chat-model-selection-target]")).toBeNull();
       const trigger = getChatModelSelect(container);
-      expect(trigger.title).toBe(scopeDescription);
+      expect(trigger.title).toBe(target === "session" ? "" : scopeDescription);
       expect(trigger.getAttribute("aria-label")).toContain(scopeDescription);
+      if (target === "session") {
+        document.body.append(container);
+        const disposeTooltips = installTitleTooltips(document);
+        try {
+          trigger.dispatchEvent(new Event("pointerover", { bubbles: true }));
+          trigger.focus();
+          expect(document.activeElement).toBe(trigger);
+          expect(document.querySelector("body > openclaw-tooltip")).toBeNull();
+          expect(trigger.hasAttribute("title")).toBe(false);
+          expect(trigger.hasAttribute("aria-describedby")).toBe(false);
+          expect(trigger.getAttribute("aria-label")).toContain(scopeDescription);
+        } finally {
+          disposeTooltips();
+          container.remove();
+        }
+      }
       expect(container.querySelector("[data-chat-model-selection-scope]")).toBeNull();
       const modelOption = Array.from(
         container.querySelectorAll<HTMLButtonElement>(

@@ -58,6 +58,7 @@ type ChatModelPickerParams = {
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
   selectionScopeDescription?: string;
+  showTriggerTooltip?: boolean;
   modelOptions: ChatModelPickerOption[];
   open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
@@ -246,7 +247,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         }`}
         aria-busy=${params.triggerLoading || params.triggerStarting ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
-        title=${params.disabledReason?.trim() || params.selectionScopeDescription || triggerTitle}
+        title=${
+          params.disabledReason?.trim() ||
+          (params.showTriggerTooltip === false
+            ? nothing
+            : params.selectionScopeDescription || triggerTitle)
+        }
         @click=${(event: MouseEvent) => {
           if (params.disabled) {
             event.preventDefault();
