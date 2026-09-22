@@ -221,6 +221,7 @@ export async function runCliFallbackCandidate(
                     return;
                   }
                   await clearCliSessionInStore({
+                    agentId: turn.followupRun.run.agentId,
                     provider: params.cliExecutionProvider,
                     expectedCliSessionId: cliSessionBinding.sessionId,
                     expectedSessionId: sessionEntry?.sessionId,
@@ -484,6 +485,7 @@ export async function runCliFallbackCandidate(
           // invalidation remains, and failure must retain the returned turn.
           return await settleCliSessionResult(candidateResult, async () => {
             await clearCliSessionInStore({
+              agentId: turn.followupRun.run.agentId,
               provider: params.cliExecutionProvider,
               expectedCliSessionId: cliSessionBinding?.sessionId,
               expectedSessionId: sessionEntry?.sessionId,
@@ -504,6 +506,7 @@ export async function runCliFallbackCandidate(
           )
         ) {
           return await persistCliSessionBindingResult({
+            agentId: turn.followupRun.run.agentId,
             provider: params.cliExecutionProvider,
             result: candidateResult,
             sessionKey,

@@ -4,11 +4,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
-import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import {
-  isPluginOwnedBindingMetadata,
-  type PluginBindingMetadata,
-} from "../../plugins/conversation-binding-metadata.js";
+import type {
+  ConversationRef,
+  SessionBindingRecord,
+} from "../../infra/outbound/session-binding-service.js";
+import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
 import type {
   PluginHookBeforeDispatchResult,
   PluginHookReplyDispatchEvent,
@@ -21,6 +21,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import type { ReplyPayload } from "../types.js";
+import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import type { StageSandboxMediaResult } from "./stage-sandbox-media.js";
@@ -130,41 +131,24 @@ const acpMocks = vi.hoisted(() => ({
   >(async () => null),
   requireAcpRuntimeBackend: vi.fn<() => unknown>(),
 }));
-const sessionBindingMocks = vi.hoisted(() => ({
-  listBySession: vi.fn<(targetSessionKey: string) => SessionBindingRecord[]>(() => []),
-  resolveByConversation: vi.fn<
+const sessionBindingMocks = vi.hoisted(() => {
+  const resolveByConversation = vi.fn<
     (ref: {
       channel: string;
       accountId: string;
       conversationId: string;
       parentConversationId?: string;
     }) => SessionBindingRecord | null
-  >(() => null),
-  touch: vi.fn(),
-}));
-
-export function createPluginBindingRecord({
-  bindingId,
-  targetSessionKey,
-  conversation,
-  boundAt = 1710000000000,
-  pluginId = "openclaw-codex-app-server",
-  ...metadata
-}: Pick<SessionBindingRecord, "bindingId" | "targetSessionKey" | "conversation"> &
-  Partial<Pick<SessionBindingRecord, "boundAt">> &
-  Omit<PluginBindingMetadata, "pluginBindingOwner" | "pluginId"> & {
-    pluginId?: string;
-  }): SessionBindingRecord {
+  >(() => null);
   return {
-    bindingId,
-    targetSessionKey,
-    targetKind: "session",
-    conversation,
-    status: "active",
-    boundAt,
-    metadata: { pluginBindingOwner: "plugin", pluginId, ...metadata },
+    listBySession: vi.fn<(targetSessionKey: string) => SessionBindingRecord[]>(() => []),
+    resolveByConversation,
+    resolveByConversationAsync: vi.fn(async (ref: Parameters<typeof resolveByConversation>[0]) =>
+      resolveByConversation(ref),
+    ),
+    touch: vi.fn(),
   };
-}
+});
 
 export function mockPluginBindingClaim(
   outcome: PluginTargetedInboundClaimOutcome = { status: "handled", result: { handled: true } },
@@ -634,7 +618,10 @@ vi.mock("../../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: acpMocks.getAcpRuntimeBackend,
   requireAcpRuntimeBackend: acpMocks.requireAcpRuntimeBackend,
 }));
-vi.mock("../../infra/outbound/session-binding-service.js", () => ({
+vi.mock("../../infra/outbound/session-binding-service.js", async () => ({
+  ...(await import("../../infra/outbound/session-binding-errors.js")),
+  readSessionBindingSelectionCurrent: (refs: readonly ConversationRef[]) =>
+    Promise.all(refs.map((ref) => sessionBindingMocks.resolveByConversationAsync(ref))),
   getSessionBindingService: () => ({
     bind: vi.fn(async () => {
       throw new Error("bind not mocked");
@@ -648,7 +635,8 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
     listBySession: (targetSessionKey: string) =>
       sessionBindingMocks.listBySession(targetSessionKey),
     resolveByConversation: sessionBindingMocks.resolveByConversation,
-    touch: sessionBindingMocks.touch,
+    resolveByConversationAsync: sessionBindingMocks.resolveByConversationAsync,
+    touchAsync: sessionBindingMocks.touch,
     unbind: vi.fn(async () => []),
   }),
 }));
@@ -695,6 +683,7 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
     const metadata = record.metadata;
     return {
       bindingId: record.bindingId,
+      boundAt: record.boundAt,
       pluginId: metadata.pluginId,
       pluginName: metadata.pluginName,
       pluginRoot: metadata.pluginRoot,
@@ -706,15 +695,11 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
     };
   },
 }));
-vi.mock("./dispatch-acp-manager.runtime.js", () => ({
+vi.mock("./dispatch-acp-manager.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => acpManagerRuntimeMocks.getAcpSessionManager(),
   readAcpSessionEntry: (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) =>
     acpMocks.readAcpSessionEntry(params),
-  getSessionBindingService: () => ({
-    listBySession: (targetSessionKey: string) =>
-      sessionBindingMocks.listBySession(targetSessionKey),
-    unbind: vi.fn(async () => []),
-  }),
 }));
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),

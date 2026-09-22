@@ -1,8 +1,12 @@
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
-import { readWorkspaceSkillSources } from "../loading/workspace-skill-loader.js";
+import {
+  loadWorkspaceSkills,
+  readWorkspaceSkillSources,
+} from "../loading/workspace-skill-loader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,
@@ -14,6 +18,7 @@ import {
   createSkillsWatcherMock,
   useSkillsWatcherFixture,
 } from "./refresh.watcher.test-support.js";
+import { serveWorkspaceSkills } from "./workspace-worker.js";
 
 const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
   createSkillsWatcherMock();
@@ -127,6 +132,83 @@ it("uses native preparation fallback after unavailable watching and cancels on w
   const version = getSkillsSnapshotVersion(gateway);
   subscriptions[0]!.emit("change");
   expect(getSkillsSnapshotVersion(gateway)).toBe(version);
+});
+
+it("carries an unchanged-content verification error through the worker into host preparation", async () => {
+  const workspace = await fixture.createFixtureDirectory("watch-worker");
+  const root = path.join(workspace, "skills");
+  await writeSkill({ dir: path.join(root, "guide"), name: "guide", description: "Stable content" });
+  expect(
+    loadWorkspaceSkills(workspace, { workspaceOnly: true }).map((entry) => entry.skill.name),
+  ).toEqual(["guide"]);
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let wire = "";
+  output.on("data", (chunk: Buffer) => {
+    wire += chunk.toString();
+  });
+  const messages = () =>
+    wire
+      .split("\n")
+      .filter(Boolean)
+      .map((line): unknown => JSON.parse(line));
+  const task = serveWorkspaceSkills({
+    workspace,
+    home: workspace,
+    operation: "watch",
+    input,
+    output,
+  });
+  const sourcePlan = resolveWorkspaceSkillSourcePlan(workspace, { workspaceOnly: true });
+  input.write(`${JSON.stringify({ sourcePlan })}\n`);
+  try {
+    await vi.waitFor(() => {
+      expect(watchMock.mock.calls.some(([watched]) => watched === root.replaceAll("\\", "/"))).toBe(
+        true,
+      );
+    });
+    const active = watchForSkillRoot(root).watcher;
+    active.emit("ready");
+    const pending = watchForSkillRoot(root).watcher;
+    const version = getSkillsSnapshotVersion(workspace);
+    pending.emit("error", Object.assign(new Error("verification read failed"), { code: "EIO" }));
+    expect(messages().filter((event) => event === "unavailable")).toEqual(["unavailable"]);
+    expect(getSkillsSnapshotVersion(workspace)).toBeGreaterThan(version);
+    expect(active.closed).toBe(false);
+    expect(pending.closed).toBe(true);
+    const count = createdWatchers.length;
+    const messageCount = messages().length;
+    pending.emit("error", new Error("late verification error"));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(createdWatchers).toHaveLength(count);
+    expect(messages()).toHaveLength(messageCount);
+  } finally {
+    input.end();
+    await task;
+    expect(createdWatchers.every((watcher) => watcher.closed)).toBe(true);
+    output.destroy();
+    await refresh.closeSkillsWatchers(true);
+  }
+
+  // Worker and Gateway own separate processes in production. Retire the worker
+  // before feeding its actual wire event into the host-side transport fixture.
+  const unavailable = messages().find((event): event is "unavailable" => event === "unavailable");
+  expect(unavailable).toBe("unavailable");
+  const { params, subscriptions, access, writes } = await remoteFixture();
+  let current = (await resolveReusableWorkspaceSkillSnapshot(params)).snapshot;
+  subscriptions[0]!.emit(unavailable!);
+  for (const description of ["First later preparation", "Second later preparation"]) {
+    await writes(description);
+    current = (
+      await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: current })
+    ).snapshot;
+    expect(current.prompt).toContain(description);
+  }
+  expect(access.watchSkills).toHaveBeenCalledOnce();
+  refresh.ensureSkillsWatcher({ ...params, config: { skills: { load: { watch: false } } } });
+  expect(subscriptions[0]!.signal.aborted).toBe(true);
 });
 
 it("refreshes Gateway Workshop edits alongside the existing host subscription", async () => {

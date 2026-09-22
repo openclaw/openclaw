@@ -88,6 +88,11 @@ import type {
   RespondFn,
 } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import {
+  captureChatResponse,
+  captureChatResult,
+  type CapturedChatResponse,
+} from "./server.chat-response.test-support.js";
 import { releaseSessionTestDirectories } from "./session-test-directories.test-support.js";
 import type { GatewaySessionsDefaults } from "./session-utils.types.js";
 import {
@@ -524,21 +529,6 @@ function makeClaudeCliSessionEntry(
 
 function makeDoneSessionEntry(overrides: StoredSessionEntry = {}): StoredSessionEntry {
   return { status: "done", ...overrides };
-}
-
-type CapturedChatResult = { ok: boolean; payload?: unknown };
-type CapturedChatResponse = CapturedChatResult & { error?: unknown };
-
-function captureChatResult(results: CapturedChatResult[]): RespondFn {
-  return (ok, payload) => {
-    results.push({ ok, payload });
-  };
-}
-
-function captureChatResponse(responses: CapturedChatResponse[]): RespondFn {
-  return (ok, payload, error) => {
-    responses.push({ ok, payload, error });
-  };
 }
 
 async function sendControlUiChat(params: {
@@ -1657,6 +1647,7 @@ describe("gateway server chat", () => {
         ]);
         const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
         const context = createDirectChatContext();
+        await initializeSessionReadContext(context);
         let cursor: string | undefined;
         if (delta) {
           const initial: CapturedChatResponse[] = [];
