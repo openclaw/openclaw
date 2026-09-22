@@ -44,9 +44,6 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     if (created?.handedOff && !created.initialBlank) {
       if (selected) {
         createdTabs.delete(tab.id);
-      } else {
-        created.groupFallback = true;
-        return true;
       }
     }
     return selected;
@@ -224,10 +221,14 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const created = createdTabs.get(tabId);
     if (
       created?.handedOff &&
+      created.groupFallback &&
       typeof change.groupId === "number" &&
       change.groupId !== created.groupId
     ) {
-      created.groupFallback = true;
+      // Fallback is only a create-time exception. A later group change is a
+      // real ACL signal and must revoke the exception rather than extending it.
+      created.groupFallback = false;
+      invalidateTab(tabId);
     }
     const accessChanged =
       typeof change.url === "string" ||

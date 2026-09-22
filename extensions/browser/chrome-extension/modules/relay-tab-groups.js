@@ -18,12 +18,34 @@ export async function isTabSelected(tab) {
 
 export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, created }) {
   const assertCurrent = () => created?.assertCurrent();
-  const fallback = () => {
+  const fallback = async () => {
     if (created) {
+      // Some Chromium shells expose grouping but do not reliably expose the
+      // resulting group identity. Keep this exception scoped to creation.
       created.groupFallback = true;
       created.grouping = false;
       created.expectedGroupId = undefined;
+      try {
+        const currentTab = await chromeApi.tabs.get(tabId);
+        if (Number.isInteger(currentTab.groupId) && currentTab.groupId >= 0) {
+          created.groupId = currentTab.groupId;
+        }
+      } catch {
+        // Keep the fallback scoped to this creation even if the follow-up
+        // snapshot is unavailable.
+      }
     }
+  };
+  const verifyMembership = async (groupId) => {
+    const [currentTab, group] = await Promise.all([
+      chromeApi.tabs.get(tabId),
+      chromeApi.tabGroups.get(groupId),
+    ]);
+    return (
+      currentTab.groupId === groupId &&
+      group.title === OPENCLAW_TAB_GROUP_TITLE &&
+      currentTab.windowId === group.windowId
+    );
   };
   const tab = await chromeApi.tabs.get(tabId);
   assertCurrent();
@@ -34,7 +56,7 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
   try {
     groups = await chromeApi.tabGroups.query({ title: OPENCLAW_TAB_GROUP_TITLE });
   } catch {
-    fallback();
+    await fallback();
     return;
   }
   assertCurrent();
@@ -53,7 +75,7 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
       ...(group ? { groupId: group.id } : {}),
     });
   } catch {
-    fallback();
+    await fallback();
     return;
   }
   assertCurrent();
@@ -71,9 +93,16 @@ export async function addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, c
     try {
       await chromeApi.tabGroups.update(groupId, { title: OPENCLAW_TAB_GROUP_TITLE, color });
     } catch {
-      fallback();
+      await fallback();
       return;
     }
     assertCurrent();
+  }
+  try {
+    if (!(await verifyMembership(groupId))) {
+      await fallback();
+    }
+  } catch {
+    await fallback();
   }
 }

@@ -61,10 +61,11 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
         }
         return await group(params);
       });
+      const expectedType = failGrouping && url !== "about:blank" ? "error" : "result";
       expect(await harness.command({ type: "createTab", url })).toMatchObject({
-        type: failGrouping ? "error" : "result",
+        type: expectedType,
       });
-      if (failGrouping) {
+      if (expectedType === "error") {
         expect(harness.tabsRemove).toHaveBeenCalledExactlyOnceWith(101);
       } else {
         expect(harness.debuggerAttach).toHaveBeenCalledExactlyOnceWith({ tabId: 101 }, "1.3");
@@ -74,6 +75,26 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
       }
     },
   );
+
+  it("revokes a create-time fallback after the tab leaves its group", async () => {
+    if (mode !== "selected") {
+      return;
+    }
+    const harness = await createHarness(mode);
+    harness.tabsGroup.mockImplementationOnce(async () => {
+      harness.updateTab(101, { groupId: 7 });
+      throw new Error("group identity unavailable");
+    });
+    expect(await harness.command({ type: "createTab", url: "about:blank" })).toMatchObject({
+      type: "result",
+    });
+    harness.updateTab(101, { groupId: -1 });
+    await vi.waitFor(async () => {
+      await expect(
+        sendRuntimeMessage(harness, { type: "getTabAccess", tabId: 101 }),
+      ).resolves.toMatchObject({ accessible: false });
+    });
+  });
   it.each([false, true])(
     "accepts initial HTTP redirects (attach failure: %s) without reclaiming a changed destination",
     async (failAttach) => {
@@ -284,17 +305,11 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
     expect(await harness.tabsQuery()).toEqual([expect.objectContaining({ id: 100 })]);
   });
 
-  it.each(["group", "name", "attach", "target lookup", "focus"])(
+  it.each(["attach", "target lookup", "focus"])(
     "rolls back failed %s without closing an unrelated blank",
     async (stage) => {
       const harness = await createHarness(mode);
       const failure = new Error(`${stage} failed`);
-      if (stage === "group") {
-        harness.tabsGroup.mockRejectedValueOnce(failure);
-      }
-      if (stage === "name") {
-        harness.tabGroupsUpdate.mockRejectedValueOnce(failure);
-      }
       if (stage === "attach") {
         harness.debuggerAttach.mockRejectedValueOnce(failure);
       }
@@ -312,6 +327,27 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
       });
       expect(harness.tabsRemove).toHaveBeenCalledExactlyOnceWith(101);
       expect(await harness.tabsQuery()).toEqual([expect.objectContaining({ id: 100 })]);
+    },
+  );
+
+  it.each(["group", "name"])(
+    "keeps the created target when %s cannot establish group ownership",
+    async (stage) => {
+      const harness = await createHarness(mode);
+      const failure = new Error(`${stage} failed`);
+      if (stage === "group") {
+        harness.tabsGroup.mockRejectedValueOnce(failure);
+      } else {
+        harness.tabGroupsUpdate.mockRejectedValueOnce(failure);
+      }
+      expect(
+        await harness.command({ type: "createTab", url: "about:blank", focus: true }),
+      ).toMatchObject({ type: "result" });
+      expect(harness.debuggerAttach).toHaveBeenCalledExactlyOnceWith({ tabId: 101 }, "1.3");
+      expect(harness.tabsRemove).not.toHaveBeenCalled();
+      expect(await harness.command({ type: "closeTab", tabId: 101 })).toMatchObject({
+        type: "result",
+      });
     },
   );
 
@@ -664,23 +700,5 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
     await expect(
       sendRuntimeMessage(restarted, { type: "getTabAccess", tabId: 101 }),
     ).resolves.toMatchObject({ accessible: false, eligible: false });
-  });
-
-  it("preserves the original failure and reports failed rollback", async () => {
-    const harness = await createHarness(mode);
-    harness.tabsGroup.mockRejectedValueOnce(new Error("group failed"));
-    harness.tabsRemove.mockRejectedValueOnce(new Error("remove failed"));
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      expect(await harness.command({ type: "createTab", url: "about:blank" })).toMatchObject({
-        type: "error",
-        message: "group failed; cleanup failed for created tab 101; close it manually.",
-      });
-      expect(warning).toHaveBeenCalledWith(
-        "Cleanup failed for created tab 101; close it manually.",
-      );
-    } finally {
-      warning.mockRestore();
-    }
   });
 });

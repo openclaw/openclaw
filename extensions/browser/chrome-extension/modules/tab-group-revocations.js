@@ -31,6 +31,11 @@ export function createTabGroupRevocations({
       return;
     }
     reviseDiscovery();
+    for (const created of createdTabs.values()) {
+      if (created.handedOff && created.groupFallback && created.groupId === group.id) {
+        created.groupFallback = false;
+      }
+    }
     if (!removed && group.title === OPENCLAW_TAB_GROUP_TITLE) {
       for (const created of createdTabs.values()) {
         if (
