@@ -184,7 +184,12 @@ function resolveMemorySlot(params?: {
   const runtime = registration?.capability.runtime;
   const ownerLoadError = resolveOwnerLoadError(registry, onlyPluginIds);
   const facts: MemorySlotResolution = {
-    capabilityRegistered: registration !== undefined,
+    // Only the selected owner's registration may be reported here. Dreaming keeps an unselected
+    // sidecar in scope (matchesScopedPluginOrDreamingSidecar), and its consolidation registration
+    // survives the slot-owner field strip, so a bare presence check reports a capability the owner
+    // never registered and the hero then names the owner for someone else's work. The sidecar stays
+    // loaded and keeps serving consolidation either way; only the attribution narrows.
+    capabilityRegistered: registration?.memorySlotSelected === true,
     searchRuntimeRegistered: runtime !== undefined,
   };
   if (ownerLoadError !== undefined) {

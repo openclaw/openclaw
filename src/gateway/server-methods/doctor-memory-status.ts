@@ -99,9 +99,13 @@ export type DoctorMemoryStatusPayload = {
   agentId: string;
   eligible: boolean;
   eligibilityReason?: string;
-  /** A plugin registered a host memory capability. Independent of search support. */
+  /**
+   * The selected slot owner registered a host memory capability. Independent of search support.
+   * Deliberately not "any loaded memory plugin": dreaming keeps an unselected sidecar in scope, and
+   * reporting its registration here names the owner for a capability the owner never registered.
+   */
   capabilityRegistered: boolean;
-  /** That capability declares a search runtime. `capability.runtime` is optional. */
+  /** The owner's capability declares a search runtime. `capability.runtime` is optional. */
   searchRuntimeRegistered: boolean;
   /** The selected slot owner's own load failed; the loader records this instead of throwing. */
   ownerLoadFailed: boolean;

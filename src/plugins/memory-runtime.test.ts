@@ -106,12 +106,20 @@ function createRegistry(
   registry.memoryCapabilities.push({
     pluginId: record.id,
     capability: instance.wrap({ runtime }),
+    // The registrar always stamps this from the record, so a fixture that omits it models an
+    // unselected sidecar rather than the slot owner it stands in for.
+    memorySlotSelected: true,
   });
   return { registry, runtime, instance };
 }
 
 const memoryConfig = {
   plugins: { slots: { memory: "memory-core" } },
+} as never;
+
+// A third-party owner is what puts memory-core in scope as an unselected dreaming sidecar.
+const thirdPartyMemoryConfig = {
+  plugins: { slots: { memory: "hindsight-openclaw" } },
 } as never;
 
 describe("memory runtime handles", () => {
@@ -480,6 +488,7 @@ describe("memory runtime handles", () => {
       capability: instance.wrap({
         publicArtifacts: { listArtifacts: vi.fn(async () => []) },
       }),
+      memorySlotSelected: true,
     });
     mocks.loadPluginRegistryHandle.mockReturnValue(registry);
 
@@ -518,6 +527,97 @@ describe("memory runtime handles", () => {
       capabilityRegistered: false,
       searchRuntimeRegistered: false,
       ownerLoadFailed: true,
+    });
+  });
+
+  it("does not attribute a dreaming sidecar's capability to the slot owner", async () => {
+    const registry = createEmptyPluginRegistry();
+    const owner = createPluginRecord({
+      id: "hindsight-openclaw",
+      source: "/plugins/hindsight-openclaw/index.js",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
+    const sidecar = createPluginRecord({
+      id: "memory-core",
+      source: "/plugins/memory-core/index.js",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
+    const sidecarInstance = new PluginInstance(sidecar.id, { record: sidecar, registry });
+    instances.push(sidecarInstance);
+    registry.plugins.push(owner, sidecar);
+    // With dreaming enabled, matchesScopedPluginOrDreamingSidecar keeps memory-core in scope even
+    // though onlyPluginIds names the owner alone, and the registrar still pushes its consolidation
+    // capability with the slot-owner fields stripped. The owner itself registered nothing, so the
+    // host must not report a registered capability and then name the owner for it.
+    registry.memoryCapabilities.push({
+      pluginId: sidecar.id,
+      capability: sidecarInstance.wrap({
+        publicArtifacts: { listArtifacts: vi.fn(async () => []) },
+      }),
+      memorySlotSelected: false,
+    });
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+    await expect(
+      getActiveMemorySearchManagerCore({ cfg: thirdPartyMemoryConfig, agentId: "main" }),
+    ).resolves.toEqual({
+      manager: null,
+      error: "memory plugin unavailable",
+      capabilityRegistered: false,
+      searchRuntimeRegistered: false,
+      ownerLoadFailed: false,
+    });
+  });
+
+  it("still reports the owner's capability when a dreaming sidecar is loaded beside it", async () => {
+    const registry = createEmptyPluginRegistry();
+    const owner = createPluginRecord({
+      id: "hindsight-openclaw",
+      source: "/plugins/hindsight-openclaw/index.js",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
+    const sidecar = createPluginRecord({
+      id: "memory-core",
+      source: "/plugins/memory-core/index.js",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
+    const ownerInstance = new PluginInstance(owner.id, { record: owner, registry });
+    const sidecarInstance = new PluginInstance(sidecar.id, { record: sidecar, registry });
+    instances.push(ownerInstance, sidecarInstance);
+    registry.plugins.push(owner, sidecar);
+    // Sidecar first, so resolution has to prefer the owner on ownership rather than on order.
+    registry.memoryCapabilities.push({
+      pluginId: sidecar.id,
+      capability: sidecarInstance.wrap({
+        publicArtifacts: { listArtifacts: vi.fn(async () => []) },
+      }),
+      memorySlotSelected: false,
+    });
+    registry.memoryCapabilities.push({
+      pluginId: owner.id,
+      capability: ownerInstance.wrap({ promptBuilder: vi.fn(() => ["owner section"]) }),
+      memorySlotSelected: true,
+    });
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+    // Narrowing attribution must not cost the owner its own registration. The sidecar's
+    // consolidation fields survive resolution untouched; memory-state.test.ts pins that merge.
+    await expect(
+      getActiveMemorySearchManagerCore({ cfg: thirdPartyMemoryConfig, agentId: "main" }),
+    ).resolves.toEqual({
+      manager: null,
+      error: "memory plugin unavailable",
+      capabilityRegistered: true,
+      searchRuntimeRegistered: false,
+      ownerLoadFailed: false,
     });
   });
 
