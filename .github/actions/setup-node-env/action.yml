@@ -271,7 +271,7 @@ runs:
         CACHE_WRITER: "0"
         # Prefix restores report cache-hit=false too; matched-key owns whether
         # the archive was restored, independently of runner-local contents.
-        CACHE_RESTORED: ${{ steps.vitest-cache.outputs.cache-matched-key != '' && 'true' || 'false' }}
+        CACHE_RESTORED: ${{ steps.vitest-cache.outputs['cache-matched-key'] != '' && 'true' || 'false' }}
         CACHE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
       shell: bash
       run: |

@@ -5701,6 +5701,7 @@ server.listen(0, "127.0.0.1", () => {
               });
             let cacheInputs: Record<string, string> | undefined;
             let configuredGeneration: string | undefined;
+            let configuredRestored: string | undefined;
             for (const step of transformSteps) {
               // Runner v2.336.0 evaluates embedded env before if; run/with inputs
               // are evaluated only after admission (CompositeActionHandler/ActionRunner).
@@ -5730,8 +5731,19 @@ server.listen(0, "127.0.0.1", () => {
                 cacheInputs = Object.fromEntries(
                   Object.entries(step.with ?? {}).map(([key, value]) => [key, render(value)]),
                 );
+                // Exercise misses and prefix hits; neither reports cache-hit=true.
+                steps[expectDefined(step.id, "transform restore step id")] = {
+                  outputs: {
+                    "cache-hit": generation === "a".repeat(64) ? "" : "false",
+                    "cache-matched-key":
+                      generation === "a".repeat(64)
+                        ? ""
+                        : `${cacheInputs["restore-keys"].trim()}9-1`,
+                  },
+                };
               } else {
                 configuredGeneration = env.CACHE_GENERATION;
+                configuredRestored = env.CACHE_RESTORED;
               }
             }
             const enabled = os !== "Windows" && mode !== "off" && flags.includes("true");
@@ -5757,9 +5769,11 @@ server.listen(0, "127.0.0.1", () => {
                 "restore-keys": `${prefix}\n`,
               });
               expect(configuredGeneration).toBe(generation);
+              expect(configuredRestored).toBe(generation === "a".repeat(64) ? "false" : "true");
             } else {
               expect(cacheInputs).toBeUndefined();
               expect(configuredGeneration).toBeUndefined();
+              expect(configuredRestored).toBeUndefined();
             }
           }
         }

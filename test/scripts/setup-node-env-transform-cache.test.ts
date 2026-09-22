@@ -15,7 +15,7 @@ it.skipIf(process.platform === "win32")(
       (candidate: { name: string }) => candidate.name === "Configure Vitest transform cache",
     );
     expect(step.env.CACHE_RESTORED).toBe(
-      "${{ steps.vitest-cache.outputs.cache-matched-key != '' && 'true' || 'false' }}",
+      "${{ steps.vitest-cache.outputs['cache-matched-key'] != '' && 'true' || 'false' }}",
     );
     const generation = "a".repeat(64);
     for (const scenario of [
