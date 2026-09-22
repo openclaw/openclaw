@@ -682,20 +682,12 @@ describe("prepareEmbeddedAttemptStream", () => {
     const sessionId = "session-output-schema";
     const settled = createDeferredCore();
     const releaseSettlement = createDeferredCore();
+    const holdSettlement = async () => {
+      settled.resolve();
+      await releaseSettlement.promise;
+    };
     const { session } = await createTestSession({
-      resourceLoader: createResourceLoader(
-        new Map([
-          [
-            "agent_settled",
-            [
-              async () => {
-                settled.resolve();
-                await releaseSettlement.promise;
-              },
-            ],
-          ],
-        ]),
-      ),
+      resourceLoader: createResourceLoader(new Map([["agent_settled", [holdSettlement]]])),
     });
     streamMocks.streamSimple.mockImplementation((model) =>
       createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }])),
@@ -705,10 +697,16 @@ describe("prepareEmbeddedAttemptStream", () => {
       "../../embedded-agent-subscribe.js",
     );
     mocks.subscribe.mockImplementation(actual.subscribeEmbeddedAgentSession);
+    const toolAuthorityFingerprint = "test-steering";
+    const steeringOptions = { isInboundUserMessage: true, toolAuthorityFingerprint };
     const prepared = prepareCatalogExecutor([], {
       activeSession: session,
       hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
-      attempt: { deferTerminalLifecycle: true, onDeferredLifecycleOwner: () => {} },
+      attempt: {
+        deferTerminalLifecycle: true,
+        onDeferredLifecycleOwner: () => {},
+        toolAuthorityFingerprint,
+      },
     });
     const prompt = session.prompt("Finish this turn.");
     let nestedPrompt: Promise<void> | undefined;
@@ -721,16 +719,13 @@ describe("prepareEmbeddedAttemptStream", () => {
       const expected = { queued: false, reason: "not_streaming", gatewayHealth: "live" };
       // The nonwaiting call makes the old late-admission bug fail without a delivery timeout.
       await expect(
-        queueMessage(sessionId, "Start the next turn.", { isInboundUserMessage: true }, () => true),
+        queueMessage(sessionId, "Start the next turn.", steeringOptions, () => true),
       ).resolves.toMatchObject(expected);
       await expect(
         queueMessage(
           sessionId,
           "Wait for the next turn.",
-          {
-            isInboundUserMessage: true,
-            waitForTranscriptCommit: true,
-          },
+          { ...steeringOptions, waitForTranscriptCommit: true },
           () => true,
         ),
       ).resolves.toMatchObject(expected);
@@ -738,12 +733,10 @@ describe("prepareEmbeddedAttemptStream", () => {
       unsubscribeNested = session.subscribe((event) => {
         if (event.type !== "agent_end") return;
         unsubscribeNested?.();
-        return queueMessage(
-          sessionId,
-          "Stale owner.",
-          { isInboundUserMessage: true },
-          () => true,
-        ).then(nestedEnd.resolve, nestedEnd.reject);
+        return queueMessage(sessionId, "Stale owner.", steeringOptions, () => true).then(
+          nestedEnd.resolve,
+          nestedEnd.reject,
+        );
       });
       nestedPrompt = session.prompt("Run a nested turn during cleanup.");
       await expect(
@@ -770,9 +763,15 @@ describe("prepareEmbeddedAttemptStream", () => {
       requests.push(context);
       return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }]));
     });
+    const toolAuthorityFingerprint = "test-steering";
+    const steeringOptions = { isInboundUserMessage: true, toolAuthorityFingerprint };
     const prepared = prepareCatalogExecutor([], {
       activeSession: session,
-      attempt: { deferTerminalLifecycle: true, onDeferredLifecycleOwner: () => {} },
+      attempt: {
+        deferTerminalLifecycle: true,
+        onDeferredLifecycleOwner: () => {},
+        toolAuthorityFingerprint,
+      },
     });
     const { queueGuardedEmbeddedAgentMessageWithOutcomeAsync: queueMessage } =
       await vi.importActual<typeof import("../runs.js")>("../runs.js");
@@ -787,9 +786,7 @@ describe("prepareEmbeddedAttemptStream", () => {
         queued = await queueMessage(
           "session-output-schema",
           "Continue this turn.",
-          {
-            isInboundUserMessage: true,
-          },
+          steeringOptions,
           () => true,
         );
       }
@@ -810,9 +807,15 @@ describe("prepareEmbeddedAttemptStream", () => {
 
   it("rejects registered steering after a real turn handoff", async () => {
     const session = await createTurnHandoffSession();
+    const toolAuthorityFingerprint = "test-steering";
+    const steeringOptions = { isInboundUserMessage: true, toolAuthorityFingerprint };
     const prepared = prepareCatalogExecutor([], {
       activeSession: session,
-      attempt: { deferTerminalLifecycle: true, onDeferredLifecycleOwner: () => {} },
+      attempt: {
+        deferTerminalLifecycle: true,
+        onDeferredLifecycleOwner: () => {},
+        toolAuthorityFingerprint,
+      },
     });
     const events: string[] = [];
     const unsubscribe = session.subscribe((event) => {
@@ -826,12 +829,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect(events).not.toContain("agent_settled");
       expect(ACTIVE_EMBEDDED_RUNS.get("session-output-schema")).toBe(prepared.queueHandle);
       await expect(
-        queueMessage(
-          "session-output-schema",
-          "Too late.",
-          { isInboundUserMessage: true },
-          () => true,
-        ),
+        queueMessage("session-output-schema", "Too late.", steeringOptions, () => true),
       ).resolves.toMatchObject({ queued: false, reason: "not_streaming", gatewayHealth: "live" });
       expect(session.getSteeringMessages()).toEqual([]);
     } finally {
