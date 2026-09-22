@@ -822,6 +822,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     const runs = [1, 2].map((id) => ({
       id,
       createdAt: `2026-08-${26 + id}T23:00:00Z`,
+      completeInventory: false,
       logs: [{ kind: "compact" as const, labels: ["blacksmith-16vcpu"], text: lines.join("\n") }],
     }));
     expect(refitTestTimings(runs).timings.compactGroupSeconds.blacksmith[timingKey]).toBe(10);

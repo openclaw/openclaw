@@ -497,6 +497,7 @@ describe("CI changed Node test plan", () => {
             [1, 2].map((id) => ({
               id,
               createdAt: "2026-09-12T00:00:00Z",
+              completeInventory: false,
               logs: [
                 {
                   kind: "compact" as const,
