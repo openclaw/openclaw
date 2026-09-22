@@ -11,6 +11,7 @@ import {
   type CommandPaletteLoadingState,
 } from "./app-shell-command-palette-loading.ts";
 import type { ShellNewSessionHost } from "./app-shell-new-session.ts";
+import { resolveChatSendShortcut } from "./chat-send-shortcut.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import {
   isOptionalElementDefined,
@@ -19,7 +20,6 @@ import {
   DEBUG_OVERLAY_ELEMENT,
   KEYBOARD_SHORTCUTS_ELEMENT,
 } from "./lazy-custom-element.ts";
-import { normalizeChatSendShortcut } from "./settings.ts";
 
 export interface ShellLazyOverlayHost extends DebugOverlayFrameHost, ShellNewSessionHost {
   readonly commandPaletteElement: OptionalCustomElement;
@@ -67,7 +67,7 @@ export function renderShellLazyOverlays(
     ${
       !nativeEmbed && isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT)
         ? html`<openclaw-keyboard-shortcuts-dialog
-            .sendShortcut=${normalizeChatSendShortcut(uiSettings?.chatSendShortcut)}
+            .sendShortcut=${resolveChatSendShortcut(uiSettings?.chatSendShortcut)}
             .newSessionHost=${host}
           ></openclaw-keyboard-shortcuts-dialog>`
         : nothing
