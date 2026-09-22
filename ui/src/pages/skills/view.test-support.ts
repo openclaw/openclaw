@@ -1,4 +1,5 @@
 import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import type { SkillsState } from "../../lib/skills/index.ts";
 import type { SkillsProps } from "./view-types.ts";
 
 export function normalizeText(node: Element | DocumentFragment): string {
@@ -46,13 +47,17 @@ export function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillSta
   };
 }
 
-export function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
+type SkillsTestOverrides = Partial<SkillsProps> & Record<string, unknown>;
+
+export function createProps<T extends SkillsTestOverrides>(overrides: T): SkillsProps & T;
+export function createProps(): SkillsProps;
+export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
   const report: SkillStatusReport = {
     workspaceDir: "/tmp/workspace",
     managedSkillsDir: "/tmp/skills",
     skills: [createSkill()],
   };
-  return {
+  const legacy = {
     canUpdate: true,
     canInstall: true,
     connected: true,
@@ -76,6 +81,7 @@ export function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     clawhubResults: null,
     clawhubSearchLoading: false,
     clawhubSearchError: null,
+    clawhubIconUrls: {},
     clawhubDetail: null,
     clawhubDetailRef: null,
     clawhubDetailLoading: false,
@@ -97,6 +103,42 @@ export function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     onClawHubInstall: () => undefined,
     ...overrides,
   };
+  const state: SkillsState = {
+    client: null,
+    connected: legacy.connected,
+    runtimeConfig: {} as SkillsState["runtimeConfig"],
+    skillsAgentId: null,
+    skillsAgentRevision: 0,
+    skillsLoading: legacy.loading,
+    skillsReport: legacy.report,
+    skillsError: legacy.error,
+    skillsFilter: legacy.filter,
+    skillsStatusFilter: legacy.statusFilter as SkillsState["skillsStatusFilter"],
+    skillsDetailKey: legacy.detailKey,
+    skillsDetailTab: legacy.detailTab as SkillsState["skillsDetailTab"],
+    skillOperation: legacy.operation,
+    skillEdits: legacy.edits,
+    skillMessages: legacy.messages,
+    clawhubSearchQuery: legacy.clawhubQuery,
+    clawhubSearchResults: legacy.clawhubResults,
+    clawhubSearchLoading: legacy.clawhubSearchLoading,
+    clawhubSearchError: legacy.clawhubSearchError,
+    clawhubIconUrls: legacy.clawhubIconUrls,
+    clawhubDetail: legacy.clawhubDetail,
+    clawhubDetailRef: legacy.clawhubDetailRef,
+    clawhubDetailLoading: legacy.clawhubDetailLoading,
+    clawhubDetailError: legacy.clawhubDetailError,
+    clawhubInstallMessage: legacy.clawhubInstallMessage,
+    clawhubVerdicts: legacy.clawhubVerdicts,
+    clawhubVerdictsLoading: legacy.clawhubVerdictsLoading,
+    clawhubVerdictsError: legacy.clawhubVerdictsError,
+    skillCardContents: legacy.skillCardContents,
+    skillCardContentKeys: {},
+    skillCardLoadingKey: legacy.skillCardLoadingKey,
+    skillCardErrors: legacy.skillCardErrors,
+    ...overrides.state,
+  };
+  return { ...legacy, state } as SkillsProps;
 }
 
 /**
