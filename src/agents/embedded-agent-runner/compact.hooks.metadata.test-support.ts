@@ -65,6 +65,7 @@ export function mockCompactHooksPluginMetadata(): void {
     createPluginMetadataSnapshotFrame: () =>
       getPluginExecutionFrame() ?? createPluginExecutionFrame({}, undefined),
     withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
+    runOutsidePluginMetadataSnapshotScope: <T>(run: () => T): T => run(),
   }));
 }
 

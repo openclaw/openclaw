@@ -12,8 +12,8 @@ import {
   waitUntilServerReady,
 } from "./monitor.webhook.test-helpers.js";
 
-afterEach(() => {
-  cleanupFeishuMonitorStateForTests();
+afterEach(async () => {
+  await cleanupFeishuMonitorStateForTests();
 });
 
 describe("Feishu webhook activity", () => {

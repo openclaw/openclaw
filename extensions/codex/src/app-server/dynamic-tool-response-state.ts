@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   CodexDynamicToolCallResponse,
@@ -36,5 +37,15 @@ export function createFailedDynamicToolResponse(
     executionStarted: options?.executionStarted,
     executedArguments: options?.executedArguments,
     sideEffectEvidence: options?.sideEffectEvidence === true || undefined,
+  };
+}
+
+export function failedToolResult(
+  message: string,
+  status: "blocked" | CodexDynamicToolDiagnosticTerminalReason = "failed",
+): AgentToolResult<unknown> {
+  return {
+    content: [{ type: "text", text: message }],
+    details: { status, error: message },
   };
 }

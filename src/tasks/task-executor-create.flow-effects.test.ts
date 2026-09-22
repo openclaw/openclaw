@@ -1,4 +1,5 @@
 import { setImmediate } from "node:timers/promises";
+import { err } from "@openclaw/normalization-core/result";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
@@ -12,8 +13,9 @@ import {
   createInMemoryTaskFlowRegistryStore,
   createInMemoryTaskRegistryStore,
 } from "../test-utils/task-registry-store.js";
+import type { DetachedTaskTerminalState } from "./detached-task-runtime-contract.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
-import { getTaskFlowById } from "./task-flow-registry.js";
+import { getTaskFlowById, prepareTaskFlowRegistryRead } from "./task-flow-registry.js";
 import { applyFlowPatch } from "./task-flow-registry.records.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
@@ -22,10 +24,12 @@ import type { TaskInitialWorkerOperations } from "./task-initial-worker.types.js
 import { getTaskActivitySnapshot, recordTaskActivityEvent } from "./task-registry-activity.js";
 import { retainCommittedTaskFlowEffects } from "./task-registry-flow-sync.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
+import { deleteTaskRecordById } from "./task-registry-query.js";
+import { markTaskRunningByRunId } from "./task-registry-record-api.js";
 import { ensureTaskRegistryReadyAsync, taskFlowSyncOwner } from "./task-registry-state.js";
-import { runTaskRecordTransitionOperation } from "./task-registry-transition.operation.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { bindTaskRunOwner, getTaskRunOwner } from "./task-run-owner.js";
 import {
   configureTaskFlowRegistryRuntime,
   resetTaskFlowRegistryForTests,
@@ -62,13 +66,18 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-async function fixture(syncMode: TaskFlowRecord["syncMode"] = "task_mirrored") {
+async function fixture(
+  syncMode: TaskFlowRecord["syncMode"] = "task_mirrored",
+  flowIds: readonly string[] = [flow.flowId],
+) {
   const initial = {
     ...flow,
     syncMode,
     ...(syncMode === "managed" ? { controllerId: "proof" } : {}),
   };
-  const flows = createInMemoryTaskFlowRegistryStore({ flows: new Map([[flow.flowId, initial]]) });
+  const flows = createInMemoryTaskFlowRegistryStore({
+    flows: new Map(flowIds.map((flowId) => [flowId, { ...initial, flowId }])),
+  });
   const store = createInMemoryTaskRegistryStore(undefined, flows);
   const originalCreate = store.runInitialMutationAsync.bind(store);
   const commands: Array<keyof TaskInitialWorkerOperations> = [];
@@ -90,31 +99,17 @@ async function fixture(syncMode: TaskFlowRecord["syncMode"] = "task_mirrored") {
         | TaskInitialWorkerOperations[Key]["output"]
         | Promise<TaskInitialWorkerOperations[Key]["output"]>;
     } = {
+      "tasks.acknowledgeStateChange": (input) =>
+        originalCreate(
+          context,
+          { type: "tasks.acknowledgeStateChange", input },
+          assertCurrent,
+          onGranted,
+        ),
       "tasks.createRecord": (input) =>
         originalCreate(context, { type: "tasks.createRecord", input }, assertCurrent, onGranted),
       "tasks.settleUnstarted": (input) =>
-        runTaskRecordTransitionOperation(
-          {
-            kind: "state",
-            taskId: input.taskId,
-            now: input.now,
-            expectedTask: input.expectedTask,
-            params: { ...input.terminal, runId: input.expectedTask.runId },
-          },
-          {
-            readCurrent: () => store.loadSnapshot().tasks.get(input.taskId),
-            // The fixture uses CLI records; no ACP or subagent backing is involved.
-            hasAuthoritativeBacking: (task) => task.runtime === "cli",
-            write: (write) => write(),
-            assertCurrent,
-            upsertTask: (task) => {
-              store.upsertTaskWithDeliveryState({ task });
-              return true;
-            },
-            deferCommit: (publish) => publish(),
-            onCommitted() {},
-          },
-        ),
+        originalCreate(context, { type: "tasks.settleUnstarted", input }, assertCurrent, onGranted),
       "flows.finalizeTaskCancellation": (input) => {
         beforeFinalize(input);
         const task = store.loadSnapshot().tasks.get(input.taskId) ?? null;
@@ -142,6 +137,8 @@ async function fixture(syncMode: TaskFlowRecord["syncMode"] = "task_mirrored") {
         flows.upsertFlow(next);
         return { changed: true, task, flow: next, previous: current };
       },
+      "tasks.finalizeActive": (input) =>
+        originalCreate(context, { type: "tasks.finalizeActive", input }, assertCurrent, onGranted),
       "flows.createForTask": unsupported,
       "tasks.linkInitialFlow": unsupported,
       "flows.deleteUnlinkedForTask": unsupported,
@@ -153,7 +150,15 @@ async function fixture(syncMode: TaskFlowRecord["syncMode"] = "task_mirrored") {
   const context = captureOpenClawStateWorkerContext();
   await ensureTaskRegistryReadyAsync(context);
   getTaskFlowById(flow.flowId);
-  const create = (runtime: TaskRecord["runtime"] = "cli") =>
+  const create = (
+    runtime: TaskRecord["runtime"] = "cli",
+    overrides: Partial<
+      Pick<
+        Parameters<typeof createRunningTaskRunCoreWithReceiptAsync>[0],
+        "task" | "childSessionKey" | "parentFlowId"
+      >
+    > = {},
+  ) =>
     createRunningTaskRunCoreWithReceiptAsync({
       runtime,
       scopeKind: "session",
@@ -163,6 +168,7 @@ async function fixture(syncMode: TaskFlowRecord["syncMode"] = "task_mirrored") {
       task: "Synthetic linked task",
       deliveryStatus: "not_applicable",
       notifyPolicy: "silent",
+      ...overrides,
     });
   const failSnapshot = () =>
     vi
@@ -177,6 +183,332 @@ async function drainRetry(delayMs = 1_000) {
   // Observe root settlement without consuming the next fake retry deadline.
   await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { interval: 0 });
 }
+
+it("preserves task identity when terminal timestamps precede its normalized lifecycle start", async () => {
+  const f = await fixture();
+  const created = await f.create();
+  if (!created) {
+    throw new Error("Expected task receipt");
+  }
+  const startedAt = created.task.createdAt - 1_000;
+  markTaskRunningByRunId({
+    runId: created.task.runId!,
+    runtime: created.task.runtime,
+    startedAt,
+  });
+  expect(f.store.loadSnapshot().tasks.get(created.task.taskId)?.createdAt).toBe(startedAt);
+  const terminal = {
+    status: "succeeded",
+    endedAt: startedAt - 1_000,
+    terminalSummary: "Completed the selected task",
+    childSessionKey: "agent:other:unselected",
+    detail: { unexpected: "terminal input" },
+  } satisfies DetachedTaskTerminalState;
+  await created.finalizeActive(terminal, () => true);
+  const completed = f.store.loadSnapshot().tasks.get(created.task.taskId);
+  expect(completed).toMatchObject({
+    status: "succeeded",
+    terminalSummary: terminal.terminalSummary,
+    createdAt: terminal.endedAt,
+    startedAt,
+    endedAt: startedAt,
+    ownerKey: created.task.ownerKey,
+    runtime: created.task.runtime,
+    runId: created.task.runId,
+    scopeKind: created.task.scopeKind,
+  });
+  expect(completed?.childSessionKey).toBe(created.task.childSessionKey);
+  expect(completed?.detail).toEqual(created.task.detail);
+});
+
+it.each(["metadata", "removal", "replacement", "adoption", "prior adoption"] as const)(
+  "preserves active run selection across a sibling observer's %s change",
+  async (change) => {
+    const f = await fixture();
+    const first = await f.create("cli", { childSessionKey: ownerKey, task: "First task" });
+    const second = await f.create("cli", { childSessionKey: ownerKey, task: "Second task" });
+    const unrelated = await f.create("cli", {
+      childSessionKey: "agent:main:other",
+      task: "Other task",
+    });
+    if (!first || !second || !unrelated) {
+      throw new Error("Expected task receipts");
+    }
+    let observed = false;
+    let releaseAdoption: (() => void) | undefined;
+    if (change === "prior adoption") {
+      releaseAdoption = bindTaskRunOwner(second.task, async () => err("Synthetic successor"));
+    }
+    configureTaskRegistryRuntime({
+      observers: {
+        onEvent(event) {
+          if (
+            event.kind !== "upserted" ||
+            event.task.taskId !== first.task.taskId ||
+            event.task.status !== "succeeded" ||
+            observed
+          ) {
+            return;
+          }
+          observed = true;
+          expect(f.commands.filter((command) => command === "tasks.finalizeActive")).toHaveLength(
+            1,
+          );
+          if (change === "removal") {
+            deleteTaskRecordById(second.task.taskId);
+          } else if (change === "adoption") {
+            releaseAdoption = bindTaskRunOwner(second.task, async () => err("Synthetic successor"));
+          } else if (change !== "prior adoption") {
+            const replacement = {
+              ...second.task,
+              progressSummary: "Newer observer progress",
+              ...(change === "replacement" ? { createdAt: second.task.createdAt + 1 } : {}),
+            };
+            f.store.upsertTaskWithDeliveryState({ task: replacement });
+            publishTaskRecordAfterAtomicStore(replacement);
+          }
+        },
+      },
+    });
+    try {
+      await first.finalizeActive(
+        { status: "succeeded", endedAt: Date.now() },
+        (task) => !getTaskRunOwner(task),
+      );
+      expect(observed).toBe(true);
+      const rows = f.store.loadSnapshot().tasks;
+      expect(rows.get(first.task.taskId)?.status).toBe("succeeded");
+      expect(rows.get(unrelated.task.taskId)?.status).toBe("running");
+      if (change === "removal") {
+        expect(rows.has(second.task.taskId)).toBe(false);
+      } else {
+        expect(rows.get(second.task.taskId)?.status).toBe(
+          change === "metadata" ? "succeeded" : "running",
+        );
+        if (change === "metadata") {
+          expect(rows.get(second.task.taskId)?.progressSummary).toBe("Newer observer progress");
+        }
+      }
+    } finally {
+      releaseAdoption?.();
+    }
+  },
+);
+
+it.each(["adopted", "unknown outcome", "acknowledged"] as const)(
+  "continues active fanout only after a known row-local refusal (%s)",
+  async (outcome) => {
+    const f = await fixture();
+    const first = await f.create("cli", { task: "First task" });
+    const second = await f.create("cli", { task: "Second task" });
+    const third = await f.create("cli", { task: "Third task" });
+    if (!first || !second || !third) {
+      throw new Error("Expected task receipts");
+    }
+    const published: string[] = [];
+    f.beforeFinalize.mockImplementation((input) => {
+      published.push(`flow:${input.taskId}`);
+    });
+    configureTaskRegistryRuntime({
+      observers: {
+        onEvent(event) {
+          if (event.kind === "upserted" && event.task.status === "succeeded") {
+            published.push(`task:${event.task.taskId}`);
+          }
+        },
+      },
+    });
+    const original = f.store.runInitialMutationAsync.bind(f.store);
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const unknownFailure = new Error("Synthetic unknown worker outcome");
+    let releaseAdoption: (() => void) | undefined;
+    vi.spyOn(f.store, "runInitialMutationAsync").mockImplementation(
+      async (context, command, assertCurrent, onGranted) => {
+        if (
+          command.type === "tasks.finalizeActive" &&
+          command.input.taskId === second.task.taskId
+        ) {
+          entered.resolve();
+          await resume.promise;
+          if (outcome === "unknown outcome") {
+            throw unknownFailure;
+          }
+          if (outcome === "acknowledged") {
+            const receipt = await original(context, command, assertCurrent, onGranted);
+            releaseAdoption = bindTaskRunOwner(second.task, async () => err("Synthetic successor"));
+            return receipt;
+          }
+        }
+        return original(context, command, assertCurrent, onGranted);
+      },
+    );
+    const completion = first
+      .finalizeActive({ status: "succeeded", endedAt: Date.now() }, () => true)
+      .catch((error: unknown) => error);
+    await entered.promise;
+    expect(f.store.loadSnapshot().tasks.get(first.task.taskId)?.status).toBe("succeeded");
+    if (outcome !== "acknowledged") {
+      releaseAdoption = bindTaskRunOwner(second.task, async () => err("Synthetic successor"));
+    }
+    try {
+      resume.resolve();
+      const result = await completion;
+      expect(result).toBe(outcome === "unknown outcome" ? unknownFailure : undefined);
+      const expectedIds = [
+        first.task.taskId,
+        ...(outcome === "acknowledged" ? [second.task.taskId] : []),
+        ...(outcome !== "unknown outcome" ? [third.task.taskId] : []),
+      ];
+      expect(published).toEqual(
+        expectedIds.flatMap((taskId) => [`flow:${taskId}`, `task:${taskId}`]),
+      );
+      const rows = f.store.loadSnapshot().tasks;
+      expect(rows.get(second.task.taskId)?.status).toBe(
+        outcome === "acknowledged" ? "succeeded" : "running",
+      );
+      expect(rows.get(third.task.taskId)?.status).toBe(
+        outcome !== "unknown outcome" ? "succeeded" : "running",
+      );
+    } finally {
+      resume.resolve();
+      await completion;
+      releaseAdoption?.();
+    }
+  },
+);
+
+it.each(["authority", "backend"] as const)(
+  "refuses active finalization when its %s changes before the admitted write",
+  async (change) => {
+    const f = await fixture();
+    const created = await f.create();
+    if (!created) {
+      throw new Error("Expected task receipt");
+    }
+    const original = f.store.runInitialMutationAsync.bind(f.store);
+    const entered = createDeferred();
+    const resume = createDeferred();
+    let current = true;
+    vi.spyOn(f.store, "runInitialMutationAsync").mockImplementation(
+      async (context, command, assertCurrent, onGranted) => {
+        if (command.type === "tasks.finalizeActive") {
+          entered.resolve();
+          await resume.promise;
+        }
+        return original(context, command, assertCurrent, onGranted);
+      },
+    );
+    const completion = created.finalizeActive(
+      { status: "failed", endedAt: Date.now() },
+      () => current,
+    );
+    const rejected = expect(completion).rejects.toThrow();
+    try {
+      await entered.promise;
+      if (change === "authority") {
+        current = false;
+      } else {
+        configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });
+      }
+      resume.resolve();
+      await rejected;
+      expect(f.store.loadSnapshot().tasks.get(created.task.taskId)?.status).toBe("running");
+    } finally {
+      resume.resolve();
+      await rejected;
+    }
+  },
+);
+
+it("publishes the settled active task only after its flow effects and preserves terminal replay", async () => {
+  const f = await fixture();
+  const created = await f.create();
+  if (!created) {
+    throw new Error("Expected task receipt");
+  }
+  const observed: string[] = [];
+  configureTaskRegistryRuntime({
+    observers: {
+      onEvent(event) {
+        if (
+          event.kind === "upserted" &&
+          event.task.taskId === created.task.taskId &&
+          event.task.status === "succeeded"
+        ) {
+          observed.push(f.flows.loadSnapshot().flows.get(flow.flowId)?.status ?? "missing");
+        }
+      },
+    },
+  });
+  const terminal = { status: "succeeded" as const, endedAt: Date.now() };
+  await created.finalizeActive(terminal, () => true);
+  const upsert = vi.spyOn(f.store, "upsertTaskWithDeliveryState");
+  await created.finalizeActive(terminal, () => true);
+  expect(upsert).not.toHaveBeenCalled();
+  expect(observed).toEqual(["succeeded", "succeeded"]);
+});
+
+it.each([
+  "publication",
+  "flow overload",
+  "flow refusal",
+  "mirrored flow publication",
+  "managed flow publication",
+] as const)("does not advance active fanout past deferred %s", async (failure) => {
+  const secondFlowId = "second-flow";
+  const managed = failure === "managed flow publication";
+  const f = await fixture(managed ? "managed" : "task_mirrored", [flow.flowId, secondFlowId]);
+  const first = await f.create("cli", { task: "First task" });
+  const second = await f.create("cli", { task: "Second task", parentFlowId: secondFlowId });
+  if (!first || !second) {
+    throw new Error("Expected task receipts");
+  }
+  if (failure === "publication") {
+    f.failSnapshot();
+  } else if (failure.endsWith("flow publication")) {
+    const failFlowRead = () =>
+      vi
+        .spyOn(f.flows, "readFlowAsync")
+        .mockRejectedValueOnce(new Error("Synthetic committed flow read failure"));
+    if (managed) {
+      const current = f.flows.loadSnapshot().flows.get(flow.flowId)!;
+      f.flows.upsertFlow({ ...current, cancelRequestedAt: Date.now() });
+      f.beforeFinalize.mockImplementationOnce(failFlowRead);
+    } else {
+      failFlowRead();
+    }
+  } else {
+    const sync = vi.spyOn(f.store, "syncLiveTaskFlowAsync");
+    if (failure === "flow overload") {
+      sync.mockRejectedValueOnce(new SqliteWorkerError("Synthetic flow capacity", "overloaded"));
+    } else {
+      sync.mockResolvedValueOnce({
+        kind: "result",
+        result: { ok: false, reason: "persist_failed", current: flow },
+      });
+    }
+  }
+
+  await first.finalizeActive({ status: "succeeded", endedAt: Date.now() }, () => true);
+
+  expect(f.store.loadSnapshot().tasks.get(first.task.taskId)?.status).toBe("succeeded");
+  if (managed) {
+    expect(f.flows.loadSnapshot().flows.get(flow.flowId)?.status).toBe("cancelled");
+  }
+  expect(f.store.loadSnapshot().tasks.get(second.task.taskId)?.status).toBe("running");
+  expect(f.commands.filter((command) => command === "tasks.finalizeActive")).toHaveLength(1);
+  await drainRetry();
+  if (failure.endsWith("flow publication")) {
+    const commands = f.commands.length;
+    const read = await prepareTaskFlowRegistryRead();
+    expect(read?.getTaskFlowById(flow.flowId)?.status).toBe(managed ? "cancelled" : "succeeded");
+    expect(f.commands).toHaveLength(commands);
+  }
+  expect(f.store.loadSnapshot().tasks.get(first.task.taskId)?.status).toBe("succeeded");
+  expect(f.store.loadSnapshot().tasks.get(second.task.taskId)?.status).toBe("running");
+  expect(f.commands.filter((command) => command === "tasks.finalizeActive")).toHaveLength(1);
+});
 
 it("retains a created task's flow repair when its publication snapshot fails", async () => {
   const f = await fixture();
@@ -255,9 +587,11 @@ it("preserves acknowledged cleanup and repairs its flow after a snapshot failure
     throw new Error("Expected a created task");
   }
   f.failSnapshot();
-  expect(
-    await created?.settleUnstarted({ status: "failed", endedAt: Date.now() }, () => true),
-  ).toBe(true);
+  const settlement = created.settleUnstarted({ status: "failed", endedAt: Date.now() }, () => true);
+  expect(created.settleUnstarted({ status: "cancelled", endedAt: Date.now() }, () => true)).toBe(
+    settlement,
+  );
+  expect(await settlement).toBe(true);
   expect(f.store.loadSnapshot().tasks.get(created.task.taskId)?.status).toBe("failed");
   expect(f.flows.loadSnapshot().flows.get(flow.flowId)?.status).toBe("running");
   await drainRetry();
@@ -524,29 +858,32 @@ it("keeps cancellation overload inside the existing finite retry budget", async 
   expect(f.flows.loadSnapshot().flows.get(flow.flowId)?.status).toBe("running");
 });
 
-it("does not retry uncertain cancellation outcomes", async () => {
-  const f = await fixture("managed");
-  const created = await f.create();
-  if (!created) {
-    throw new Error("Expected a created task");
-  }
-  f.flows.upsertFlow({
-    ...flow,
-    syncMode: "managed",
-    controllerId: "proof",
-    status: "running",
-    cancelRequestedAt: Date.now(),
-  });
-  f.beforeFinalize.mockImplementation(() => {
-    throw new SqliteWorkerError("Synthetic uncertain cancellation outcome", "outcome-unknown");
-  });
-  expect(await created.settleUnstarted({ status: "failed", endedAt: Date.now() }, () => true)).toBe(
-    true,
-  );
-  await drainRetry(751_000);
-  expect(f.beforeFinalize).toHaveBeenCalledTimes(1);
-  expect(f.commands.filter((command) => command === "tasks.settleUnstarted")).toHaveLength(1);
-});
+it.each(["settleUnstarted", "finalizeActive"] as const)(
+  "does not retry uncertain cancellation outcomes (%s)",
+  async (finalize) => {
+    const f = await fixture("managed");
+    const created = await f.create();
+    if (!created) {
+      throw new Error("Expected a created task");
+    }
+    f.flows.upsertFlow({
+      ...flow,
+      syncMode: "managed",
+      controllerId: "proof",
+      status: "running",
+      cancelRequestedAt: Date.now(),
+    });
+    f.beforeFinalize.mockImplementation(() => {
+      throw new SqliteWorkerError("Synthetic uncertain cancellation outcome", "outcome-unknown");
+    });
+    expect(await created[finalize]({ status: "failed", endedAt: Date.now() }, () => true)).toBe(
+      finalize === "settleUnstarted" ? true : undefined,
+    );
+    await drainRetry(751_000);
+    expect(f.beforeFinalize).toHaveBeenCalledTimes(1);
+    expect(f.commands.filter((command) => command === `tasks.${finalize}`)).toHaveLength(1);
+  },
+);
 
 it.each(
   (["mirror-only", "callback"] as const).flatMap((pendingKind) =>

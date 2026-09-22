@@ -21,6 +21,7 @@ import {
   upsertSessionEntryCore,
 } from "../../src/config/sessions/session-accessor.js";
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
+import { openOpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js";
 import { openClawStateDatabaseCache } from "../../src/state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 import * as githubIdentities from "../../src/state/user-profile-github-identity.js";
@@ -132,6 +133,94 @@ function catalogFixture() {
 }
 
 describe("session-share node commands", () => {
+  it("derives titles only for the requested page while preserving transcript-title search", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const source = commandFixture();
+      const receiver = catalogFixture();
+      receiver.invoke.mockImplementation(async ({ command, params }) => {
+        const handler = source.commands.find((candidate) => candidate.command === command)!;
+        return { payloadJSON: await handler.handle(JSON.stringify(params)) };
+      });
+      const recency = Date.now();
+      for (let index = 0; index < 3; index++) {
+        const scope = {
+          agentId: "main",
+          sessionKey: `agent:main:derived-${index}`,
+          sessionId: `derived-${index}`,
+        };
+        await replaceSessionEntry(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: recency,
+          category: "Team",
+        });
+        await appendSessionTranscriptMessageByIdentity({
+          ...scope,
+          message: { role: "user", content: `Derived title ${index}` },
+        });
+        await replaceSessionEntry(scope, {
+          sessionId: scope.sessionId,
+          category: "Team",
+          updatedAt: recency - index,
+          lastInteractionAt: recency - index,
+          lastActivityAt: recency - index,
+        });
+      }
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:named" },
+        {
+          sessionId: "named",
+          updatedAt: recency + 1,
+          category: "Team",
+          label: "Named session",
+        },
+      );
+      const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+      const counter = trackSqliteStatementExecutions(db, ["transcript"], (sql) =>
+        /\btranscript_events\b/.test(sql) ? "transcript" : null,
+      );
+      let first: Awaited<ReturnType<SessionCatalogProvider["list"]>>;
+      try {
+        first = await receiver.catalog.list({ limitPerHost: 1 });
+        expect.soft(counter.counts.transcript).toBe(0);
+      } finally {
+        counter.restore();
+      }
+      expect(first[0]?.sessions).toMatchObject([
+        { threadId: "agent:main:named", name: "Named session" },
+      ]);
+      expect(first[0]?.nextCursor).toBeDefined();
+      const second = await receiver.catalog.list({
+        limitPerHost: 2,
+        cursors: { "node:alpha": first[0]!.nextCursor! },
+      });
+      expect(second[0]?.sessions.map(({ threadId, name }) => ({ threadId, name }))).toEqual([
+        { threadId: "agent:main:derived-0", name: "Derived title 0" },
+        { threadId: "agent:main:derived-1", name: "Derived title 1" },
+      ]);
+      const last = await receiver.catalog.list({
+        limitPerHost: 2,
+        cursors: { "node:alpha": second[0]!.nextCursor! },
+      });
+      expect(last[0]?.sessions).toMatchObject([
+        { threadId: "agent:main:derived-2", name: "Derived title 2" },
+      ]);
+      expect(last[0]?.nextCursor).toBeUndefined();
+      for (const search of ["Derived title 2", "MAIN:DERIVED-2"]) {
+        const found = await receiver.catalog.list({ search, limitPerHost: 1 });
+        expect(found[0]?.sessions).toMatchObject([
+          { threadId: "agent:main:derived-2", name: "Derived title 2" },
+        ]);
+      }
+      db.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?").run(
+        "invalid-json",
+        "derived-0",
+      );
+      await expect(
+        source.list({ limit: 1, cursor: sessionCatalogPaging.encodeCursor(1) }),
+      ).rejects.toThrow(SyntaxError);
+    });
+  });
+
   it.each(["fixed", "template"])(
     "reads the configured %s store and revokes an in-flight read when its store changes",
     async (kind) => {

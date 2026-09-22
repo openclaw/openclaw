@@ -158,12 +158,15 @@ export function buildBuiltinChatCommands(
   };
   const commands: ChatCommandDefinition[] = [
     defineBuiltinCommand("help", "Show available commands.", "status", "essential", {
+      activeRunSafe: true,
       modelIndependent: "always",
     }),
     defineBuiltinCommand("commands", "List all slash commands.", "status", "power", {
+      activeRunSafe: true,
       modelIndependent: "no-args",
     }),
     defineBuiltinCommand("tools", "List available runtime tools.", "status", "standard", {
+      activeRunSafe: true,
       modelIndependent: "always",
       args: [
         defineCommandArgument("mode", "compact or verbose", { choices: ["compact", "verbose"] }),
@@ -279,6 +282,7 @@ export function buildBuiltinChatCommands(
       },
     ),
     defineBuiltinCommand("tasks", "List background tasks for this session.", "status", "standard", {
+      activeRunSafe: true,
       modelIndependent: "always",
     }),
     defineBuiltinCommand("allowlist", "List/add/remove allowlist entries.", "management", "power", {
@@ -288,6 +292,7 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("approve", "Approve or deny exec requests.", "management", "power", {
       acceptsArgs: true,
+      activeRunSafe: true,
       modelIndependent: "always",
     }),
     defineBuiltinCommand(
@@ -295,7 +300,7 @@ export function buildBuiltinChatCommands(
       "Explain how context is built and used.",
       "status",
       "standard",
-      { acceptsArgs: true, modelIndependent: "always" },
+      { acceptsArgs: true, activeRunSafe: true, modelIndependent: "always" },
     ),
     defineBuiltinCommand(
       "btw",
@@ -303,6 +308,7 @@ export function buildBuiltinChatCommands(
       "tools",
       "standard",
       {
+        activeRunSafe: true,
         modelIndependent: "no-args",
         nativeAliases: ["side"],
         textAliases: ["/btw", "/side"],
@@ -372,6 +378,7 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("whoami", "Show your sender id.", "status", "power", {
       textAliases: ["/whoami", "/id"],
+      activeRunSafe: true,
       modelIndependent: "no-args",
     }),
     defineBuiltinCommand(
@@ -396,6 +403,7 @@ export function buildBuiltinChatCommands(
       "management",
       "standard",
       {
+        activeRunSafe: true,
         modelIndependent: "always",
         args: [
           defineCommandArgument("action", "list | log | info", {
@@ -448,7 +456,7 @@ export function buildBuiltinChatCommands(
       "List thread-bound agents for this session.",
       "management",
       "standard",
-      { modelIndependent: "always" },
+      { activeRunSafe: true, modelIndependent: "always" },
     ),
     defineBuiltinCommand(
       "steer",
@@ -670,6 +678,7 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand("models", "List model providers/models.", "options", "standard", {
       acceptsArgs: true,
+      activeRunSafe: true,
       modelIndependent: "always",
     }),
     defineBuiltinCommand("queue", "Adjust queue settings.", "options", "power", {

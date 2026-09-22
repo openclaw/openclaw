@@ -1,6 +1,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import "../../../lib/toast.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayload,
@@ -45,7 +46,6 @@ async function mountComments(additional: ChatAttachment[] = []) {
   const props: ChatAttachmentControlsProps = {
     attachments,
     getAttachments: () => attachments,
-    gatewayScope: {},
     readSignal: signalOwner.signal,
     onAttachmentsChange: (next) => {
       attachments = next;
@@ -98,6 +98,8 @@ describe("comment actions outside the transcript", () => {
       .click();
     expect(fixture.attachments()).toEqual([]);
     expect(fixture.input()).toBeNull();
+    await fixture.toast.updateComplete;
+    expect(fixture.toast.querySelector("[role=status]")).toBeNull();
   });
 
   it("removes all current-session comments while retaining other attachments and their payloads", async () => {
@@ -123,69 +125,13 @@ describe("comment actions outside the transcript", () => {
       .querySelector<HTMLButtonElement>('button[aria-label="Remove all comments"]')!
       .click();
     expect(fixture.attachments()).toEqual([file, otherSession]);
-    expect(getChatAttachmentDataUrl(fixture.attachment)).not.toBeNull();
-    expect(getChatAttachmentDataUrl(second)).not.toBeNull();
-    expect(fixture.input()).toBeNull();
-    await fixture.toast.updateComplete;
-    fixture.toast.querySelector<HTMLButtonElement>('button[aria-label="Dismiss"]')!.click();
     expect(getChatAttachmentDataUrl(fixture.attachment)).toBeNull();
     expect(getChatAttachmentDataUrl(second)).toBeNull();
+    await fixture.toast.updateComplete;
+    expect(fixture.toast.querySelector("[role=status]")).toBeNull();
     expect(getChatAttachmentDataUrl(otherSession)).not.toBeNull();
     expect(fixture.input()).toBeNull();
   });
-
-  it("undoes clearing comments without replacing attachments added afterward", async () => {
-    const second = createChatSelectionAttachment({
-      text: "Second passage",
-      comment: "Second note",
-      sessionKey: "agent:main:main",
-      start: 0,
-      end: 14,
-    })!;
-    const fixture = await mountComments([second]);
-    fixture.composer
-      .querySelector<HTMLButtonElement>('button[aria-label="Remove all comments"]')!
-      .click();
-    expect(fixture.attachments()).toEqual([]);
-    const file: ChatAttachment = {
-      id: "new-file",
-      mimeType: "text/plain",
-      dataUrl: "data:text/plain;base64,bmV3",
-    };
-    fixture.controller.props.onAttachmentsChange!([file]);
-    await fixture.toast.updateComplete;
-    fixture.toast.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
-    expect(fixture.attachments()).toEqual([fixture.attachment, second, file]);
-    expect(getChatAttachmentDataUrl(fixture.attachment)).not.toBeNull();
-    expect(getChatAttachmentDataUrl(second)).not.toBeNull();
-  });
-
-  it.each(["disabled", "hidden", "aborted", "session", "gateway", "disconnected"] as const)(
-    "rejects Undo and releases its payload when the comment owner is %s",
-    async (reason) => {
-      const fixture = await mountComments();
-      fixture.composer
-        .querySelector<HTMLButtonElement>('button[aria-label="Remove all comments"]')!
-        .click();
-      await fixture.toast.updateComplete;
-      if (reason === "disabled") {
-        fixture.controller.props = { ...fixture.controller.props, disabled: true };
-      } else if (reason === "hidden") {
-        fixture.controller.presented = false;
-      } else if (reason === "aborted") {
-        fixture.signalOwner.abort();
-      } else if (reason === "session") {
-        fixture.controller.sessionKey = "agent:main:other";
-      } else if (reason === "gateway") {
-        fixture.controller.props = { ...fixture.controller.props, gatewayScope: {} };
-      } else {
-        fixture.controller.remove();
-      }
-      fixture.toast.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
-      expect(fixture.attachments()).toEqual([]);
-      expect(getChatAttachmentDataUrl(fixture.attachment)).toBeNull();
-    },
-  );
 
   it.each(["disabled", "hidden", "aborted"] as const)(
     "retires an open editor and rejects its detached Save control when %s",

@@ -25,7 +25,6 @@ type CatalogPageLoad = {
 type PluginDiscoveryGateway = {
   getClient: () => GatewayBrowserClient | null;
   isConnected: () => boolean;
-  onEntriesChanged?: () => void;
 };
 
 function compareOfficialDownloads(left: PluginDiscoveryEntry, right: PluginDiscoveryEntry): number {
@@ -115,7 +114,6 @@ export class PluginDiscoveryController {
             CATALOG_SECTION_SIZE,
           );
         }
-        this.gateway.onEntriesChanged?.();
       },
       onError: (error) => {
         this.error = formatUiError(error);
@@ -148,7 +146,6 @@ export class PluginDiscoveryController {
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         };
         this.loadMoreError = page.remoteError ?? null;
-        this.gateway.onEntriesChanged?.();
       },
       onError: (error) => {
         this.loadMoreError = formatUiError(error);

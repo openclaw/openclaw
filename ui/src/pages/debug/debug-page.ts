@@ -50,6 +50,7 @@ class DebugPage extends OpenClawLightDomElement {
       void this.loadLiveDiagnostics();
     },
     false,
+    "visible",
   );
   private callEpoch = 0;
   private diagnosticsTaskActiveClient: GatewayBrowserClient | null = null;

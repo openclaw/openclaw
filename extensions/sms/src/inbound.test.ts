@@ -1,5 +1,6 @@
 // Sms tests cover inbound plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { unlinkIfExists as unlinkIfExistsType } from "openclaw/plugin-sdk/media-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchSmsInboundEvent, type SmsChannelRuntime } from "./inbound.js";
@@ -88,6 +89,7 @@ function createRuntime() {
       resolveAgentRoute,
     },
     inbound: {
+      ingress: createPluginRuntimeMock().channel.inbound.ingress,
       run,
       buildContext,
     },

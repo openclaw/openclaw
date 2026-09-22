@@ -4,12 +4,13 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { UpdateRunResult } from "../infra/update-runner.js";
+import { listUpdateRuns } from "../infra/update-run-ledger.js";
+import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { VERSION } from "../version.js";
 import {
   installDeferredCompletionFixture,
   readPackageVersion,
-  runGatewayUpdate,
+  updateGitCheckout,
   runCommandWithTimeout,
   readConfigFileSnapshot,
   defaultRuntime,
@@ -25,6 +26,7 @@ import {
   mutateConfigFileWithRetry,
   updateFinalizeCommand,
   ExitError,
+  observeUpdateGatewayReadiness,
 } from "./update-cli.deferred-completion.test-support.js";
 
 describe("update-cli child-owned deferred completion", () => {
@@ -71,7 +73,7 @@ describe("update-cli child-owned deferred completion", () => {
     readPackageVersion.mockResolvedValue("2026.9.4");
     await runPostCoreCommand({ restart: false }, { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" });
 
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(updateGitCheckout).not.toHaveBeenCalled();
     const installCall = (
       vi.mocked(runCommandWithTimeout).mock.calls as unknown as Array<[string[], unknown]>
     ).find(([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
@@ -101,12 +103,50 @@ describe("update-cli child-owned deferred completion", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("refuses a post-core run missing from history before Doctor or plugin effects", async () => {
+    const ledger = await import("../infra/update-run-ledger.js");
+    const sourceRuntime = await import("./update-cli/update-command-runtime.js");
+    const preparation = vi
+      .spyOn(sourceRuntime, "completeSourceUpdateRuntime")
+      .mockRejectedValue(new Error("Missing-run regression reached runtime preparation."));
+    const runId = "53e56de0-a951-4b3d-af1a-9e4f1ac5a069";
+    expect(ledger.getUpdateRun(runId)).toBeUndefined();
+    const history = ledger.listUpdateRuns({ limit: 100 });
+    readPackageVersion.mockResolvedValue("2026.9.4");
+
+    const failure = await runPostCoreCommand(
+      { restart: false, json: true },
+      {
+        OPENCLAW_UPDATE_RUN_ID: runId,
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+        OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL: "beta",
+      },
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(preparation).not.toHaveBeenCalled();
+    expect(failure).toMatchObject({
+      name: "UpdateCommandRecoveryPendingError",
+      message: "Post-core update run is unavailable; resume cannot verify its owner.",
+    });
+
+    expect(vi.mocked(runExec).mock.calls.some(([, args]) => args.includes("doctor"))).toBe(false);
+    expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(mutateConfigFileWithRetry).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(0);
+    expect(ledger.listUpdateRuns({ limit: 100 })).toEqual(history);
+  });
+
   it("completes convergence-only post-core changes for a legacy parent", async () => {
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce(
-      postCoreConvergenceResult({
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+      ...postCoreConvergenceResult({
         changes: ["Repaired configured plugin install records."],
       }),
-    );
+      config: cfg,
+    }));
 
     await runPostCoreCommand({ restart: false, json: true });
 
@@ -212,6 +252,31 @@ describe("update-cli child-owned deferred completion", () => {
           await expect(updateFinalizeCommand({ json: true, yes: true })).rejects.toEqual(
             new ExitError(1),
           );
+          expect(observeUpdateGatewayReadiness).toHaveBeenCalledOnce();
+          const recorded = listUpdateRuns({ limit: 1 })[0];
+          expect(recorded?.status).toBe("failed");
+          expect(recorded?.verification).toEqual({
+            serviceRunning: false,
+            port: 18789,
+            pluginErrors: [],
+            channelsReady: false,
+            settled: false,
+            readyz: false,
+            recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          });
+          expect(
+            recorded?.steps.filter((step) => step.step === "gateway recovery verification"),
+          ).toEqual([
+            {
+              step: "gateway recovery verification",
+              status: "failed",
+              exitCode: 1,
+              detail: "Exit code: 1; Gateway did not settle.",
+              failureFacts: [
+                { check: "settled", code: "stopped-free", message: "Gateway did not settle." },
+              ],
+            },
+          ]);
         }
       }
 
@@ -219,15 +284,11 @@ describe("update-cli child-owned deferred completion", () => {
         expect(replaceConfigFile).toHaveBeenCalledExactlyOnceWith({ nextConfig: config });
         expect(mutateConfigFileWithRetry).toHaveBeenCalledExactlyOnceWith({
           mutate: expect.any(Function),
-          ...(mode === "finalize"
-            ? {
-                writeOptions: {
-                  assertCurrent: expect.any(Function),
-                  beforeCommit: expect.any(Function),
-                  observe: false,
-                },
-              }
-            : {}),
+          writeOptions: {
+            assertCurrent: expect.any(Function),
+            beforeCommit: expect.any(Function),
+            observe: false,
+          },
         });
         if (mode === "finalize") {
           expect(
@@ -240,7 +301,7 @@ describe("update-cli child-owned deferred completion", () => {
       } else {
         expect(replaceConfigFile).not.toHaveBeenCalled();
       }
-      expect(runGatewayUpdate).not.toHaveBeenCalled();
+      expect(updateGitCheckout).not.toHaveBeenCalled();
     },
   );
 
@@ -299,10 +360,11 @@ describe("update-cli child-owned deferred completion", () => {
         fsSync.writeFileSync(path.join(installPath, "index.js"), "module.exports = {};\n");
         return { config: current, changed: true, outcomes: [repaired] };
       });
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
         ...postCoreConvergenceResult(),
         installRecords: records,
-      });
+        config: cfg,
+      }));
 
       await runPostCoreCommand({ yes: true, json, restart: false });
 

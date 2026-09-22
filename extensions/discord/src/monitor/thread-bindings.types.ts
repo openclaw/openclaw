@@ -37,6 +37,7 @@ export type ThreadBindingManager = {
     persist?: boolean;
   }) => ThreadBindingRecord | null;
   bindTarget: (params: {
+    assertCurrent?: () => void;
     threadId?: string | number;
     channelId?: string;
     createThread?: boolean;

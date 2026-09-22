@@ -4,6 +4,12 @@ const fs = require("node:fs");
 const pid = Number(process.argv[2]);
 const processLimit = 32;
 const threadLimit = 64;
+const nativeThreadRoles = new Map([
+  ["V8Worker", "v8-worker"],
+  ["DelayedTaskSche", "delayed-task-scheduler"],
+  ["SignalInspector", "signal-inspector"],
+  ["libuv-worker", "libuv-worker"],
+]);
 
 function read(file) {
   try {
@@ -13,7 +19,7 @@ function read(file) {
   }
 }
 
-// No argv, environment, or command names: these can contain credentials.
+// No argv or environment. Only fixed native thread roles are emitted below.
 const rows = execFileSync("ps", ["-axo", "pid=,ppid=,stat=,wchan="], {
   encoding: "utf8",
   timeout: 500,
@@ -63,6 +69,7 @@ for (const row of tree) {
       JSON.stringify({
         pid: row.pid,
         tid: Number(tid),
+        role: Number(tid) === row.pid ? "main" : nativeThreadRoles.get(read(`${base}/comm`)),
         wchan: read(`${base}/wchan`),
         stack: read(`${base}/stack`),
         signals,

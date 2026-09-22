@@ -114,7 +114,9 @@ GPT-Live owns response timing and interruption. Discord plays its continuous
 audio without waiting for a completed-response event, and does not add local
 speaker-start interruption. Microphone audio remains admitted during playback
 so GPT-Live can hear and handle interruptions itself. Delegated tasks use the routed OpenClaw agent with
-the originating speaker's Discord identity and tool permissions.
+the originating speaker's Discord identity and tool permissions. Room controls
+clear buffered local playback before requesting their spoken result; they keep
+the continuous provider stream open so it can deliver that result.
 The Gateway paces microphone input continuously, including silence between
 speaker captures. Playback preserves quiet PCM within an active stream, including
 pauses delivered after earlier speech has already played. When no unheard speech
@@ -166,7 +168,7 @@ Notes:
 - Occupancy management owns only sessions that it joined. A manual `/vc join`, standalone transcript-only session, follow-user session, active session in another channel, or other ad-hoc join is not moved or disconnected when the configured room empties. Attaching transcript capture to an occupancy-managed session preserves that ownership.
 - `voice.allowedChannels` is an optional residency allowlist. Leave it unset to allow `/vc join` into any authorized Discord voice channel. When set, `/vc join`, startup auto-join, and bot voice-state moves are restricted to the listed `{ guildId, channelId }` entries. Set it to an empty array to deny all Discord voice joins. If Discord moves the bot outside the allowlist, OpenClaw leaves that channel and rejoins the configured auto-join target when one is available.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options; the upstream defaults are `daveEncryption=true` and `decryptionFailureTolerance=24`.
-- OpenClaw uses the bundled `libopus-wasm` codec for Discord voice receive and realtime raw PCM playback. It ships a pinned libopus WebAssembly build and does not require native opus addons.
+- OpenClaw uses the bundled `libopus-wasm` codec for Discord voice receive and realtime raw PCM playback. It ships a pinned libopus WebAssembly build and does not require native opus addons. Discord voice sockets, codecs, playback conversion, and packet pacing run in a worker thread. GPT-Live continuous output travels directly from its media worker to the Discord playback worker rather than relaying every audio chunk through the Gateway event loop. Speaker admission, agent work, and transcripts remain on the Gateway; a busy Gateway can still delay those control operations.
 - `voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts. Default: `30000`.
 - `voice.reconnectGraceMs` controls how long OpenClaw waits for a disconnected voice session to begin reconnecting before destroying it. Default: `15000`.
 - In `stt-tts` mode, voice playback does not stop just because another user starts speaking. To avoid feedback loops, OpenClaw does not admit new conversational turns while TTS is playing; an explicitly started capture still records that speech. Speak after playback finishes for the next conversational turn. Response-based realtime models receive audible authorized microphone input as barge-in signals when interruption is enabled; GPT-Live handles incoming audio itself.

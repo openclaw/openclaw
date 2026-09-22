@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { RealtimeVoiceBridgeCallbacks } from "./provider-types.js";
 import { createRealtimeVoiceBridgeSession } from "./session-runtime.js";
-import { makeBridge } from "./session-runtime.test-support.js";
+import { makeBridge, makeVoiceProvider } from "./session-runtime.test-support.js";
 
 describe("realtime voice bridge finalization", () => {
   it("keeps legacy disposal synchronous when its terminal callback closes again", () => {
@@ -11,12 +11,7 @@ describe("realtime voice bridge finalization", () => {
       reentrantClose = session.close();
     });
     const session = createRealtimeVoiceBridgeSession({
-      provider: {
-        id: "test",
-        label: "Test",
-        isConfigured: () => true,
-        createBridge: () => makeBridge({ close }),
-      },
+      provider: makeVoiceProvider(() => makeBridge({ close })),
       providerConfig: {},
       audioSink: { sendAudio: vi.fn() },
     });
@@ -41,15 +36,10 @@ describe("realtime voice bridge finalization", () => {
       const onToolCall = vi.fn();
       const sendAudio = vi.fn();
       const session = createRealtimeVoiceBridgeSession({
-        provider: {
-          id: "test",
-          label: "Test",
-          isConfigured: () => true,
-          createBridge: (request) => {
-            callbacks = request;
-            return providerBridge;
-          },
-        },
+        provider: makeVoiceProvider((request) => {
+          callbacks = request;
+          return providerBridge;
+        }),
         providerConfig: {},
         audioSink: { sendAudio },
         onTranscript,

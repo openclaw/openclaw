@@ -31,6 +31,7 @@ function managedService(
 ) {
   let running = initiallyRunning;
   let pid = 4200;
+  mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
   const stop = vi.fn(async () => {
     events.push("stop");
     running = false;

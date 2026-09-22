@@ -3,7 +3,7 @@
  * payload fields, and thinking-prefill cleanup around provider stream functions.
  */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { streamSimple } from "openclaw/plugin-sdk/llm";
+import { getEnvApiKey, streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   resolveProviderEndpoint,
@@ -48,6 +48,33 @@ const OPENCLAW_OAUTH_ANTHROPIC_BETAS = [
 ] as const;
 
 type DynamicFastMode = boolean | (() => boolean | undefined);
+
+/** Publish installed-version evidence; the transport owns the floor and billing snapshot. */
+export function createAnthropicClaudeCodeIdentityWrapper(
+  baseStreamFn: StreamFn | undefined,
+  resolveVersion: () => Promise<string | undefined>,
+  sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+      model.provider !== "anthropic" ||
+      (sourceApi ?? model.api) !== "anthropic-messages" ||
+      !isAnthropicOAuthApiKey(options?.apiKey ?? getEnvApiKey(model.provider))
+    ) {
+      return underlying(model, context, options);
+    }
+    return resolveVersion().then((version) =>
+      underlying(
+        model,
+        context,
+        version
+          ? { ...options, headers: { ...options?.headers, "user-agent": `claude-cli/${version}` } }
+          : options,
+      ),
+    );
+  };
+}
 
 function isAnthropic1MModel(modelId: string): boolean {
   return supportsClaude1MContext({ id: modelId });

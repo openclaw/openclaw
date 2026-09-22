@@ -3,12 +3,7 @@
 // detail history tab.
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type {
-  CronRunLogEntry,
-  CronDeliveryStatus,
-  CronRunsStatusValue,
-  CronSortDir,
-} from "../../api/types.ts";
+import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { icon } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -22,36 +17,33 @@ import {
   formatCompactTokenCount,
 } from "../../lib/format.ts";
 import { cronRunEntryMatchesLink } from "./route-model.ts";
+import type { CronProps } from "./view-types.ts";
 
 registerCronEnglish();
 
-// Leaf contract: the slice of the cron view props this module needs. Keeping
-// it local (instead of importing CronProps from view.ts) avoids a module
-// cycle between view.ts and view-runs.ts.
-type CronRunsSectionProps = {
-  basePath: string;
-  agentId: string;
-  runs: CronRunLogEntry[];
-  highlightedRunId?: string | null;
-  runsHasMore: boolean;
-  runsLoadingMore: boolean;
-  runsStatuses: CronRunsStatusValue[];
-  runsDeliveryStatuses: CronDeliveryStatus[];
-  runsQuery: string;
-  runsSortDir: CronSortDir;
+type CronRunsSectionProps = Pick<
+  CronProps,
+  | "basePath"
+  | "agentId"
+  | "runs"
+  | "runsState"
+  | "highlightedRunId"
+  | "runsHasMore"
+  | "runsLoadingMore"
+  | "runsStatuses"
+  | "runsDeliveryStatuses"
+  | "runsQuery"
+  | "runsSortDir"
+  | "onLoadMoreRuns"
+  | "onRefresh"
+  | "onRunsFiltersChange"
+  | "onViewRunTranscript"
+> & {
   conditionActivity?: {
     checkCount: number;
     lastCheckedAtMs?: number;
     lastFiredAtMs?: number;
   };
-  onLoadMoreRuns: () => void;
-  onRunsFiltersChange: (patch: {
-    cronRunsStatuses?: CronRunsStatusValue[];
-    cronRunsDeliveryStatuses?: CronDeliveryStatus[];
-    cronRunsQuery?: string;
-    cronRunsSortDir?: CronSortDir;
-  }) => void | Promise<void>;
-  onViewRunTranscript?: (entry: CronRunLogEntry) => void;
 };
 
 function renderConditionMetric(label: string, value: string) {
@@ -229,7 +221,7 @@ export function renderRunsSection(props: CronRunsSectionProps) {
   const sortLabel =
     props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst");
   return html`
-    <div class="cron-runs">
+    <div class="cron-runs" aria-busy=${String(props.runsState === "pending")}>
       ${props.conditionActivity ? renderConditionActivity(props.conditionActivity) : nothing}
       <div class="cron-run-filters">
         <div class="cron-search-box cron-run-filter-search">
@@ -311,28 +303,40 @@ export function renderRunsSection(props: CronRunsSectionProps) {
           </wa-dropdown>
         </div>
       </div>
+      ${props.runsState === "failed" ? html`<button class="btn btn--sm" @click=${props.onRefresh}>${t("common.retry")}</button>` : nothing}
       ${
         runs.length === 0
-          ? hasRunFilters
-            ? html`<div class="muted cron-runs__empty">${t("cron.runs.noMatching")}</div>`
-            : html`
-                <div class="cron-empty-state">
-                  <div class="cron-empty-state__title">
-                    ${
-                      props.conditionActivity
-                        ? t("cron.runs.emptyConditionTitle")
-                        : t("cron.runs.emptyTitle")
-                    }
-                  </div>
-                  <div class="cron-empty-state__copy">
-                    ${
-                      props.conditionActivity
-                        ? conditionEmptyHint(props.conditionActivity)
-                        : t("cron.runs.emptyHint")
-                    }
-                  </div>
-                </div>
-              `
+          ? props.runsState === "pending"
+            ? html`<div
+                class="cron-empty-state"
+                role="status"
+                aria-live="polite"
+                data-test-id="cron-runs-loading"
+              >
+                ${t("cron.list.loading")}
+              </div>`
+            : props.runsState !== "ready"
+              ? nothing
+              : hasRunFilters
+                ? html`<div class="muted cron-runs__empty">${t("cron.runs.noMatching")}</div>`
+                : html`
+                    <div class="cron-empty-state">
+                      <div class="cron-empty-state__title">
+                        ${
+                          props.conditionActivity
+                            ? t("cron.runs.emptyConditionTitle")
+                            : t("cron.runs.emptyTitle")
+                        }
+                      </div>
+                      <div class="cron-empty-state__copy">
+                        ${
+                          props.conditionActivity
+                            ? conditionEmptyHint(props.conditionActivity)
+                            : t("cron.runs.emptyHint")
+                        }
+                      </div>
+                    </div>
+                  `
           : html`
               <div class="cron-runs__list">
                 ${runs.map((entry) =>
@@ -368,7 +372,16 @@ function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
   return nextRunAtMs > nowMs ? t("cron.runEntry.next", { rel }) : t("cron.runEntry.due", { rel });
 }
 
-export function runStatusLabel(value: string): string {
+export function runStatusLabel(
+  value: string,
+  completion?: CronRunLogEntry["completionStatus"],
+): string {
+  if (value === "ok" && (completion === "failed" || completion === "unknown")) {
+    const completionLabel = t(
+      completion === "failed" ? "cron.runs.runStatusError" : "cron.runs.runStatusUnknown",
+    );
+    return `${t("cron.runs.runStatusOk")} · ${completionLabel}`;
+  }
   switch (value) {
     case "ok":
       return t("cron.runs.runStatusOk");
@@ -400,7 +413,7 @@ function renderRun(
   highlightedRunId?: string | null,
   onViewRunTranscript?: (entry: CronRunLogEntry) => void,
 ) {
-  const status = runStatusLabel(entry.status ?? "unknown");
+  const status = runStatusLabel(entry.status ?? "unknown", entry.completionStatus);
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");
   const usage = entry.usage;
   const usageSummary =

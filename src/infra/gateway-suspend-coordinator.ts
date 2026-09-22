@@ -66,7 +66,7 @@ type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
     | {
         status: "draining";
         snapshot: GatewayActiveWorkSnapshot;
-        commitAdmission: () => boolean;
+        commitAdmission?: () => boolean;
       }
     | { status: "ready"; snapshot: GatewayActiveWorkSnapshot };
   nowMs: () => number;
@@ -255,10 +255,7 @@ function renewHeldSuspension(held: HeldGatewaySuspension, nowMs: number): void {
 function refreshHeldSuspension(
   held: HeldGatewaySuspension,
 ): HeldGatewaySuspension["phase"] | undefined {
-  if (held.phase.status === "ready") {
-    return held.phase;
-  }
-  // Polls and renewals must retain the update's terminal policy until the lease is ready.
+  // Polls and renewals retain the update's terminal policy even after the first idle observation.
   const snapshot = createGatewayActiveWorkSnapshot(held.inspect, {
     ignoreTerminalSessions: held.terminalPolicy === "terminate",
   });
@@ -266,10 +263,15 @@ function refreshHeldSuspension(
     return undefined;
   }
   if (!snapshot.idle) {
-    held.phase.snapshot = snapshot;
+    // Late terminal writes reopen observation, never the committed admission fence.
+    held.phase = {
+      status: "draining",
+      snapshot,
+      ...(held.phase.status === "draining" ? { commitAdmission: held.phase.commitAdmission } : {}),
+    };
     return held.phase;
   }
-  if (!held.phase.commitAdmission()) {
+  if (held.phase.status === "draining" && held.phase.commitAdmission?.() === false) {
     throw new Error("gateway suspension admission changed during drain completion");
   }
   held.phase = { status: "ready", snapshot };
@@ -285,6 +287,7 @@ function heldPrepareResult(
     expiresAtMs: held.expiresAtMs,
     activeCount: phase.snapshot.counts.totalActive,
     blockers: phase.snapshot.blockers,
+    writeCustody: phase.snapshot.writeCustody,
   };
   return phase.status === "draining"
     ? { status: "draining", ...result, retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS }
@@ -363,6 +366,7 @@ export function prepareGatewaySuspend(params: {
       retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
       activeCount: snapshot.counts.totalActive,
       blockers: snapshot.blockers,
+      writeCustody: snapshot.writeCustody,
     };
   }
 
@@ -396,6 +400,7 @@ export function prepareGatewaySuspend(params: {
         retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
         activeCount: snapshot.counts.totalActive,
         blockers: snapshot.blockers,
+        writeCustody: snapshot.writeCustody,
       };
     }
     const admissionTransition = snapshot.idle ? admission.commit : admission.drain;
@@ -534,10 +539,15 @@ export function getGatewaySuspendStatus(suspensionId: string): GatewaySuspendSta
       expiresAtMs: held.expiresAtMs,
       activeCount: phase.snapshot.counts.totalActive,
       blockers: phase.snapshot.blockers,
+      writeCustody: phase.snapshot.writeCustody,
       retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
     };
   }
-  return { status: "ready", expiresAtMs: held.expiresAtMs };
+  return {
+    status: "ready",
+    expiresAtMs: held.expiresAtMs,
+    writeCustody: phase.snapshot.writeCustody,
+  };
 }
 
 export function resumeGatewaySuspend(suspensionId: string): GatewaySuspendResumeResult {

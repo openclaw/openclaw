@@ -12,7 +12,6 @@ import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import {
-  isChatFastModeProviderSupported,
   chatModelUnavailableMessage,
   normalizeChatFastModeInput,
 } from "../../lib/chat/model-select-state.ts";
@@ -46,7 +45,7 @@ import {
   resolveDraftThinkingDefaults,
   resolveDraftThinkingTarget,
 } from "./model-target.ts";
-import type { NewSessionPreference } from "./preferences.ts";
+import { hasNewSessionModelPreference, type NewSessionPreference } from "./preferences.ts";
 
 registerModelControlsEnglish();
 
@@ -59,10 +58,12 @@ type NewSessionMetadataState = ChatModelCatalogState & {
 type NewSessionMetadataLoadOptions = {
   agent?: GatewayAgentRow;
   preference?: NewSessionPreference | null;
+  initialModel?: string;
 };
 
 export class NewSessionModelControl {
   private selectionGeneration = 0;
+  private initialModel: string | undefined;
   private agentId = "";
   private metadataState: NewSessionMetadataState = {
     catalog: [],
@@ -93,11 +94,12 @@ export class NewSessionModelControl {
 
   constructor(
     private readonly notify: () => void,
-    private readonly onSelectionChange: (selection: {
-      model: string;
-      agentRuntime?: string;
-      thinkingLevel: string;
-    }) => void = () => undefined,
+    private readonly onSelectionChange: (
+      selection: Pick<
+        NewSessionPreference,
+        "model" | "agentRuntime" | "thinkingLevel" | "fastMode"
+      >,
+    ) => void = () => undefined,
     private readonly onCatalogTargetSelect: (catalogId: string) => void = () => undefined,
   ) {
     this.catalogTargets = new CatalogTargetDiscovery(notify);
@@ -242,11 +244,12 @@ export class NewSessionModelControl {
         if (
           !this.draftAccount &&
           this.pendingSelectionGeneration === this.selectionGeneration &&
-          (this.pendingPreference?.model || this.pendingPreference?.thinkingLevel)
+          hasNewSessionModelPreference(this.pendingPreference)
         ) {
           this.selected = this.pendingPreference.model ?? "";
           this.agentRuntime = this.pendingPreference.agentRuntime;
           this.thinkingLevel = this.pendingPreference.thinkingLevel ?? "";
+          this.fastMode = this.pendingPreference.fastMode;
         }
         this.restoringPreference = false;
         this.updateMetadataState({ ...this.metadataState, status: "error" });
@@ -294,6 +297,14 @@ export class NewSessionModelControl {
     this.catalogTargets.retry(client, this.agentId);
   }
 
+  private resetSelection(model = "") {
+    this.selected = model;
+    this.agentRuntime = undefined;
+    this.contextWindow = "";
+    this.thinkingLevel = "";
+    this.fastMode = undefined;
+  }
+
   invalidate(resetSelection = false) {
     if (!resetSelection && this.metadataClient) {
       invalidateModelCatalogCache(this.metadataClient, this.metadataScope);
@@ -305,11 +316,8 @@ export class NewSessionModelControl {
     if (resetSelection) {
       this.agentId = "";
       this.metadataClient = undefined;
-      this.selected = "";
-      this.agentRuntime = undefined;
-      this.contextWindow = "";
-      this.thinkingLevel = "";
-      this.fastMode = undefined;
+      this.resetSelection();
+      this.initialModel = undefined;
       this.updateMetadataState({
         catalog: [],
         hasSnapshot: false,
@@ -349,11 +357,8 @@ export class NewSessionModelControl {
       this.draftAccount = undefined;
       this.clearMetadataSubscription();
       if (this.agentId !== normalizedAgentId) {
-        this.selected = "";
-        this.agentRuntime = undefined;
-        this.contextWindow = "";
-        this.thinkingLevel = "";
-        this.fastMode = undefined;
+        this.resetSelection();
+        this.initialModel = undefined;
       }
       this.agentId = normalizedAgentId;
       this.metadataClient = undefined;
@@ -365,7 +370,6 @@ export class NewSessionModelControl {
     }
     this.metadataIdentityId = snapshot?.selfUser?.id;
     this.metadataHello = snapshot?.hello;
-    const selectionGeneration = this.selectionGeneration;
     if (!context || snapshot?.phase !== "connected" || !client || !normalizedAgentId || !enabled) {
       this.clearDraftAccount();
       this.clearMetadataSubscription();
@@ -381,6 +385,13 @@ export class NewSessionModelControl {
       this.notify();
       return;
     }
+    const initialModel = options.initialModel;
+    if (initialModel && initialModel !== this.initialModel) {
+      this.resetSelection(initialModel);
+      this.selectionGeneration += 1;
+      this.initialModel = initialModel;
+    }
+    const selectionGeneration = this.selectionGeneration;
     const scope = {
       agentId: normalizedAgentId,
       ...(this.draftAccount ? { authProfileId: this.draftAccount.authProfileId } : {}),
@@ -388,12 +399,12 @@ export class NewSessionModelControl {
     const previousScope = this.metadataScope;
     const boundScope = this.bindMetadataSubscription(client, scope);
     const rebound = boundScope !== previousScope;
-    this.pendingPreference = options.preference;
+    // URL intent seeds this draft once; saved preferences and catalog refreshes cannot replace it.
+    this.pendingPreference = this.initialModel ? undefined : options.preference;
     this.pendingAgent = options.agent;
     this.pendingSelectionGeneration = selectionGeneration;
-    this.restoringPreference = Boolean(
-      !this.draftAccount && (options.preference?.model || options.preference?.thinkingLevel),
-    );
+    this.restoringPreference =
+      !this.draftAccount && hasNewSessionModelPreference(this.pendingPreference);
     if (this.metadataRequest) {
       this.notify();
       return;
@@ -496,6 +507,7 @@ export class NewSessionModelControl {
       model: preference.model ?? "",
       agentRuntime: preference.agentRuntime,
       thinkingLevel: preference.thinkingLevel ?? "",
+      fastMode: preference.fastMode,
       agent: this.pendingAgent,
       defaults: this.pendingContext?.sessions.state.result?.defaults,
       catalog: this.catalog,
@@ -503,13 +515,19 @@ export class NewSessionModelControl {
     this.selected = selection.model;
     this.agentRuntime = selection.agentRuntime;
     this.thinkingLevel = selection.thinkingLevel;
+    this.fastMode = selection.fastMode;
     if (selection.repaired) {
-      this.onSelectionChange({
-        model: selection.model,
-        ...(preference.agentRuntime ? { agentRuntime: this.agentRuntime ?? "" } : {}),
-        thinkingLevel: selection.thinkingLevel,
-      });
+      this.persistSelection(preference.agentRuntime ? (this.agentRuntime ?? "") : undefined);
     }
+  }
+
+  private persistSelection(agentRuntime = this.agentRuntime) {
+    this.onSelectionChange({
+      model: this.selected,
+      ...(agentRuntime !== undefined ? { agentRuntime } : {}),
+      thinkingLevel: this.thinkingLevel,
+      fastMode: this.fastMode,
+    });
   }
 
   resolveAgentRuntime(
@@ -653,6 +671,7 @@ export class NewSessionModelControl {
           model: value,
           agentRuntime: agentRuntime ?? undefined,
           thinkingLevel: this.thinkingLevel,
+          fastMode: this.fastMode,
           agent: options.agent,
           defaults: options.context?.sessions.state.result?.defaults,
           catalog: this.catalog,
@@ -683,14 +702,8 @@ export class NewSessionModelControl {
         }
         this.contextWindow = "";
         this.thinkingLevel = selection.thinkingLevel;
-        this.fastMode = isChatFastModeProviderSupported(target?.provider)
-          ? this.fastMode
-          : undefined;
-        this.onSelectionChange({
-          model: selection.model,
-          ...(runtimeChanged || this.agentRuntime ? { agentRuntime: this.agentRuntime ?? "" } : {}),
-          thinkingLevel: this.thinkingLevel,
-        });
+        this.fastMode = selection.fastMode;
+        this.persistSelection(runtimeChanged ? (this.agentRuntime ?? "") : undefined);
       },
       onModelPickerTargetSelect: (groupId, catalogId) => {
         if (groupId === "cliAgents") {
@@ -706,16 +719,13 @@ export class NewSessionModelControl {
         this.selectionGeneration += 1;
         this.restoringPreference = false;
         this.thinkingLevel = value;
-        this.onSelectionChange({
-          model: this.selected,
-          ...(this.agentRuntime ? { agentRuntime: this.agentRuntime } : {}),
-          thinkingLevel: this.thinkingLevel,
-        });
+        this.persistSelection();
       },
       onFastModeSelect: (value) => {
         this.selectionGeneration += 1;
         this.restoringPreference = false;
         this.fastMode = normalizeChatFastModeInput(value);
+        this.persistSelection();
         this.notify();
       },
       onContextWindowSelect: (value) => {

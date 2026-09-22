@@ -4,6 +4,18 @@ import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js
 import { listAppServerRuntimeModelBackendBindings } from "./app-server-runtime-bindings.js";
 
 /**
+ * Bundled plugins whose harnesses declare provider compatibility dynamically
+ * per model route instead of a fixed provider id. `acpx`'s native ACP agent
+ * bridges (OpenCode, Qwen Code, Pi, Kilo Code, Copilot-via-ACP) opt into
+ * whichever configured model route lists them in `runtimePolicy.compatibleIds`;
+ * `createModelCatalogDecisions()` in model-catalog-decisions.ts discovers them
+ * from that route data and confirms them with `harness.supports()`, so they
+ * have no single canonical provider row here. A dedicated single-provider
+ * harness (like `codex` or `copilot`) still needs one.
+ */
+const DYNAMIC_PROVIDER_DISCOVERY_PLUGIN_IDS = new Set(["acpx"]);
+
+/**
  * Harness ids declared by bundled extensions that are NOT CLI backends. CLI
  * backends declare `modelProvider` on their registration and are covered by
  * `listCliRuntimeModelBackendBindings()`; everything else is an app-server
@@ -13,6 +25,9 @@ import { listAppServerRuntimeModelBackendBindings } from "./app-server-runtime-b
 function listBundledAppServerHarnessIds(): readonly string[] {
   const harnessIds = new Set<string>();
   for (const entry of listBundledPluginMetadata({ includeChannelConfigs: false })) {
+    if (DYNAMIC_PROVIDER_DISCOVERY_PLUGIN_IDS.has(entry.manifest.id)) {
+      continue;
+    }
     const cliBackends = new Set(entry.manifest.cliBackends ?? []);
     for (const harnessId of entry.manifest.activation?.onAgentHarnesses ?? []) {
       if (!cliBackends.has(harnessId)) {

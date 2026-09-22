@@ -122,7 +122,7 @@ describe("shared question panel", () => {
     expect(container.querySelector(".chat-question-panel__option--other kbd")).not.toBeNull();
     expect(container.querySelector('[role="radiogroup"]')).not.toBeNull();
     expect(
-      container.querySelector<HTMLInputElement>(".chat-question-panel__option--other input")
+      container.querySelector<HTMLTextAreaElement>(".chat-question-panel__option--other textarea")
         ?.placeholder,
     ).toBe("Type your own answer here");
     expect(container.querySelector(".chat-question-panel__progress")?.textContent).toBe("1/2");
@@ -142,7 +142,7 @@ describe("shared question panel", () => {
     await panel.updateComplete;
     container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')[0]?.click();
     container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')[1]?.click();
-    const other = container.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
+    const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
     other.value = "Metrics";
     other.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await panel.updateComplete;
@@ -239,7 +239,9 @@ describe("shared question panel", () => {
       const onSubmit = vi.fn();
       drawGateway(prompt, { onSubmit });
       await panelIn(container);
-      const input = container.querySelector<HTMLInputElement>("input")!;
+      const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+        "input, textarea",
+      )!;
       const submit = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!;
       expect(input.value).toBe(value);
       expect(input.placeholder).toBe("Value");
@@ -268,7 +270,9 @@ describe("shared question panel", () => {
     );
     await panelIn(container);
 
-    const input = container.querySelector<HTMLInputElement>("input")!;
+    const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+      "input, textarea",
+    )!;
     expect(input.closest("label")?.textContent).toContain("Answer");
     expect(input.placeholder).toBe("Answer");
   });
@@ -381,29 +385,56 @@ describe("shared question panel", () => {
     );
   });
 
-  it("uses Enter in Other to advance and submit free text", async () => {
+  it.each([
+    { key: "Enter" },
+    { key: "Enter", shiftKey: true },
+    { key: "Enter", ctrlKey: true, isComposing: true },
+    { key: "1" },
+  ])("leaves textarea editing to the field: %j", async (keys) => {
     const onSubmit = vi.fn();
     drawGateway(gatewayPrompt(), { onSubmit });
     const panel = await panelIn(container);
-    const other = container.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
-
-    other.value = "Markdown table";
+    const other = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    other.value = "A draft that is not ready";
     other.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    other.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await panel.updateComplete;
-
-    expect(onSubmit).toHaveBeenCalledWith({ format: ["Markdown table"] });
+    const event = new KeyboardEvent("keydown", { ...keys, bubbles: true, cancelable: true });
+    other.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(container.querySelectorAll('[aria-checked="true"]')).toHaveLength(0);
   });
 
-  it("uses Enter in empty Other to submit an already-selected option", async () => {
+  it.each(["ctrlKey", "metaKey"] as const)(
+    "uses %s+Enter in Other to submit a multiline answer",
+    async (modifier) => {
+      const onSubmit = vi.fn();
+      drawGateway(gatewayPrompt(), { onSubmit });
+      const panel = await panelIn(container);
+      const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
+
+      other.value = "Markdown table\nInclude the tradeoffs.";
+      other.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      other.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", [modifier]: true, bubbles: true }),
+      );
+      await panel.updateComplete;
+
+      expect(onSubmit).toHaveBeenCalledWith({ format: ["Markdown table\nInclude the tradeoffs."] });
+    },
+  );
+
+  it("uses Ctrl+Enter in empty Other to submit an already-selected option", async () => {
     const onSubmit = vi.fn();
     drawGateway(gatewayPrompt(), { onSubmit });
     const panel = await panelIn(container);
 
     container.querySelector<HTMLButtonElement>('[role="radio"]')?.click();
     await panel.updateComplete;
-    const other = container.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
-    other.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
+    other.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+    );
 
     expect(onSubmit).toHaveBeenCalledWith({ format: ["Compact"] });
   });
@@ -492,7 +523,7 @@ describe("shared question panel", () => {
     const onSubmit = vi.fn();
     drawGateway(prompt, { onSubmit });
     const panel = await panelIn(container);
-    const other = container.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
+    const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
     other.value = "Compact";
     other.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await panel.updateComplete;
@@ -501,7 +532,7 @@ describe("shared question panel", () => {
     drawGateway(prompt, { onSubmit });
     await panelIn(container);
 
-    expect(container.querySelector<HTMLInputElement>(".chat-question-panel__other")!.value).toBe(
+    expect(container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!.value).toBe(
       "Compact",
     );
     expect(container.querySelector('[aria-checked="true"]')).toBeNull();

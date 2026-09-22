@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -91,7 +91,7 @@ describe("board and progress-card database write admission", () => {
           );
         }
         if (cold) {
-          closeOpenClawAgentDatabaseByPath(database.path);
+          await closeOpenClawAgentDatabaseByPathAsync(database.path);
         }
         const tables = () =>
           withOpenClawAgentDatabaseReadOnly(

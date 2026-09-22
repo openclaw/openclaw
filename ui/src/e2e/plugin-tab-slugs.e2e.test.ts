@@ -168,10 +168,17 @@ suite.define(() => {
         if (!(await sidebar.locator(".theme-mode-toggle").isVisible())) {
           await identityMenu.click();
         }
+        // The menu loads lazily, and each mode click renders its next label asynchronously.
+        await sidebar.locator(".theme-mode-toggle").waitFor();
         for (const currentMode of ["System", "Light"] as const) {
           const toggle = sidebar.getByRole("button", { name: `Color mode: ${currentMode}` });
           if (await toggle.isVisible()) {
             await toggle.click();
+            await sidebar
+              .getByRole("button", {
+                name: `Color mode: ${currentMode === "System" ? "Light" : "Dark"}`,
+              })
+              .waitFor();
           }
         }
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");

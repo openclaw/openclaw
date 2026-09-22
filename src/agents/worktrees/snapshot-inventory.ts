@@ -22,6 +22,11 @@ import {
 } from "./git-path-inventory.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
 import { commandError, requireGit, requireGitBuffer, runGit } from "./git.js";
+import {
+  captureExactState,
+  exactSnapshotPrefix,
+  writeExactStateCommit,
+} from "./snapshot-exact-state.js";
 
 type SnapshotIndexEnvironment = NodeJS.ProcessEnv & { GIT_INDEX_FILE: string };
 
@@ -452,7 +457,9 @@ export async function snapshotWorktree(
     type: "git.temporary-directory",
     input: {},
   });
-  const snapshotRef = `refs/openclaw/snapshots/${input.worktreeId}`;
+  const snapshotRef = input.exactState
+    ? `${exactSnapshotPrefix}${input.worktreeId}`
+    : `refs/openclaw/snapshots/${input.worktreeId}`;
   const filemodeArgs = process.platform === "win32" ? [] : ["-c", "core.filemode=true"];
   const env: SnapshotIndexEnvironment = {
     GIT_INDEX_FILE: path.join(temporaryDirectory, "index"),
@@ -463,15 +470,38 @@ export async function snapshotWorktree(
   };
   const inventory = await collectSnapshotInventory(input);
   await assertCurrent();
-  const { missing, tracked } = await prepareSnapshotIndex(
-    input,
-    inventory,
-    env,
-    temporaryDirectory,
-  );
+  const prepared = input.exactState
+    ? undefined
+    : await prepareSnapshotIndex(input, inventory, env, temporaryDirectory);
+  const missing = prepared?.missing ?? new Set<string>();
+  const tracked = prepared?.tracked ?? new Set<string>();
+  const exact = input.exactState
+    ? await captureExactState({
+        checkoutPath: input.checkoutPath,
+        ...input.exactState,
+        paths: inventory.paths.values(),
+        provisionedPaths: input.provisionedPaths,
+        write: true,
+        temporaryDirectory,
+      })
+    : undefined;
   const provisionedState = await requestGitWorkerEffect<"worktree.snapshot-provisioned">({
     type: "worktree.snapshot-provisioned",
-    input: {},
+    input: exact
+      ? {
+          expected: {
+            algorithm: exact.metadata.head.length === 64 ? "sha256" : "sha1",
+            files: exact.metadata.files
+              .filter((entry) => entry.provisioned)
+              .map((entry) => ({
+                path: Buffer.from(entry.path, "hex").toString("utf8"),
+                mode: entry.kind === "missing" ? null : entry.mode,
+                size: entry.size,
+                blob: entry.blob,
+              })),
+          },
+        }
+      : {},
   });
   const missingPaths: Buffer[] = [];
   const trackedPaths: Buffer[] = [];
@@ -487,20 +517,33 @@ export async function snapshotWorktree(
   }
   missingPaths.sort((left, right) => Buffer.compare(right, left));
   await assertCurrent();
-  await requireGit(
-    input.checkoutPath,
-    [...snapshotIndexArgs, "update-index", "--add", "--remove", "-z", "--stdin"],
-    {
-      env,
-      input: Buffer.concat(
-        [...missingPaths, ...trackedPaths, ...addedPaths].flatMap((entry) => [
-          entry,
-          Buffer.from([0]),
-        ]),
-      ),
-    },
-  );
-  await assertCurrent();
+  if (!exact) {
+    await requireGit(
+      input.checkoutPath,
+      [...snapshotIndexArgs, "update-index", "--add", "--remove", "-z", "--stdin"],
+      {
+        env,
+        input: Buffer.concat(
+          [...missingPaths, ...trackedPaths, ...addedPaths].flatMap((entry) => [
+            entry,
+            Buffer.from([0]),
+          ]),
+        ),
+      },
+    );
+    await assertCurrent();
+  }
+  if (exact) {
+    await requireGit(input.checkoutPath, [...snapshotIndexArgs, "read-tree", "--empty"], { env });
+    await requireGit(
+      input.checkoutPath,
+      [...snapshotIndexArgs, "update-index", "-z", "--index-info"],
+      {
+        env,
+        input: Buffer.concat(exact.treeEntries),
+      },
+    );
+  }
   const tree = await requireGit(input.checkoutPath, [...snapshotIndexArgs, "write-tree"], { env });
   assertNoProvisionedTreePaths(
     parseGitTreePaths(await requireGitBuffer(input.checkoutPath, ["ls-tree", "-r", "-z", tree])),
@@ -518,6 +561,10 @@ export async function snapshotWorktree(
     await assertCurrent();
   };
   await assertHeadCurrent();
+  const exactCommit = exact ? await writeExactStateCommit(input.checkoutPath, exact) : undefined;
+  if (exact) {
+    await verifyExactStateSnapshot({ ...input, expectedDigest: exact.digest });
+  }
   const commit = await requireGit(
     input.checkoutPath,
     [
@@ -526,6 +573,7 @@ export async function snapshotWorktree(
       tree,
       "-p",
       inventory.head,
+      ...(exactCommit ? ["-p", exactCommit] : []),
       "-m",
       `OpenClaw worktree snapshot: ${input.reason}`,
     ],
@@ -536,10 +584,34 @@ export async function snapshotWorktree(
   // A commit made while the queue waits must preserve the checkout for retry.
   await requireGit(input.checkoutPath, ["update-ref", "--stdin", "-z"], {
     input: Buffer.from(
-      `start\0verify HEAD\0${inventory.head}\0update ${snapshotRef}\0${commit}\0\0prepare\0commit\0`,
+      `start\0verify HEAD\0${inventory.head}\0${input.exactState ? `verify refs/heads/${input.exactState.branch}\0${input.exactState.expected.branchHead}\0` : ""}update ${snapshotRef}\0${commit}\0\0prepare\0commit\0`,
     ),
   });
-  return { snapshotRef, provisionedState };
+  return { snapshotRef, provisionedState, ...(exact ? { exactStateDigest: exact.digest } : {}) };
+}
+
+export async function verifyExactStateSnapshot(
+  input: GitWorktreeOperations["worktree.snapshot-verify-exact"]["input"],
+): Promise<boolean> {
+  if (!input.exactState) {
+    throw new Error("Exact-state verification requires captured authority");
+  }
+  await assertCurrent();
+  const inventory = await collectSnapshotInventory(input);
+  const captured = await captureExactState({
+    checkoutPath: input.checkoutPath,
+    ...input.exactState,
+    paths: inventory.paths.values(),
+    provisionedPaths: input.provisionedPaths,
+    write: false,
+  });
+  await assertCurrent();
+  if (captured.digest !== input.expectedDigest) {
+    throw new Error(
+      "Worktree contents or metadata changed after exact-state capture; checkout preserved",
+    );
+  }
+  return true;
 }
 
 export async function inspectNestedRepository(checkoutPath: string): Promise<boolean> {

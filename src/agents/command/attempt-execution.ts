@@ -1095,8 +1095,8 @@ export function runAgentAttempt(params: {
               : undefined,
           })
       : undefined,
-    onExecutionStarted: (info) => {
-      params.opts.onExecutionStarted?.();
+    onExecutionStarted: async (info) => {
+      await params.opts.onExecutionStarted?.();
       if (info?.lifecycleGeneration) {
         params.onLifecycleGenerationChanged?.(info.lifecycleGeneration);
       }

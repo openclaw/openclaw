@@ -415,8 +415,11 @@ describe("update repair ledger recovery", () => {
       const run = seedRun();
       finishUpdateRun(run.runId, { status: "failed", reason });
 
-      await updateRepairCommand({});
+      await updateRepairCommand({ json: true });
 
+      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ reconciledRuns: [run.runId] }),
+      );
       expect(getUpdateRun(run.runId)).toMatchObject({
         status: "failed",
         reason,
@@ -425,7 +428,9 @@ describe("update repair ledger recovery", () => {
         ]),
       });
       expect(mocks.finalize).not.toHaveBeenCalled();
-      expect(mocks.runtime.log).toHaveBeenCalledWith(expect.stringContaining("already reconciled"));
+      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining("already reconciled") }),
+      );
       expect(buildStatusUpdateRows(null)).toEqual([
         { Item: "Update run", Value: "ℹ️ OpenClaw abandoned update reconciled." },
       ]);
@@ -449,18 +454,28 @@ describe("update repair ledger recovery", () => {
     },
   );
 
-  it("runs full repair when an abandoned outcome is older than the recovery window", async () => {
-    const run = seedRun();
-    vi.mocked(Date.now).mockReturnValue(now - ABANDONED_UPDATE_RUN_MS - 10);
-    finishUpdateRun(run.runId, { status: "failed", reason: "abandoned" });
-    vi.mocked(Date.now).mockReturnValue(now);
-    const recorded = getUpdateRun(run.runId);
+  it.each([-1, 0, 1])(
+    "keeps the lightweight repair window separate from acknowledgment (%sms)",
+    async (offset) => {
+      const run = seedRun();
+      vi.mocked(Date.now).mockReturnValue(now - ABANDONED_UPDATE_RUN_MS - offset);
+      finishUpdateRun(run.runId, { status: "failed", reason: "abandoned" });
+      vi.mocked(Date.now).mockReturnValue(now);
+      const recorded = getUpdateRun(run.runId);
 
-    await updateRepairCommand({});
+      await updateRepairCommand({});
 
-    expect(mocks.finalize).toHaveBeenCalledWith({}, []);
-    expect(getUpdateRun(run.runId)).toEqual(recorded);
-  });
+      if (offset > 0) {
+        expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
+        expect(getUpdateRun(run.runId)).toEqual(recorded);
+      } else {
+        expect(mocks.finalize).not.toHaveBeenCalled();
+        expect(getUpdateRun(run.runId)?.steps).toContainEqual(
+          expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+        );
+      }
+    },
+  );
 
   it.each([
     { label: "recent request", ageMs: 60_000 },
@@ -587,7 +602,7 @@ describe("update repair ledger recovery", () => {
     });
 
     await expect(updateRepairCommand({})).rejects.toThrow(
-      "Stop the Gateway service through its owner",
+      /openclaw update repair.*openclaw gateway stop/,
     );
 
     expect(getUpdateRun(old.runId)).toEqual(old);

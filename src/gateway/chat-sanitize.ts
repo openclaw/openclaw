@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { extractInboundSenderLabel } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
+import { projectChatWorkContextForDisplay } from "../chat/work-context.js";
 // Gateway chat history display strips internal/user envelopes while preserving
 // sender labels for UI rows. The helpers return original object identities when
 // nothing changes so callers can avoid unnecessary snapshot churn.
@@ -77,7 +78,8 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   if (!message || typeof message !== "object") {
     return message;
   }
-  const entry = message as Record<string, unknown>;
+  const projected = projectChatWorkContextForDisplay(message);
+  const entry = projected as Record<string, unknown>;
   const role = typeof entry.role === "string" ? normalizeLowercaseStringOrEmpty(entry.role) : "";
   const stripUserEnvelope = role === "user";
 
@@ -112,7 +114,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
     }
   }
 
-  return next ?? message;
+  return next ?? projected;
 }
 
 /** Strips envelope metadata from a message array, preserving the original array when unchanged. */

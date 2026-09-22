@@ -6,7 +6,7 @@ import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-ru
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { buildPreparedModelsProviderData } from "./commands-models.js";
+import { buildPreparedModelsProviderData } from "./commands-models-catalog.js";
 import { createModelsTestOwner } from "./commands-models.test-support.js";
 
 const CONFIG: OpenClawConfig = {
@@ -31,8 +31,8 @@ beforeEach(() => {
     }),
     resolveRuntimeCliBackends: () => [],
   });
-  vi.spyOn(preparedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
-    (params = {}) => {
+  vi.spyOn(preparedCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
+    async (params = {}) => {
       const config = params.config ?? CONFIG;
       const entries = [{ provider: "github-copilot", id: "fixture-model", name: "Fixture Model" }];
       const registry = createEmptyPluginRegistry();

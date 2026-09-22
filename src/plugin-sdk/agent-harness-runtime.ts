@@ -248,8 +248,14 @@ export {
 } from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
 export {
+  projectPluginMessageDeliveryFact,
+  readEmbeddedMessageDeliveryFact,
+} from "../agents/embedded-agent-message-delivery.js";
+export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
+  isDeliveredMessagingToolSendToCurrentSource,
 } from "../agents/embedded-agent-messaging-extraction.js";
 export {
   extractToolResultMediaArtifact,
@@ -257,6 +263,7 @@ export {
 } from "../agents/embedded-agent-tool-media.js";
 export {
   extractToolErrorMessage,
+  sanitizeToolArgs,
   sanitizeToolResult,
 } from "../agents/embedded-agent-tool-results.js";
 export {
@@ -266,6 +273,7 @@ export {
   resolveToolResultFailureKind,
   type ToolResultFailureKind,
 } from "../agents/tool-result-error.js";
+export { readToolOperatorHint } from "../agents/tool-operator-hint.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
@@ -364,6 +372,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   prompt: string;
   userTurnTranscriptRecorder?: EmbeddedAgentQueueMessageOptions["userTurnTranscriptRecorder"];
   workspaceDir: string;
+  agentWorkspaceDir?: string;
   model: { input?: string[] };
   existingImages?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
@@ -390,6 +399,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   return detectAndLoadPromptImages({
     prompt: params.prompt,
     workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
     model: params.model,
     existingImages: params.existingImages,
     imageOrder: params.imageOrder,

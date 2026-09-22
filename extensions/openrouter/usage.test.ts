@@ -193,6 +193,7 @@ describe("OpenRouter usage", () => {
   ])(
     "routes $name through canonical guarded transport instead of the ambient proxy wrapper",
     async ({ request, dispatcherPolicy }) => {
+      const signal = new AbortController().signal;
       const ambientProxyFetch = vi.fn(async () => Response.json({ data: { usage: 1 } }));
       const canonicalRuntimeFetch = vi.fn(async () => Response.json({ data: { usage: 1 } }));
       const release = vi.fn(async () => undefined);
@@ -213,6 +214,7 @@ describe("OpenRouter usage", () => {
           baseUrl: "https://private.example.invalid/router/v1",
           request,
           timeoutMs: 1000,
+          signal,
           fetchFn: ambientProxyFetch as unknown as typeof fetch,
         });
 
@@ -225,6 +227,7 @@ describe("OpenRouter usage", () => {
           expect(params.fetchImpl).toBeUndefined();
           expect(params.maxRedirects).toBe(0);
           expect(params.timeoutMs).toBe(1000);
+          expect(params.signal).toBe(signal);
           expect(params.policy).toEqual({ allowedOrigins: ["https://private.example.invalid"] });
         }
       } finally {

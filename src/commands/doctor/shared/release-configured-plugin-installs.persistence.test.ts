@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import { beforeEach, expect, it, vi } from "vitest";
+import { readConfigFileSnapshot } from "../../../config/config.js";
+import { hashConfigRaw } from "../../../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { runWriteConfigHealth } from "../../../flows/doctor-health-contribution-runners.config.js";
 import { runReleaseConfiguredPluginInstallsHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
@@ -36,7 +38,8 @@ beforeEach(() => {
   mocks.repair.mockReset().mockResolvedValue({ changes: [], warnings: [], records: {} });
 });
 
-function createContext(state: OpenClawTestState, cfg: OpenClawConfig) {
+async function createContext(state: OpenClawTestState, cfg: OpenClawConfig) {
+  const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
   const ctx = createDoctorHealthFlowContext({
     cfg,
     cfgForPersistence: structuredClone(cfg),
@@ -44,6 +47,10 @@ function createContext(state: OpenClawTestState, cfg: OpenClawConfig) {
     configResult: {
       cfg,
       shouldWriteConfig: false,
+      confirmedConfigSource: {
+        path: snapshot.path,
+        hash: snapshot.hash ?? hashConfigRaw(snapshot.raw),
+      },
       sourceLastTouchedVersion: cfg.meta?.lastTouchedVersion,
     },
     env: state.env,
@@ -70,10 +77,10 @@ it.each(["absent", "empty", "2026.9.4"])(
           await fs.writeFile(state.configPath, raw);
         }
         const timestamp = readConfigMachineState<string>("config.lastTouchedAt");
-        const ctx = createContext(state, cfg);
+        const ctx = await createContext(state, cfg);
 
         await runReleaseConfiguredPluginInstallsHealth(ctx);
-        await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+        await expect(runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).resolves.toBe(true);
 
         expect.soft(ctx.cfg).toEqual(cfg);
         expect.soft(readConfigMachineState<string>("config.lastTouchedAt")).toBe(timestamp);
@@ -109,10 +116,10 @@ it.each(configuredCases)(
           warnings: [],
           records: {},
         });
-        const ctx = createContext(state, cfg);
+        const ctx = await createContext(state, cfg);
 
         await runReleaseConfiguredPluginInstallsHealth(ctx);
-        await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+        await expect(runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).resolves.toBe(true);
 
         expect(mocks.repair).toHaveBeenCalledOnce();
         expect(mocks.repair).toHaveBeenCalledWith(
@@ -134,11 +141,11 @@ it("still commits a genuine config repair and first-write privacy defaults after
   await withOpenClawTestState(
     { label: "release-backfill-real-repair", env: updateEnv },
     async (state) => {
-      const ctx = createContext(state, { gateway: { mode: "local" } });
+      const ctx = await createContext(state, { gateway: { mode: "local" } });
       ctx.configResult.shouldWriteConfig = true;
 
       await runReleaseConfiguredPluginInstallsHealth(ctx);
-      await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+      await expect(runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).resolves.toBe(true);
 
       expect(mocks.repair).not.toHaveBeenCalled();
       expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({

@@ -66,6 +66,17 @@ offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
 include parser-owned `block` metadata; callers supplying their own ranges do not
 need to provide it.
 
+### Gateway worker environment creation
+
+`GatewayRequestHandlerOptions` from `core` and `gateway-runtime` retains the
+worker-environment creation contract shipped in OpenClaw 2026.9.5. When
+`context.workerEnvironmentService` is available, its `create` method accepts
+positional arguments in this order: `profileId`, `idempotencyKey`, `machineClass?`,
+`executionMode?`, `projectPath?`, `signal?`, `os?`, and `runSetupScript?`.
+Idempotent retries and caller cancellation keep their existing behavior across
+host upgrades. Changing this contract requires an explicitly approved SDK
+migration.
+
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from

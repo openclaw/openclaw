@@ -1,12 +1,13 @@
-/**
- * Live channel message state and preview finalization helpers.
- *
- * Tracks draft previews and converts them into finalized message receipts when possible.
- */
 import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
+import type { ChannelDeliveryResult } from "../turn/delivery-outcome.js";
+import { createAcceptedChannelDeliveryResult } from "../turn/delivery-result.js";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "../turn/partial-delivery-error.js";
 import type { LiveMessageState, MessageReceipt, RenderedMessageBatch } from "./types.js";
 
-/** Mutable draft preview handle used before a live message is finalized or discarded. */
+/** A transport-owned preview. discardPending must stop new work before awaiting in-flight work. */
 export type LivePreviewFinalizerDraft<TId> = {
   flush: () => Promise<void>;
   id: () => TId | undefined;
@@ -15,21 +16,27 @@ export type LivePreviewFinalizerDraft<TId> = {
   clear: () => Promise<void>;
 };
 
-/** Outcome kind returned after attempting to finalize or fall back from a live preview. */
+export type LivePreviewDraft<TId> = Omit<LivePreviewFinalizerDraft<TId>, "clear"> & {
+  clear: () => Promise<boolean | void>;
+};
+
+export type LivePreviewDeliveryResult = ChannelDeliveryResult & { visibleReplySent: boolean };
+type PreviewSendResult = LivePreviewDeliveryResult | boolean | void;
+
 export type LivePreviewFinalizerResultKind =
   | "normal-delivered"
   | "normal-skipped"
   | "preview-finalized"
   | "preview-retained";
 
-/** Result of a live preview finalization attempt plus the latest live state. */
 type LivePreviewFinalizerResult<TPayload> = {
   kind: LivePreviewFinalizerResultKind;
   liveState?: LiveMessageState<TPayload>;
+  deliveryResult?: LivePreviewDeliveryResult;
 };
 
-/** Adapter contract for channels that can edit a draft preview into the final message. */
-type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = {
+// Preserve the published literal shape: mapped types change contextual payload inference.
+type PublishedPreviewAdapter<TPayload, TId, TEdit> = {
   draft?: LivePreviewFinalizerDraft<TId>;
   buildFinalEdit: (payload: TPayload) => TEdit | undefined;
   editFinal: (id: TId, edit: TEdit) => Promise<void>;
@@ -52,14 +59,56 @@ type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = {
   logPreviewEditFailure?: (error: unknown) => void;
 };
 
-/** Defines a finalizable live-preview adapter while preserving its generic payload/id/edit types. */
+type PreviewDeliveryParams<TPayload, TId, TEdit> = FinalizableLivePreviewAdapter<
+  TPayload,
+  TId,
+  TEdit
+> & {
+  kind: "tool" | "block" | "final";
+  payload: TPayload;
+  liveState?: LiveMessageState<TPayload>;
+  deliverNormally: (payload: TPayload) => Promise<PreviewSendResult>;
+  onNormalDelivered?: () => Promise<void> | void;
+};
+
+// Both interfaces execute the same delivery algorithm.
+type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = Omit<
+  PublishedPreviewAdapter<TPayload, TId, TEdit>,
+  "draft" | "buildFinalEdit" | "editFinal" | "deliverSupplemental"
+> & {
+  draft?: LivePreviewDraft<TId>;
+  buildFinalEdit?: (payload: TPayload) => TEdit | undefined;
+  editFinal?: (id: TId, edit: TEdit) => Promise<void | LivePreviewDeliveryResult>;
+  deliverSupplemental?: (payload: TPayload) => Promise<PreviewSendResult>;
+};
+
+type PublishedPreviewDeliveryParams<TPayload, TId, TEdit> = PublishedPreviewAdapter<
+  TPayload,
+  TId,
+  TEdit
+> & {
+  kind: "tool" | "block" | "final";
+  payload: TPayload;
+  liveState?: LiveMessageState<TPayload>;
+  deliverNormally: (payload: TPayload) => Promise<boolean | void>;
+  onNormalDelivered?: () => Promise<void> | void;
+};
+
+type PreviewDeliveryOwner<TPayload> = {
+  isCurrent: () => boolean;
+  update: (state: LiveMessageState<TPayload>) => void;
+  accept: (result: LivePreviewDeliveryResult, partial: boolean) => void;
+  complete: () => void;
+  cleanup: boolean;
+  onCleanupFailure?: (error: unknown) => void;
+};
+
 export function defineFinalizableLivePreviewAdapter<TPayload, TId, TEdit>(
-  adapter: FinalizableLivePreviewAdapter<TPayload, TId, TEdit>,
-): FinalizableLivePreviewAdapter<TPayload, TId, TEdit> {
+  adapter: PublishedPreviewAdapter<TPayload, TId, TEdit>,
+): PublishedPreviewAdapter<TPayload, TId, TEdit> {
   return adapter;
 }
 
-/** Creates the initial live-message state, optionally seeded with an existing preview receipt. */
 export function createLiveMessageState<TPayload = unknown>(params?: {
   receipt?: MessageReceipt;
   lastRendered?: RenderedMessageBatch<TPayload>;
@@ -73,20 +122,6 @@ export function createLiveMessageState<TPayload = unknown>(params?: {
   };
 }
 
-/** Marks a live message as finalized and disables further in-place preview edits. */
-function markLiveMessageFinalized<TPayload>(
-  state: LiveMessageState<TPayload>,
-  receipt: MessageReceipt,
-): LiveMessageState<TPayload> {
-  return {
-    ...state,
-    phase: "finalized",
-    receipt,
-    canFinalizeInPlace: false,
-  };
-}
-
-/** Creates a receipt for a draft/preview platform message. */
 export function createPreviewMessageReceipt(params: {
   id: unknown;
   threadId?: string;
@@ -114,186 +149,436 @@ export function createPreviewMessageReceipt(params: {
   };
 }
 
-/** Finalizes a live preview in place when possible, otherwise falls back to normal delivery. */
-export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params: {
-  kind: "tool" | "block" | "final";
-  payload: TPayload;
-  liveState?: LiveMessageState<TPayload>;
-  draft?: LivePreviewFinalizerDraft<TId>;
-  buildFinalEdit: (payload: TPayload) => TEdit | undefined;
-  editFinal: (id: TId, edit: TEdit) => Promise<void>;
-  resolveFinalizedId?: (id: TId, edit: TEdit) => TId | undefined;
-  deliverNormally: (payload: TPayload) => Promise<boolean | void>;
-  createPreviewReceipt?: (id: TId, edit: TEdit) => MessageReceipt;
-  onPreviewFinalized?: (
-    id: TId,
-    receipt: MessageReceipt,
-    liveState: LiveMessageState<TPayload>,
-  ) => Promise<void> | void;
-  buildSupplementalPayload?: (payload: TPayload) => TPayload | undefined;
-  deliverSupplemental?: (payload: TPayload) => Promise<boolean | void>;
-  handlePreviewEditError?: (params: {
-    error: unknown;
-    id: TId;
-    edit: TEdit;
-    payload: TPayload;
-    liveState: LiveMessageState<TPayload>;
-  }) => "fallback" | "retain" | Promise<"fallback" | "retain">;
-  onNormalDelivered?: () => Promise<void> | void;
-  logPreviewEditFailure?: (error: unknown) => void;
-}): Promise<LivePreviewFinalizerResult<TPayload>> {
+function visibleDelivery(result: PreviewSendResult): LivePreviewDeliveryResult | undefined {
+  if (typeof result === "object") {
+    return result.visibleReplySent ? result : undefined;
+  }
+  // Published stateless SDK callers historically acknowledge a send by resolving void.
+  return result === false ? undefined : { visibleReplySent: true };
+}
+
+function combineDelivery(
+  first: LivePreviewDeliveryResult | undefined,
+  next: LivePreviewDeliveryResult,
+): LivePreviewDeliveryResult {
+  if (!first || first === next) {
+    return next;
+  }
+  return createAcceptedChannelDeliveryResult({
+    deliveryResults: [first, next],
+    content: [first.content, next.content].filter(Boolean).join("\n"),
+  });
+}
+
+function warnCleanupFailure(): void {
+  console.warn("Live preview cleanup failed after delivery; a stale preview may remain");
+}
+
+/** The single promotion/replacement algorithm, shared by stateful and published stateless callers. */
+async function deliverPreview<TPayload, TId, TEdit>(
+  params: PreviewDeliveryParams<TPayload, TId, TEdit>,
+  owner?: PreviewDeliveryOwner<TPayload>,
+): Promise<LivePreviewFinalizerResult<TPayload>> {
   let liveState =
     params.liveState ??
     createLiveMessageState<TPayload>({ canFinalizeInPlace: Boolean(params.draft) });
-
-  if (params.kind !== "final" || !params.draft) {
-    const delivered = await params.deliverNormally(params.payload);
-    if (delivered === false) {
-      return { kind: "normal-skipped", liveState };
+  let accepted: LivePreviewDeliveryResult | undefined;
+  let normalAccepted = false;
+  const update = (next: LiveMessageState<TPayload>) => {
+    liveState = next;
+    owner?.update(next);
+  };
+  const accept = (result: LivePreviewDeliveryResult, partial = false) => {
+    accepted = combineDelivery(accepted, result);
+    owner?.accept(result, partial);
+  };
+  const send = async (
+    payload: TPayload,
+    deliver: (payload: TPayload) => Promise<PreviewSendResult>,
+  ): Promise<LivePreviewDeliveryResult> => {
+    if (owner && !owner.isCurrent()) {
+      return { visibleReplySent: false, suppression: { reason: "no_visible_result" } };
     }
-    await params.onNormalDelivered?.();
-    return { kind: "normal-delivered", liveState };
-  }
+    let result: PreviewSendResult;
+    try {
+      result = await deliver(payload);
+    } catch (error) {
+      if (isChannelPartialDeliveryError(error)) {
+        accept(error.deliveryResult, true);
+      }
+      throw error;
+    }
+    const normalized =
+      typeof result === "object"
+        ? result
+        : (visibleDelivery(result) ?? { visibleReplySent: false });
+    if (normalized.visibleReplySent) {
+      accept(normalized);
+    }
+    return normalized;
+  };
+  const normal = async (payload: TPayload, completesFinal = false) => {
+    const delivery = await send(payload, params.deliverNormally);
+    if (delivery.visibleReplySent) {
+      normalAccepted = true;
+      if (completesFinal) {
+        owner?.complete();
+      }
+      if (owner?.isCurrent() ?? true) {
+        await params.onNormalDelivered?.();
+      }
+    }
+    return delivery;
+  };
+  const result = (kind: LivePreviewFinalizerResultKind): LivePreviewFinalizerResult<TPayload> => ({
+    kind,
+    liveState,
+    ...(accepted ? { deliveryResult: accepted } : {}),
+  });
 
-  const edit = liveState.canFinalizeInPlace ? params.buildFinalEdit(params.payload) : undefined;
-  if (edit !== undefined) {
-    await params.draft.flush();
-    const previewId = params.draft.id();
-    if (previewId !== undefined) {
-      await params.draft.seal?.();
-      let editSucceeded = false;
-      try {
-        await params.editFinal(previewId, edit);
-        editSucceeded = true;
-      } catch (err) {
-        params.logPreviewEditFailure?.(err);
-        // Ambiguous preview edit failures can keep the preview as the visible final state.
-        const decision =
-          (await params.handlePreviewEditError?.({
-            error: err,
+  try {
+    if (owner && !owner.isCurrent()) {
+      return result("normal-skipped");
+    }
+    // Promotion transfers custody to the durable answer. A later warning must not
+    // reach either the final edit or fallback cleanup, even if given the old handle.
+    if (params.kind !== "final" || !params.draft || liveState.phase === "finalized") {
+      return result(
+        (await normal(params.payload, true)).visibleReplySent
+          ? "normal-delivered"
+          : "normal-skipped",
+      );
+    }
+
+    const draft = params.draft;
+    const edit = liveState.canFinalizeInPlace ? params.buildFinalEdit?.(params.payload) : undefined;
+    if (edit !== undefined && params.editFinal) {
+      await draft.flush();
+      if (owner && !owner.isCurrent()) {
+        return result("normal-skipped");
+      }
+      const previewId = draft.id();
+      if (previewId !== undefined) {
+        await draft.seal?.();
+        if (owner && !owner.isCurrent()) {
+          return result("normal-skipped");
+        }
+        let editResult: void | LivePreviewDeliveryResult = undefined;
+        let edited = false;
+        try {
+          editResult = await params.editFinal(previewId, edit);
+          edited = editResult?.visibleReplySent !== false;
+        } catch (error) {
+          if (isChannelPartialDeliveryError(error)) {
+            update({
+              ...liveState,
+              phase: "finalized",
+              canFinalizeInPlace: false,
+              receipt:
+                error.deliveryResult.receipt ?? createPreviewMessageReceipt({ id: previewId }),
+            });
+            accept(error.deliveryResult, true);
+            throw error;
+          }
+          params.logPreviewEditFailure?.(error);
+          const decision = await params.handlePreviewEditError?.({
+            error,
             id: previewId,
             edit,
             payload: params.payload,
             liveState,
-          })) ?? "fallback";
-        if (decision === "retain") {
-          const receipt =
-            liveState.receipt ??
-            params.createPreviewReceipt?.(previewId, edit) ??
-            createPreviewMessageReceipt({ id: previewId });
-          liveState = {
-            ...liveState,
-            phase: "previewing",
-            canFinalizeInPlace: true,
-            receipt,
-          };
-          return { kind: "preview-retained", liveState };
-        }
-      }
-      if (editSucceeded) {
-        const finalizedId = params.resolveFinalizedId?.(previewId, edit) ?? previewId;
-        const receipt =
-          params.createPreviewReceipt?.(finalizedId, edit) ??
-          createPreviewMessageReceipt({ id: finalizedId });
-        liveState = markLiveMessageFinalized(liveState, receipt);
-        await params.onPreviewFinalized?.(finalizedId, receipt, liveState);
-        const supplementalPayload = params.buildSupplementalPayload?.(params.payload);
-        if (supplementalPayload !== undefined) {
-          const supplementalDelivered = await params.deliverSupplemental?.(supplementalPayload);
-          if (!params.deliverSupplemental || supplementalDelivered === false) {
-            // A finalized text preview must not silently acknowledge media that never became visible.
-            const fallbackDelivered = await params.deliverNormally(supplementalPayload);
-            if (fallbackDelivered === false) {
-              throw new Error("Live preview supplemental payload was not delivered");
-            }
+          });
+          if (decision === "retain") {
+            update({
+              ...liveState,
+              phase: "previewing",
+              canFinalizeInPlace: true,
+              receipt:
+                liveState.receipt ??
+                params.createPreviewReceipt?.(previewId, edit) ??
+                createPreviewMessageReceipt({ id: previewId }),
+            });
+            return result("preview-retained");
           }
         }
-        return { kind: "preview-finalized", liveState };
+        if (edited) {
+          const finalizedId = params.resolveFinalizedId?.(previewId, edit) ?? previewId;
+          const receipt =
+            editResult?.receipt ??
+            params.createPreviewReceipt?.(finalizedId, edit) ??
+            createPreviewMessageReceipt({ id: finalizedId });
+          update({ ...liveState, phase: "finalized", receipt, canFinalizeInPlace: false });
+          accept(editResult ?? { visibleReplySent: true, receipt });
+          if (owner?.isCurrent() ?? true) {
+            await params.onPreviewFinalized?.(finalizedId, receipt, liveState);
+          }
+          const supplemental = params.buildSupplementalPayload?.(params.payload);
+          if (supplemental !== undefined) {
+            const delivered = params.deliverSupplemental
+              ? await send(supplemental, params.deliverSupplemental)
+              : await normal(supplemental);
+            if (!delivered.visibleReplySent && !delivered.suppression) {
+              const fallback = params.deliverSupplemental ? await normal(supplemental) : delivered;
+              if (!fallback.visibleReplySent && !fallback.suppression) {
+                throw new Error("Live preview supplemental payload was not delivered");
+              }
+            }
+          }
+          owner?.complete();
+          return result("preview-finalized");
+        }
       }
     }
-  }
 
-  if (params.draft.discardPending) {
-    await params.draft.discardPending();
-  } else {
-    await params.draft.clear();
-  }
-  liveState = markLiveMessageCancelled(liveState);
-
-  let delivered;
-  try {
-    const result = await params.deliverNormally(params.payload);
-    delivered = result !== false;
-    if (delivered) {
-      await params.onNormalDelivered?.();
+    if (owner && !owner.isCurrent()) {
+      return result("normal-skipped");
     }
-  } finally {
-    if (delivered) {
-      const draft = params.draft;
-      await runBestEffortCleanup({
-        cleanup: () => draft.clear(),
-        onError: () =>
-          console.warn("Live preview cleanup failed after delivery; a stale preview may remain"),
+    if (draft.discardPending) {
+      await draft.discardPending();
+    } else {
+      // Retained for the published legacy adapter contract. Modern adapters provide
+      // discardPending so no visible artifact is deleted before replacement lands.
+      await draft.clear();
+    }
+    if (owner && !owner.isCurrent()) {
+      return result("normal-skipped");
+    }
+    update({ ...liveState, phase: "cancelled", canFinalizeInPlace: false });
+    try {
+      const delivered = await normal(params.payload, true);
+      return result(delivered.visibleReplySent ? "normal-delivered" : "normal-skipped");
+    } finally {
+      if (normalAccepted && (owner?.cleanup ?? true) && (owner?.isCurrent() ?? true)) {
+        await runBestEffortCleanup({
+          cleanup: async () => {
+            if ((await draft.clear()) === false) {
+              throw new Error("Live preview deletion was not confirmed");
+            }
+          },
+          onError: owner?.onCleanupFailure ?? warnCleanupFailure,
+        });
+      }
+    }
+  } catch (error) {
+    if (accepted) {
+      // Only evidence captured at send/edit boundaries participates. An accepted
+      // progress flush error must never masquerade as an accepted final send.
+      throw createChannelPartialDeliveryError(error, {
+        ...accepted,
+        visibleReplySent: true,
       });
     }
+    throw error;
   }
-
-  return { kind: delivered ? "normal-delivered" : "normal-skipped", liveState };
 }
 
-/** Runs live-preview finalization through an optional adapter, falling back to normal delivery. */
+/** Published stateless contract. Bundled channels use createLivePreviewLifecycle. */
+export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(
+  params: PublishedPreviewDeliveryParams<TPayload, TId, TEdit>,
+): Promise<LivePreviewFinalizerResult<TPayload>> {
+  return await deliverPreview(params);
+}
+
+/** Published adapter contract; shares the stateful owner's delivery implementation. */
 export async function deliverWithFinalizableLivePreviewAdapter<TPayload, TId, TEdit>(params: {
   kind: "tool" | "block" | "final";
   payload: TPayload;
   liveState?: LiveMessageState<TPayload>;
-  adapter?: FinalizableLivePreviewAdapter<TPayload, TId, TEdit>;
+  adapter?: PublishedPreviewAdapter<TPayload, TId, TEdit>;
   deliverNormally: (payload: TPayload) => Promise<boolean | void>;
   onNormalDelivered?: () => Promise<void> | void;
 }): Promise<LivePreviewFinalizerResult<TPayload>> {
-  if (!params.adapter) {
-    const liveState = params.liveState ?? createLiveMessageState<TPayload>();
-    const delivered = await params.deliverNormally(params.payload);
-    if (delivered === false) {
-      return { kind: "normal-skipped", liveState };
-    }
-    await params.onNormalDelivered?.();
-    return { kind: "normal-delivered", liveState };
-  }
-
-  return await deliverFinalizableLivePreview({
-    kind: params.kind,
-    payload: params.payload,
-    ...(params.liveState ? { liveState: params.liveState } : {}),
-    draft: params.adapter.draft,
-    buildFinalEdit: params.adapter.buildFinalEdit,
-    editFinal: params.adapter.editFinal,
-    ...(params.adapter.resolveFinalizedId
-      ? { resolveFinalizedId: params.adapter.resolveFinalizedId }
-      : {}),
-    deliverNormally: params.deliverNormally,
-    ...(params.adapter.createPreviewReceipt
-      ? { createPreviewReceipt: params.adapter.createPreviewReceipt }
-      : {}),
-    ...(params.adapter.onPreviewFinalized
-      ? { onPreviewFinalized: params.adapter.onPreviewFinalized }
-      : {}),
-    ...(params.adapter.buildSupplementalPayload
-      ? { buildSupplementalPayload: params.adapter.buildSupplementalPayload }
-      : {}),
-    ...(params.adapter.deliverSupplemental
-      ? { deliverSupplemental: params.adapter.deliverSupplemental }
-      : {}),
-    ...(params.adapter.handlePreviewEditError
-      ? { handlePreviewEditError: params.adapter.handlePreviewEditError }
-      : {}),
-    ...(params.onNormalDelivered ? { onNormalDelivered: params.onNormalDelivered } : {}),
-    ...(params.adapter.logPreviewEditFailure
-      ? { logPreviewEditFailure: params.adapter.logPreviewEditFailure }
-      : {}),
-  });
+  return await deliverPreview({ ...params.adapter, ...params });
 }
 
-/** Records the latest rendered preview batch and moves the live message into previewing state. */
+type FinalOutcome =
+  | "pending"
+  | "sending"
+  | "accepted"
+  | "delivered"
+  | "error"
+  | "partial"
+  | "failed"
+  | "suppressed";
+type PreviewGeneration<TPayload> = {
+  state: LiveMessageState<TPayload>;
+  outcome: FinalOutcome;
+};
+
+export type LivePreviewLifecycle<TPayload, TId> = {
+  readonly previewFinalized: boolean;
+  readonly finalDelivered: boolean;
+  readonly finalSucceeded: boolean;
+  readonly finalFailed: boolean;
+  readonly finalStarted: boolean;
+  deliver<TEdit = never>(params: {
+    kind: "tool" | "block" | "final";
+    payload: TPayload;
+    isError?: boolean;
+    adapter?: Omit<FinalizableLivePreviewAdapter<TPayload, TId, TEdit>, "draft">;
+    deliverNormally: (payload: TPayload) => Promise<LivePreviewDeliveryResult>;
+    onNormalDelivered?: () => Promise<void> | void;
+  }): Promise<LivePreviewFinalizerResult<TPayload>>;
+  observeDelivery: (result: LivePreviewDeliveryResult) => Promise<void>;
+  observeFailure: () => void;
+  cleanup: (options?: { failed?: boolean }) => Promise<void>;
+  retainPreview: () => void;
+  reset: () => void;
+};
+
+/** Owns one admitted turn's final facts and preview custody, not provider wire semantics. */
+export function createLivePreviewLifecycle<TPayload, TId>(
+  options: {
+    draft?: LivePreviewDraft<TId>;
+    retainOnError?: boolean;
+    cleanupUndelivered?: boolean;
+    onFinalStarted?: () => void;
+    onFinalDelivered?: () => void;
+    onCleanupFailure?: (error: unknown) => void;
+  } = {},
+): LivePreviewLifecycle<TPayload, TId> {
+  const newGeneration = (): PreviewGeneration<TPayload> => ({
+    state: createLiveMessageState({ canFinalizeInPlace: Boolean(options.draft) }),
+    outcome: "pending",
+  });
+  let generation = newGeneration();
+  const hasAccepted = (current: PreviewGeneration<TPayload>) =>
+    current.outcome === "accepted" ||
+    current.outcome === "delivered" ||
+    current.outcome === "error" ||
+    current.outcome === "partial";
+  const cleanup = async (current: PreviewGeneration<TPayload>, failed = false) => {
+    if (current !== generation) {
+      return;
+    }
+    await runBestEffortCleanup({
+      cleanup: async () => {
+        await options.draft?.discardPending?.();
+        if (
+          current !== generation ||
+          current.state.phase === "finalized" ||
+          current.outcome === "failed" ||
+          current.outcome === "sending" ||
+          current.outcome === "accepted" ||
+          current.outcome === "partial" ||
+          (current.outcome === "error" && options.retainOnError) ||
+          (!hasAccepted(current) && (failed || !options.cleanupUndelivered))
+        ) {
+          return;
+        }
+        if ((await options.draft?.clear()) === false) {
+          throw new Error("Live preview deletion was not confirmed");
+        }
+      },
+      onError: options.onCleanupFailure ?? warnCleanupFailure,
+    });
+  };
+  return {
+    get previewFinalized() {
+      return (
+        generation.state.phase === "finalized" ||
+        (generation.state.phase === "cancelled" && generation.outcome === "delivered")
+      );
+    },
+    get finalDelivered() {
+      return hasAccepted(generation);
+    },
+    get finalSucceeded() {
+      return generation.outcome === "delivered";
+    },
+    get finalFailed() {
+      return generation.outcome === "failed" || generation.outcome === "partial";
+    },
+    get finalStarted() {
+      return generation.outcome !== "pending";
+    },
+    async deliver(params) {
+      const current = generation;
+      const terminal = params.kind === "final";
+      const previouslyAccepted = current.outcome === "delivered";
+      if (terminal && current.outcome === "pending") {
+        current.outcome = "sending";
+        options.onFinalStarted?.();
+      }
+      try {
+        const result = await deliverPreview(
+          { ...params.adapter, ...params, draft: options.draft, liveState: current.state },
+          {
+            isCurrent: () => current === generation,
+            update: (state) => {
+              current.state = state;
+            },
+            accept: (_result, partial) => {
+              if (!terminal || previouslyAccepted || current.outcome === "delivered") {
+                return;
+              }
+              current.outcome = partial ? "partial" : params.isError ? "error" : "accepted";
+            },
+            complete: () => {
+              if (!terminal || current.outcome === "delivered") {
+                return;
+              }
+              current.outcome = params.isError ? "error" : "delivered";
+              if (current === generation && !params.isError) {
+                options.onFinalDelivered?.();
+              }
+            },
+            cleanup: !(params.isError && options.retainOnError),
+            onCleanupFailure: options.onCleanupFailure,
+          },
+        );
+        if (terminal && !hasAccepted(current)) {
+          current.outcome = "suppressed";
+        }
+        return result;
+      } catch (error) {
+        if (terminal && !previouslyAccepted && current.outcome !== "delivered") {
+          current.outcome = hasAccepted(current) ? "partial" : "failed";
+        }
+        throw error;
+      }
+    },
+    async observeDelivery(result) {
+      if (!result.visibleReplySent) {
+        return;
+      }
+      const current = generation;
+      const started = current.outcome !== "pending";
+      const notify = current.outcome !== "delivered";
+      current.outcome = "delivered";
+      if (current.state.phase !== "finalized") {
+        current.state = { ...current.state, phase: "cancelled", canFinalizeInPlace: false };
+      }
+      try {
+        if (!started) {
+          options.onFinalStarted?.();
+        }
+        if (notify) {
+          options.onFinalDelivered?.();
+        }
+      } catch (error) {
+        throw createChannelPartialDeliveryError(error, { ...result, visibleReplySent: true });
+      } finally {
+        await cleanup(current);
+      }
+    },
+    observeFailure() {
+      if (!hasAccepted(generation)) {
+        generation.outcome = "failed";
+      }
+    },
+    async cleanup(params) {
+      await cleanup(generation, params?.failed);
+    },
+    retainPreview() {
+      generation.state = { ...generation.state, phase: "finalized", canFinalizeInPlace: false };
+    },
+    reset() {
+      generation = newGeneration();
+    },
+  };
+}
+
 export function markLiveMessagePreviewUpdated<TPayload>(
   state: LiveMessageState<TPayload>,
   rendered: RenderedMessageBatch<TPayload>,
@@ -302,16 +587,5 @@ export function markLiveMessagePreviewUpdated<TPayload>(
     ...state,
     phase: "previewing",
     lastRendered: rendered,
-  };
-}
-
-/** Marks a live message cancelled and prevents later in-place finalization. */
-function markLiveMessageCancelled<TPayload>(
-  state: LiveMessageState<TPayload>,
-): LiveMessageState<TPayload> {
-  return {
-    ...state,
-    phase: "cancelled",
-    canFinalizeInPlace: false,
   };
 }

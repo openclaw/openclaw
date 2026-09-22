@@ -133,6 +133,7 @@ export function createSubscriptionHydrationHarness(
     hello: null as GatewayHelloOk | null,
   };
   const gatewayListeners = new Set<(next: typeof snapshot) => void>();
+  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   const publish = () => gatewayListeners.forEach((listener) => listener(snapshot));
   const gateway = {
     connection: { gatewayUrl: "ws://gateway.example.test" },
@@ -143,7 +144,10 @@ export function createSubscriptionHydrationHarness(
       gatewayListeners.add(listener);
       return () => gatewayListeners.delete(listener);
     },
-    subscribeEvents: () => () => undefined,
+    subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
     setSessionKey(sessionKey: string) {
       snapshot = { ...snapshot, sessionKey };
       publish();
@@ -173,6 +177,11 @@ export function createSubscriptionHydrationHarness(
     gateway,
     selection,
     sessions,
+    emitEvent: (event: GatewayEventFrame) => {
+      for (const listener of eventListeners) {
+        listener(event);
+      }
+    },
     connect: () => {
       snapshot = { ...snapshot, client, phase: "connected", assistantAgentId: "main" };
       publish();

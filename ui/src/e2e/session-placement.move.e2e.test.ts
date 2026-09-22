@@ -687,7 +687,7 @@ suite.define(() => {
 
   it.each([
     { machineId: "fast", expectedMachineClass: "fast" },
-    { machineId: "standard", expectedMachineClass: undefined },
+    { machineId: "standard", expectedMachineClass: "standard" },
     { machineId: undefined, expectedMachineClass: undefined },
   ])(
     "moves to a cloud profile with machine $machineId",

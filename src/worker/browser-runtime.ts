@@ -33,15 +33,16 @@ type CreateWorkerBrowserToolRuntimeParams = {
   runtime?: WorkerBrowserRuntime;
 };
 
-function runWorkerBrowserLauncher(launcherPath: string): Promise<void> {
+function runWorkerBrowserLauncher(descriptor: WorkerBrowserLaunchDescriptor): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     execFile(
-      launcherPath,
-      [],
+      descriptor.launcherPath,
+      descriptor.launcherArgs ?? [],
       {
         timeout: WORKER_BROWSER_LAUNCH_TIMEOUT_MS,
         maxBuffer: WORKER_BROWSER_LAUNCH_OUTPUT_LIMIT_BYTES,
         windowsHide: true,
+        shell: false,
       },
       (error) => {
         if (error) {
@@ -71,7 +72,7 @@ export async function createWorkerBrowserToolRuntime(
     });
   return await browserRuntime.createAttachedBrowserToolRuntime({
     cdpUrl: params.descriptor.cdpUrl,
-    ensureAttachTarget: async () => await runWorkerBrowserLauncher(params.descriptor.launcherPath),
+    ensureAttachTarget: async () => await runWorkerBrowserLauncher(params.descriptor),
     agentSessionKey: params.sessionKey,
     agentDir: params.stateDir,
     workspaceDir: params.workspaceDir,

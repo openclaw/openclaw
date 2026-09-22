@@ -74,7 +74,7 @@ export async function publishSessionPatchEffects(params: {
     // catalog only on reason "groups" (the sessions.groups.* siblings emit it).
     let catalogChanged: boolean;
     try {
-      catalogChanged = ensureSessionGroupRegistered(category);
+      catalogChanged = await ensureSessionGroupRegistered(category);
     } catch (error) {
       // The session category is already durable. Preserve that outcome and the
       // existing same-category patch recovery instead of asking clients to undo it.

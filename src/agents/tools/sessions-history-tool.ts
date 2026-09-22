@@ -55,10 +55,18 @@ import {
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: ChatHistoryParamsSchema.properties.sessionKey,
   limit: ChatHistoryParamsSchema.properties.limit,
-  offset: ChatHistoryParamsSchema.properties.offset,
+  offset: Type.With(ChatHistoryParamsSchema.properties.offset, {
+    description:
+      "Plain-pagination offset. Ignored when messageId is set; limit still bounds anchored history.",
+  }),
   pendingBefore: ChatHistoryParamsSchema.properties.pendingBefore,
-  messageId: ChatHistoryParamsSchema.properties.messageId,
-  sessionId: ChatHistoryParamsSchema.properties.sessionId,
+  messageId: Type.With(ChatHistoryParamsSchema.properties.messageId, {
+    description: "Return history around this message id. Ignores offset; limit bounds the window.",
+  }),
+  sessionId: Type.With(ChatHistoryParamsSchema.properties.sessionId, {
+    description:
+      "Transcript session id that owns messageId. Requires messageId; omit for the latest tail.",
+  }),
   includeTools: Type.Optional(Type.Boolean()),
 });
 

@@ -3,7 +3,7 @@
  *
  * What is REAL here (no vitest, no mocks of the seam under test):
  *   - `buildPreparedModelsProviderData()` from
- *     src/auto-reply/reply/commands-models.ts —
+ *     src/auto-reply/reply/commands-models-catalog.ts —
  *     the exact production function that builds `/models` provider data.
  *   - Explicit lifecycle publication captures real registered harnesses, catalog
  *     routes, and synthetic configured host-auth facts. Runtime choices pass the
@@ -56,7 +56,7 @@ import path, { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 
-type CommandsModelsModule = typeof import("../src/auto-reply/reply/commands-models.js");
+type CommandsModelsModule = typeof import("../src/auto-reply/reply/commands-models-catalog.js");
 type BindingsModule = typeof import("../src/agents/app-server-runtime-bindings.js");
 type BundledMetadataModule = typeof import("../src/plugins/bundled-plugin-metadata.js");
 type DirectiveRuntimeModule =
@@ -76,7 +76,7 @@ const importSource = async (relativePath: string) =>
   import(pathToFileURL(path.join(repoRoot, relativePath)).href);
 
 const { buildPreparedModelsProviderData } = (await importSource(
-  "src/auto-reply/reply/commands-models.ts",
+  "src/auto-reply/reply/commands-models-catalog.ts",
 )) as CommandsModelsModule;
 const { listAppServerRuntimeModelBackendBindings } = (await importSource(
   "src/agents/app-server-runtime-bindings.ts",

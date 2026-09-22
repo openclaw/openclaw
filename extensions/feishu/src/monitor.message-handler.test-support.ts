@@ -1,6 +1,7 @@
 // Feishu test support covers monitor.message handler plugin behavior.
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
-import { describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
@@ -75,6 +76,10 @@ function createHandler() {
 }
 
 describe("createFeishuMessageReceiveHandler self-message filtering", () => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+  });
+
   it("drops the current bot before debounce and processing claims", async () => {
     const { handler, handleMessage, enqueue } = createHandler();
 

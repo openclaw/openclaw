@@ -321,12 +321,12 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
 
 /** Count fenced code body characters using the same block grammar as rendering. */
 export function countMarkdownFencedCodeChars(markdown: string): number {
-  const tokens = createMarkdownIt({ linkify: false, autolink: false, tableMode: "bullets" }).parse(
-    markdown,
-    {},
-  );
+  if (!markdown.includes("```") && !markdown.includes("~~~")) {
+    return 0;
+  }
+  const parser = createMarkdownIt({ linkify: false, autolink: false, tableMode: "bullets" });
   let count = 0;
-  for (const token of tokens) {
+  for (const token of parser.parse(markdown, {})) {
     if (token.type === "fence") {
       // The parser's final LF frames the code body; counting it shifts the speech threshold.
       count += token.content.length - (token.content.endsWith("\n") ? 1 : 0);

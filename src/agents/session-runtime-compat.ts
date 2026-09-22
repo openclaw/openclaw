@@ -6,9 +6,18 @@
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  isManifestPluginAvailableForControlPlane,
+  loadManifestMetadataSnapshot,
+} from "../plugins/manifest-contract-eligibility.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { isAppServerRuntimeModelBackendBinding } from "./app-server-runtime-bindings.js";
+import {
+  isAppServerRuntimeModelBackendBinding,
+  listAppServerRuntimeModelBackendBindings,
+} from "./app-server-runtime-bindings.js";
+import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { isCliRuntimeAliasForProvider } from "./model-runtime-aliases.js";
 
 /** Persisted runtime fields used to recover session runtime compatibility. */
@@ -72,6 +81,31 @@ export function resolveCompatibleAgentRuntimeForProvider(params: {
   // 'Runtime "glm-bridge" is not supported for zai' and the model never changed,
   // even though the picker offered that exact combination (openclaw-vgx7).
   if (isAppServerRuntimeModelBackendBinding({ provider, runtime })) {
+    return runtime;
+  }
+  if (
+    runtime === "codex" ||
+    listAppServerRuntimeModelBackendBindings().some((binding) => binding.runtime === runtime)
+  ) {
+    // This runtime owns a dedicated single-provider binding above (Codex's
+    // virtual `codex` provider included); it must never fall through to the
+    // generic ACP harness discovery below just because its plugin happens to
+    // be registered for an unrelated provider.
+    return undefined;
+  }
+  if (getRegisteredAgentHarness(runtime)) {
+    return runtime;
+  }
+  const snapshot =
+    getCurrentPluginMetadataSnapshot({ config: params.cfg, allowWorkspaceScopedSnapshot: true }) ??
+    loadManifestMetadataSnapshot({ config: params.cfg });
+  if (
+    snapshot.plugins.some(
+      (plugin) =>
+        plugin.activation?.onAgentHarnesses?.includes(runtime) &&
+        isManifestPluginAvailableForControlPlane({ snapshot, plugin, config: params.cfg }),
+    )
+  ) {
     return runtime;
   }
   return isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg }) ? runtime : undefined;

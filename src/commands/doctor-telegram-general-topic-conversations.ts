@@ -20,6 +20,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
+import { projectExistingAgentDatabaseTargets } from "./doctor-session-sqlite-readers.js";
 
 const GENERAL_TOPIC_ID = "1";
 const LEGACY_GENERAL_TARGET = /^telegram:(-?\d+):topic:1$/u;
@@ -89,7 +90,11 @@ function listLegacyRows(database: import("node:sqlite").DatabaseSync): Conversat
 }
 
 function resolveRepairScopes(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
-  return resolveAllAgentSessionStoreTargetsSync(cfg, { env }).map((target) => {
+  return projectExistingAgentDatabaseTargets(
+    resolveAllAgentSessionStoreTargetsSync(cfg, { env }),
+    env,
+    cfg,
+  ).map((target) => {
     const scope = resolveSqliteReadScope({
       agentId: target.agentId,
       env,

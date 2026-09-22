@@ -1,15 +1,10 @@
 import { createHash } from "node:crypto";
-import fsp from "node:fs/promises";
-import path from "node:path";
 import {
   withWorkerWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "../gateway/worker-environments/workspace-hash-memo.js";
 import { changedPaths } from "../gateway/worker-environments/workspace-manifest-comparison.js";
-import {
-  parseWorkspaceManifest,
-  overlayWorkspaceManifest,
-} from "../gateway/worker-environments/workspace-manifest-worker.js";
+import { overlayWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -21,7 +16,11 @@ import type {
   NodeWorkerPreparedWorkspaceRow,
   NodeWorkerPreparedWorkspaceStore,
 } from "./node-worker-prepared-workspace-store.js";
-import { captureManifest, TRANSFER_TIMEOUT_MS } from "./node-worker-workspace-commands.js";
+import {
+  captureManifest,
+  readWorkspaceManifest,
+  TRANSFER_TIMEOUT_MS,
+} from "./node-worker-workspace-commands.js";
 
 export type NodeWorkerPreparedWorkspaceTransfer = {
   row: NodeWorkerPreparedWorkspaceRow;
@@ -38,16 +37,11 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
   signal?: AbortSignal;
 }) {
   const { row, store } = params.prepared;
-  const readManifest = async (ref: string) =>
-    await parseWorkspaceManifest(
-      await fsp.readFile(
-        path.join(row.home_dir, ".openclaw-worker", "manifests", `${ref.slice(7)}.json`),
-        "utf8",
-      ),
-      ref,
-      params.signal,
-    );
-  const source = await readManifest(row.source_manifest_ref);
+  const { manifest: source } = await readWorkspaceManifest(
+    row.home_dir,
+    row.source_manifest_ref,
+    params.signal,
+  );
   if (!source.baseCommit || params.manifest.baseCommit !== source.baseCommit) {
     throw new Error("Prepared workspace transfer does not match its immutable Git base");
   }
@@ -62,7 +56,11 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
       signal: params.signal,
     });
   const baseManifestRef = await capture(row.source_manifest_ref);
-  const base = await readManifest(baseManifestRef);
+  const { manifest: base } = await readWorkspaceManifest(
+    row.home_dir,
+    baseManifestRef,
+    params.signal,
+  );
   let target = params.manifest;
   let targetRef = params.manifestRef;
   if (params.sourceOverlay) {
@@ -73,10 +71,9 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
   const sourceEntries = new Map(source.entries.map((entry) => [entry.path, entry]));
   return {
     changed: changedPaths(base, target, params.signal),
-    materializeSourceFile: async (
+    readSourceFile: async (
       entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
-      destination: string,
-    ) => {
+    ): Promise<Buffer> => {
       const original = sourceEntries.get(entry.path);
       if (
         original?.type !== "file" ||
@@ -124,7 +121,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
         throw new Error("Prepared checkpoint immutable Git content verification failed");
       }
       params.signal?.throwIfAborted();
-      await fsp.writeFile(destination, result.stdout, { mode: entry.mode, flag: "wx" });
+      return result.stdout;
     },
     apply: async (stagingRoot: string): Promise<string> => {
       params.signal?.throwIfAborted();

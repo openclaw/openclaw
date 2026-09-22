@@ -113,6 +113,7 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
 }
 
 export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
+  readProviderDisplayId: vi.fn(() => undefined),
   getSessionAttachment: vi.fn(() => undefined),
   findSessionAttachment: vi.fn(() => undefined),
   getSessionAttachmentStatus: vi.fn(() => undefined),

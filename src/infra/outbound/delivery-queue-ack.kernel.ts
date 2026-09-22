@@ -1,6 +1,5 @@
 // Canonical outbound settlement returns cleanup facts only after custody commits.
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
-import { loadDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite-bound.js";
 import { transitionOwnedDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite-claim.kernel.js";
 import {
   completeDeliveryQueueEntryInDatabase,
@@ -13,17 +12,12 @@ import { hasLiveDeliveryQueueClaim } from "../delivery-queue-sqlite.types.js";
 import { collectEntrySpoolPaths } from "./delivery-queue-media-paths.js";
 import { createDeliveryQueueMediaRetentionInDatabase } from "./delivery-queue-media-staging.kernel.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
+import type {
+  AckDeliveryOptions,
+  FailPendingDeliveryResult,
+} from "./delivery-queue-settlement.types.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
-
-export type AckDeliveryOptions = {
-  /** Caller holds a GC-visible recovery lease until its active adapter settles. */
-  retainSpoolArtifacts?: boolean;
-  /** An intentionally suppressed pre-send batch must not become a success receipt. */
-  suppressCompletionReceipt?: boolean;
-  /** Prevent an older provider attempt from settling a replacement owner. */
-  expectedPlatformSendAttemptId?: string | null;
-};
 
 /** Retires an unsent live claim while its adapter preparation still owns resources. */
 export function retireUnsentDeliveryInDatabase(
@@ -132,36 +126,30 @@ export function ackDeliveryInDatabase(
       deleteDeliveryQueueEntryInDatabase(database, OUTBOUND_DELIVERY_QUEUE_NAME, id);
     }
   };
-  if (options && "expectedPlatformSendAttemptId" in options) {
-    const settled = transitionOwnedDeliveryQueueEntryInDatabase(
-      database,
-      {
-        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-        id,
-        platformSendAttemptId: options.expectedPlatformSendAttemptId ?? null,
-      },
-      (entry) => {
-        // SAFETY: Pending rows in this namespace retain the prepared outbound payload.
-        settle(entry as QueuedDelivery);
-      },
-    );
-    if (!settled) {
-      throw new Error(`Delivery platform claim was lost: ${id}`);
-    }
-  } else {
-    const current = loadDeliveryQueueEntryInDatabase(
-      database,
-      OUTBOUND_DELIVERY_QUEUE_NAME,
+  // A claimless caller has no owner to assert, so an unclaimed row settles and an
+  // already-missing row is a no-op; either way it must never touch a live claim.
+  const platformSendAttemptId =
+    options && "expectedPlatformSendAttemptId" in options
+      ? (options.expectedPlatformSendAttemptId ?? null)
+      : null;
+  const settled = transitionOwnedDeliveryQueueEntryInDatabase(
+    database,
+    {
+      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
       id,
-      "pending",
-    );
-    // SAFETY: Pending rows in this namespace retain the prepared outbound payload.
-    settle(current as QueuedDelivery | null);
+      platformSendAttemptId,
+      allowMissingEntry: !(options && "expectedPlatformSendAttemptId" in options),
+    },
+    (entry) => {
+      // SAFETY: Pending rows in this namespace retain the prepared outbound payload.
+      settle(entry as QueuedDelivery);
+    },
+  );
+  if (!settled) {
+    throw new Error(`Delivery platform claim was lost: ${id}`);
   }
   return spoolPaths;
 }
-
-export type FailPendingDeliveryResult = { status: "failed" } | { status: "not_pending" };
 
 /** Conditionally dead-letter a freshly re-read pending entry without a claimed state. */
 export function failPendingDeliveryInDatabase(
