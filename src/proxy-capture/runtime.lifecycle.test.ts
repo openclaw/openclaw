@@ -7,7 +7,12 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  closeOpenClawStateDatabaseByPathAsync,
+  retainOpenClawStateDatabase,
+} from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import {
   captureHttpExchange,
@@ -21,6 +26,7 @@ import {
   acquireDebugProxyCaptureStore,
   closeDebugProxyCaptureStore,
   DebugProxyCaptureStore,
+  getDebugProxyCaptureStore,
   persistEventPayload,
 } from "./store.sqlite.js";
 import type { CaptureEventRecord } from "./types.js";
@@ -98,6 +104,57 @@ function pendingResponse(chunks: Buffer[]) {
 }
 
 describe("capture store lifecycle", () => {
+  it("preserves capture across sibling release and explicit maintenance restart", async () => {
+    const root = stateRoot();
+    const env = { OPENCLAW_STATE_DIR: root };
+    const settings = captureSettings(root);
+    const getStore = () => getDebugProxyCaptureStore({ env });
+    const store = getStore();
+    const sibling = retainOpenClawStateDatabase(openOpenClawStateDatabase({ env }));
+    const deps: DebugProxyCaptureRuntimeDeps = { getStore };
+    try {
+      initializeDebugProxyCapture("fixture", settings, deps);
+      sibling.release();
+      captureWsEvent(
+        {
+          url: "wss://example.test/capture",
+          direction: "outbound",
+          kind: "ws-frame",
+          flowId: "after-sibling-release",
+          payload: "retained capture",
+        },
+        settings,
+        deps,
+      );
+      expect(store.getSessionEvents(settings.sessionId)).toContainEqual(
+        expect.objectContaining({ flowId: "after-sibling-release", dataText: "retained capture" }),
+      );
+      await closeOpenClawStateDatabaseByPathAsync(store.dbPath);
+      initializeDebugProxyCapture("fixture", settings, deps);
+      captureWsEvent(
+        {
+          url: "wss://example.test/capture",
+          direction: "outbound",
+          kind: "ws-frame",
+          flowId: "after-maintenance",
+          payload: "resumed capture",
+        },
+        settings,
+        deps,
+      );
+      expect(
+        getStore()
+          .getSessionEvents(settings.sessionId)
+          .map((event) => event.flowId),
+      ).toEqual(["after-maintenance", "after-sibling-release"]);
+    } finally {
+      sibling.release();
+      finalizeDebugProxyCapture(settings, deps);
+      store.close();
+      closeOpenClawStateDatabaseByPath(store.dbPath);
+    }
+  });
+
   it.each(
     (["shared", "legacy"] as const).flatMap((storage) =>
       (["direct", "last-lease"] as const).map((close) => ({ storage, close })),
@@ -340,7 +397,7 @@ describe("capture store lifecycle", () => {
         deps,
       );
       await stream.pending;
-      closeOpenClawStateDatabaseByPath(store.dbPath);
+      store.db.close();
       expect(store.isClosed).toBe(true);
       expect(() => finalizeDebugProxyCapture(settings, deps)).toThrow(AggregateError);
       expect(() => finalizeDebugProxyCapture(settings, deps)).not.toThrow();

@@ -67,6 +67,9 @@ export async function ensureCliExecutionBootstrap(params: {
   const loadPlugins = params.loadPlugins ?? startupPolicy.loadPlugins;
   const skipConfigGuard = params.skipConfigGuard ?? startupPolicy.skipConfigGuard;
   const validateConfigOnly = params.validateConfigOnly ?? startupPolicy.validateConfigOnly;
+  const nativeGatewayBootstrap =
+    commandPath[0] === "gateway" &&
+    (commandPath.length === 1 || (commandPath.length === 2 && commandPath[1] === "run"));
   if (!skipConfigGuard) {
     await measureCliCommandStartup("config-ready", async () => {
       const { ensureConfigReady } = await configGuardModuleLoader.load();
@@ -84,9 +87,6 @@ export async function ensureCliExecutionBootstrap(params: {
             : {}),
           ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
         });
-      const nativeGatewayBootstrap =
-        commandPath[0] === "gateway" &&
-        (commandPath.length === 1 || (commandPath.length === 2 && commandPath[1] === "run"));
       if (nativeGatewayBootstrap && !validateConfigOnly) {
         const [
           { withConfigSnapshotPreparation },
@@ -105,6 +105,14 @@ export async function ensureCliExecutionBootstrap(params: {
         await runConfigGuard();
       }
     });
+  }
+  if (nativeGatewayBootstrap && !validateConfigOnly) {
+    const { resolveEnabledDebugProxySettings } = await import("../proxy-capture/env.js");
+    if (resolveEnabledDebugProxySettings()) {
+      // State migration drains capture with its native handle; resume only after admission succeeds.
+      const { initializeDebugProxyCapture } = await import("../proxy-capture/runtime.js");
+      initializeDebugProxyCapture("cli");
+    }
   }
   if (!loadPlugins) {
     return;

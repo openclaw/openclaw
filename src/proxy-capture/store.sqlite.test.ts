@@ -30,7 +30,7 @@ afterEach(() => {
 
 function makeStore() {
   const root = makeTempDir(cleanupDirs, "openclaw-proxy-capture-");
-  return new DebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
+  return getDebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
 }
 
 function makeStateEnv(prefix: string): NodeJS.ProcessEnv {
@@ -217,7 +217,8 @@ describe("DebugProxyCaptureStore", () => {
 
     // Explicit acquisition after shared-handle retirement must rebind; retained
     // capture finalizers instead keep their exact owner and must not reopen it.
-    closeOpenClawStateDatabaseForTest();
+    stale.db.close();
+    stale.close();
     expect(stale.isClosed).toBe(true);
 
     const rebound = getDebugProxyCaptureStore(options);
@@ -228,19 +229,23 @@ describe("DebugProxyCaptureStore", () => {
   it("fences a shared store that was opened before external ownership was claimed", () => {
     const env = makeStateEnv("openclaw-proxy-capture-preclaim-");
     const store = new DebugProxyCaptureStore({ env });
-    env.OPENCLAW_SUPERVISOR_MODE = "external";
-    claimOpenClawStateOwnership("gateway-supervisor", { env });
-    delete env.OPENCLAW_SUPERVISOR_MODE;
+    try {
+      env.OPENCLAW_SUPERVISOR_MODE = "external";
+      claimOpenClawStateOwnership("gateway-supervisor", { env });
+      delete env.OPENCLAW_SUPERVISOR_MODE;
 
-    expect(() =>
-      store.upsertSession({
-        id: "preclaim-session",
-        startedAt: 1,
-        mode: "proxy-run",
-        sourceScope: "openclaw",
-        sourceProcess: "cli",
-      }),
-    ).toThrow(OpenClawStateOwnershipError);
+      expect(() =>
+        store.upsertSession({
+          id: "preclaim-session",
+          startedAt: 1,
+          mode: "proxy-run",
+          sourceScope: "openclaw",
+          sourceProcess: "cli",
+        }),
+      ).toThrow(OpenClawStateOwnershipError);
+    } finally {
+      store.close();
+    }
   });
 
   it("tracks and closes cached stores independently across paths", () => {
@@ -514,7 +519,7 @@ describe("DebugProxyCaptureStore", () => {
     () => {
       const env = makeStateEnv("openclaw-proxy-capture-permissions-");
       const root = env.OPENCLAW_STATE_DIR!;
-      const store = new DebugProxyCaptureStore({ env });
+      const store = getDebugProxyCaptureStore({ env });
       const blob = store.persistPayload(Buffer.from("authorization: Bearer secret"));
       const row = store.db
         .prepare(

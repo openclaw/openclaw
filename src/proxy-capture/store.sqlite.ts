@@ -12,7 +12,11 @@ import {
   registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
-import { retainOpenClawStateDatabaseForIdle } from "../state/openclaw-state-db-cache.js";
+import {
+  registerOpenClawStateDatabaseAsyncResource,
+  requireOpenClawStateDatabaseIdentity,
+  retainOpenClawStateDatabaseForIndependentRead,
+} from "../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -191,7 +195,8 @@ function runSharedDebugProxyCaptureWrite<T>(owner: object, operation: () => T): 
 
 class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
   private readonly pathBased?: PathBasedDebugProxyCaptureStore;
-  private readonly releaseIdleReference?: () => void;
+  private readonly databaseReference?: { release(): void };
+  private readonly unregisterDatabaseResource?: () => void;
   private closed: boolean;
   private closing: boolean;
 
@@ -226,7 +231,17 @@ class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
     });
     this.closed = false;
     this.closing = false;
-    this.releaseIdleReference = retainOpenClawStateDatabaseForIdle(database);
+    // Pin the native handle without requesting retirement; writes retain their
+    // separate coordinator admission in runSharedDebugProxyCaptureWrite.
+    this.databaseReference = retainOpenClawStateDatabaseForIndependentRead(database.path)!;
+    const databaseIdentity = requireOpenClawStateDatabaseIdentity(database);
+    this.unregisterDatabaseResource = registerOpenClawStateDatabaseAsyncResource({
+      close: async (identity) => {
+        if (!identity || identity.key === databaseIdentity.key) {
+          this.close();
+        }
+      },
+    });
     sharedDebugProxyCaptureStates.set(this, { database, env: optionsOrDbPath.env });
   }
 
@@ -238,7 +253,8 @@ class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
     const errors: unknown[] = [];
     for (const close of [
       () => finalizeCaptureStore(this),
-      () => this.releaseIdleReference?.(),
+      () => this.unregisterDatabaseResource?.(),
+      () => this.databaseReference?.release(),
       () => this.pathBased?.walMaintenance.close(),
       () => {
         if (this.pathBased && this.db.isOpen) {
@@ -355,8 +371,8 @@ export function closeDebugProxyCaptureStore(): void {
   }
 }
 
-// Lease API keeps one cached capture-store wrapper alive across related
-// operations, then releases it without closing the shared state database.
+// Capture leases share one wrapper; its native reference keeps sibling borrowers
+// from retiring the database before capture has settled.
 export function acquireDebugProxyCaptureStore(
   dbPath: string,
   blobDir: string,
