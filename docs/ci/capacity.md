@@ -75,6 +75,16 @@ fails instead of dropping work or increasing either cap.
 
 The approved row-cap increase raises compact plans from 80 to 90 rows and final Node matrices from 64/120 to 70/130 push/PR rows. It reserves room for the measured isolated Gateway-server family and measured plugin-envelope packing. At the limits, each run can admit six more Node registrations on push or ten more on PR; compact rows are already included in that total. Across the retained four-main/21-PR arrival envelope, the increase is `4 × 6 + 21 × 10 = 234`, taking the conservative ceiling from 4,776 to 5,010. Runner classes, workers, matrix concurrency and timeouts retain their existing policies. The cap increase alone does not establish a runtime improvement.
 
+Full manual Node plans split the Gateway isolated/database-worker cohort with
+the existing 64-file envelope limit and deterministic file weights. Run
+35727279415 exhausted its 60-minute job after completing the 18 isolated files
+and passing cases from only 137 of 235 database-worker files. The current 257-file
+inventory now occupies five complete, disjoint stripes, adding four manual jobs
+while preserving both configs, two workers and the job deadline. Dispatches
+route these rows to GitHub-hosted runners, so the split adds no Blacksmith
+registrations. Compact main/PR planning and the 90/70/130 row caps are unchanged;
+neither the file limit nor advisory weights guarantee a wall time.
+
 The shared plugin catch-all, QA and provider suites use native Vitest sharding, sized from the existing 90-file envelope budget. Their complete configs still own discovery and exclusions; the counting inventory never narrows execution to the directly changed plugin. At `2f7fb353`, the catch-all has 486 counting entries and 474 effective files across six jobs, QA has 238/232 across three, and providers have 275/256 across four. Counting entries include files excluded by Vitest, so the budget is conservative. Each job retains its existing worker limits, isolation policy and per-file module cleanup.
 
 Process-bounded plugin fallback uses each test file's effective config owner,

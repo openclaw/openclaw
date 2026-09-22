@@ -103,66 +103,63 @@ export async function executeWorkerTurn(
   }
   turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
-  // The unrecorded-input fallback retains its writable view and captured append custody.
-  const readAsynchronously =
-    turn.suppressNextUserMessagePersistence === true ||
-    turn.userTurnTranscriptRecorder?.hasPersisted() === true;
-  // Pending recorder writes keep the synchronous read-before-persist ordering.
-  const manager = readAsynchronously
-    ? await SessionManager.openModelContextAsync(transcriptTarget, { signal: turn.abortSignal })
-    : turn.userTurnTranscriptRecorder
-      ? SessionManager.openModelContext(transcriptTarget)
-      : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
+  const recorder = turn.userTurnTranscriptRecorder;
   const assertContextCurrent = () => {
     params.assertRunCurrent?.();
     turn.abortSignal?.throwIfAborted();
+    if (recorder?.isBlocked()) {
+      throw new Error("Cloud worker turn input is blocked");
+    }
     if (!params.placements.validateTurnClaim(params.turnClaim)) {
       throw new Error("Worker turn claim changed during context preparation");
     }
     resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
   };
   assertContextCurrent();
-  const userMessageAlreadyPersisted =
-    turn.suppressNextUserMessagePersistence === true ||
-    turn.userTurnTranscriptRecorder?.hasPersisted() === true;
-  const contextMessages = convertToLlm(manager.buildSessionContext().messages);
-  const leaf = manager.getLeafEntry();
-  const history =
-    userMessageAlreadyPersisted && leaf?.type === "message" && leaf.message.role === "user"
-      ? contextMessages.slice(0, -1)
-      : contextMessages;
-  let baseLeafId = manager.getLeafId();
-  if (!userMessageAlreadyPersisted) {
-    const persisted = turn.userTurnTranscriptRecorder
-      ? await turn.userTurnTranscriptRecorder.persistApproved({
-          cwd:
-            params.workspace.kind === "local"
-              ? params.workspace.path
-              : placement.remoteWorkspaceDir,
-        })
-      : undefined;
-    if (persisted) {
-      baseLeafId = persisted.messageId;
-      turn.onUserMessagePersisted?.(persisted.message);
-    } else if (turn.userTurnTranscriptRecorder?.hasPersisted()) {
-      const persistedView = await SessionManager.openAsync(
-        transcriptTarget,
-        undefined,
-        undefined,
-        turn.abortSignal,
-      );
-      assertContextCurrent();
-      baseLeafId = persistedView.getLeafId();
-    } else if (turn.userTurnTranscriptRecorder) {
-      throw new Error("Cloud worker turn could not persist its canonical user message");
-    }
+  if (recorder?.hasRuntimePersistencePending()) {
+    await recorder.waitForRuntimePersistence();
+    assertContextCurrent();
   }
+  if (recorder && turn.suppressNextUserMessagePersistence !== true && !recorder.hasPersisted()) {
+    const persisted = await recorder.persistApproved({
+      cwd: params.workspace.kind === "local" ? params.workspace.path : placement.remoteWorkspaceDir,
+    });
+    if (persisted) {
+      turn.onUserMessagePersisted?.(persisted.message);
+    }
+    assertContextCurrent();
+  }
+  const receipt = recorder?.getAdmissionReceipt();
+  const admission = receipt ? { ...receipt } : undefined;
+  if (recorder && !admission) {
+    throw new Error("Cloud worker turn has no readable canonical user admission");
+  }
+  const userMessageAlreadyPersisted =
+    admission !== undefined || turn.suppressNextUserMessagePersistence === true;
+  // Validate context after reentrant phase callbacks have finished.
   turn.onExecutionPhase?.({
     phase: "model_resolution",
     backend: "cloud-worker",
     provider: modelRef.provider,
     model: modelRef.model,
   });
+  const manager = userMessageAlreadyPersisted
+    ? await SessionManager.openModelContextAsync(transcriptTarget, {
+        admission,
+        signal: turn.abortSignal,
+      })
+    : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
+  assertContextCurrent();
+  const contextMessages = convertToLlm(manager.buildSessionContext().messages);
+  const leaf = manager.getLeafEntry();
+  const history =
+    !admission &&
+    userMessageAlreadyPersisted &&
+    leaf?.type === "message" &&
+    leaf.message.role === "user"
+      ? contextMessages.slice(0, -1)
+      : contextMessages;
+  let baseLeafId = admission?.entryId ?? manager.getLeafId();
 
   assertContextCurrent();
   const credential = await params.environments.acquireTurnCredential(params.turnClaim);
@@ -299,7 +296,7 @@ export async function executeWorkerTurn(
     ) {
       throw new StaleWorkerBuildError();
     }
-    if (!userMessageAlreadyPersisted && !turn.userTurnTranscriptRecorder) {
+    if (!userMessageAlreadyPersisted && !recorder) {
       const canonical = buildPersistedUserTurnMessage({
         text: turn.transcriptPrompt ?? turn.prompt,
         media: turn.media,
@@ -425,7 +422,7 @@ export async function executeWorkerTurn(
     if (!isAuthorized()) {
       throw new Error("Worker turn authority changed while preparing its launch");
     }
-    turn.userTurnTranscriptRecorder?.markSentToProvider?.();
+    recorder?.markSentToProvider?.();
     turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend: "cloud-worker" });
     const handoffAbort = new AbortController();
     let handoffError: Error | undefined;

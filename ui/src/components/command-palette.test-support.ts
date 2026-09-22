@@ -10,6 +10,7 @@ import type {
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
+import { invalidateCronCatalog } from "../lib/cron/catalog.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import {
   createTestGatewayClient,
@@ -77,6 +78,9 @@ export function createGateway(
   return {
     gateway,
     emit(event) {
+      if (event === "cron" || event === "config.changed") {
+        invalidateCronCatalog(client);
+      }
       if (event === "config.changed" || event === "chat.metadata.changed") {
         invalidateChatMetadataStore(client);
       }
@@ -86,6 +90,7 @@ export function createGateway(
     },
     setConnected(nextConnected) {
       if (!nextConnected) {
+        invalidateCronCatalog(client);
         invalidateChatMetadataStore(client);
       }
       snapshot = {

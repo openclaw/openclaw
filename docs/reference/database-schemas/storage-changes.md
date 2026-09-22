@@ -76,9 +76,12 @@ Sandbox registry lists, point lookups, backend/scope runtime IDs, and browser
 registry reads execute in the shared-state read worker. CLI management and
 runtime provisioning await the same domain APIs. Reads retain inherited snapshot
 and disposable-source scopes, preserve read-only and missing-state behavior, and
-join native reader cleanup before returning. Registry writes, runtime reservation
-and currentness callbacks, and Doctor imports retain their synchronous owners;
-their worker migration remains separate work.
+join native reader cleanup before returning. Doctor imports legacy registry rows
+through the shared-state writer, with host transaction and commit admission under
+the captured maintenance scope. Imports retain sequential per-row transactions,
+existing-row precedence, and sharded-before-monolithic ordering; source cleanup
+waits for durable acknowledgement. Runtime registry writes, reservations, and
+currentness callbacks retain their synchronous owners.
 
 Shared-state operations that request host transaction or commit admission acquire
 fresh lifecycle coordinator custody on their executing SQLite worker. A live

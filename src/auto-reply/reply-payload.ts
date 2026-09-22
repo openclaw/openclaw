@@ -358,6 +358,48 @@ export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata |
   return replyPayloadMetadata.get(payload);
 }
 
+/** Exact source occurrence represented by one emitted block reply. */
+export type ReplyPayloadSourceOccurrence = {
+  assistantMessageIndex: number;
+  sourceText: string;
+  sourceRange: readonly [start: number, end: number];
+};
+
+/** Reads a complete, internally consistent source occurrence from reply metadata. */
+export function readReplyPayloadSourceOccurrence(
+  payload: object,
+): ReplyPayloadSourceOccurrence | undefined {
+  const metadata = getReplyPayloadMetadata(payload);
+  const assistantMessageIndex = metadata?.assistantMessageIndex;
+  const sourceText = metadata?.blockSourceText;
+  const sourceRange = metadata?.blockSourceRange;
+  if (
+    typeof assistantMessageIndex !== "number" ||
+    !Number.isSafeInteger(assistantMessageIndex) ||
+    assistantMessageIndex < 0 ||
+    typeof sourceText !== "string" ||
+    !Array.isArray(sourceRange) ||
+    sourceRange.length !== 2
+  ) {
+    return undefined;
+  }
+  const [start, end] = sourceRange;
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    end <= start ||
+    end - start !== sourceText.length
+  ) {
+    return undefined;
+  }
+  return {
+    assistantMessageIndex,
+    sourceText,
+    sourceRange: [start, end],
+  };
+}
+
 /** Explicit speech remains content while the payload waits for TTS admission. */
 export function hasReplyPayloadSpeechContent(payload: object): boolean {
   return Boolean(readNonBlankString(getReplyPayloadMetadata(payload)?.tts?.text));

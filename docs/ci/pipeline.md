@@ -131,7 +131,9 @@ without the runtime-selection capability keep their original Node behavior.
 The UI job probes its actual config and arguments through the target's runtime
 owner, so older unit-only helpers, helpers requiring the retired global FTL flag,
 and legacy compatibility targets retain Node.
-Its three native shards and three workers per row remain unchanged.
+Current-runner targets use three native shards and three workers per row,
+including exact-target Full Release Validation dispatches. Historical
+compatibility targets retain their unsharded package command.
 The UI runtime partition is applied after Vitest selects each native shard, so
 files keep their original shard ownership. A shard with no Node-only files
 finishes that partition without running other UI files. Dual validation runs

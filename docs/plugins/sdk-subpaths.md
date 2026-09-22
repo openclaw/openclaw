@@ -175,7 +175,7 @@ new code; see the per-row notes below.
     | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
     | `plugin-sdk/question-gateway-runtime` | Resolve runtime-authored `ask_user` choices through the Gateway from channel interaction handlers |
     | `plugin-sdk/channel-inbound` | Shared inbound helpers for event classification, context building, formatting, roots, debounce, mention matching, mention-policy, and inbound logging |
-    | `plugin-sdk/channel-inbound-debounce` | Narrow inbound debounce helpers |
+    | `plugin-sdk/channel-inbound-debounce` | Keyed inbound batching with pending-aware `resolveDebounceMs`, optional `canAppend` batch boundaries, and `maxWaitMs` (defaults to five initial quiet windows, never shorter than the first quiet window). `shouldBuffer(item)` checks admission synchronously before `enqueue(item)`. Cancellation includes sealed batches waiting for dispatch, but not active work. |
     | `plugin-sdk/channel-mention-gating` | Private-local after July 2026; Narrow mention-policy, mention marker, and mention text helpers without the broader inbound runtime surface |
     | `plugin-sdk/channel-streaming-config` | Dependency-light channel streaming config readers (`getChannelStreamingConfigObject`, `resolveChannelStreamingNativeTransport`) for doctor contract closures and other control-plane paths that must not load the reply pipeline |
     | `plugin-sdk/channel-send-result` | Reply result types |
