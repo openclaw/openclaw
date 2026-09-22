@@ -35,6 +35,9 @@ export async function createMatrixDraftController(params: {
     client,
     logVerboseMessage,
   } = params;
+  type DraftDisposition = "active" | "retained" | "consumed";
+  let draftDisposition: DraftDisposition = "active";
+
   const draftStreamingEnabled = streaming !== "off";
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
   const progressDraftStreaming = streaming === "progress";
