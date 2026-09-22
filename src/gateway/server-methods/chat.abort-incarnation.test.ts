@@ -8,10 +8,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -105,7 +102,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       });
       await vi.waitFor(() => expect(ended.execution.status).toBe("terminal"));
       clearAgentRunContext("ended");
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       expect(ended.endedReason).toBe("subagent-complete");
     }
     expect(subagentRuns.get("ended")).toBe(ended);

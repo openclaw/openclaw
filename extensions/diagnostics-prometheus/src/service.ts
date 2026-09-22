@@ -20,6 +20,7 @@ import {
   formatLabelEntry,
   formatLabels,
   formatPrometheusNumber,
+  seconds,
   sortedLabels,
   type LabelSet,
 } from "./prometheus-format.js";
@@ -27,6 +28,7 @@ import {
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
+import { recordGatewayRpcEvent } from "./service-gateway-rpc.js";
 
 const TOKEN_BUCKETS = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576];
 const BYTE_BUCKETS = [
@@ -34,11 +36,6 @@ const BYTE_BUCKETS = [
   4294967296, 17179869184,
 ];
 const RATIO_BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 2, 4, 8, 16];
-
-function seconds(ms: number | undefined): number | undefined {
-  const value = numericValue(ms);
-  return value === undefined ? undefined : value / 1000;
-}
 
 function safeErrorMessage(err: unknown): string {
   const message = err instanceof Error ? (err.message ?? err.name) : String(err);
@@ -380,6 +377,10 @@ function recordDiagnosticEvent(
   }
 
   switch (evt.type) {
+    case "diagnostic.phase.completed":
+    case "gateway.rpc":
+      recordGatewayRpcEvent(store, evt, metadata);
+      return;
     case "diagnostic.gc":
       store.histogram(
         "openclaw_gc_duration_seconds",
@@ -402,51 +403,6 @@ function recordDiagnosticEvent(
         evt.intervalMs / 1000,
       );
       return;
-    case "gateway.rpc": {
-      const labels = { method: evt.method };
-      if (evt.phase === "received") {
-        store.counter(
-          "openclaw_gateway_rpc_requests_total",
-          "Authenticated Gateway WebSocket requests received.",
-          labels,
-        );
-        return;
-      }
-      store.counter(
-        "openclaw_gateway_rpc_outcomes_total",
-        "Gateway RPC observations by phase and outcome.",
-        { phase: evt.phase, outcome: evt.outcome },
-      );
-      if (evt.phase === "response" && (evt.outcome === "ok" || evt.outcome === "error")) {
-        store.histogram(
-          "openclaw_gateway_rpc_first_response_seconds",
-          "Elapsed time until the first Gateway RPC response is sent.",
-          labels,
-          seconds(evt.durationMs),
-        );
-      } else if (evt.phase === "handler") {
-        store.histogram(
-          "openclaw_gateway_rpc_handler_seconds",
-          "Gateway RPC handler duration until return or throw.",
-          labels,
-          seconds(evt.durationMs),
-        );
-        store.histogram(
-          "openclaw_gateway_rpc_admission_seconds",
-          "Elapsed time from Gateway RPC receipt until handler invocation.",
-          labels,
-          seconds(evt.admissionMs),
-        );
-      } else if (evt.phase === "dispatch") {
-        store.histogram(
-          "openclaw_gateway_rpc_queue_wait_seconds",
-          "Gateway operator request start queue wait.",
-          labels,
-          seconds(evt.queueWaitMs),
-        );
-      }
-      return;
-    }
     case "model.usage":
       recordModelUsage(store, evt);
       return;
