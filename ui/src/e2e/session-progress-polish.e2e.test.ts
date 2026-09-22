@@ -101,6 +101,7 @@ suite.define(() => {
       );
       const page = await context.newPage();
       const { gateway, card } = await openProgress(page);
+      await page.locator(".session-progress-card__summary").focus();
       const frame = await page.locator(".session-progress-card--composer").evaluate((element) => {
         const style = getComputedStyle(element);
         return {
@@ -112,6 +113,12 @@ suite.define(() => {
       expect(frame.width).toBe("1px");
       expect(frame.color).not.toBe("rgba(0, 0, 0, 0)");
       expect(frame.shadow).toBe("none");
+      if (mode === "light") {
+        const composerShadow = await page
+          .locator(".agent-chat__input")
+          .evaluate((element) => getComputedStyle(element).boxShadow);
+        expect(composerShadow.startsWith(`${frame.color} 0px 0px 0px 1px`)).toBe(true);
+      }
       const body = page.locator(".session-progress-card--composer .session-progress-card__body");
       const mask = () => body.evaluate((el) => getComputedStyle(el).maskImage);
       const height = () => body.evaluate((el) => el.clientHeight);

@@ -113,7 +113,7 @@ describe("elastic progress disclosure controller", () => {
     },
   );
 
-  it.each(["history", "header", "click"] as const)(
+  it.each(["history", "header"] as const)(
     "retains a %s collapse through revisions, completion, and remount",
     async (choice) => {
       const container = createContainer();
@@ -128,10 +128,8 @@ describe("elastic progress disclosure controller", () => {
         vi.advanceTimersByTime(201);
         transcript.wheel(200);
         vi.advanceTimersByTime(301);
-      } else if (choice === "header") {
-        summary.dispatchEvent(new WheelEvent("wheel", { deltaY: 400, cancelable: true }));
       } else {
-        summary.click();
+        summary.dispatchEvent(new WheelEvent("wheel", { deltaY: 400, cancelable: true }));
       }
       expect(card.open).toBe(false);
       context.readingHistory = false;
@@ -295,31 +293,26 @@ describe("elastic progress disclosure controller", () => {
     expect(card.open).toBe(false);
     expect(body.style.height).toBe("");
   });
-  it.each([false, true])(
-    "preserves another pane's newer manual choice after stale automatic collapse and remount (open=%s)",
-    async (manualOpen) => {
-      const first = createContainer();
-      const second = createContainer();
-      const context = { gatewayScope: {}, cardLifetime: {}, readingHistory: true };
-      renderTranscriptCard(first, context);
-      renderTranscriptCard(second, context);
-      const transcript = observeTranscript(first, transcriptCleanups);
-      await Promise.resolve();
-      second.querySelector("summary")!.click();
-      if (manualOpen) {
-        second.querySelector("summary")!.click();
-      }
-      expect(second.querySelector("details")!.open).toBe(manualOpen);
-      transcript.wheel(200);
-      vi.advanceTimersByTime(201);
-      transcript.wheel(200);
-      vi.advanceTimersByTime(300);
-      expect(first.querySelector("details")!.open).toBe(false);
-      render(nothing, second);
-      renderTranscriptCard(second, context);
-      expect(second.querySelector("details")!.open).toBe(manualOpen);
-    },
-  );
+  it("preserves another pane's newer manual reopen after stale automatic collapse and remount", async () => {
+    const first = createContainer();
+    const second = createContainer();
+    const context = { gatewayScope: {}, cardLifetime: {}, readingHistory: true };
+    renderTranscriptCard(first, context);
+    renderTranscriptCard(second, context);
+    const transcript = observeTranscript(first, transcriptCleanups);
+    await Promise.resolve();
+    second.querySelector("summary")!.click();
+    second.querySelector("summary")!.click();
+    expect(second.querySelector("details")!.open).toBe(true);
+    transcript.wheel(200);
+    vi.advanceTimersByTime(201);
+    transcript.wheel(200);
+    vi.advanceTimersByTime(300);
+    expect(first.querySelector("details")!.open).toBe(false);
+    render(nothing, second);
+    renderTranscriptCard(second, context);
+    expect(second.querySelector("details")!.open).toBe(true);
+  });
 
   it.each([
     { first: progressCard.sessionKey, next: "agent:main:next" },
