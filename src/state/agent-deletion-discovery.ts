@@ -172,7 +172,8 @@ export function createRetainedAgentDatabaseMatcher(
       [resolveOpenClawStateSqlitePath(env), ...namespace.readDatabasePaths()].some(
         hasSqliteFileFamily,
       ) ||
-      (agentDirectories && readConfiguredTargets().some(({ path }) => hasSqliteArtifacts(path)));
+      (agentDirectories &&
+        readConfiguredTargets().some((target) => hasSqliteArtifacts(target.path)));
     return (pathname: string, _agentId?: string) =>
       unavailable || (agentDirectories && hasSqliteArtifacts(pathname));
   }

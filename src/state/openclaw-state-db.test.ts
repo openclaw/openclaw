@@ -3723,9 +3723,15 @@ describe("openclaw state database", () => {
           .get(tableName),
       ).toBeUndefined();
     }
+    const expected = createInitialStateSchemaShape("unavailable");
     expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(migrated.db))).toEqual(
-      normalizeSqliteSchemaShapeSql(createInitialStateSchemaShape()),
+      normalizeSqliteSchemaShapeSql(expected),
     );
+    expect(
+      migrated.db
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'")
+        .get(),
+    ).toBeUndefined();
     // The fixture's auth_profile_stores row is keyed 'fixture-store', not the
     // production 'shared' key, so the v13 fold drops the table without
     // importing it into the KV.
@@ -4233,7 +4239,13 @@ INSERT INTO device_identities VALUES (
       updated_at_ms: 20,
     });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
+    const expected = createInitialStateSchemaShape("unavailable");
+    expect(collectSqliteSchemaShape(database.db)).toEqual(expected);
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'")
+        .get(),
+    ).toBeUndefined();
   });
 
   it("adopts a canonical native PortGuardian seed without losing records", () => {
@@ -4270,8 +4282,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       timestamp: 42.5,
     });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    const expected = createInitialStateSchemaShape();
-    delete expected.agent_deletion_journal;
+    const expected = createInitialStateSchemaShape("unavailable");
     expect(collectSqliteSchemaShape(database.db)).toEqual(expected);
     expect(
       database.db

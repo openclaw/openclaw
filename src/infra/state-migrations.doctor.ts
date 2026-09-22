@@ -2754,15 +2754,6 @@ async function executeLegacyStateMigrations(
   }
   const stateEnv = { ...env, OPENCLAW_STATE_DIR: stateDir };
   let agentDatabaseMigrationDiscovery = params.agentDatabaseMigrationDiscovery;
-  let agentDiscoveryFailure: { error: unknown } | undefined;
-  try {
-    agentDatabaseMigrationDiscovery ??= await prepareDoctorAgentDatabaseDiscovery(
-      params.cfg,
-      stateEnv,
-    );
-  } catch (error) {
-    agentDiscoveryFailure = { error };
-  }
   const stateSchemaOptions = { env: stateEnv };
   const configPath = resolveConfigPath(env, stateDir, homedir);
   let agentDatabaseTargets: Array<{ agentId: string; path: string }> = [];
@@ -2955,11 +2946,12 @@ async function executeLegacyStateMigrations(
     configIncludedPaths,
     stateDir,
     env,
-    run: () => {
+    run: async () => {
       try {
-        if (agentDiscoveryFailure) {
-          throw agentDiscoveryFailure.error;
-        }
+        agentDatabaseMigrationDiscovery ??= await prepareDoctorAgentDatabaseDiscovery(
+          params.cfg,
+          stateEnv,
+        );
         agentDatabaseTargets = hasCustomAgentDirOverride(env)
           ? []
           : [...(agentDatabaseMigrationDiscovery?.configuredAgentDatabaseTargets ?? [])];
