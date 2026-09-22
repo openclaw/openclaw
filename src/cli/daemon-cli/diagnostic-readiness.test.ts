@@ -164,6 +164,63 @@ describe("diagnostic Gateway readiness", () => {
     },
   );
 
+  it("exits promptly when command inspection proves the Gateway service is absent", async () => {
+    readCommand.mockImplementation(async (_env, options) => {
+      options?.onCommandInspection?.({ kind: "absent" });
+      return null;
+    });
+    const result = await waitForGatewayDiagnosticReadiness({
+      config: { gateway: { auth: { mode: "none" } } },
+      timeoutMs: 60_000,
+    });
+    expect(result).toMatchObject({
+      healthy: false,
+      waitOutcome: "stopped-free",
+      runtime: { status: "stopped" },
+      portUsage: { status: "free" },
+    });
+    expect(result?.elapsedMs).toBeLessThan(20_000);
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing command without inspection as verified absence", async () => {
+    readCommand.mockResolvedValue(null);
+    const result = await waitForGatewayDiagnosticReadiness({
+      config: { gateway: { auth: { mode: "none" } } },
+      timeoutMs: 60_000,
+    });
+    expect(result).toMatchObject({
+      healthy: false,
+      waitOutcome: "stopped-free",
+      runtime: { status: "stopped" },
+      portUsage: { status: "free" },
+    });
+    expect(result?.elapsedMs).toBeLessThan(20_000);
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("keeps the readiness budget when command inspection fails closed", async () => {
+    readCommand.mockImplementation(async (_env, options) => {
+      options?.onCommandInspection?.({
+        kind: "unavailable",
+        error: new Error("service-manager-unavailable"),
+      });
+      return null;
+    });
+    const result = await waitForGatewayDiagnosticReadiness({
+      config: { gateway: { auth: { mode: "none" } } },
+      timeoutMs: 1_250,
+    });
+    expect(result).toMatchObject({
+      healthy: false,
+      waitOutcome: "timeout",
+      elapsedMs: 1_250,
+      runtime: { status: "unknown" },
+      portUsage: { status: "free" },
+    });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("does not use a different installed service as the selected Gateway's process identity", async () => {
     readRuntime.mockResolvedValueOnce({ status: "running" });
     const result = await waitForGatewayDiagnosticReadiness({

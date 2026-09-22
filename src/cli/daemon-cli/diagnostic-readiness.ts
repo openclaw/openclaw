@@ -1,7 +1,10 @@
 import { resolveConfigPath, resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceCommandInspection,
+} from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { isImplicitLocalGatewayTarget } from "../../gateway/call.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
@@ -52,6 +55,7 @@ export async function waitForGatewayDiagnosticReadiness(opts: {
   const port = opts.localPortOverride ?? resolveGatewayPort(probeContext.config);
   const nativeService = resolveGatewayService();
   let nativeCommand: Promise<GatewayServiceCommandConfig | null> | undefined;
+  let commandInspection: GatewayServiceCommandInspection | undefined;
   return waitForGatewayHealthyRestart({
     port,
     timeoutMs: opts.timeoutMs ?? DEFAULT_RESTART_HEALTH_TIMEOUT_MS,
@@ -72,14 +76,28 @@ export async function waitForGatewayDiagnosticReadiness(opts: {
         }
         const startedAt = performance.now();
         const command = await (nativeCommand ??= nativeService
-          .readCommand(env, options)
-          .catch(() => null));
+          .readCommand(env, {
+            ...options,
+            onCommandInspection: (inspection) => {
+              commandInspection = inspection;
+            },
+          })
+          .catch((error: unknown) => {
+            commandInspection ??= { kind: "unavailable", error };
+            return null;
+          }));
+        if (!command) {
+          // Missing unit/plist is offline (Linux inspection absent, Darwin ENOENT).
+          // Failed inspection stays unknown so a starting Gateway keeps the budget.
+          return {
+            status: commandInspection?.kind === "unavailable" ? "unknown" : "stopped",
+          };
+        }
         const serviceEnv = mergeGatewayServiceEnv(env, command);
         const servicePort =
-          parseTcpPortFromArgs(command?.programArguments) ??
+          parseTcpPortFromArgs(command.programArguments) ??
           resolveGatewayPort(probeContext.config, serviceEnv);
         if (
-          !command ||
           servicePort !== port ||
           resolveStateDir(serviceEnv) !== resolveStateDir(env) ||
           resolveConfigPath(serviceEnv) !== resolveConfigPath(env)
