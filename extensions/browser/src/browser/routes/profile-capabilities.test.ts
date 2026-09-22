@@ -44,6 +44,10 @@ describe("browser engine route admission", () => {
     ["post", "/act", { kind: "clickCoords", x: 10, y: 20 }],
     ["post", "/act", { kind: "drag", startRef: "e1", endRef: "e2" }],
     ["post", "/act", { kind: "resize", width: 800, height: 600 }],
+    ["post", "/act", { kind: "wait", selector: "main" }],
+    ["post", "/act", { kind: "click", selector: "button" }],
+    ["post", "/act", { kind: "type", selector: "input", text: "hello" }],
+    ["post", "/act", { kind: "select", selector: "select", values: ["first"] }],
   ] as const)(
     "rejects registered %s %s before browser adapter admission",
     async (method, path, body) => {
@@ -70,6 +74,24 @@ describe("browser engine route admission", () => {
       expect(ctx.forProfile).toHaveBeenCalledWith("selected");
     },
   );
+
+  it.each([
+    ["lightpanda", { kind: "click", ref: "e1" }],
+    ["lightpanda", { kind: "wait", timeMs: 0 }],
+    ["chromium", { kind: "wait", selector: "main" }],
+  ] as const)("preserves supported %s action %j", async (engine, body) => {
+    const { ctx } = setup(engine);
+    const routes = createBrowserRouteApp();
+    const adapter = vi.fn(
+      (_req: BrowserRequest, res: ReturnType<typeof createBrowserRouteResponse>["res"]) =>
+        res.json({ ok: true }),
+    );
+    withBrowserProfileCapabilities(routes.app, ctx).post("/act", adapter);
+    const response = createBrowserRouteResponse();
+    await routes.postHandlers.get("/act")?.({ params: {}, query: {}, body }, response.res);
+    expect(response.statusCode).toBe(200);
+    expect(adapter).toHaveBeenCalledOnce();
+  });
 
   it.each([true, "true", "1", "yes", " TRUE "])(
     "rejects labeled snapshots (%s) before adapter admission",

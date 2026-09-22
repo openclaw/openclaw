@@ -49,7 +49,10 @@ function unsupportedRequest(path: string, req: BrowserRequest): boolean {
     // SAFETY: The condition admits only non-null objects; kind is narrowed before use.
     req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
   if (path === "/act") {
-    return typeof body.kind === "string" && !SEMANTIC_ACT_KINDS.has(body.kind);
+    return (
+      (typeof body.kind === "string" && !SEMANTIC_ACT_KINDS.has(body.kind)) ||
+      Boolean(toStringOrEmpty(body.selector))
+    );
   }
   return (
     path === "/snapshot" &&
