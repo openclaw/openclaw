@@ -101,9 +101,19 @@ internal class ChatComposerStateStore(
     }
   }
 
+  fun hasPendingImport(owner: ChatComposerOwner): Boolean = synchronized(lock) { attachmentStore.hasPendingImport(owner) }
+
+  /** Only unsettled work blocks leaving; completed send receipts await their UI without holding navigation. */
+  fun hasPendingGatewaySwitchWork(owner: ChatComposerOwner): Boolean =
+    synchronized(lock) {
+      sendStatesState.value[owner]?.activeOperationIds?.isNotEmpty() == true ||
+        attachmentStore.hasPendingImport(owner) ||
+        mediaOwners.containsValue(owner)
+    }
+
   fun beginSend(owner: ChatComposerOwner): ChatComposerSendStart =
     synchronized(lock) {
-      if (hasSendGateLocked(owner)) {
+      if (hasSendGateLocked(owner) || hasPendingImport(owner)) {
         return@synchronized ChatComposerSendStart(ChatComposerSendStartResult.Unavailable)
       }
       val inputSnapshot = textDrafts[owner]
@@ -244,7 +254,7 @@ internal class ChatComposerStateStore(
         recordAttachmentOmissionLocked(
           owner,
           omitted + failedCount.coerceAtLeast(0),
-          ChatComposerAttachmentNotice.Image,
+          ChatComposerAttachmentNotice.Attachment,
         )
       }
     }
@@ -253,11 +263,6 @@ internal class ChatComposerStateStore(
   fun cancelMediaImport(importId: Long) = synchronized(lock) { attachmentStore.cancelImport(importId) }
 
   fun clearAttachmentOmission(owner: ChatComposerOwner) = synchronized(lock) { attachmentNoticesState.value = attachmentNoticesState.value - owner }
-
-  fun reportImageOmission(
-    owner: ChatComposerOwner,
-    omitted: Int,
-  ) = synchronized(lock) { recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Image) }
 
   fun reportAttachmentOmission(
     owner: ChatComposerOwner,
@@ -303,8 +308,10 @@ internal class ChatComposerStateStore(
           attachmentMigration.omittedCount > 0 ||
             currentNotices[to] == ChatComposerAttachmentNotice.Attachment ||
             ChatComposerAttachmentNotice.Attachment in sourceNotices -> ChatComposerAttachmentNotice.Attachment
+
           currentNotices[to] == ChatComposerAttachmentNotice.Image ||
             ChatComposerAttachmentNotice.Image in sourceNotices -> ChatComposerAttachmentNotice.Image
+
           else -> null
         }
       if (nextNotice != null) nextNotices += (to to nextNotice)

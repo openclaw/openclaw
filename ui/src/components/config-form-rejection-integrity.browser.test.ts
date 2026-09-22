@@ -1,9 +1,7 @@
-// Control UI tests cover nested config edit rejection and draft preservation.
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+// Control UI tests cover nested config edit rejection and draft preservation.
+import { renderObjectFixture, renderArrayFixture } from "../test-helpers/config-form-fixtures.ts";
 import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
-import { renderArray, renderObject } from "./config-form.node.collection.ts";
-import { renderNode } from "./config-form.ts";
 
 type ConfigFormStructuredDraftElement = HTMLElement & {
   updateComplete: Promise<unknown>;
@@ -29,31 +27,22 @@ describe("config form rejection integrity", () => {
     };
     let currentValue = { name: "valid", mode: "a" };
     const renderValue = () => {
-      render(
-        renderObject(
-          {
-            schema,
-            value: currentValue,
-            path: ["settings"],
-            hints: {},
-            unsupported: new Set(),
-            disabled: false,
-            sourceIdentity: currentValue,
-            controlIdentity: currentValue,
-            onPatch: (path, nextValue) => {
-              const key = path.at(-1);
-              if (key !== "name" && key !== "mode") {
-                return false;
-              }
-              currentValue = { ...currentValue, [key]: nextValue };
-              renderValue();
-              return true;
-            },
-          },
-          renderNode,
-        ),
-        container,
-      );
+      renderObjectFixture(container, {
+        schema,
+        value: currentValue,
+        path: ["settings"],
+        sourceIdentity: currentValue,
+        controlIdentity: currentValue,
+        onPatch: (path, nextValue) => {
+          const key = path.at(-1);
+          if (key !== "name" && key !== "mode") {
+            return false;
+          }
+          currentValue = { ...currentValue, [key]: nextValue };
+          renderValue();
+          return true;
+        },
+      });
     };
 
     renderValue();
@@ -85,28 +74,19 @@ describe("config form rejection integrity", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
-    render(
-      renderArray(
-        {
-          schema: {
-            type: "array",
-            uniqueItems: true,
-            items: {
-              type: "array",
-              items: { type: "string", pattern: "^[a-z]+$" },
-            },
-          },
-          value: [["alpha"], []],
-          path: ["groups"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
+    renderArrayFixture(container, {
+      schema: {
+        type: "array",
+        uniqueItems: true,
+        items: {
+          type: "array",
+          items: { type: "string", pattern: "^[a-z]+$" },
         },
-        renderNode,
-      ),
-      container,
-    );
+      },
+      value: [["alpha"], []],
+      path: ["groups"],
+      onPatch,
+    });
 
     const arrays = Array.from(container.querySelectorAll<HTMLElement>(".cfg-array"));
     const secondGroup = expectElement(arrays[2], "second nested array");
@@ -153,28 +133,19 @@ describe("config form rejection integrity", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
-    render(
-      renderArray(
-        {
-          schema: {
-            type: "array",
-            uniqueItems: true,
-            items: {
-              type: "array",
-              items: { type: "string" },
-            },
-          },
-          value: [[""], []],
-          path: ["groups"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
+    renderArrayFixture(container, {
+      schema: {
+        type: "array",
+        uniqueItems: true,
+        items: {
+          type: "array",
+          items: { type: "string" },
         },
-        renderNode,
-      ),
-      container,
-    );
+      },
+      value: [[""], []],
+      path: ["groups"],
+      onPatch,
+    });
 
     const arrays = Array.from(container.querySelectorAll<HTMLElement>(".cfg-array"));
     const secondGroup = expectElement(arrays[2], "second auto-default array");
@@ -213,28 +184,19 @@ describe("config form rejection integrity", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
-    render(
-      renderArray(
-        {
-          schema: {
-            type: "array",
-            uniqueItems: true,
-            items: {
-              type: "object",
-              additionalProperties: { type: "object" },
-            },
-          },
-          value: [{ "custom-1": {} }, {}],
-          path: ["entries"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
+    renderArrayFixture(container, {
+      schema: {
+        type: "array",
+        uniqueItems: true,
+        items: {
+          type: "object",
+          additionalProperties: { type: "object" },
         },
-        renderNode,
-      ),
-      container,
-    );
+      },
+      value: [{ "custom-1": {} }, {}],
+      path: ["entries"],
+      onPatch,
+    });
 
     const maps = Array.from(container.querySelectorAll<HTMLElement>(".cfg-map"));
     const secondMap = expectElement(maps[1], "second auto-default map");
@@ -278,28 +240,19 @@ describe("config form rejection integrity", () => {
   it("restores a map key when a constrained parent rejects the rename", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    render(
-      renderArray(
-        {
-          schema: {
-            type: "array",
-            uniqueItems: true,
-            items: {
-              type: "object",
-              additionalProperties: { type: "string" },
-            },
-          },
-          value: [{ a: "1" }, { b: "1" }],
-          path: ["entries"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
+    renderArrayFixture(container, {
+      schema: {
+        type: "array",
+        uniqueItems: true,
+        items: {
+          type: "object",
+          additionalProperties: { type: "string" },
         },
-        renderNode,
-      ),
-      container,
-    );
+      },
+      value: [{ a: "1" }, { b: "1" }],
+      path: ["entries"],
+      onPatch,
+    });
 
     const key = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Key: b']"),
@@ -315,24 +268,15 @@ describe("config form rejection integrity", () => {
   it("blocks renaming a map key whose value is still a redacted secret", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    render(
-      renderObject(
-        {
-          schema: {
-            type: "object",
-            additionalProperties: { type: "string" },
-          },
-          value: { primary: "__OPENCLAW_REDACTED__", plain: "visible" },
-          path: ["secrets"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          onPatch,
-        },
-        renderNode,
-      ),
-      container,
-    );
+    renderObjectFixture(container, {
+      schema: {
+        type: "object",
+        additionalProperties: { type: "string" },
+      },
+      value: { primary: "__OPENCLAW_REDACTED__", plain: "visible" },
+      path: ["secrets"],
+      onPatch,
+    });
 
     const redactedKey = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Key: primary']"),
@@ -382,21 +326,12 @@ describe("config form rejection integrity", () => {
       },
     };
     const renderValue = () => {
-      render(
-        renderObject(
-          {
-            schema,
-            value: currentValue,
-            path: ["settings"],
-            hints: {},
-            unsupported: new Set(),
-            disabled: false,
-            onPatch,
-          },
-          renderNode,
-        ),
-        container,
-      );
+      renderObjectFixture(container, {
+        schema,
+        value: currentValue,
+        path: ["settings"],
+        onPatch,
+      });
     };
 
     renderValue();
@@ -462,21 +397,12 @@ describe("config form rejection integrity", () => {
       },
     };
     const renderValue = () => {
-      render(
-        renderObject(
-          {
-            schema,
-            value: {},
-            path: ["settings"],
-            hints: {},
-            unsupported: new Set(),
-            disabled: false,
-            onPatch,
-          },
-          renderNode,
-        ),
-        container,
-      );
+      renderObjectFixture(container, {
+        schema,
+        value: {},
+        path: ["settings"],
+        onPatch,
+      });
     };
 
     renderValue();
@@ -553,21 +479,12 @@ describe("config form rejection integrity", () => {
       },
     };
     const renderValue = () => {
-      render(
-        renderObject(
-          {
-            schema,
-            value: {},
-            path: ["settings"],
-            hints: {},
-            unsupported: new Set(),
-            disabled: false,
-            onPatch,
-          },
-          renderNode,
-        ),
-        container,
-      );
+      renderObjectFixture(container, {
+        schema,
+        value: {},
+        path: ["settings"],
+        onPatch,
+      });
     };
     const add = (draft: ConfigFormStructuredDraftElement) =>
       expectElement(

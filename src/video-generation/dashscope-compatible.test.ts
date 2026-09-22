@@ -21,6 +21,7 @@ const invalidGeneratedVideos = [
   { name: "HTML error", contentType: "text/html; charset=utf-8", body: "<html>error</html>" },
   { name: "image", contentType: "image/png", body: "image-bytes" },
   { name: "audio", contentType: "audio/mp4", body: "audio-bytes" },
+  { name: "empty video", contentType: "video/mp4", body: "" },
 ] as const;
 
 function neverChunkingVideoResponse(): Response {
@@ -275,7 +276,7 @@ describe("downloadDashscopeGeneratedVideos", () => {
     },
   );
 
-  it("aborts a stalled generated video body via chunk idle timeout", async () => {
+  it("aborts a stalled generated video body at its operation deadline", async () => {
     const fetchFn = vi.fn(async () => neverChunkingVideoResponse());
     const timeoutMs = 80;
     const startedAt = Date.now();
@@ -288,7 +289,7 @@ describe("downloadDashscopeGeneratedVideos", () => {
         fetchFn: fetchFn as unknown as typeof fetch,
         maxBytes: 10 * 1024 * 1024,
       }),
-    ).rejects.toThrow("Alibaba Wan generated video download stalled: no data received for 80ms");
+    ).rejects.toThrow(/Alibaba Wan generated video download timed out/);
 
     const elapsedMs = Date.now() - startedAt;
     expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs - 20);
@@ -332,6 +333,39 @@ describe("downloadDashscopeGeneratedVideos", () => {
     expect(buffer.toString("utf8")).toBe("mp4-bytes");
     expect(video?.mimeType).toBe("video/mp4");
   });
+
+  it("rejects a malformed response while a debug-capture clone still holds the body tee", async () => {
+    let captured: Response | undefined;
+    const fetchFn = vi.fn(async () => {
+      const response = new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"error":"denied"'));
+            // The body never ends, so only an explicit cancel can settle it.
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+      // Debug capture keeps an unread clone; the tee leaves the source branch
+      // pending, so awaiting the cancel of the rejected body would never settle.
+      captured = response.clone();
+      return response;
+    });
+
+    try {
+      await expect(
+        downloadDashscopeGeneratedVideos({
+          providerLabel: "Alibaba Wan",
+          urls: ["https://example.com/invalid.mp4"],
+          timeoutMs: 5_000,
+          fetchFn,
+          maxBytes: 10 * 1024 * 1024,
+        }),
+      ).rejects.toThrow("Alibaba Wan generated video download: malformed video response");
+    } finally {
+      void captured?.body?.cancel().catch(() => undefined);
+    }
+  }, 2_000);
 
   it("fails closed before fetch when a function-valued remaining budget is exhausted", async () => {
     const fetchFn = vi.fn(async () => neverChunkingVideoResponse());
@@ -468,19 +502,19 @@ describe("runDashscopeVideoGenerationTask", () => {
   it("releases the submission request timeout before polling the task", async () => {
     vi.useFakeTimers();
     try {
-      let submissionTimerCount: number | undefined;
-      let pollTimerCount: number | undefined;
-      const fetchFn = vi.fn(async (url: string | URL | Request) => {
+      let submissionSignal: AbortSignal | undefined;
+      let submissionReleasedBeforePoll: boolean | undefined;
+      const fetchFn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
         const requestUrl = url instanceof Request ? url.url : String(url);
         if (requestUrl.includes("/video-synthesis")) {
-          submissionTimerCount = vi.getTimerCount();
+          submissionSignal = init?.signal ?? undefined;
           return new Response(JSON.stringify({ output: { task_id: "task-123" } }), {
             status: 200,
             headers: { "content-type": "application/json" },
           });
         }
         if (requestUrl.includes("/tasks/task-123")) {
-          pollTimerCount = vi.getTimerCount();
+          submissionReleasedBeforePoll = submissionSignal?.aborted;
           return new Response(
             JSON.stringify({
               output: { task_status: "SUCCEEDED", video_url: "https://example.com/result.mp4" },
@@ -508,9 +542,271 @@ describe("runDashscopeVideoGenerationTask", () => {
         fetchFn: fetchFn as typeof fetch,
       });
 
-      expect(submissionTimerCount).toBeGreaterThan(0);
-      expect(pollTimerCount).toBe(submissionTimerCount);
+      expect(submissionReleasedBeforePoll).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// Exercise the owner functions with real Response streams. Frequent bytes must
+// not refresh the total budget, and a completed header read must not reset it.
+describe("DashScope operation deadline", () => {
+  function streamingResponse(contentType: string, status = 200) {
+    let timer: ReturnType<typeof setInterval>;
+    const cancel = vi.fn(() => clearInterval(timer));
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          timer = setInterval(() => controller.enqueue(new TextEncoder().encode(" ")), 10);
+        },
+        cancel,
+      }),
+      { status, headers: { "content-type": contentType } },
+    );
+    return { response, cancel };
+  }
+
+  it.each(["submit", "poll", "download", "submit-error", "poll-error", "download-error"])(
+    "bounds a trickling %s body with the same operation deadline",
+    async (stage) => {
+      vi.useFakeTimers();
+      const body = streamingResponse(
+        stage.startsWith("download") ? "video/mp4" : "application/json",
+        stage.endsWith("error") ? 503 : 200,
+      );
+      const signals: AbortSignal[] = [];
+      const fetchFn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        if (init?.signal) {
+          signals.push(init.signal);
+        }
+        const requestUrl = url instanceof Request ? url.url : String(url);
+        if (requestUrl.includes("video-synthesis")) {
+          if (stage.startsWith("submit")) {
+            return body.response;
+          }
+          return Response.json({ output: { task_id: "deadline-task" } });
+        }
+        if (requestUrl.includes("/tasks/")) {
+          if (stage.startsWith("poll")) {
+            return body.response;
+          }
+          return Response.json({
+            output: { task_status: "SUCCEEDED", video_url: "https://example.com/video.mp4" },
+          });
+        }
+        return body.response;
+      });
+      try {
+        let settled: unknown;
+        const operation = runDashscopeVideoGenerationTask({
+          providerLabel: "Qwen",
+          model: "wan2.6-t2v",
+          req: { provider: "qwen", model: "wan2.6-t2v", prompt: "synthetic", cfg: {} },
+          url: "https://example.com/video-synthesis",
+          headers: new Headers(),
+          baseUrl: "https://example.com",
+          timeoutMs: 100,
+          fetchFn,
+        }).then(
+          (value) => {
+            settled = value;
+          },
+          (error: unknown) => {
+            settled = error;
+          },
+        );
+        await vi.advanceTimersByTimeAsync(100);
+        expect(settled).toBeInstanceOf(Error);
+        expect(String(settled)).toMatch(/timed out|budget exhausted/);
+        await operation;
+        expect(body.cancel).toHaveBeenCalledOnce();
+        expect(signals.every((signal) => signal.aborted)).toBe(true);
+        expect(fetchFn).toHaveBeenCalledTimes(
+          stage.startsWith("submit") ? 1 : stage.startsWith("poll") ? 2 : 3,
+        );
+      } finally {
+        void body.response.body?.cancel().catch(() => undefined);
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("does not reset a numeric budget between sequential downloads or after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchFn = vi.fn(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 40);
+        });
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              setTimeout(() => {
+                controller.enqueue(new TextEncoder().encode("video"));
+                controller.close();
+              }, 20);
+            },
+          }),
+          { headers: { "content-type": "video/mp4" } },
+        );
+      });
+      let settled: unknown;
+      const operation = downloadDashscopeGeneratedVideos({
+        providerLabel: "Qwen",
+        urls: ["https://example.com/1.mp4", "https://example.com/2.mp4"],
+        timeoutMs: 100,
+        fetchFn,
+        maxBytes: 1024,
+      }).then(
+        (value) => {
+          settled = value;
+        },
+        (error: unknown) => {
+          settled = error;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(101);
+      expect(settled).toBeInstanceOf(Error);
+      expect(String(settled)).toMatch(/timed out|budget exhausted/);
+      await operation;
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("DashScope retry and release deadlines", () => {
+  it.each([429, 503])(
+    "does not let HTTP %s retry backoff outlive the remaining budget",
+    async (status) => {
+      vi.useFakeTimers();
+      try {
+        const fetchFn = vi.fn(async () => new Response("busy", { status }));
+        let error: unknown;
+        const operation = downloadDashscopeGeneratedVideos({
+          providerLabel: "Qwen",
+          urls: ["https://example.com/out.mp4"],
+          timeoutMs: 100,
+          fetchFn,
+          maxBytes: 1024,
+        }).catch((reason: unknown) => {
+          error = reason;
+        });
+        await vi.advanceTimersByTimeAsync(100);
+        expect(error).toBeInstanceOf(Error);
+        expect(String(error)).toMatch(/timed out/);
+        await operation;
+        expect(fetchFn).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("still retries a transient response and returns complete video bytes within budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("busy", { status: 503 }))
+        .mockResolvedValueOnce(new Response("video", { headers: { "content-type": "video/mp4" } }));
+      const operation = downloadDashscopeGeneratedVideos({
+        providerLabel: "Qwen",
+        urls: ["https://example.com/out.mp4"],
+        timeoutMs: 500,
+        fetchFn,
+        maxBytes: 1024,
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect((await operation)[0]?.buffer?.toString()).toBe("video");
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("charges submission and poll waits to the default operation budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchFn = vi.fn(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 30);
+        });
+        return Response.json(
+          fetchFn.mock.calls.length === 1
+            ? { output: { task_id: "pending" } }
+            : { output: { task_status: "PENDING" } },
+        );
+      });
+      let error: unknown;
+      const operation = runDashscopeVideoGenerationTask({
+        providerLabel: "Qwen",
+        model: "wan2.6-t2v",
+        req: { provider: "qwen", model: "wan2.6-t2v", prompt: "synthetic", cfg: {} },
+        url: "https://example.com/video-synthesis",
+        headers: new Headers(),
+        baseUrl: "https://example.com",
+        defaultTimeoutMs: 100,
+        fetchFn,
+      }).catch((reason: unknown) => {
+        error = reason;
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(String(error)).toMatch(/timed out after 100ms/);
+      await operation;
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases an expired successful-body read without waiting for a capture tee", async () => {
+    vi.useFakeTimers();
+    let captured: Response | undefined;
+    try {
+      let signal: AbortSignal | undefined;
+      const fetchFn = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        signal = init?.signal ?? undefined;
+        const response = new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array([1]));
+            },
+          }),
+          { headers: { "content-type": "video/mp4" } },
+        );
+        captured = response.clone();
+        return response;
+      });
+      let error: unknown;
+      const operation = downloadDashscopeGeneratedVideos({
+        providerLabel: "Qwen",
+        urls: ["https://example.com/out.mp4"],
+        timeoutMs: 100,
+        fetchFn,
+        maxBytes: 1024,
+      }).catch((reason: unknown) => {
+        error = reason;
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(String(error)).toMatch(/timed out/);
+      await operation;
+      expect(signal?.aborted).toBe(true);
+      expect(fetchFn).toHaveBeenCalledOnce();
+    } finally {
+      void captured?.body?.cancel().catch(() => undefined);
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
   });

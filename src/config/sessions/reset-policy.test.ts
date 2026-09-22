@@ -1,5 +1,6 @@
 // Session reset policy tests cover defaults, opt-in schedules, and compatibility overrides.
 import { describe, expect, it } from "vitest";
+import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import { SessionSchema } from "../zod-schema.session.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset-policy.js";
 import { resolveChannelResetConfig } from "./reset.js";
@@ -54,6 +55,98 @@ describe("session reset policy", () => {
       evaluateSessionFreshness({ updatedAt: startedAt, sessionStartedAt: startedAt, now, policy }),
     ).toMatchObject({ fresh: false, staleReason: "daily" });
   });
+
+  it.each([
+    {
+      name: "before New York's spring gap",
+      timezone: "America/New_York",
+      now: "2027-03-14T06:00:00Z",
+      startedAt: "2027-03-13T07:30:00Z",
+      atHour: 2,
+      boundary: "2027-03-13T07:00:00Z",
+      fresh: true,
+    },
+    {
+      name: "before Lord Howe's half-hour spring gap",
+      timezone: "Australia/Lord_Howe",
+      now: "2026-10-03T14:30:00Z",
+      startedAt: "2026-10-02T15:45:00Z",
+      atHour: 2,
+      boundary: "2026-10-02T15:30:00Z",
+      fresh: true,
+    },
+    {
+      name: "after New York's spring gap",
+      timezone: "America/New_York",
+      now: "2027-03-14T07:15:00Z",
+      startedAt: "2027-03-14T06:30:00Z",
+      atHour: 2,
+      boundary: "2027-03-14T07:00:00Z",
+      fresh: false,
+    },
+    {
+      name: "the day after New York's spring gap",
+      timezone: "America/New_York",
+      now: "2027-03-15T05:00:00Z",
+      startedAt: "2027-03-14T07:30:00Z",
+      atHour: 2,
+      boundary: "2027-03-14T07:00:00Z",
+      fresh: true,
+    },
+    {
+      name: "during New York's repeated hour",
+      timezone: "America/New_York",
+      now: "2026-11-01T06:15:00Z",
+      startedAt: "2026-11-01T05:30:00Z",
+      atHour: 1,
+      boundary: "2026-11-01T05:00:00Z",
+      fresh: true,
+    },
+    {
+      name: "before an ordinary UTC reset",
+      timezone: "UTC",
+      now: "2027-03-14T01:00:00Z",
+      startedAt: "2027-03-13T02:30:00Z",
+      atHour: 2,
+      boundary: "2027-03-13T02:00:00Z",
+      fresh: true,
+    },
+    {
+      name: "before Nuuk's spring gap crosses midnight",
+      timezone: "America/Nuuk",
+      now: "2027-03-28T00:30:00Z",
+      startedAt: "2027-03-27T01:30:00Z",
+      atHour: 23,
+      boundary: "2027-03-27T01:00:00Z",
+      fresh: true,
+    },
+    {
+      name: "after Troll's two-hour fold rewinds past the reset hour",
+      timezone: "Antarctica/Troll",
+      now: "2026-10-25T01:30:00Z",
+      startedAt: "2026-10-24T23:30:00Z",
+      atHour: 2,
+      boundary: "2026-10-25T00:00:00Z",
+      fresh: false,
+    },
+  ])(
+    "uses the configured local reset hour $name",
+    ({ timezone, now, startedAt, atHour, boundary, fresh }) => {
+      // Native Date captures the host timezone in each process; Vitest workers
+      // cannot reliably change it through a late process.env.TZ assignment.
+      const output = execNodeEvalSync(
+        `import { evaluateSessionFreshness } from ${JSON.stringify(new URL("./reset-policy.ts", import.meta.url).href)};
+       console.log(JSON.stringify(evaluateSessionFreshness(${JSON.stringify({
+         updatedAt: Date.parse(startedAt),
+         sessionStartedAt: Date.parse(startedAt),
+         now: Date.parse(now),
+         policy: { mode: "daily", atHour },
+       })})));`,
+        { env: { ...process.env, TZ: timezone }, timeout: 10_000 },
+      );
+      expect(JSON.parse(output)).toMatchObject({ fresh, dailyResetAt: Date.parse(boundary) });
+    },
+  );
 
   it.each([
     {

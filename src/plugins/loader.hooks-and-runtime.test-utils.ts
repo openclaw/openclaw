@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { createHookRunner } from "./hooks.js";
+import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   EMPTY_PLUGIN_SCHEMA,
@@ -25,7 +26,9 @@ import {
   pluginManifest,
   channelPluginSource,
 } from "./loader.test-harness.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -128,6 +131,11 @@ function loadBuiltArtifactScenario(scenario: BuiltArtifactScenario) {
       ? path.join(repoRoot, "dist-runtime", "extensions", scenario.id)
       : path.join(pluginDir, "dist");
   writeFixtureText(artifactDir, scenario.artifactEntry, scenario.artifactBody);
+  if (scenario.artifactLocation === "core") {
+    writeFixtureJson(artifactDir, "package.json", {
+      openclaw: { extensions: [`./${scenario.artifactEntry}`] },
+    });
+  }
 
   const load = () =>
     loadOpenClawPlugins({
@@ -156,16 +164,25 @@ function loadBuiltArtifactScenario(scenario: BuiltArtifactScenario) {
   return registry.plugins.find((entry) => entry.id === scenario.id)?.status;
 }
 
-function loadSourceExternalArtifactScenario(params: {
+async function loadSourceExternalArtifactScenario(params: {
   sourceBody: string;
   packageLocalBody: string;
   rootBuildBody?: string;
   runtimeOverlayBody?: string;
+  loadOptions?: Parameters<typeof loadOpenClawPlugins>[0];
+  sourceSelection?: "file" | "directory" | "symlink" | "plugin-mount" | "parent-mount";
+  fromInstalledIndex?: boolean;
 }) {
   const id = "source-external-artifact-test";
   const repoRoot = makePluginLoaderTempDir();
   const sourceDir = path.join(repoRoot, "extensions", id);
   const rootBuildDir = path.join(repoRoot, "dist", "extensions", id);
+  const mountPoint =
+    params.sourceSelection === "plugin-mount"
+      ? sourceDir
+      : params.sourceSelection === "parent-mount"
+        ? path.dirname(sourceDir)
+        : undefined;
   mkdirSafe(path.join(repoRoot, ".git"));
   mkdirSafe(path.join(repoRoot, "src"));
   writeFixtureText(repoRoot, "pnpm-workspace.yaml", "packages: []\n");
@@ -197,32 +214,67 @@ function loadSourceExternalArtifactScenario(params: {
     );
   }
 
+  const sourceAlias = path.join(repoRoot, "selected-source");
+  if (params.sourceSelection === "symlink" || (params.fromInstalledIndex && mountPoint)) {
+    fs.symlinkSync(sourceDir, sourceAlias, process.platform === "win32" ? "junction" : "dir");
+  }
+  const configuredPath =
+    params.sourceSelection === "symlink"
+      ? sourceAlias
+      : params.sourceSelection === "file"
+        ? path.join(sourceDir, "index.ts")
+        : params.sourceSelection === "directory"
+          ? sourceDir
+          : undefined;
   const config = {
     plugins: {
       allow: [id],
       entries: { [id]: { enabled: true } },
+      ...(configuredPath ? { load: { paths: [configuredPath] } } : {}),
     },
   };
-  const registry = withEnv(
-    {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: params.rootBuildBody
-        ? path.join(repoRoot, "dist", "extensions")
-        : path.join(repoRoot, "extensions"),
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    },
-    () => {
-      const manifestRegistry = loadPluginManifestRegistryCore({ config });
-      return loadOpenClawPlugins({
-        cache: false,
-        preferBuiltPluginArtifacts: true,
-        onlyPluginIds: [id],
-        config,
-        manifestRegistry,
-      });
-    },
-  );
-  return registry.plugins.find((entry) => entry.id === id)?.status;
+  const cache = createPluginCache();
+  cache.metadata.discoveryMountPoints = new Set(mountPoint ? [mountPoint] : []);
+  try {
+    return withPluginCache(cache, () => {
+      const registry = withEnv(
+        {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: params.rootBuildBody
+            ? path.join(repoRoot, "dist", "extensions")
+            : path.join(repoRoot, "extensions"),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: undefined,
+        },
+        () => {
+          let index = params.fromInstalledIndex ? loadInstalledPluginIndex({ config }) : undefined;
+          if (index && mountPoint) {
+            // Installed roots can retain lexical aliases while mount facts are canonical.
+            index = {
+              ...index,
+              plugins: index.plugins.map((plugin) =>
+                plugin.pluginId === id ? { ...plugin, rootDir: sourceAlias } : plugin,
+              ),
+            };
+          }
+          const manifestRegistry = index
+            ? loadPluginManifestRegistryForInstalledIndex({ index, config })
+            : loadPluginManifestRegistryCore({ config });
+          return loadOpenClawPlugins({
+            cache: false,
+            preferBuiltPluginArtifacts: true,
+            onlyPluginIds: [id],
+            config,
+            manifestRegistry,
+            ...params.loadOptions,
+          });
+        },
+      );
+      return registry.plugins.find((entry) => entry.id === id)?.status;
+    });
+  } finally {
+    await retirePluginCache(cache);
+  }
 }
 
 describe("loadOpenClawPlugins", () => {
@@ -452,7 +504,7 @@ ${channelPluginSource({
       expectSetupRuntimeLoaded: true,
     },
     {
-      name: "merges bundled runtime plugin into setup-runtime channel loads",
+      name: "initializes both setup and runtime graphs before merging setup-runtime channels",
       fixture: {
         id: "setup-runtime-bundled-runtime-merge-test",
         label: "Setup Runtime Bundled Runtime Merge Test",
@@ -466,12 +518,17 @@ ${channelPluginSource({
           makePluginLoaderTempDir(),
           "bundled-runtime-applied.txt",
         ),
+        bundledSetupRuntimeMarker: path.join(
+          makePluginLoaderTempDir(),
+          "setup-runtime-applied.txt",
+        ),
       },
       loadOptions: { setupIntent: true },
       expectFullLoaded: true,
       expectSetupLoaded: true,
       expectedChannels: 1,
       expectBundledFullRuntimeLoaded: true,
+      expectSetupRuntimeLoaded: true,
     },
     {
       name: "defaults ordinary unconfigured channel loads to the full runtime",
@@ -592,12 +649,19 @@ ${channelPluginSource({
       ids: ["setup-runtime-error-test", "setup-runtime-helper-test"],
     });
 
-    expect(registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")?.status).toBe(
-      "error",
+    expect(registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")).toMatchObject(
+      {
+        status: "error",
+        failurePhase: "load",
+        error: expect.stringContaining("broken setup runtime setter"),
+      },
     );
-    expect(
-      registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")?.error,
-    ).toContain("broken setup runtime setter");
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: "setup-runtime-error-test",
+        code: "channel-setup-failure",
+      }),
+    );
     expect(registry.plugins.find((entry) => entry.id === "setup-runtime-helper-test")?.status).toBe(
       "loaded",
     );
@@ -627,11 +691,18 @@ ${channelPluginSource({
     });
 
     expect(
-      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test")?.status,
-    ).toBe("error");
-    expect(
-      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test")?.error,
-    ).toContain("broken setup-runtime registrar");
+      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test"),
+    ).toMatchObject({
+      status: "error",
+      failurePhase: "register",
+      error: expect.stringContaining("broken setup-runtime registrar"),
+    });
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: "setup-runtime-route-error-test",
+        code: "channel-setup-failure",
+      }),
+    );
     expect(registry.httpRoutes.some((route) => route.path === "/setup-runtime-route-error")).toBe(
       false,
     );
@@ -791,7 +862,7 @@ ${channelPluginSource({
     });
   });
 
-  it("records a diagnostic when registerChannel throws in the setup-entry path", () => {
+  it("rolls back setup registrations and records a diagnostic when registerChannel throws", () => {
     useNoBundledPlugins();
     const brokenDir = createSetupFailureFixture({
       id: "register-channel-throws-test",
@@ -805,6 +876,13 @@ ${channelPluginSource({
   });
   module.exports = {
     kind: "bundled-channel-setup-entry",
+    registerSetupRuntime(api) {
+      api.registerHttpRoute({
+        path: "/register-channel-throws-route",
+        auth: "gateway",
+        handler: async () => true,
+      });
+    },
     loadSetupPlugin: () => ({
       id: "register-channel-throws-test",
       meta: {
@@ -846,6 +924,9 @@ ${channelPluginSource({
       pluginId: "register-channel-throws-test",
       message: "failed to register setup channel",
     });
+    expect(
+      registry.httpRoutes.some((route) => route.path === "/register-channel-throws-route"),
+    ).toBe(false);
     // The healthy plugin loaded AFTER the broken one must still be present.
     const healthyChannel = registry.channels.find(
       (entry) => entry.plugin.id === "healthy-after-register-throw-chat",
@@ -888,23 +969,57 @@ ${channelPluginSource({
     ).toBe("loaded");
   });
 
-  it("ignores package-local dist when a bundled source plugin opts out of core dist", () => {
+  it("ignores package-local dist when a bundled source plugin opts out of core dist", async () => {
     expect(
-      loadSourceExternalArtifactScenario({
+      await loadSourceExternalArtifactScenario({
         sourceBody: 'export default { id: "source-external-artifact-test", register() {} };\n',
         packageLocalBody: 'throw new Error("stale package-local dist should not load");\n',
       }),
     ).toBe("loaded");
   });
 
-  it("prefers the root build when a bundled source plugin opts out of core dist", () => {
+  it("prefers the root build when a bundled source plugin opts out of core dist", async () => {
     expect(
-      loadSourceExternalArtifactScenario({
+      await loadSourceExternalArtifactScenario({
         sourceBody: 'throw new Error("source should not load when root build exists");\n',
         packageLocalBody: 'throw new Error("stale package-local dist should not load");\n',
         rootBuildBody: 'module.exports = { id: "source-external-artifact-test", register() {} };\n',
         runtimeOverlayBody:
           'throw new Error("staged runtime should canonicalize to the root build");\n',
+      }),
+    ).toBe("loaded");
+  });
+
+  it.each([
+    { name: "source host", loadOptions: { preferBuiltPluginArtifacts: undefined } },
+    { name: "explicit false", loadOptions: { preferBuiltPluginArtifacts: false } },
+    { name: "configured file", sourceSelection: "file" as const },
+    { name: "configured directory", sourceSelection: "directory" as const },
+    { name: "configured symlink", sourceSelection: "symlink" as const },
+    { name: "individual overlay", sourceSelection: "plugin-mount" as const },
+    { name: "parent overlay", sourceSelection: "parent-mount" as const },
+    {
+      name: "rehydrated overlay",
+      sourceSelection: "parent-mount" as const,
+      fromInstalledIndex: true,
+    },
+    {
+      name: "rehydrated configured alias",
+      sourceSelection: "file" as const,
+      fromInstalledIndex: true,
+    },
+    {
+      name: "rehydrated configured symlink",
+      sourceSelection: "symlink" as const,
+      fromInstalledIndex: true,
+    },
+  ])("preserves $name execution instead of its built peer", async (scenario) => {
+    expect(
+      await loadSourceExternalArtifactScenario({
+        ...scenario,
+        sourceBody: 'export default { id: "source-external-artifact-test", register() {} };\n',
+        packageLocalBody: 'throw new Error("package-local output should not load");\n',
+        rootBuildBody: 'throw new Error("source selection must remain authoritative");\n',
       }),
     ).toBe("loaded");
   });
@@ -1018,13 +1133,11 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "hook-policy",
       filename: "hook-policy.cjs",
-      body: `module.exports = { id: "hook-policy", register(api) {
-    api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
-    api.on("before_model_resolve", () => ({
-      modelOverride: "demo-model",
-      providerOverride: "demo-provider",
-    }));
-  } };`,
+      registration: `api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
+      api.on("before_model_resolve", () => ({
+        modelOverride: "demo-model",
+        providerOverride: "demo-provider",
+      }));`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1063,12 +1176,11 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "next-turn-policy",
       filename: "next-turn-policy.cjs",
-      body: `module.exports = { id: "next-turn-policy", register(api) {
-    void api.session.workflow.enqueueNextTurnInjection({
-      sessionKey: "agent:main:main",
-      text: "blocked context",
-    });
-  } };`,
+      registration: `void api.session.workflow.enqueueNextTurnInjection({
+        sessionKey: "global",
+        agentId: "work",
+        text: "blocked context",
+      });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1103,9 +1215,7 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "hook-policy-default",
       filename: "hook-policy-default.cjs",
-      body: `module.exports = { id: "hook-policy-default", register(api) {
-    api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
-  } };`,
+      registration: `api.on("before_prompt_build", () => ({ prependContext: "prepend" }));`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1130,10 +1240,8 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "hook-timeouts",
       filename: "hook-timeouts.cjs",
-      body: `module.exports = { id: "hook-timeouts", register(api) {
-    api.on("before_prompt_build", () => ({ prependContext: "prepend" }), { timeoutMs: 5000 });
-    api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));
-  } };`,
+      registration: `api.on("before_prompt_build", () => ({ prependContext: "prepend" }), { timeoutMs: 5000 });
+      api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1239,11 +1347,9 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "tool-result-middleware-no-timeout",
       filename: "tool-result-middleware-no-timeout.cjs",
-      body: `module.exports = { id: "tool-result-middleware-no-timeout", register(api) {
-    api.registerAgentToolResultMiddleware(() => new Promise(() => {}), {
-      runtimes: ["openclaw"],
-    });
-  } };`,
+      registration: `api.registerAgentToolResultMiddleware(() => new Promise(() => {}), {
+        runtimes: ["openclaw"],
+      });`,
     });
     updatePluginManifest(plugin, {
       contracts: { agentToolResultMiddleware: ["openclaw"] },
@@ -1287,9 +1393,7 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "after-tool-call-option-timeout",
       filename: "after-tool-call-option-timeout.cjs",
-      body: `module.exports = { id: "after-tool-call-option-timeout", register(api) {
-    api.on("after_tool_call", () => new Promise(() => {}), { timeoutMs: 30 });
-  } };`,
+      registration: `api.on("after_tool_call", () => new Promise(() => {}), { timeoutMs: 30 });`,
     });
     const registry = loadRegistryFromSinglePlugin({
       plugin,
@@ -1317,17 +1421,15 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "conversation-hooks",
       filename: "conversation-hooks.cjs",
-      body: `module.exports = { id: "conversation-hooks", register(api) {
-    api.on("before_model_resolve", () => undefined);
-    api.on("agent_turn_prepare", () => undefined);
-    api.on("before_prompt_build", () => undefined);
-    api.on("before_agent_reply", () => undefined);
-    api.on("llm_input", () => undefined);
-    api.on("llm_output", () => undefined);
-    api.on("before_agent_finalize", () => undefined);
-    api.on("agent_end", () => undefined);
-    api.on("before_agent_run", () => undefined);
-  } };`,
+      registration: `api.on("before_model_resolve", () => undefined);
+      api.on("agent_turn_prepare", () => undefined);
+      api.on("before_prompt_build", () => undefined);
+      api.on("before_agent_reply", () => undefined);
+      api.on("llm_input", () => undefined);
+      api.on("llm_output", () => undefined);
+      api.on("before_agent_finalize", () => undefined);
+      api.on("agent_end", () => undefined);
+      api.on("before_agent_run", () => undefined);`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1351,17 +1453,15 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "conversation-hooks-allowed",
       filename: "conversation-hooks-allowed.cjs",
-      body: `module.exports = { id: "conversation-hooks-allowed", register(api) {
-    api.on("before_model_resolve", () => undefined);
-    api.on("agent_turn_prepare", () => undefined);
-    api.on("before_prompt_build", () => undefined);
-    api.on("before_agent_reply", () => undefined);
-    api.on("llm_input", () => undefined);
-    api.on("llm_output", () => undefined);
-    api.on("before_agent_finalize", () => undefined);
-    api.on("agent_end", () => undefined);
-    api.on("before_agent_run", () => undefined);
-  } };`,
+      registration: `api.on("before_model_resolve", () => undefined);
+      api.on("agent_turn_prepare", () => undefined);
+      api.on("before_prompt_build", () => undefined);
+      api.on("before_agent_reply", () => undefined);
+      api.on("llm_input", () => undefined);
+      api.on("llm_output", () => undefined);
+      api.on("before_agent_finalize", () => undefined);
+      api.on("agent_end", () => undefined);
+      api.on("before_agent_run", () => undefined);`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -1396,17 +1496,15 @@ ${channelPluginSource({
     const plugin = writePlugin({
       id: "reply-hook-trigger-eligibility",
       filename: "reply-hook-trigger-eligibility.cjs",
-      body: `module.exports = { id: "reply-hook-trigger-eligibility", register(api) {
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "cron", "heartbeat"] });
-    api.on("before_agent_reply", () => undefined);
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: [] });
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "unknown"] });
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["manual"] });
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: "heartbeat" });
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: Array(1) });
-    api.on("before_agent_reply", () => undefined, { eligibleTriggers: [, "heartbeat"] });
-    api.on("before_tool_call", () => undefined, { eligibleTriggers: ["heartbeat"] });
-  } };`,
+      registration: `api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "cron", "heartbeat"] });
+      api.on("before_agent_reply", () => undefined);
+      api.on("before_agent_reply", () => undefined, { eligibleTriggers: [] });
+      api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "unknown"] });
+      api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["manual"] });
+      api.on("before_agent_reply", () => undefined, { eligibleTriggers: "heartbeat" });
+      api.on("before_agent_reply", () => undefined, { eligibleTriggers: Array(1) });
+      api.on("before_agent_reply", () => undefined, { eligibleTriggers: [, "heartbeat"] });
+      api.on("before_tool_call", () => undefined, { eligibleTriggers: ["heartbeat"] });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({

@@ -55,6 +55,13 @@ describe("AppSidebar child-session load errors", () => {
         expect(alert?.getAttribute("role")).toBe("alert");
         expect(alert?.textContent).toContain(visibleError);
       });
+      const mountedAlert = sidebar.querySelector(`[data-child-session-error="${parentKey}"]`);
+      harness.publishList({
+        result: sessionResult([{ ...parentSession(parentKey, childKey), updatedAt: 2 }]),
+      });
+      await sidebar.updateComplete;
+      expect(harness.list).toHaveBeenCalledOnce();
+      expect(sidebar.querySelector(`[data-child-session-error="${parentKey}"]`)).toBe(mountedAlert);
       if (failure !== visibleError) {
         expect(sidebar.textContent).not.toContain(failure);
       }
@@ -116,7 +123,7 @@ describe("AppSidebar child-session load errors", () => {
   });
 
   it.each(["main", "agent:main:main"])(
-    "surfaces and retries child failures for the hidden %s main session",
+    "keeps subagents under the %s main session through child-load recovery",
     async (parentKey) => {
       const childKey = "agent:main:subagent:recovered";
       const gateway = createGateway({} as GatewayBrowserClient);
@@ -130,7 +137,7 @@ describe("AppSidebar child-session load errors", () => {
       harness.publishList({ result: sessionResult([parentSession(parentKey, childKey)]) });
 
       await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
-      expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull();
+      expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).not.toBeNull();
       await waitForFast(() => {
         const alert = sidebar.querySelector(`[data-child-session-error="${parentKey}"]`);
         expect(alert?.getAttribute("role")).toBe("alert");
@@ -141,10 +148,21 @@ describe("AppSidebar child-session load errors", () => {
         .querySelector<HTMLButtonElement>(`[data-retry-child-sessions="${parentKey}"]`)
         ?.click();
 
+      await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
       await waitForFast(() =>
-        expect(sidebar.textContent).toContain("Recovered main-session child"),
+        expect(sidebar.querySelector("[data-child-session-error]")).toBeNull(),
       );
-      expect(harness.list).toHaveBeenCalledTimes(2);
+      expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
+      sidebar
+        .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parentKey}"]`)
+        ?.click();
+      await waitForFast(() =>
+        expect(
+          sidebar.querySelector(
+            `[data-session-tree="${parentKey}"] [data-session-key="${childKey}"]`,
+          ),
+        ).not.toBeNull(),
+      );
       expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
     },
   );

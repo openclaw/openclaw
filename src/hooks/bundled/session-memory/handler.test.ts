@@ -10,7 +10,7 @@ import {
   parseSqliteSessionFileMarker,
 } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
-  loadTranscriptEvents,
+  loadTranscriptEventsSync,
   readSessionTranscriptBoundedMessageTailPage,
   replaceTranscriptEvents,
 } from "../../../config/sessions/session-accessor.js";
@@ -19,14 +19,6 @@ import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { getRecentSessionProjectionFromEvents } from "./transcript.js";
-
-function getRecentSessionContentFromEvents(
-  events: readonly unknown[],
-  messageCount?: number,
-): string | null {
-  return getRecentSessionProjectionFromEvents(events, messageCount)?.content ?? null;
-}
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -59,77 +51,12 @@ vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) =
     await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
   return {
     ...actual,
-    loadTranscriptEvents: vi.fn(actual.loadTranscriptEvents),
+    loadTranscriptEventsSync: vi.fn(actual.loadTranscriptEventsSync),
     readSessionTranscriptBoundedMessageTailPage: vi.fn(
       actual.readSessionTranscriptBoundedMessageTailPage,
     ),
   };
 });
-
-async function readFileTranscript(filePath: string, messageCount = 15): Promise<string | null> {
-  try {
-    const content = await fs.readFile(filePath, "utf8");
-    return getRecentSessionContentFromEvents(
-      content
-        .trim()
-        .split("\n")
-        .flatMap((line) => {
-          try {
-            return [JSON.parse(line) as unknown];
-          } catch {
-            return [];
-          }
-        }),
-      messageCount,
-    );
-  } catch {
-    return null;
-  }
-}
-
-async function getRecentSessionContentWithResetFallback(
-  filePath: string,
-  messageCount = 15,
-): Promise<string | null> {
-  const active = await readFileTranscript(filePath, messageCount);
-  if (active) {
-    return active;
-  }
-  const candidates = (await fs.readdir(path.dirname(filePath)))
-    .filter((name) => name.startsWith(`${path.basename(filePath)}.reset.`))
-    .toSorted();
-  const latest = candidates.at(-1);
-  return latest
-    ? await readFileTranscript(path.join(path.dirname(filePath), latest), messageCount)
-    : active;
-}
-
-async function findPreviousSessionFile(params: {
-  sessionsDir: string;
-  currentSessionFile?: string;
-  sessionId?: string;
-}): Promise<string | undefined> {
-  const files = await fs.readdir(params.sessionsDir);
-  const currentName = params.currentSessionFile
-    ? path.basename(params.currentSessionFile)
-    : undefined;
-  if (currentName?.includes(".reset.") && files.includes(currentName)) {
-    return path.join(params.sessionsDir, currentName);
-  }
-  const sessionId = params.sessionId?.trim();
-  if (!sessionId) {
-    return undefined;
-  }
-  const activeName = `${sessionId}.jsonl`;
-  if (files.includes(activeName)) {
-    return path.join(params.sessionsDir, activeName);
-  }
-  const reset = files
-    .filter((name) => name.startsWith(`${activeName}.reset.`))
-    .toSorted()
-    .at(-1);
-  return reset ? path.join(params.sessionsDir, reset) : undefined;
-}
 
 let handler: typeof import("./handler.js").default;
 let flushSessionMemoryWritesForTest: typeof import("./handler.js").flushSessionMemoryWritesForTest;
@@ -301,38 +228,6 @@ async function runNewWithPreviousSession(params: {
     },
   });
   return { tempDir, files, memoryContent };
-}
-
-async function createSessionMemoryWorkspace(params?: {
-  activeSession?: { name: string; content: string };
-}): Promise<{ tempDir: string; sessionsDir: string; activeSessionFile?: string }> {
-  const tempDir = await createCaseWorkspace("workspace");
-  const sessionsDir = path.join(tempDir, "sessions");
-  await fs.mkdir(sessionsDir, { recursive: true });
-
-  if (!params?.activeSession) {
-    return { tempDir, sessionsDir };
-  }
-
-  const activeSessionFile = await writeWorkspaceFile({
-    dir: sessionsDir,
-    name: params.activeSession.name,
-    content: params.activeSession.content,
-  });
-  return { tempDir, sessionsDir, activeSessionFile };
-}
-
-function expectMemoryConversation(params: {
-  memoryContent: string;
-  user: string;
-  assistant: string;
-  absent?: string;
-}) {
-  expect(params.memoryContent).toContain(sessionMemoryRecord("user", params.user));
-  expect(params.memoryContent).toContain(sessionMemoryRecord("assistant", params.assistant));
-  if (params.absent) {
-    expect(params.memoryContent).not.toContain(params.absent);
-  }
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -560,7 +455,9 @@ describe("session-memory hook", () => {
     vi.mocked(readSessionTranscriptBoundedMessageTailPage).mockImplementationOnce(() => {
       throw new Error("bounded capture unavailable");
     });
-    vi.mocked(loadTranscriptEvents).mockRejectedValueOnce(failure);
+    vi.mocked(loadTranscriptEventsSync).mockImplementationOnce(() => {
+      throw failure;
+    });
     loggerMocks.warn.mockClear();
 
     const { memoryContent } = await runNewWithPreviousSessionEntry({
@@ -823,192 +720,6 @@ describe("session-memory hook", () => {
     );
     expect(memoryContent).toContain("- **Session Key**: agent:navi:main");
     await expectPathMissing(path.join(mainWorkspace, "memory"));
-  });
-
-  it("falls back to latest .jsonl.reset.* transcript when active file is empty", async () => {
-    const { sessionsDir, activeSessionFile } = await createSessionMemoryWorkspace({
-      activeSession: { name: "test-session.jsonl", content: "" },
-    });
-
-    // Simulate /new rotation where useful content is now in .reset.* file
-    const resetContent = createMockSessionContent([
-      { role: "user", content: "Message from rotated transcript" },
-      { role: "assistant", content: "Recovered from reset fallback" },
-    ]);
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "test-session.jsonl.reset.2026-02-16T22-26-33.000Z",
-      content: resetContent,
-    });
-
-    const memoryContent = await getRecentSessionContentWithResetFallback(activeSessionFile!);
-
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Message from rotated transcript"));
-    expect(memoryContent).toContain(
-      sessionMemoryRecord("assistant", "Recovered from reset fallback"),
-    );
-  });
-
-  it("handles reset-path session pointers from previousSessionEntry", async () => {
-    const { sessionsDir } = await createSessionMemoryWorkspace();
-
-    const sessionId = "reset-pointer-session";
-    const resetSessionFile = await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-33.000Z`,
-      content: createMockSessionContent([
-        { role: "user", content: "Message from reset pointer" },
-        { role: "assistant", content: "Recovered directly from reset file" },
-      ]),
-    });
-
-    const previousSessionFile = await findPreviousSessionFile({
-      sessionsDir,
-      currentSessionFile: resetSessionFile,
-      sessionId,
-    });
-    expect(previousSessionFile).toBe(resetSessionFile);
-
-    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Message from reset pointer"));
-    expect(memoryContent).toContain(
-      sessionMemoryRecord("assistant", "Recovered directly from reset file"),
-    );
-  });
-
-  it("recovers transcript when previousSessionEntry.sessionFile is missing", async () => {
-    const { sessionsDir } = await createSessionMemoryWorkspace();
-
-    const sessionId = "missing-session-file";
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: `${sessionId}.jsonl`,
-      content: "",
-    });
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-33.000Z`,
-      content: createMockSessionContent([
-        { role: "user", content: "Recovered with missing sessionFile pointer" },
-        { role: "assistant", content: "Recovered by sessionId fallback" },
-      ]),
-    });
-
-    const previousSessionFile = await findPreviousSessionFile({
-      sessionsDir,
-      sessionId,
-    });
-    expect(previousSessionFile).toBe(path.join(sessionsDir, `${sessionId}.jsonl`));
-
-    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
-    expect(memoryContent).toContain(
-      sessionMemoryRecord("user", "Recovered with missing sessionFile pointer"),
-    );
-    expect(memoryContent).toContain(
-      sessionMemoryRecord("assistant", "Recovered by sessionId fallback"),
-    );
-  });
-
-  it("falls back to latest reset transcript when only archived copies remain", async () => {
-    const { sessionsDir } = await createSessionMemoryWorkspace();
-
-    const sessionId = "reset-only-session";
-    const olderResetFile = await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-33.000Z`,
-      content: createMockSessionContent([
-        { role: "user", content: "Older archived session" },
-        { role: "assistant", content: "Older archived summary" },
-      ]),
-    });
-    const newerResetFile = await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-34.000Z`,
-      content: createMockSessionContent([
-        { role: "user", content: "Newest archived session" },
-        { role: "assistant", content: "Newest archived summary" },
-      ]),
-    });
-
-    const previousSessionFile = await findPreviousSessionFile({
-      sessionsDir,
-      sessionId,
-    });
-    expect(previousSessionFile).toBe(newerResetFile);
-    expect(previousSessionFile).not.toBe(olderResetFile);
-
-    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Newest archived session"));
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Newest archived summary"));
-    expect(memoryContent).not.toContain("Older archived session");
-  });
-
-  it("prefers the newest reset transcript when multiple reset candidates exist", async () => {
-    const { sessionsDir, activeSessionFile } = await createSessionMemoryWorkspace({
-      activeSession: { name: "test-session.jsonl", content: "" },
-    });
-
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "test-session.jsonl.reset.2026-02-16T22-26-33.000Z",
-      content: createMockSessionContent([
-        { role: "user", content: "Older rotated transcript" },
-        { role: "assistant", content: "Old summary" },
-      ]),
-    });
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "test-session.jsonl.reset.2026-02-16T22-26-34.000Z",
-      content: createMockSessionContent([
-        { role: "user", content: "Newest rotated transcript" },
-        { role: "assistant", content: "Newest summary" },
-      ]),
-    });
-
-    const memoryContent = await getRecentSessionContentWithResetFallback(activeSessionFile!);
-    if (!memoryContent) {
-      throw new Error("expected newest reset transcript content");
-    }
-
-    expectMemoryConversation({
-      memoryContent,
-      user: "Newest rotated transcript",
-      assistant: "Newest summary",
-      absent: "Older rotated transcript",
-    });
-  });
-
-  it("prefers active transcript when it is non-empty even with reset candidates", async () => {
-    const { sessionsDir, activeSessionFile } = await createSessionMemoryWorkspace({
-      activeSession: {
-        name: "test-session.jsonl",
-        content: createMockSessionContent([
-          { role: "user", content: "Active transcript message" },
-          { role: "assistant", content: "Active transcript summary" },
-        ]),
-      },
-    });
-
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "test-session.jsonl.reset.2026-02-16T22-26-34.000Z",
-      content: createMockSessionContent([
-        { role: "user", content: "Reset fallback message" },
-        { role: "assistant", content: "Reset fallback summary" },
-      ]),
-    });
-
-    const memoryContent = await getRecentSessionContentWithResetFallback(activeSessionFile!);
-    if (!memoryContent) {
-      throw new Error("expected active transcript memory content");
-    }
-
-    expectMemoryConversation({
-      memoryContent,
-      user: "Active transcript message",
-      assistant: "Active transcript summary",
-      absent: "Reset fallback message",
-    });
   });
 
   it("handles empty session files gracefully", async () => {

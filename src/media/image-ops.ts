@@ -1,15 +1,16 @@
 // Image operation helpers normalize image transforms and adapter calls.
 import {
-  createRastermill,
   isRastermillUnavailableError,
   RastermillUnavailableError,
   readImageProbeFromHeader as readRastermillImageProbeFromHeader,
   type ImageProbe,
   type ImageMetadata,
 } from "rastermill";
-import { resolveSystemBin } from "../infra/resolve-system-bin.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
+import { convertBmpToPngWithWorker, createImageProcessor } from "./image-processor.js";
+
+export { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
+export { createImageProcessor } from "./image-processor.js";
 
 export type { ImageMetadata, ImageProbe };
 
@@ -39,27 +40,6 @@ type ResizeToJpegParams = {
 
 /** Ordered JPEG quality ladder used when shrinking generated or attached images. */
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
-/** Shared input/output pixel cap for Rastermill-backed image operations. */
-export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
-
-const loadPhotonRuntime = createLazyRuntimeModule(() => import("./photon.runtime.js"));
-
-/** Creates a Rastermill processor with OpenClaw temp-dir, pixel-limit, and command trust policy. */
-export function createImageProcessor() {
-  return createRastermill({
-    execution: "auto",
-    limits: {
-      inputPixels: MAX_IMAGE_INPUT_PIXELS,
-      outputPixels: MAX_IMAGE_INPUT_PIXELS,
-    },
-    temp: {
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-img-",
-    },
-    commandResolver: (command) =>
-      resolveSystemBin(command, { trust: command === "powershell" ? "strict" : "standard" }),
-  });
-}
 
 /** Detects either OpenClaw's wrapper error or Rastermill's native unavailable error. */
 export function isImageProcessorUnavailableError(err: unknown): boolean {
@@ -160,7 +140,7 @@ export async function convertImageToPng(buffer: Buffer): Promise<Buffer> {
     }
 
     try {
-      return (await loadPhotonRuntime()).convertBmpToPngWithPhoton(buffer);
+      return await convertBmpToPngWithWorker(buffer);
     } catch {
       throw error;
     }

@@ -6,7 +6,6 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
-// Discord plugin module implements runtime.messaging.send behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import { coerceDiscordComponentParam } from "../components.js";
@@ -16,7 +15,7 @@ import {
 } from "../reply-reference.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
-import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
+import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 
@@ -181,7 +180,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         throw new Error("Discord stickers are disabled.");
       }
       const to = readStringParam(ctx.params, "to", { required: true });
-      const content = readStringParam(ctx.params, "content");
+      const content = readStringParam(ctx.params, "content", { trim: false });
       const stickerIds = readStringArrayParam(ctx.params, "stickerIds", {
         required: true,
         label: "stickerIds",
@@ -221,6 +220,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const content = readStringParam(ctx.params, "content", {
         required: !asVoice && !componentSpec && !components && !embeds?.length && !mediaUrl,
         allowEmpty: true,
+        trim: false,
       });
       const filename = readStringParam(ctx.params, "filename");
       const replyTo = readStringParam(ctx.params, "replyTo");
@@ -322,7 +322,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const channelId = ctx.resolveChannelId();
       const name = readStringParam(ctx.params, "name", { required: true });
       const messageId = readStringParam(ctx.params, "messageId");
-      const content = readStringParam(ctx.params, "content");
+      const content = readStringParam(ctx.params, "content", { trim: false });
       const autoArchiveMinutes = readDiscordAutoArchiveDurationParam(
         ctx.params,
         "autoArchiveMinutes",
@@ -405,6 +405,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const channelId = ctx.resolveChannelId();
       const content = readStringParam(ctx.params, "content", {
         required: true,
+        trim: false,
       });
       const mediaUrl = readStringParam(ctx.params, "mediaUrl");
       const replyTo = readStringParam(ctx.params, "replyTo");

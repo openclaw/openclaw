@@ -4,14 +4,11 @@ import {
   drainStoreWriterQueuesForTest,
   type StoreWriterQueue,
 } from "../../shared/store-writer-queue.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
 import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
 
-type SessionStoreWriterQueue = StoreWriterQueue;
-
-export const WRITER_QUEUES = new Map<string, SessionStoreWriterQueue>();
-// State-dir teardown drains this owner before closing SQLite handles. Keeping
-// the queue here prevents late session writes from recreating removed fixtures.
-export const SQLITE_SESSION_WRITER_QUEUES = new Map<string, SessionStoreWriterQueue>();
+export const WRITER_QUEUES = new Map<string, StoreWriterQueue>();
+// Teardown drains the canonical agent writer before closing SQLite handles.
 
 /** Clears session writer queues and prompt-blob caches for tests. */
 export function clearSessionStoreCacheForTest(): void {

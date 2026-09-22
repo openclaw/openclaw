@@ -4,15 +4,20 @@ import type { DatabaseSync } from "node:sqlite";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { writeConfigMachineState } from "../../state/config-machine-state.js";
+import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { resolveUserPath } from "../../utils.js";
 import { listLegacyAuthProfileSources } from "./legacy-source-files.js";
 import {
   noteCommittedSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
   resolveSharedAuthStoreOwnership,
   SHARED_AUTH_STORE_STATE_KEY,
   type SharedAuthStoreOwnership,
@@ -25,6 +30,21 @@ const SHARED_AUTH_STORE_MIGRATION_KIND = "shared-auth-store-state-db";
 // Ownership objects are process-stable per state root. Doctor replaces the cached object
 // after relocation, so legacy inspection is memoized only for that ownership generation.
 const inspectedLegacySharedAuthOwnerships = new WeakSet<SharedAuthStoreOwnership>();
+
+type FreshSharedAuthStoreHandoff = {
+  previousSharedDatabasePath: string;
+  sharedDatabasePath: string;
+  env: NodeJS.ProcessEnv;
+};
+const freshSharedAuthStoreHandoffs = new Set<(handoff: FreshSharedAuthStoreHandoff) => void>();
+
+/** Runtime views follow only this producer's proven empty-store relocation. */
+export function registerFreshSharedAuthStoreHandoff(
+  handoff: (receipt: FreshSharedAuthStoreHandoff) => void,
+): () => void {
+  freshSharedAuthStoreHandoffs.add(handoff);
+  return () => freshSharedAuthStoreHandoffs.delete(handoff);
+}
 
 type SourceAuthDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -105,29 +125,56 @@ export function readSharedAuthLegacyRowsFromDatabase(database: DatabaseSync): Sh
   return { store, state };
 }
 
-export function inspectSharedAuthLegacyRowsReadOnly(sourcePath: string): SharedAuthLegacyRows {
+export function inspectSharedAuthLegacyRowsReadOnly(
+  sourcePath: string,
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
+): SharedAuthLegacyRows {
   if (inspectSharedAuthLegacySourceFile(sourcePath).status === "missing") {
     return { store: null, state: null };
   }
-  let database: DatabaseSync;
+  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
   try {
-    database = openNodeSqliteDatabase(sourcePath, { readOnly: true });
+    // Prepare in a child: closing the original inode here can release this
+    // process's live auth writer locks on Linux, even through a read-only handle.
+    prepared = behavior.artifactPreservingReadOnly
+      ? prepareSqliteReadOnlyLocationSync(sourcePath)
+      : undefined;
   } catch (error) {
     throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
   }
   try {
-    return readSharedAuthLegacyRowsFromDatabase(database);
-  } catch (error) {
-    throw new SharedAuthStoreSourceInspectionError(sourcePath, "read", error);
+    let database: DatabaseSync;
+    try {
+      database = openNodeSqliteDatabase(prepared?.location ?? sourcePath, { readOnly: true });
+    } catch (error) {
+      throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
+    }
+    try {
+      return readSharedAuthLegacyRowsFromDatabase(database);
+    } catch (error) {
+      throw new SharedAuthStoreSourceInspectionError(sourcePath, "read", error);
+    } finally {
+      database.close();
+    }
   } finally {
-    database.close();
+    prepared?.cleanup();
   }
 }
 
-export function hasPendingSharedAuthCleanup(env: NodeJS.ProcessEnv, sourcePath: string): boolean {
+export function hasPendingSharedAuthCleanup(
+  env: NodeJS.ProcessEnv,
+  sourcePath: string,
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
+): boolean {
+  const read = behavior.artifactPreservingReadOnly
+    ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly
+    : withExistingOpenClawStateDatabaseReadOnly;
   return (
-    withExistingOpenClawStateDatabaseReadOnly(
+    read(
       ({ db: database }) => {
+        if (behavior.artifactPreservingReadOnly && !tableExists(database, "migration_sources")) {
+          return false;
+        }
         const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
         const row = executeSqliteQueryTakeFirstSync(
           database,
@@ -169,6 +216,14 @@ function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv): void {
   }
   writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
   noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, env);
+  const handoff = {
+    previousSharedDatabasePath: sourcePath,
+    sharedDatabasePath: resolveSharedAuthStorePath(env),
+    env,
+  };
+  for (const publish of freshSharedAuthStoreHandoffs) {
+    publish(handoff);
+  }
 }
 
 export function prepareFreshSharedAuthStoreWrite(params: {

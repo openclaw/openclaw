@@ -9,7 +9,10 @@ import { loadExecApprovalsReadOnly } from "../../infra/exec-approvals.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { readRestartSentinelReadOnly } from "../../infra/restart-sentinel.js";
 import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
-import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
+import {
+  buildPluginCompatibilityNotices,
+  withPluginDiagnosticsReport,
+} from "../../plugins/status.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { buildStatusAllOverviewRows } from "../status-overview-rows.ts";
@@ -23,7 +26,7 @@ import {
   type StatusGatewayDiagnosticsResult,
   type resolveStatusServiceSummaries,
 } from "../status-runtime-shared.ts";
-import { formatUpdateRestartStatusValue } from "../status-update-restart.ts";
+import { buildStatusUpdateRows } from "../status-update-restart.ts";
 import { resolveStatusAllConnectionDetails } from "../status.gateway-connection.ts";
 import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
 import {
@@ -68,12 +71,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
     port: number;
     portUsage: Awaited<ReturnType<typeof inspectPortUsage>> | null;
     tailscaleMode: string;
-    tailscale: {
-      backendState: null;
-      dnsName: string | null;
-      ips: string[];
-      error: null;
-    };
+    tailscaleDns: string | null;
     tailscaleHttpsUrl: string | null;
     skillStatus: ReturnType<typeof buildWorkspaceSkillStatus> | null;
     pluginCompatibility: ReturnType<typeof buildPluginCompatibilityNotices>;
@@ -145,6 +143,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
             });
             return buildWorkspaceSkillStatus(defaultWorkspace, {
               config: overview.cfg,
+              agentId: controlPlaneWorkspace.agentId,
               eligibility: {
                 nodeSkills,
                 remote: getRemoteSkillEligibility({
@@ -157,7 +156,10 @@ async function resolveStatusAllLocalDiagnosis(params: {
           }
         })()
       : null;
-  const pluginCompatibility = buildPluginCompatibilityNotices({ config: overview.cfg });
+  const pluginCompatibility = await withPluginDiagnosticsReport(
+    { config: overview.cfg },
+    (report) => buildPluginCompatibilityNotices({ report }),
+  );
 
   return {
     configPath,
@@ -171,12 +173,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
       port,
       portUsage,
       tailscaleMode: overview.tailscaleMode,
-      tailscale: {
-        backendState: null,
-        dnsName: overview.tailscaleDns,
-        ips: [],
-        error: null,
-      },
+      tailscaleDns: overview.tailscaleDns,
       tailscaleHttpsUrl: overview.tailscaleHttpsUrl,
       skillStatus,
       pluginCompatibility,
@@ -228,9 +225,8 @@ export async function buildStatusAllReportData(params: {
     configPath,
     summary,
     secretDiagnosticsCount: params.overview.secretDiagnostics.length,
-    updateRestartValue: formatUpdateRestartStatusValue(diagnosis.sentinel?.payload),
+    updateRows: buildStatusUpdateRows(diagnosis.sentinel?.payload),
     agentStatus: params.overview.agentStatus,
-    tailscaleBackendState: diagnosis.tailscale.backendState,
   });
 
   return {

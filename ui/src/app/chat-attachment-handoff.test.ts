@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ChatAttachment } from "../lib/chat/chat-types.ts";
 import {
@@ -44,6 +44,68 @@ afterEach(() => {
 });
 
 describe("chat attachment route handoff", () => {
+  it("reports only supplied payload IDs still held by staged packages or fallbacks", () => {
+    const handoff = createChatAttachmentHandoff();
+    const owner = {} as GatewayBrowserClient;
+    const staged = storedAttachment("query-staged", "text/plain", false);
+    const fallback = storedAttachment("query-fallback", "text/plain", false);
+    const unreferenced = storedAttachment("query-unreferenced", "text/plain", false);
+    try {
+      handoff.prepare({
+        owner,
+        paneId: "dock",
+        scopeKey: "home",
+        attachments: [staged],
+        fallbacks: {
+          home: { message: "Fallback", attachments: [fallback], storageFailed: false, sequence: 1 },
+        },
+      });
+      expect(handoff.retainedAttachmentIds([staged, fallback, unreferenced])).toEqual(
+        new Set([staged.id, fallback.id]),
+      );
+      expect(handoff.retainedAttachmentIds([fallback])).toEqual(new Set([fallback.id]));
+      expect(handoff.consume({ owner, paneId: "dock", scopeKey: "home" })?.attachments).toEqual([
+        staged,
+      ]);
+      expect(handoff.retainedAttachmentIds([staged, fallback])).toEqual(new Set());
+    } finally {
+      handoff.dispose();
+    }
+  });
+
+  it("retires deleted-session packages across panes without erasing newer packages or siblings", () => {
+    vi.useFakeTimers();
+    const handoff = createChatAttachmentHandoff();
+    const owner = {} as GatewayBrowserClient;
+    const scopeKey = "agent:main:deleted";
+    const old = storedAttachment("old-deleted", "image/png", false);
+    const fresh = storedAttachment("newer-deleted", "image/png", false);
+    const sibling = storedAttachment("kept-sibling", "image/png", false);
+    try {
+      vi.setSystemTime(100);
+      handoff.prepare({ owner, paneId: "p1", scopeKey, attachments: [old], fallbacks: {} });
+      handoff.prepare({
+        owner,
+        paneId: "p2",
+        scopeKey: "sibling",
+        attachments: [sibling],
+        fallbacks: {},
+      });
+      vi.setSystemTime(300);
+      handoff.prepare({ owner, paneId: "p3", scopeKey, attachments: [fresh], fallbacks: {} });
+      handoff.retireScope(scopeKey, 200);
+      expect(handoff.consume({ owner, paneId: "p1", scopeKey })).toBeNull();
+      expect(getChatAttachmentDataUrl(old)).toBeNull();
+      expect(handoff.consume({ owner, paneId: "p3", scopeKey })?.attachments).toEqual([fresh]);
+      expect(handoff.consume({ owner, paneId: "p2", scopeKey: "sibling" })?.attachments).toEqual([
+        sibling,
+      ]);
+    } finally {
+      handoff.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("transfers every exact staged attachment object once", () => {
     const owner = {} as GatewayBrowserClient;
     const annotation = storedAttachment("annotation", "image/png", true);

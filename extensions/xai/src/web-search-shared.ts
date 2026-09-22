@@ -5,11 +5,11 @@ import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import { normalizeXaiModelId } from "../model-id.js";
 import {
   requestXaiResponsesTool,
+  resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
-export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
 export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 const XAI_DEFAULT_WEB_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
@@ -113,7 +113,7 @@ export async function requestXaiWebSearch(params: {
       ...params,
       inputText: params.query,
       tools: [{ type: "web_search" }],
-      reasoningEffort: params.model === XAI_DEFAULT_WEB_SEARCH_MODEL ? "low" : undefined,
+      reasoningEffort: resolveXaiToolDefaultReasoningEffort(params.model, "low"),
       errorLabel: "xAI web search failed",
     },
     (data) =>

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
@@ -11,18 +12,7 @@ export const STANDING_INTENTS_FTS_SHADOW_TABLES = [
   "standing_intents_fts_idx",
 ] as const;
 
-const STANDING_INTENTS_SCHEMA_START = "CREATE TABLE IF NOT EXISTS standing_intents (";
-const STANDING_INTENTS_SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_transcript_index_state (";
 type StandingIntentColumnInfo = { name?: unknown };
-
-function standingIntentsSchemaSql(): string {
-  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(STANDING_INTENTS_SCHEMA_START);
-  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(STANDING_INTENTS_SCHEMA_END, start);
-  if (start === -1 || end === -1) {
-    throw new Error("OpenClaw standing-intents schema markers are missing.");
-  }
-  return OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end);
-}
 
 function ensureStandingIntentCreatorColumn(db: DatabaseSync): void {
   const columns = /* sqlite-allow-raw -- Canonical additive schema inspection only. */ db
@@ -41,7 +31,14 @@ function ensureStandingIntentCreatorColumn(db: DatabaseSync): void {
 /** Lazily add the canonical standing-intents tables on first feature use. */
 export function ensureOpenClawAgentStandingIntentsSchema(db: DatabaseSync): void {
   const ensure = () => {
-    db.exec(standingIntentsSchemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
+    // sqlite-allow-raw -- Canonical additive DDL only.
+    db.exec(
+      extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, STANDING_INTENTS_TABLE, {
+        endMarker: "CREATE TABLE IF NOT EXISTS session_transcript_index_state (",
+        includeEndMarker: false,
+        errorMessage: "OpenClaw standing-intents schema markers are missing.",
+      }),
+    );
     ensureStandingIntentCreatorColumn(db);
   };
   if (db.isTransaction) {

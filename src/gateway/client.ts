@@ -30,12 +30,14 @@ import {
 import { logDebug, logError } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
-import type { DeviceAuthEntry } from "../shared/device-auth.js";
+import { type DeviceAuthEntry, normalizeDeviceAuthRole } from "../shared/device-auth.js";
+import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
 import { VERSION } from "../version.js";
 
 export {
   GatewayClientRequestError,
   isGatewayConnectAssemblyError,
+  isGatewayProtocolResponseError,
 } from "../../packages/gateway-client/src/index.js";
 export type {
   GatewayClientCloseInfo,
@@ -55,7 +57,7 @@ export type GatewayClientOptions = BaseGatewayClientOptions & {
 function createOpenClawGatewayClientHostDeps(
   overrides?: GatewayClientHostDeps,
   deviceAuthScope?: string,
-  suppressOriginDeviceAuth = false,
+  suppressStoredDeviceAuth = false,
   sharedStateMode?: "read-only",
   preparedDeviceAuth?: DeviceAuthEntry,
 ): GatewayClientHostDeps {
@@ -65,24 +67,64 @@ function createOpenClawGatewayClientHostDeps(
   const rotationFence = preparedDeviceAuth
     ? { expectedToken: preparedDeviceAuth.token }
     : undefined;
+  let tokenObservation:
+    | { deviceId: string; role: string; expectedToken: string | null }
+    | undefined;
+  const observe = (params: { deviceId: string; role: string }) => {
+    const deviceId = params.deviceId;
+    const role = normalizeDeviceAuthRole(params.role);
+    return (snapshot: { expectedToken: string | null }) => {
+      tokenObservation = { deviceId, role, expectedToken: snapshot.expectedToken };
+    };
+  };
+  const observedFor = (params: { deviceId: string; role: string }) =>
+    tokenObservation?.deviceId === params.deviceId &&
+    tokenObservation.role === normalizeDeviceAuthRole(params.role)
+      ? tokenObservation
+      : undefined;
+  const writeFence = (params: { deviceId: string; role: string }) => {
+    if (rotationFence) {
+      return rotationFence;
+    }
+    // Each connection's accepted writes settle before its successor loads another observation.
+    const observed = observedFor(params);
+    return observed ? { expectedToken: observed.expectedToken } : undefined;
+  };
+  const clearFence = (params: { deviceId: string; role: string; expectedToken?: string }) => {
+    const expectedToken = rotationFence?.expectedToken ?? params.expectedToken;
+    const raw = observedFor(params)?.expectedToken;
+    return {
+      ...rotationFence,
+      ...(typeof raw === "string" && raw !== expectedToken && raw.trim() === expectedToken
+        ? { observedToken: raw }
+        : {}),
+    };
+  };
   const deviceAuthDeps: Pick<
     GatewayClientHostDeps,
     "loadDeviceAuthToken" | "storeDeviceAuthToken" | "clearDeviceAuthToken"
   > = deviceAuthScope
     ? {
-        loadDeviceAuthToken: (params) =>
-          suppressOriginDeviceAuth
-            ? null
-            : readOnly
-              ? loadOriginDeviceTokenReadOnly({ ...params, gatewayScope: deviceAuthScope })
-              : loadOriginDeviceToken({ ...params, gatewayScope: deviceAuthScope }),
+        loadDeviceAuthToken: (params) => {
+          if (readOnly) {
+            return suppressStoredDeviceAuth
+              ? null
+              : loadOriginDeviceTokenReadOnly({ ...params, gatewayScope: deviceAuthScope });
+          }
+          const load = loadOriginDeviceToken({
+            ...params,
+            gatewayScope: deviceAuthScope,
+            onSnapshot: observe(params),
+          });
+          return suppressStoredDeviceAuth ? null : load;
+        },
         storeDeviceAuthToken: readOnly
           ? () => {}
           : (params) =>
               storeOriginDeviceToken({
                 ...params,
                 gatewayScope: deviceAuthScope,
-                ...rotationFence,
+                ...writeFence(params),
               }),
         clearDeviceAuthToken: readOnly
           ? () => {}
@@ -90,19 +132,22 @@ function createOpenClawGatewayClientHostDeps(
               clearOriginDeviceToken({
                 ...params,
                 gatewayScope: deviceAuthScope,
-                ...rotationFence,
+                ...clearFence(params),
               }),
       }
     : readOnly
       ? {
-          loadDeviceAuthToken: loadDeviceAuthTokenReadOnly,
+          loadDeviceAuthToken: suppressStoredDeviceAuth ? () => null : loadDeviceAuthTokenReadOnly,
           storeDeviceAuthToken: () => {},
           clearDeviceAuthToken: () => {},
         }
       : {
-          loadDeviceAuthToken,
-          storeDeviceAuthToken: (params) => storeDeviceAuthToken({ ...params, ...rotationFence }),
-          clearDeviceAuthToken: (params) => clearDeviceAuthToken({ ...params, ...rotationFence }),
+          loadDeviceAuthToken: (params) =>
+            loadDeviceAuthToken({ ...params, onSnapshot: observe(params) }),
+          storeDeviceAuthToken: (params) =>
+            storeDeviceAuthToken({ ...params, ...writeFence(params) }),
+          clearDeviceAuthToken: (params) =>
+            clearDeviceAuthToken({ ...params, ...clearFence(params) }),
         };
   const preparedDeviceAuthDeps = preparedDeviceAuth
     ? { ...deviceAuthDeps, loadDeviceAuthToken: () => preparedDeviceAuth }
@@ -136,19 +181,33 @@ export class GatewayClient {
 
   constructor(opts: GatewayClientOptions) {
     const { deviceAuthScope, preparedDeviceAuth, sharedStateMode, ...baseOptions } = opts;
-    const suppressOriginDeviceAuth = Boolean(
-      deviceAuthScope && (baseOptions.token?.trim() || baseOptions.password?.trim()),
-    );
+    const runtimeIdentity = resolveGatewayClientPlatformIdentity(process.platform);
+    // Password-only read-only clients cannot use stored tokens for auth, retry, or persistence.
+    const suppressStoredDeviceAuth =
+      Boolean(deviceAuthScope && (baseOptions.token?.trim() || baseOptions.password?.trim())) ||
+      (!deviceAuthScope &&
+        sharedStateMode === "read-only" &&
+        Boolean(baseOptions.password?.trim()) &&
+        !baseOptions.token?.trim() &&
+        !baseOptions.bootstrapToken?.trim() &&
+        !baseOptions.deviceToken?.trim() &&
+        !baseOptions.approvalRuntimeToken?.trim() &&
+        !baseOptions.agentRuntimeIdentityToken?.trim() &&
+        !baseOptions.preferBootstrapToken);
     for (const value of Object.values(baseOptions.edgeAuthHeaders ?? {})) {
       registerSecretValueForRedaction(value);
     }
     this.#client = new BaseGatewayClient({
       ...baseOptions,
       clientVersion: baseOptions.clientVersion ?? VERSION,
+      platform: baseOptions.platform ?? runtimeIdentity.platform,
+      deviceFamily:
+        baseOptions.deviceFamily ??
+        (baseOptions.platform === undefined ? runtimeIdentity.deviceFamily : undefined),
       hostDeps: createOpenClawGatewayClientHostDeps(
         baseOptions.hostDeps,
         deviceAuthScope,
-        suppressOriginDeviceAuth,
+        suppressStoredDeviceAuth,
         sharedStateMode,
         preparedDeviceAuth,
       ),
@@ -173,6 +232,12 @@ export class GatewayClient {
     opts?: GatewayClientRequestOptions,
   ): Promise<T> {
     return this.#client.request<T>(method, params, opts);
+  }
+
+  /** Current transport state, including CLOSING before the close callback fires.
+   * This is not authentication or readiness evidence on its own. */
+  get connected(): boolean {
+    return this.#client.connected;
   }
 
   getConnectionMetadata(): GatewayClientConnectionMetadata {

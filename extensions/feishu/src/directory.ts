@@ -28,39 +28,55 @@ export async function listFeishuDirectoryPeersLive(params: {
     const client = createFeishuClient(account);
     const peers: FeishuDirectoryPeer[] = [];
     const limit = params.limit ?? 50;
-
-    const response = await client.contact.user.list({
-      params: {
-        page_size: Math.min(limit, 50),
-      },
-    });
-
-    if (response.code !== 0) {
-      throw new Error(response.msg || `code ${response.code}`);
-    }
-
     const q = normalizeLowercaseStringOrEmpty(params.query);
-    for (const user of response.data?.items ?? []) {
-      if (user.open_id) {
-        const name = user.name || "";
-        if (
-          !q ||
-          normalizeLowercaseStringOrEmpty(user.open_id).includes(q) ||
-          normalizeLowercaseStringOrEmpty(name).includes(q)
-        ) {
-          peers.push({
-            kind: "user",
-            id: user.open_id,
-            name: name || undefined,
-          });
+    const pageSize = q ? 50 : Math.min(limit, 50);
+    let pageToken: string | undefined;
+    const seenPageTokens = new Set<string>();
+
+    for (let page = 0; page < MAX_FEISHU_DIRECTORY_PAGES; page += 1) {
+      const response = await client.contact.user.list({
+        params: {
+          page_size: pageSize,
+          page_token: pageToken,
+        },
+      });
+      if (response.code !== 0) {
+        throw new Error(response.msg || `code ${response.code}`);
+      }
+      for (const user of response.data?.items ?? []) {
+        if (user.open_id) {
+          const name = user.name || "";
+          if (
+            !q ||
+            normalizeLowercaseStringOrEmpty(user.open_id).includes(q) ||
+            normalizeLowercaseStringOrEmpty(name).includes(q)
+          ) {
+            peers.push({
+              kind: "user",
+              id: user.open_id,
+              name: name || undefined,
+            });
+          }
+        }
+        if (peers.length >= limit) {
+          return peers;
         }
       }
-      if (peers.length >= limit) {
-        break;
+      if (!response.data?.has_more) {
+        return peers;
       }
-    }
 
-    return peers;
+      const nextPageToken = response.data.page_token;
+      if (!nextPageToken) {
+        throw new Error("Feishu live peer directory returned an empty page token");
+      }
+      if (seenPageTokens.has(nextPageToken)) {
+        throw new Error("Feishu live peer directory returned a repeated page token");
+      }
+      seenPageTokens.add(nextPageToken);
+      pageToken = nextPageToken;
+    }
+    throw new Error("Feishu live peer directory pagination limit exceeded");
   } catch (err) {
     if (params.fallbackToStatic === false) {
       throw err instanceof Error ? err : new Error("Feishu live peer lookup failed");

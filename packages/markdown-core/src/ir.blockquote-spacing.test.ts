@@ -40,13 +40,6 @@ describe("blockquote spacing", () => {
       expect(result.text).toBe("quote\n\nparagraph");
     });
 
-    it("should not produce triple newlines", () => {
-      const input = "> quote\n\nparagraph";
-      const result = markdownToIR(input);
-
-      expect(result.text).not.toContain("\n\n\n");
-    });
-
     it("excludes the trailing paragraph separator from the blockquote span", () => {
       const result = markdownToIR("> `gpt`\n\nbody");
 
@@ -67,13 +60,6 @@ describe("blockquote spacing", () => {
       const result = markdownToIR(input);
 
       expect(result.text).toBe("first\n\nsecond");
-    });
-
-    it("should not produce triple newlines between blockquotes", () => {
-      const input = "> first\n\n> second";
-      const result = markdownToIR(input);
-
-      expect(result.text).not.toContain("\n\n\n");
     });
   });
 

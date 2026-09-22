@@ -18,6 +18,30 @@ function completeMutation(tracker: DiffStatTracker, toolCallId: string, status =
 }
 
 describe("createProgressDraftDiffStatTracker", () => {
+  it.each([
+    ["", 0],
+    ["one", 1],
+    ["one\n", 2],
+    ["one\r", 2],
+    ["one\r\n", 2],
+    ["\r\n", 2],
+    ["one\rtwo\nthree\r\nfour", 4],
+    ["\r\r\n\n", 4],
+  ])("preserves completed write and edit line counts for %j", (content, lineCount) => {
+    const tracker = createProgressDraftDiffStatTracker({ canStage: () => true });
+    stageMutation(tracker, "write", "write", { path: "example.txt", content });
+    completeMutation(tracker, "write");
+    expect(tracker.resolve()).toEqual({ files: 1, added: lineCount, removed: 0 });
+
+    stageMutation(tracker, "edit", "edit", {
+      path: "example.txt",
+      oldText: content,
+      newText: content,
+    });
+    completeMutation(tracker, "edit");
+    expect(tracker.resolve()).toEqual({ files: 1, added: lineCount * 2, removed: lineCount });
+  });
+
   it("stages starts and commits successful terminal items additively", () => {
     const tracker = createProgressDraftDiffStatTracker({ canStage: () => true });
 

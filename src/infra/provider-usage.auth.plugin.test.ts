@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderResolveUsageAuthContext } from "../plugins/types.js";
 
 const resolveProviderUsageAuthWithPluginMock = vi.fn(
   async (..._args: unknown[]): Promise<unknown> => null,
@@ -134,6 +135,19 @@ describe("resolveProviderAuths plugin boundary", () => {
     resolveApiKeyForProfileMock.mockResolvedValue(null);
     resolveProviderUsageAuthWithPluginMock.mockReset();
     resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
+  });
+
+  it("normalizes direct plugin candidates before provider env keys", async () => {
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (rawParams) => {
+      const { context } = rawParams as { context: ProviderResolveUsageAuthContext };
+      const token = context.resolveApiKeyFromConfigAndStore({
+        envDirect: [undefined, "first-\r\nkey", "second-key"],
+      });
+      return token ? { token } : null;
+    });
+    await expect(
+      resolveProviderAuthsForTest({ providers: ["zai"], env: { ZAI_API_KEY: "fallback-key" } }),
+    ).resolves.toEqual([{ provider: "zai", token: "first-key" }]);
   });
 
   it("prefers plugin-owned usage auth when available", async () => {

@@ -22,6 +22,11 @@ Status: official downloadable plugin.
 openclaw plugins install @tencent-connect/openclaw-qqbot
 ```
 
+If the bot was installed as `@openclaw/qqbot` under plugin id `qqbot`,
+`openclaw plugins update qqbot` and `openclaw update` rewrite it to
+`@tencent-connect/openclaw-qqbot` under plugin id `openclaw-qqbot`. Channel
+config stays under `channels.qqbot`.
+
 ## Setup
 
 1. Go to the [QQ Open Platform](https://q.qq.com/) and scan the QR code with your
@@ -39,7 +44,7 @@ AppSecret is not stored in plaintext. If you leave the page without saving it, y
 openclaw channels add --channel qqbot --token "AppID:AppSecret"
 ```
 
-5. Restart the Gateway.
+5. Check `openclaw channels status --probe`; start the Gateway if it is offline. Config changes follow [hot reload](/gateway/configuration/hot-reload).
 
 ## Inbound durability
 

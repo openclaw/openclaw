@@ -10,21 +10,21 @@ import {
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
-import { readLocalFileSafely } from "../../infra/fs-safe.js";
-import { readSnakeCaseParamRaw } from "../../param-key.js";
-import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type {
   AgentTool,
   AgentToolProgress,
   AgentToolResult,
   AgentToolUpdateCallback,
-} from "../runtime/index.js";
-import { sanitizeToolResultImages } from "../tool-images.js";
-import { registerTrustedToolInputError } from "../tool-result-error.js";
+} from "../../../packages/agent-core/src/types.js";
+import { readLocalFileSafely } from "../../infra/fs-safe.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
+import type { ImageSanitizationLimits } from "../image-sanitization.js";
+import { ToolAuthorizationError, ToolInputError } from "../tool-input-error.js";
 import { textResult } from "./tool-results.js";
 
+export { ToolAuthorizationError, ToolInputError };
 export { jsonResult, textResult } from "./tool-results.js";
 
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
@@ -36,6 +36,8 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   catalogMode?: "direct-only";
   /** Gateway client capabilities required before this tool can be assembled. */
   requiredClientCaps?: string[];
+  /** Tool-owned execution and transport wait budget, before any harness completion grace. */
+  getExecutionTimeoutMs?: (args: unknown) => number | undefined;
   prepareBeforeToolCallParams?: (
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
@@ -60,6 +62,7 @@ export type AnyAgentTool = Omit<AgentTool, "execute"> &
     catalogMode?: "direct-only";
     /** Gateway client capabilities required before this tool can be assembled. */
     requiredClientCaps?: string[];
+    getExecutionTimeoutMs?: AgentToolWithMeta<TSchema, unknown>["getExecutionTimeoutMs"];
     prepareBeforeToolCallParams?: AgentToolWithMeta<
       TSchema,
       unknown
@@ -85,25 +88,6 @@ export type ActionGate<T extends Record<string, boolean | undefined>> = (
   key: keyof T,
   defaultValue?: boolean,
 ) => boolean;
-
-export class ToolInputError extends Error {
-  readonly status: number = 400;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolInputError";
-    registerTrustedToolInputError(this);
-  }
-}
-
-export class ToolAuthorizationError extends ToolInputError {
-  override readonly status = 403;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolAuthorizationError";
-  }
-}
 
 export function createActionGate<T extends Record<string, boolean | undefined>>(
   actions: T | undefined,
@@ -343,26 +327,9 @@ export function readStringArrayParam(
   options: StringParamOptions = {},
 ) {
   const { required = false, label = key } = options;
-  const raw = readSnakeCaseParamRaw(params, key);
-  if (Array.isArray(raw)) {
-    const values = normalizeStringEntries(raw.filter((entry) => typeof entry === "string"));
-    if (values.length === 0) {
-      if (required) {
-        throw new ToolInputError(`${label} required`);
-      }
-      return undefined;
-    }
+  const values = normalizeSingleOrTrimmedStringList(readSnakeCaseParamRaw(params, key));
+  if (values.length > 0) {
     return values;
-  }
-  if (typeof raw === "string") {
-    const value = raw.trim();
-    if (!value) {
-      if (required) {
-        throw new ToolInputError(`${label} required`);
-      }
-      return undefined;
-    }
-    return [value];
   }
   if (required) {
     throw new ToolInputError(`${label} required`);
@@ -517,6 +484,7 @@ async function imageResult(params: {
       },
     },
   };
+  const { sanitizeToolResultImages } = await import("../tool-images.runtime.js");
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
 

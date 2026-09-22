@@ -2,12 +2,14 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { captureCronMutationCommit } from "./mutation-completion.js";
 import { assertCronJobScratchContent } from "./scratch-contract.js";
 import { cronStoreKey } from "./store/key.js";
 import { getCronStoreKysely } from "./store/schema.js";
@@ -208,6 +210,10 @@ export function writeCronJobScratch(params: {
           updated_at_ms: nowMs,
         }),
       );
+      const committed = captureCronMutationCommit("cron.scratch.set");
+      if (committed) {
+        deferSqlitePostCommitPublication(db, committed);
+      }
       if (params.content === null) {
         return { ok: true, currentRevision: revision } as const;
       }

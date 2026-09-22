@@ -1,9 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
@@ -17,34 +13,15 @@ import {
   recordOutboundMessageForPromptContext,
   registerTelegramOutboundGroupHistoryRecorder,
 } from "./outbound-message-context.js";
-import { setTelegramRuntime } from "./runtime.js";
+import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
   resetTelegramMessageCacheForTest as resetTelegramMessageCacheBucketsForTest,
 } from "./runtime.test-support.js";
-import type { TelegramRuntime } from "./runtime.types.js";
 
 const cfg = {
   session: { store: "/tmp/openclaw-telegram-outbound-context-test.json" },
 } satisfies OpenClawConfig;
-
-function installTelegramStateRuntimeForTest(): void {
-  setTelegramRuntime({
-    state: {
-      openKeyedStore: ((options) =>
-        createPluginStateKeyedStoreForTests(
-          "telegram",
-          options,
-        )) as TelegramRuntime["state"]["openKeyedStore"],
-      openSyncKeyedStore: ((options) =>
-        createPluginStateSyncKeyedStoreForTests(
-          "telegram",
-          options,
-        )) as TelegramRuntime["state"]["openSyncKeyedStore"],
-    },
-    channel: {},
-  } as TelegramRuntime);
-}
 
 async function recordAndRead(
   params: Omit<Parameters<typeof recordOutboundMessageForPromptContext>[0], "cfg">,
@@ -68,7 +45,7 @@ describe("recordOutboundMessageForPromptContext", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests();
     resetTelegramMessageCacheBucketsForTest();
-    installTelegramStateRuntimeForTest();
+    setTelegramPluginStateRuntimeForTests();
   });
 
   afterEach(() => {

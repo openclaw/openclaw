@@ -1,7 +1,4 @@
-import {
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendAudit,
   appendInboxRead,
@@ -9,9 +6,8 @@ import {
   composeInbound,
   composeOutbound,
   confirmDelivery,
-  createAnthropicGuard,
   createMonotonicUlidFactory,
-  createOpenAiGuard,
+  effectiveGuardPolicyVersion,
   formatHandleEpoch,
   InvalidDeliveryReceiptError,
   parseHandleEpoch,
@@ -21,6 +17,7 @@ import {
   type AuditStore,
   type GuardAdapter,
   type ReplayStore,
+  type ReviewGate,
 } from "../protocol/index.js";
 import type { ReefChannelConfig } from "./config-schema.js";
 import { autonomyBudget } from "./config-schema.js";
@@ -31,7 +28,7 @@ import {
 } from "./friend-types.js";
 import { reefMessageTextHash } from "./rejection-resend.js";
 import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
-import { ReefTransportClient } from "./transport.js";
+import { ReefInboxEntryParkedError, ReefTransportClient } from "./transport.js";
 import {
   REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
   REEF_OUTBOUND_DELIVERY_TTL_MS,
@@ -128,6 +125,9 @@ export function isPermanentReefOutboundRejection(error: unknown): boolean {
 
 export class ReefMessageFlow {
   private legacyDeliveryIndex?: Promise<Map<string, LegacyDeliveryCandidate>>;
+  // Entry ids whose last processing outcome parked (pending review, guard
+  // outage): their re-polls skip the duplicate durable read observation.
+  private readonly parkedReadIds = new Set<string>();
 
   constructor(
     readonly options: {
@@ -185,8 +185,8 @@ export class ReefMessageFlow {
       recipientEncryptionPublicKey: friend.x25519PublicKey,
       guard: this.options.guard,
       audit: this.options.audit,
-      policyVersion: this.requireGuardConfig().policyVersion,
-      reviewGate: (request) => this.options.reviews.request(request),
+      policyVersion: this.guardPolicyVersion(),
+      reviewGate: reviewGateFor(this.options.reviews),
     });
     signal?.throwIfAborted();
     // Persist the exact peer/id/body binding before the relay can return a
@@ -220,10 +220,12 @@ export class ReefMessageFlow {
       return [];
     }
     const rejections: ReefDeliveryRejection[] = [];
-    await appendInboxRead(
-      this.options.audit,
-      entries.map((entry) => entry.id),
-    );
+    // A parked entry is re-polled every reconcile interval; one durable read
+    // observation per park keeps the audit chain from filling with retries.
+    const unreadIds = entries.map((entry) => entry.id).filter((id) => !this.parkedReadIds.has(id));
+    if (unreadIds.length > 0) {
+      await appendInboxRead(this.options.audit, unreadIds);
+    }
     for (const entry of entries) {
       if (entry.kind === "receipt") {
         const rejection = await this.processReceipt(entry);
@@ -233,7 +235,15 @@ export class ReefMessageFlow {
         continue;
       }
       if (entry.envelope) {
-        await this.processEnvelope(entry.peer, entry.envelope);
+        try {
+          await this.processEnvelope(entry.peer, entry.envelope);
+        } catch (error) {
+          if (error instanceof ReefInboxEntryParkedError) {
+            this.parkedReadIds.add(entry.id);
+          }
+          throw error;
+        }
+        this.parkedReadIds.delete(entry.id);
       }
     }
     return rejections;
@@ -407,13 +417,28 @@ export class ReefMessageFlow {
         replayStore: this.options.replay,
         guard: this.options.guard,
         audit: this.options.audit,
-        policyVersion: this.requireGuardConfig().policyVersion,
-        reviewGate: (request) => this.options.reviews.request(request),
+        policyVersion: this.guardPolicyVersion(),
+        reviewGate: reviewGateFor(this.options.reviews),
       });
     } catch (error) {
       if (error instanceof PipelineError && error.receipt) {
         await this.options.transport.acknowledge(relayPeer, envelope.id, error.receipt);
         return;
+      }
+      // Parked outcomes are domain states, not transport failures: the message
+      // stays un-acked at the relay and the next inbox poll re-attempts it.
+      // Pending reviews wait for the owner; guard_failure waits out a provider
+      // outage. Neither may tear down the inbox socket or reject the peer.
+      if (error instanceof PipelineError && isParkedInboundPipelineError(error)) {
+        throw new ReefInboxEntryParkedError(error.message);
+      }
+      if (isPluginStateCapacityError(error)) {
+        // Shared replay state is at capacity. Park instead of tearing down the
+        // shared inbox: the entry stays un-acked at the relay and re-polls
+        // without head-of-line blocking entries from other peers.
+        throw new ReefInboxEntryParkedError(
+          "Reef replay state is at capacity; entry parked for retry",
+        );
       }
       throw error;
     }
@@ -421,7 +446,7 @@ export class ReefMessageFlow {
       await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
       return;
     }
-    if (await this.options.delivered.has(envelope.id)) {
+    if ((await this.options.delivered.status(envelope.id)) === "delivered") {
       await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
       return;
     }
@@ -441,7 +466,18 @@ export class ReefMessageFlow {
         autonomy: friend.autonomy,
       });
     }
-    await this.options.delivered.add(envelope.id);
+    try {
+      await this.options.delivered.confirm(envelope.id);
+    } catch (error) {
+      if (isPluginStateCapacityError(error)) {
+        // Failed confirm means no delivered marker persisted, so the re-poll
+        // re-ingests the entry instead of unwinding the shared inbox.
+        throw new ReefInboxEntryParkedError(
+          "Reef delivered-marker store is at capacity; entry parked for retry",
+        );
+      }
+      throw error;
+    }
     await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
   }
 
@@ -458,28 +494,37 @@ export class ReefMessageFlow {
     }
     return this.options.config.guard;
   }
+
+  private guardPolicyVersion(): string {
+    const guard = this.requireGuardConfig();
+    return effectiveGuardPolicyVersion(guard.policyVersion, guard.rules);
+  }
 }
 
-export function createConfiguredGuard(
-  config: ReefChannelConfig,
-  fetcher: typeof fetch = fetch,
-): GuardAdapter {
-  if (!config.guard) {
-    throw new Error("Reef guard is not configured");
-  }
-  const guardCredential = normalizeOptionalString(process.env[config.guard.apiKeyEnv]);
-  if (!guardCredential) {
-    throw new Error(
-      `Reef guard credential environment variable ${config.guard.apiKeyEnv} is unset`,
-    );
-  }
-  const options = {
-    apiKey: guardCredential,
-    pinnedModel: config.guard.pinnedModel,
-    timeoutMs: config.guard.timeoutMs,
-    fetch: fetcher,
+function reviewGateFor(reviews: ReviewApprovalStore): ReviewGate {
+  return {
+    lookup: (approvalDigest) => reviews.lookupDecision(approvalDigest),
+    request: (request) => reviews.request(request),
   };
-  return config.guard.provider === "openai"
-    ? createOpenAiGuard(options)
-    : createAnthropicGuard(options);
+}
+
+function isParkedInboundPipelineError(error: PipelineError): boolean {
+  if (error.stage === "review" && error.reviewOutcome === "pending") {
+    return true;
+  }
+  return (
+    error.stage === "guard" &&
+    error.verdict?.decision === "deny" &&
+    error.verdict.category === "guard_failure"
+  );
+}
+
+// PluginStateStoreError is not part of the plugin SDK import surface; its
+// stable error code identifies bounded-store capacity exhaustion (reject-new).
+function isPluginStateCapacityError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    // SAFETY: PluginStateStoreError carries a stable string code; the class is not on the plugin-SDK import surface.
+    (error as { code?: unknown }).code === "PLUGIN_STATE_LIMIT_EXCEEDED"
+  );
 }

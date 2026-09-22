@@ -17,6 +17,7 @@ import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -59,8 +60,8 @@ function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
     if (!stat.isDirectory()) {
       return "not_directory";
     }
-  } catch {
-    return "missing";
+  } catch (error) {
+    return hasErrnoCode(error, "ENOENT") ? "missing" : "unreadable";
   }
   try {
     fs.accessSync(dirPath, fs.constants.R_OK);
@@ -75,32 +76,12 @@ function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
   return "present";
 }
 
-function formatWorkspaceProblemLine(
-  workspaceDir: string,
+function formatDirectoryProblemLine(
+  dirPath: string,
   health: ClaudeCliDirHealth,
-  agentId?: string,
+  label: string,
 ): string | null {
-  const label = agentId ? `Agent ${agentId} workspace` : "Workspace";
-  const display = shortenHomePath(workspaceDir);
-  if (health === "present" || health === "missing") {
-    return null;
-  }
-  if (health === "not_directory") {
-    return `- ${label}: ${display} exists but is not a directory.`;
-  }
-  if (health === "unreadable") {
-    return `- ${label}: ${display} is not readable by this user.`;
-  }
-  return `- ${label}: ${display} is not writable by this user.`;
-}
-
-function formatProjectDirProblemLine(
-  projectDir: string,
-  health: ClaudeCliDirHealth,
-  agentId?: string,
-): string | null {
-  const label = agentId ? `Agent ${agentId} Claude project dir` : "Claude project dir";
-  const display = shortenHomePath(projectDir);
+  const display = shortenHomePath(dirPath);
   if (health === "present" || health === "missing") {
     return null;
   }
@@ -235,10 +216,10 @@ export function noteClaudeCliHealth(
 
   for (const target of workspaceTargets) {
     const agentLabel = showAgentLabels ? target.agentId : undefined;
-    const workspaceProblem = formatWorkspaceProblemLine(
+    const workspaceProblem = formatDirectoryProblemLine(
       target.workspaceDir,
       target.workspaceHealth,
-      agentLabel,
+      agentLabel ? `Agent ${agentLabel} workspace` : "Workspace",
     );
     if (workspaceProblem) {
       lines.push(workspaceProblem);
@@ -255,10 +236,10 @@ export function noteClaudeCliHealth(
       );
     }
 
-    const projectDirProblem = formatProjectDirProblemLine(
+    const projectDirProblem = formatDirectoryProblemLine(
       target.projectDir,
       target.projectDirHealth,
-      agentLabel,
+      agentLabel ? `Agent ${agentLabel} Claude project dir` : "Claude project dir",
     );
     if (projectDirProblem) {
       lines.push(projectDirProblem);

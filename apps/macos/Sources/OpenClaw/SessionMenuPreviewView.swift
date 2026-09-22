@@ -98,22 +98,6 @@ actor SessionPreviewLimiter {
     }
 }
 
-#if DEBUG
-extension SessionPreviewCache {
-    func _testSet(
-        snapshot: SessionMenuPreviewSnapshot,
-        for sessionKey: String,
-        updatedAt: Date = Date())
-    {
-        self.entries[sessionKey] = CacheEntry(snapshot: snapshot, updatedAt: updatedAt)
-    }
-
-    func _testReset() {
-        self.entries = [:]
-    }
-}
-#endif
-
 struct SessionMenuPreviewSnapshot {
     let items: [SessionPreviewItem]
     let status: SessionMenuPreviewView.LoadStatus
@@ -342,6 +326,8 @@ enum SessionMenuPreviewLoader {
             return SessionMenuPreviewSnapshot(items: items, status: .empty)
         case "missing":
             return SessionMenuPreviewSnapshot(items: items, status: .error("Thread missing"))
+        case "cold":
+            return SessionMenuPreviewSnapshot(items: [], status: .error("History archived; open chat to restore"))
         default:
             return SessionMenuPreviewSnapshot(items: items, status: .error("Preview unavailable"))
         }

@@ -1,5 +1,6 @@
 // Telegram tests cover forum reaction topic recovery before authorization and routing.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
@@ -27,6 +28,7 @@ const resolveCachedMessageThreadSpec = vi.fn<
 >(async () => undefined);
 
 function buildTelegramConfig(overrides?: {
+  reactionNotifications?: "all" | "own";
   topics?: Record<string, { enabled?: boolean; agentId?: string }>;
 }): OpenClawConfig {
   return {
@@ -34,7 +36,7 @@ function buildTelegramConfig(overrides?: {
       telegram: {
         dmPolicy: "open",
         allowFrom: ["*"],
-        reactionNotifications: "all",
+        reactionNotifications: overrides?.reactionNotifications ?? "all",
         groupPolicy: "open",
         groups: {
           [String(FORUM_CHAT_ID)]: {
@@ -51,7 +53,10 @@ function buildTelegramConfig(overrides?: {
  * Registers the real reaction handler against the real authorization runtime so
  * the test proves topic-scoped config lookup, not just the handler's own branch.
  */
-function registerHandler(cfg: OpenClawConfig): ReactionHandler {
+function registerHandler(
+  cfg: OpenClawConfig,
+  wasSentByBot: () => boolean | Promise<boolean> = () => true,
+): ReactionHandler {
   const handlers = new Map<string, ReactionHandler>();
   const params: RegisterTelegramHandlerParams = {
     accountId: "default",
@@ -102,7 +107,7 @@ function registerHandler(cfg: OpenClawConfig): ReactionHandler {
     telegramDeps: {
       ...defaultTelegramBotDeps,
       getRuntimeConfig: () => cfg,
-      wasSentByBot: () => true,
+      wasSentByBot,
       enqueueSystemEvent,
       readChannelAllowFromStore: async () => [],
     },
@@ -260,6 +265,24 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     expect(runtimeLog).toHaveBeenCalledTimes(1);
     expect(String(runtimeLog.mock.calls[0]?.[0])).toContain("thread-context-unavailable");
   });
+
+  it.each([false, true])(
+    "awaits own-message lookup before reaction delivery: %s",
+    async (sentByBot) => {
+      const lookup = createDeferred<boolean>();
+      const cfg = buildTelegramConfig({ reactionNotifications: "own" });
+      const handler = registerHandler(cfg, () => lookup.promise);
+      const delivery = handler(forumReactionContext({ isForum: false }));
+      try {
+        await Promise.resolve();
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      } finally {
+        lookup.resolve(sentByBot);
+        await delivery;
+      }
+      expect(enqueueSystemEvent).toHaveBeenCalledTimes(sentByBot ? 1 : 0);
+    },
+  );
 
   it("never consults the message cache for non-forum groups", async () => {
     const handler = registerHandler(buildTelegramConfig());

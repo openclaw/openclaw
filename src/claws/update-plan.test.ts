@@ -24,9 +24,9 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
-async function fixture() {
+async function fixture(options?: Parameters<typeof createUpdatePlanFixture>[1]) {
   const root = tempDirs.make("openclaw-claw-update-");
-  return await createUpdatePlanFixture(root);
+  return await createUpdatePlanFixture(root, options);
 }
 
 describe("buildClawUpdatePlan", () => {
@@ -238,6 +238,53 @@ describe("buildClawUpdatePlan", () => {
       ]),
     );
   });
+
+  it.each([true, false])(
+    "discloses inherited default memory sources when enabled=%s",
+    async (enabled) => {
+      const current = await fixture({
+        config: { memory: { search: { sources: [], rememberAcrossConversations: true } } },
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: {
+            memory: {
+              search: { enabled, rememberAcrossConversations: true, sources: ["sessions"] },
+            },
+          },
+        },
+      });
+      const plan = await buildClawUpdatePlan({
+        agentId: "worker",
+        targetManifest: current.manifest,
+        targetOpenClawProfile: {
+          schemaVersion: 1,
+          agent: { memory: { search: { enabled, rememberAcrossConversations: true } } },
+        },
+        targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
+        config: current.config,
+        sourceMcpServers: current.config.mcp?.servers ?? {},
+        stateOptions: { env: current.env },
+        packagePreflight,
+      });
+
+      expect(plan.blockers).toEqual([]);
+      expect(plan.actions).toContainEqual(
+        expect.objectContaining({ kind: "agent", action: "change", blocked: false }),
+      );
+      expect(plan.capabilityChanges).toContainEqual(
+        expect.objectContaining({
+          path: "agent.memory.search.sources",
+          classification: "escalation",
+          requiresDistinctConsent: true,
+          effect: {
+            path: "memory.search.sources",
+            current: ["sessions"],
+            desired: ["memory", "sessions"],
+          },
+        }),
+      );
+    },
+  );
 
   it("plans grouped add, change, and removal actions", async () => {
     const current = await fixture();

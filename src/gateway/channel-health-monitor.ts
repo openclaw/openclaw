@@ -4,7 +4,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 // Gateway channel health monitor.
 // Periodically evaluates channel account health and restarts stale runtimes.
-import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -130,10 +129,14 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (!status) {
             continue;
           }
-          if (!channelManager.isHealthMonitorEnabled(channelId as ChannelId, accountId)) {
+          // Status also exposes unlisted lifetimes; automatic recovery keeps its configured scope.
+          if (!channelManager.isAccountListed(channelId, accountId)) {
             continue;
           }
-          if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
+          if (!channelManager.isHealthMonitorEnabled(channelId, accountId)) {
+            continue;
+          }
+          if (channelManager.isManuallyStopped(channelId, accountId)) {
             continue;
           }
           const key = rKey(channelId, accountId);
@@ -179,7 +182,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           // is in flight. Restarting here cannot start anything (the supervisor
           // still holds the account task) and only resets the attempt ladder, so
           // a crash-looping channel would never reach its give-up terminal state.
-          if (channelManager.isAutoRestartScheduled(channelId as ChannelId, accountId)) {
+          if (channelManager.isAutoRestartScheduled(channelId, accountId)) {
             continue;
           }
 
@@ -226,7 +229,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           try {
             if (status.running) {
-              await channelManager.stopChannel(channelId as ChannelId, accountId, {
+              await channelManager.stopChannel(channelId, accountId, {
                 manual: false,
               });
             }
@@ -235,8 +238,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             if (abandonInFlightRestart) {
               return;
             }
-            channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
-            await channelManager.startChannel(channelId as ChannelId, accountId);
+            if (!channelManager.isAccountListed(channelId, accountId)) {
+              continue;
+            }
+            channelManager.resetRestartAttempts(channelId, accountId);
+            await channelManager.startChannel(channelId, accountId);
           } catch (err) {
             log.error?.(
               `[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`,

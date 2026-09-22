@@ -5,25 +5,23 @@ import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { canClaimReservedCommandOwnership } from "./registry-registrars-operations.js";
 import type { PluginRegistryState } from "./registry-state.js";
-import type { PluginRecord, PluginTextTransformsRegistration } from "./registry-types.js";
+import type {
+  PluginOwnedProviderRegistration,
+  PluginRecord,
+  PluginTextTransformsRegistration,
+} from "./registry-types.js";
 import type { CliBackendPlugin, ProviderPlugin, WorkerProvider } from "./types.js";
 import { validateWorkerProviderContract } from "./worker-provider-registry.js";
-
-type PluginOwnedProviderRegistration<T extends { id: string }> = {
-  pluginId: string;
-  pluginName?: string;
-  provider: T;
-  source: string;
-  rootDir?: string;
-};
 
 export function createProviderRegistrars(state: PluginRegistryState) {
   const {
     registry,
+    createIdentityRegistration,
+    createRegistration,
     pushDiagnostic,
-    registerSynthesizedTextModelCatalogProvider,
-    registerSynthesizedMediaModelCatalogProvider,
-    registerSynthesizedVoiceModelCatalogProvider,
+    reportRegistrationError,
+    reportRegistrationWarning,
+    registerModelCatalogProvider,
   } = state;
 
   const registerProvider = (record: PluginRecord, provider: ProviderPlugin) => {
@@ -39,25 +37,24 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     const id = normalizedProvider.id;
     const existing = registry.providers.find((entry) => entry.provider.id === id);
     if (existing) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `provider already registered: ${id} (${existing.pluginId})`,
-      });
+      reportRegistrationError(record, `provider already registered: ${id} (${existing.pluginId})`);
       return;
     }
     if (!record.providerIds.includes(id)) {
       record.providerIds.push(id);
     }
-    registry.providers.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      provider: normalizedProvider,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
-    registerSynthesizedTextModelCatalogProvider({ record, provider: normalizedProvider });
+    registry.providers.push(
+      createRegistration(record, {
+        provider: { ...normalizedProvider, pluginRoot: record.rootDir },
+      }),
+    );
+    // Reserve catalog ownership without duplicating the discovery-owned model row builders.
+    if (normalizedProvider.catalog || normalizedProvider.staticCatalog) {
+      registerModelCatalogProvider(record, {
+        provider: normalizedProvider.id,
+        kinds: ["text"],
+      });
+    }
   };
 
   const registerAgentHarness = (
@@ -67,30 +64,21 @@ export function createProviderRegistrars(state: PluginRegistryState) {
   ) => {
     const id = normalizeOptionalString((harness as Partial<AgentHarness> | undefined)?.id) ?? "";
     if (!id) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "agent harness registration missing id",
-      });
+      reportRegistrationError(record, "agent harness registration missing id");
       return;
     }
     if (id === "openclaw") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: 'agent harness id "openclaw" is reserved for the built-in runtime',
-      });
+      reportRegistrationError(
+        record,
+        'agent harness id "openclaw" is reserved for the built-in runtime',
+      );
       return;
     }
     if (typeof harness.supports !== "function" || typeof harness.runAttempt !== "function") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `agent harness "${id}" registration missing required runtime methods`,
-      });
+      reportRegistrationError(
+        record,
+        `agent harness "${id}" registration missing required runtime methods`,
+      );
       return;
     }
     if (
@@ -99,67 +87,49 @@ export function createProviderRegistrars(state: PluginRegistryState) {
         id !== "codex" ||
         typeof options.nativeCompaction !== "function")
     ) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: 'native compaction requires the registry-owned "codex" harness',
-      });
+      reportRegistrationError(
+        record,
+        'native compaction requires the registry-owned "codex" harness',
+      );
       return;
     }
     const existing = registry.agentHarnesses.find((entry) => entry.harness.id === id);
     if (existing) {
       const ownerPluginId = "pluginId" in existing ? existing.pluginId : undefined;
       const ownerDetail = ownerPluginId ? ` (owner: ${ownerPluginId})` : "";
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `agent harness already registered: ${id}${ownerDetail}`,
-      });
+      reportRegistrationError(record, `agent harness already registered: ${id}${ownerDetail}`);
       return;
     }
     const normalizedHarness = { ...harness, id, pluginId: harness.pluginId ?? record.id };
     record.agentHarnessIds.push(id);
-    registry.agentHarnesses.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      harness: normalizedHarness,
-      ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.agentHarnesses.push(
+      createRegistration(record, {
+        harness: normalizedHarness,
+        ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
+      }),
+    );
   };
 
   const registerCliBackend = (record: PluginRecord, backend: CliBackendPlugin) => {
     const id = backend.id.trim();
     if (!id) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "cli backend registration missing id",
-      });
+      reportRegistrationError(record, "cli backend registration missing id");
       return;
     }
     const existing = registry.cliBackends.find((entry) => entry.backend.id === id);
     if (existing) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `cli backend already registered: ${id} (${existing.pluginId})`,
-      });
+      reportRegistrationError(
+        record,
+        `cli backend already registered: ${id} (${existing.pluginId})`,
+      );
       return;
     }
-    registry.cliBackends.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      builtWithOpenClawVersion: record.builtWithOpenClawVersion,
-      backend: { ...backend, id },
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.cliBackends.push(
+      createRegistration(record, {
+        builtWithOpenClawVersion: record.builtWithOpenClawVersion,
+        backend: { ...backend, id },
+      }),
+    );
     record.cliBackendIds.push(id);
   };
 
@@ -171,41 +141,30 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       (!transforms.input || transforms.input.length === 0) &&
       (!transforms.output || transforms.output.length === 0)
     ) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: "text transform registration has no input or output replacements",
-      });
+      reportRegistrationWarning(
+        record,
+        "text transform registration has no input or output replacements",
+      );
       return;
     }
-    registry.textTransforms.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      transforms,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.textTransforms.push(
+      createRegistration(record, {
+        transforms,
+      }),
+    );
   };
 
   const registerEmbeddingProvider = (record: PluginRecord, adapter: EmbeddingProviderAdapter) => {
     const id = adapter.id.trim();
     if (!id) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "embedding provider registration missing id",
-      });
+      reportRegistrationError(record, "embedding provider registration missing id");
       return;
     }
     if (!(record.contracts?.embeddingProviders ?? []).includes(id)) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin must declare contracts.embeddingProviders for adapter: ${id}`,
-      });
+      reportRegistrationError(
+        record,
+        `plugin must declare contracts.embeddingProviders for adapter: ${id}`,
+      );
       return;
     }
     const coreEntry = getCoreEmbeddingProvider(id);
@@ -219,21 +178,14 @@ export function createProviderRegistrars(state: PluginRegistryState) {
             ? existing.pluginId
             : undefined;
       const ownerDetail = ownerPluginId ? ` (owner: ${ownerPluginId})` : "";
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `embedding provider already registered: ${id}${ownerDetail}`,
-      });
+      reportRegistrationError(record, `embedding provider already registered: ${id}${ownerDetail}`);
       return;
     }
-    registry.embeddingProviders.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      provider: adapter,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.embeddingProviders.push(
+      createRegistration(record, {
+        provider: adapter,
+      }),
+    );
     if (!record.embeddingProviderIds.includes(id)) {
       record.embeddingProviderIds.push(id);
     }
@@ -244,51 +196,41 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       kindLabel: string;
       registrations: Array<PluginOwnedProviderRegistration<T>>;
       ownedIds: (record: PluginRecord) => string[];
-      onRegister?: (record: PluginRecord, provider: T) => void;
+      catalogKinds?: Parameters<typeof registerModelCatalogProvider>[1]["kinds"];
     }) =>
     (record: PluginRecord, provider: T): boolean | void => {
       const id = provider.id.trim();
       const { kindLabel } = params;
       if (!id) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `${kindLabel} registration missing id`,
-        });
-        return params.onRegister ? undefined : false;
+        reportRegistrationError(record, `${kindLabel} registration missing id`);
+        return params.catalogKinds ? undefined : false;
       }
       const existing = params.registrations.find((entry) => entry.provider.id === id);
       if (existing) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `${kindLabel} already registered: ${id} (${existing.pluginId})`,
-        });
-        return params.onRegister ? undefined : false;
+        reportRegistrationError(
+          record,
+          `${kindLabel} already registered: ${id} (${existing.pluginId})`,
+        );
+        return params.catalogKinds ? undefined : false;
       }
       const ownedIds = params.ownedIds(record);
       if (!ownedIds.includes(id)) {
         ownedIds.push(id);
       }
-      params.registrations.push({
-        pluginId: record.id,
-        pluginName: record.name,
-        provider,
-        source: record.source,
-        rootDir: record.rootDir,
-      });
-      if (params.onRegister) {
-        params.onRegister(record, provider);
+      params.registrations.push(
+        createIdentityRegistration(record, {
+          provider,
+        }),
+      );
+      if (params.catalogKinds) {
+        registerModelCatalogProvider(record, { provider: provider.id, kinds: params.catalogKinds });
         return;
       }
       return true;
     };
 
   const registerWorkerProvider = (record: PluginRecord, provider: WorkerProvider) => {
-    const reject = (message: string) =>
-      pushDiagnostic({ level: "error", pluginId: record.id, source: record.source, message });
+    const reject = (message: string) => reportRegistrationError(record, message);
     const validation = validateWorkerProviderContract(
       provider,
       record.contracts?.workerProviders ?? [],
@@ -303,52 +245,33 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       reject(`worker provider already registered: ${id} (${existing.pluginId})`);
       return;
     }
-    registry.workerProviders.set(id, {
-      pluginId: record.id,
-      pluginName: record.name,
-      provider,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.workerProviders.set(
+      id,
+      createRegistration(record, {
+        provider,
+      }),
+    );
   };
 
   const registerSpeechProvider = createProviderLikeRegistrar({
     kindLabel: "speech provider",
     registrations: registry.speechProviders,
     ownedIds: (record) => record.speechProviderIds,
-    onRegister: (record, provider) =>
-      registerSynthesizedVoiceModelCatalogProvider({
-        record,
-        provider,
-        capabilities: { tts: true },
-        modes: ["tts"],
-      }),
+    catalogKinds: ["voice"],
   });
 
   const registerRealtimeTranscriptionProvider = createProviderLikeRegistrar({
     kindLabel: "realtime transcription provider",
     registrations: registry.realtimeTranscriptionProviders,
     ownedIds: (record) => record.realtimeTranscriptionProviderIds,
-    onRegister: (record, provider) =>
-      registerSynthesizedVoiceModelCatalogProvider({
-        record,
-        provider,
-        capabilities: { realtime_transcription: true },
-        modes: ["realtime_transcription"],
-      }),
+    catalogKinds: ["voice"],
   });
 
   const registerRealtimeVoiceProvider = createProviderLikeRegistrar({
     kindLabel: "realtime voice provider",
     registrations: registry.realtimeVoiceProviders,
     ownedIds: (record) => record.realtimeVoiceProviderIds,
-    onRegister: (record, provider) =>
-      registerSynthesizedVoiceModelCatalogProvider({
-        record,
-        provider,
-        capabilities: { realtime_voice: true },
-        modes: ["realtime_voice"],
-      }),
+    catalogKinds: ["voice"],
   });
 
   const registerMediaUnderstandingProvider = createProviderLikeRegistrar({
@@ -367,24 +290,21 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     kindLabel: "image-generation provider",
     registrations: registry.imageGenerationProviders,
     ownedIds: (record) => record.imageGenerationProviderIds,
-    onRegister: (record, provider) =>
-      registerSynthesizedMediaModelCatalogProvider({ record, kind: "image_generation", provider }),
+    catalogKinds: ["image_generation"],
   });
 
   const registerVideoGenerationProvider = createProviderLikeRegistrar({
     kindLabel: "video-generation provider",
     registrations: registry.videoGenerationProviders,
     ownedIds: (record) => record.videoGenerationProviderIds,
-    onRegister: (record, provider) =>
-      registerSynthesizedMediaModelCatalogProvider({ record, kind: "video_generation", provider }),
+    catalogKinds: ["video_generation"],
   });
 
   const registerMusicGenerationProvider = createProviderLikeRegistrar({
     kindLabel: "music-generation provider",
     registrations: registry.musicGenerationProviders,
     ownedIds: (record) => record.musicGenerationProviderIds,
-    onRegister: (record, provider) =>
-      registerSynthesizedMediaModelCatalogProvider({ record, kind: "music_generation", provider }),
+    catalogKinds: ["music_generation"],
   });
 
   const registerWebFetchProvider = createProviderLikeRegistrar({

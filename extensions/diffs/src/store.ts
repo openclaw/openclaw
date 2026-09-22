@@ -228,12 +228,16 @@ export class DiffArtifactStore {
       entries
         .filter((entry) => entry.isDirectory() && DIFF_ARTIFACT_ID_PATTERN.test(entry.name))
         .map(async (entry) => {
-          if (this.renderingFileIds.has(entry.name) || (await this.blobStore.lookup(entry.name))) {
+          if (this.renderingFileIds.has(entry.name)) {
             return;
           }
           const artifactDir = this.artifactDir(entry.name);
           const stats = await fs.stat(artifactDir).catch(() => null);
-          if (stats && now - stats.mtimeMs > SWEEP_FALLBACK_AGE_MS) {
+          if (
+            stats &&
+            now - stats.mtimeMs > SWEEP_FALLBACK_AGE_MS &&
+            !(await this.blobStore.lookup(entry.name))
+          ) {
             await fs.rm(artifactDir, { recursive: true, force: true }).catch(() => {});
           }
         }),

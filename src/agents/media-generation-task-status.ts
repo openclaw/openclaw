@@ -10,7 +10,6 @@ export const IMAGE_GENERATION_TASK_KIND = "image_generation";
 
 /** Image generation keeps multi-task status and prompt-specific duplicate lookup. */
 export const {
-  findActiveTaskForSession: findActiveImageGenerationTaskForSession,
   listActiveTasksForSession: listActiveImageGenerationTasksForSession,
   findDuplicateGuardTaskForSession: findDuplicateGuardImageGenerationTaskForSession,
   buildTaskStatusDetails: buildImageGenerationTaskStatusDetails,

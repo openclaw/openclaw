@@ -87,7 +87,13 @@ function resolveCustomStoreSqlitePath(params: {
       registeredDatabases,
       isSameDatabasePath,
     );
-    const databaseOwner = resolveDatabaseOwner(candidatePath);
+    let databaseOwner: string | undefined;
+    if (registeredOwners.length === 1) {
+      // Registry precedence makes inspection redundant, but filesystem errors still propagate.
+      hasFilesystemEntry(candidatePath);
+    } else {
+      databaseOwner = resolveDatabaseOwner(candidatePath);
+    }
     return {
       effectiveOwner:
         registeredOwners.length === 1
@@ -98,18 +104,8 @@ function resolveCustomStoreSqlitePath(params: {
       registeredOwners,
     };
   };
-  const registeredUnsuffixedOwners = resolveRegisteredOwners(
-    unsuffixedPath,
-    registeredDatabases,
-    isSameDatabasePath,
-  );
-  const durableUnsuffixedOwner = resolveDatabaseOwner(unsuffixedPath);
-  const persistedUnsuffixedOwner =
-    registeredUnsuffixedOwners.length === 1
-      ? registeredUnsuffixedOwners[0]
-      : registeredUnsuffixedOwners.length === 0
-        ? durableUnsuffixedOwner
-        : undefined;
+  const { registeredOwners: registeredUnsuffixedOwners, effectiveOwner: persistedUnsuffixedOwner } =
+    resolvePersistedOwner(unsuffixedPath);
   const suffixedPathFor = (ownerAgentId: string) =>
     path.join(sessionsDir, `${sqliteBaseName}.${ownerAgentId}.sqlite`);
   const resolveSuffixedTarget = (ownerAgentId: string) => {
@@ -275,7 +271,13 @@ export function resolveSqliteTargetFromSessionStorePath(
       registeredDatabases,
       options.isSameDatabasePath ?? isSameOpenClawAgentDatabasePath,
     );
-    const databaseOwner = resolveDatabaseOwner(unsuffixedTarget.path);
+    let databaseOwner: string | undefined;
+    if (registeredOwners.length === 1) {
+      // Registry precedence makes inspection redundant, but filesystem errors still propagate.
+      hasFilesystemEntry(unsuffixedTarget.path);
+    } else {
+      databaseOwner = resolveDatabaseOwner(unsuffixedTarget.path);
+    }
     const configuredDefaultAgentId = normalizeAgentId(
       options.defaultAgentId ?? LEGACY_IMPLICIT_AGENT_ID,
     );
@@ -313,7 +315,8 @@ export function listDurableSqliteTargetOwnersForSessionStorePath(storePath: stri
   return [...owners];
 }
 
-function listSqliteTargetCandidatePathsForSessionStorePath(storePath: string): string[] {
+/** List inspection candidates without opening stores or assigning writable ownership. */
+export function listSqliteTargetCandidatePathsForSessionStorePath(storePath: string): string[] {
   const unsuffixedTarget = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
   if (unsuffixedTarget.agentId || path.resolve(storePath).endsWith(".sqlite")) {
     return [unsuffixedTarget.path];

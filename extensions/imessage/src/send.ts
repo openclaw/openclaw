@@ -25,7 +25,6 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString as stringValue,
@@ -65,6 +64,7 @@ import {
 } from "./monitor/sanitize-outbound.js";
 import { withIMessageRemoteFile } from "./remote-file.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
+import { withIMessageReceiptGuidReader } from "./send-receipt-db.js";
 import {
   formatIMessageChatTarget,
   type IMessageService,
@@ -219,107 +219,20 @@ function normalizeResolvedMessageGuid(value: unknown): string | null {
   return isConcreteIMessageMessageId(trimmed) && !isNumericMessageRowId(trimmed) ? trimmed : null;
 }
 
-function resolveMessageGuidFromChatDb(params: {
+async function resolveMessageGuidFromChatDb(params: {
   dbPath?: string;
   messageId: string;
-}): string | null {
+}): Promise<string | null> {
   const dbPath = params.dbPath?.trim();
   const messageId = params.messageId.trim();
   if (!dbPath || !isNumericMessageRowId(messageId)) {
     return null;
   }
-  let db: import("node:sqlite").DatabaseSync | null = null;
-  try {
-    db = openNodeSqliteDatabase(dbPath, { readOnly: true });
-    const row = db.prepare("SELECT guid FROM message WHERE ROWID = ?").get(messageId) as
-      | { guid?: unknown }
-      | undefined;
-    return normalizeResolvedMessageGuid(row?.guid);
-  } catch {
-    return null;
-  } finally {
-    try {
-      db?.close();
-    } catch {
-      // best-effort cleanup
-    }
-  }
-}
-
-function getStringRowValue(row: Record<string, unknown> | undefined, key: string): string | null {
-  return normalizeResolvedMessageGuid(row?.[key]);
-}
-
-function appleMessageDateLowerBoundMs(sentAfterMs: number | undefined): number | null {
-  if (!Number.isFinite(sentAfterMs)) {
-    return null;
-  }
-  // chat.db stores message.date as nanoseconds since 2001-01-01. Give the
-  // bridge a small amount of clock/write skew so a just-sent row is included.
-  return Math.max(0, Math.floor(((sentAfterMs as number) - 978_307_200_000 - 5_000) * 1_000_000));
-}
-
-function resolveLatestSentMessageGuidFromChatDb(params: {
-  dbPath?: string;
-  target: ParsedIMessageTarget;
-  text: string;
-  sentAfterMs?: number;
-}): string | null {
-  const dbPath = params.dbPath?.trim();
-  if (!dbPath) {
-    return null;
-  }
-  let db: import("node:sqlite").DatabaseSync | null = null;
-  try {
-    db = openNodeSqliteDatabase(dbPath, { readOnly: true });
-    const targetClauses: string[] = [];
-    const targetParams: Array<string | number> = [];
-    const lowerBound = appleMessageDateLowerBoundMs(params.sentAfterMs);
-    if (params.text) {
-      targetClauses.push("m.text = ?");
-      targetParams.push(params.text);
-    }
-    if (lowerBound !== null) {
-      targetClauses.push("m.date >= ?");
-      targetParams.push(lowerBound);
-    }
-    if (params.target.kind === "chat_id") {
-      targetClauses.push("cmj.chat_id = ?");
-      targetParams.push(params.target.chatId);
-    } else if (params.target.kind === "chat_guid") {
-      targetClauses.push("c.guid = ?");
-      targetParams.push(params.target.chatGuid);
-    } else if (params.target.kind === "chat_identifier") {
-      targetClauses.push("c.chat_identifier = ?");
-      targetParams.push(params.target.chatIdentifier);
-    } else {
-      const normalizedHandle = normalizeIMessageHandle(params.target.to);
-      targetClauses.push("(h.id = ? OR h.uncanonicalized_id = ?)");
-      targetParams.push(normalizedHandle, params.target.to);
-    }
-    const targetWhere = targetClauses.length ? `AND ${targetClauses.join(" AND ")}` : "";
-    const selectSql = `
-      SELECT m.guid
-      FROM message m
-      LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
-      LEFT JOIN chat c ON c.ROWID = cmj.chat_id
-      LEFT JOIN handle h ON h.ROWID = m.handle_id
-      WHERE m.is_from_me = 1
-      ${targetWhere}
-      ORDER BY m.date DESC, m.ROWID DESC
-      LIMIT 10
-    `;
-    const rows = db.prepare(selectSql).all(...targetParams) as Array<Record<string, unknown>>;
-    return getStringRowValue(rows[0], "guid");
-  } catch {
-    return null;
-  } finally {
-    try {
-      db?.close();
-    } catch {
-      // best-effort cleanup
-    }
-  }
+  return normalizeResolvedMessageGuid(
+    await withIMessageReceiptGuidReader(dbPath, (read) =>
+      read({ type: "messageGuid", input: { messageId } }),
+    ),
+  );
 }
 
 function canResolveLatestSentMessageGuidFromChatDb(dbPath?: string): boolean {
@@ -365,32 +278,44 @@ async function resolveFallbackSentMessageGuid(params: {
   sentAfterMs?: number;
   resolveSentMessageGuidImpl?: IMessageSendOpts["resolveSentMessageGuidImpl"];
 }): Promise<string | null> {
-  const resolver = params.resolveSentMessageGuidImpl ?? resolveLatestSentMessageGuidFromChatDb;
-  if (
-    !params.resolveSentMessageGuidImpl &&
-    !canResolveLatestSentMessageGuidFromChatDb(params.dbPath)
-  ) {
+  const dbPath = params.dbPath?.trim();
+  if (!params.resolveSentMessageGuidImpl && !canResolveLatestSentMessageGuidFromChatDb(dbPath)) {
     return null;
   }
   const deadlineMs = Date.now() + 5_000;
-  while (Date.now() <= deadlineMs) {
-    const resolved = normalizeResolvedMessageGuid(
-      await resolver({
-        dbPath: params.dbPath,
-        target: params.target,
-        text: params.text,
-        sentAfterMs: params.sentAfterMs,
-      }),
-    );
-    if (resolved) {
-      return resolved;
+  const poll = async (
+    resolver: NonNullable<IMessageSendOpts["resolveSentMessageGuidImpl"]>,
+  ): Promise<string | null> => {
+    while (Date.now() <= deadlineMs) {
+      const resolved = normalizeResolvedMessageGuid(
+        await resolver({
+          dbPath: params.dbPath,
+          target: params.target,
+          text: params.text,
+          sentAfterMs: params.sentAfterMs,
+        }),
+      );
+      if (resolved) {
+        return resolved;
+      }
+      if (Date.now() >= deadlineMs) {
+        return null;
+      }
+      await delay(250);
     }
-    if (Date.now() >= deadlineMs) {
-      return null;
-    }
-    await delay(250);
+    return null;
+  };
+  if (params.resolveSentMessageGuidImpl) {
+    return await poll(params.resolveSentMessageGuidImpl);
   }
-  return null;
+  if (!dbPath) {
+    return null;
+  }
+  return await withIMessageReceiptGuidReader(dbPath, (read) =>
+    poll(({ target, text, sentAfterMs }) =>
+      read({ type: "latestSentGuid", input: { target, text, sentAfterMs } }),
+    ),
+  );
 }
 
 function shouldRecoverApprovalPromptGuid(params: {
@@ -540,20 +465,6 @@ function isIMessageRpcSendTimeout(error: unknown): boolean {
   return /imsg rpc timeout \(send\)/i.test(message);
 }
 
-async function runIMessageCliJson(
-  cliPath: string,
-  dbPath: string | undefined,
-  args: readonly string[],
-  timeoutMs?: number,
-): Promise<Record<string, unknown>> {
-  return await runIMessageCliJsonCommand({
-    args,
-    cliPath,
-    dbPath,
-    timeoutMs,
-  });
-}
-
 function resultService(value: unknown): Exclude<IMessageService, "auto"> | undefined {
   const normalized = stringValue(value)?.toLowerCase();
   return normalized === "imessage" || normalized === "sms" ? normalized : undefined;
@@ -699,7 +610,7 @@ async function trySendAttachmentForTarget(params: {
   let pendingEchoKey: string | undefined;
   try {
     if (echoScope) {
-      pendingEchoKey = rememberPersistedIMessageEcho({
+      pendingEchoKey = await rememberPersistedIMessageEcho({
         scope: echoScope,
         text: params.echoText,
         media: params.echoMedia,
@@ -748,7 +659,7 @@ async function trySendAttachmentForTarget(params: {
       ]);
     });
   } catch (error) {
-    forgetPersistedIMessageEchoKey(pendingEchoKey);
+    await forgetPersistedIMessageEchoKey(pendingEchoKey);
     if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
       return null;
     }
@@ -757,7 +668,7 @@ async function trySendAttachmentForTarget(params: {
   const failure = resolveIMessageSendFailure(result);
   if (failure) {
     const error = new Error(failure);
-    forgetPersistedIMessageEchoKey(pendingEchoKey);
+    await forgetPersistedIMessageEchoKey(pendingEchoKey);
     if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
       return null;
     }
@@ -773,7 +684,7 @@ async function trySendAttachmentForTarget(params: {
   });
   const messageId = resolvedId ?? (result.ok || result.success ? "ok" : "unknown");
   if (echoScope) {
-    rememberPersistedIMessageEcho({
+    await rememberPersistedIMessageEcho({
       scope: echoScope,
       text: params.echoText,
       media: params.echoMedia,
@@ -781,7 +692,7 @@ async function trySendAttachmentForTarget(params: {
     });
   }
   if (resolvedId && isConcreteIMessageMessageId(resolvedId)) {
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: params.accountId,
       messageId: resolvedId,
       chatGuid:
@@ -843,7 +754,7 @@ export async function sendMessageIMessage(
     resolveTargetService(target) ??
     (account.config.service as IMessageService | undefined);
   const sendTransport = (account.config.sendTransport ?? "auto") as IMessageSendTransport;
-  const resolvedReplyToId = resolveAuthorizedIMessageReplyReference({
+  const resolvedReplyToId = await resolveAuthorizedIMessageReplyReference({
     account,
     target,
     cliPath,
@@ -934,7 +845,7 @@ export async function sendMessageIMessage(
   let effectiveReplyToId = resolvedReplyToId;
   const runCliJson =
     opts.runCliJson ??
-    ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
+    ((args: readonly string[]) => runIMessageCliJsonCommand({ args, cliPath, dbPath, timeoutMs }));
   const requestOwnedRpc = async (method: string, rpcParams: Record<string, unknown>) => {
     const rpcClient = opts.createClient
       ? await opts.createClient({ cliPath, dbPath, remoteHost })
@@ -1052,14 +963,6 @@ export async function sendMessageIMessage(
       ? await opts.createClient({ cliPath, dbPath, remoteHost })
       : await createIMessageRpcClient({ cliPath, dbPath, remoteHost }));
   const shouldClose = !opts.client;
-  let closedClient = false;
-  const stopOwnedClient = async () => {
-    if (!shouldClose || closedClient) {
-      return;
-    }
-    closedClient = true;
-    await client.stop();
-  };
   const requestSuccessfulSend = async (sendParams: Record<string, unknown>) => {
     const request = async (nativeParams: Record<string, unknown>) =>
       await requestIMessageRpcSend(client, "send", nativeParams, timeoutMs);
@@ -1088,7 +991,7 @@ export async function sendMessageIMessage(
   try {
     try {
       if (echoScope) {
-        pendingEchoKey = rememberPersistedIMessageEcho({
+        pendingEchoKey = await rememberPersistedIMessageEcho({
           scope: echoScope,
           text: echoText,
           media: echoMedia,
@@ -1167,7 +1070,7 @@ export async function sendMessageIMessage(
       });
     }
     if (echoScope) {
-      rememberPersistedIMessageEcho({
+      await rememberPersistedIMessageEcho({
         scope: echoScope,
         text: echoText,
         media: echoMedia,
@@ -1185,7 +1088,7 @@ export async function sendMessageIMessage(
     );
     if (resolvedId && isConcreteIMessageMessageId(resolvedId)) {
       const chatContext = chatContextFromIMessageTarget(target, confirmedService ?? service);
-      rememberIMessageReplyCache({
+      await rememberIMessageReplyCache({
         accountId: account.accountId,
         messageId: resolvedId,
         ...chatContext,
@@ -1203,7 +1106,7 @@ export async function sendMessageIMessage(
         ...(target.kind === "chat_id" ? { chatId: target.chatId } : {}),
         ...(handleForKey ? { handle: handleForKey } : {}),
       };
-      registerIMessageApprovalReactionTarget({
+      await registerIMessageApprovalReactionTarget({
         accountId: account.accountId,
         conversation,
         messageId: approvalBindingMessageId,
@@ -1228,10 +1131,12 @@ export async function sendMessageIMessage(
       }),
     };
   } catch (error) {
-    forgetPersistedIMessageEchoKey(pendingEchoKey);
+    await forgetPersistedIMessageEchoKey(pendingEchoKey);
     throw error;
   } finally {
-    await stopOwnedClient();
+    if (shouldClose) {
+      await client.stop();
+    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

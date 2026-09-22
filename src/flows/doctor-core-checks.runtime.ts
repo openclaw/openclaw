@@ -1,11 +1,13 @@
 // Doctor runtime checks inspect tool names, browser residue, and runtime state.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { formatUnsupportedNodeVersionMessage } from "../../node-version.mjs";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
-import {
-  type McpToolCatalogDiagnostic,
-  createBundleMcpToolRuntime,
-} from "../agents/agent-bundle-mcp-tools.js";
+import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
+import { loadSessionMcpConfig } from "../agents/agent-bundle-mcp-runtime-config.js";
+import type {
+  BundleMcpToolRuntime,
+  McpToolCatalogDiagnostic,
+} from "../agents/agent-bundle-mcp-types.js";
 import {
   listAgentEntries,
   listAgentIds,
@@ -13,16 +15,16 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
-import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { applyFinalEffectiveToolPolicy } from "../agents/embedded-agent-runner/effective-tool-policy.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { partitionMcpServersByConnectionScope } from "../agents/mcp-connection-resolver.js";
 import { findModelInCatalog, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
-import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
+import { readPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
 import { collectExplicitAllowlist, normalizeToolPolicyName } from "../agents/tool-policy.js";
 import {
@@ -33,11 +35,15 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { projectDoctorSecretRuntimeDegradations } from "../commands/doctor-secret-runtime-degradation.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { collectUnavailableAgentSkills } from "../commands/doctor-skills-core.js";
+import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.js";
 import {
   GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
   gatewayConnectErrorWasRateLimited,
 } from "../commands/gateway-health-auth-diagnostic.js";
+import { formatSqliteWalHealthWarning } from "../commands/sqlite-wal-health.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isNodeRuntime } from "../daemon/runtime-binary.js";
+import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
 import {
   getSystemdCgroupHygieneSummary,
   type GatewayServiceRuntime,
@@ -56,16 +62,15 @@ import {
 } from "../media-understanding/local-audio.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
-import type { StatusSummary } from "../status/types.js";
+import type { StatusSummary } from "../status/summary.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
-type BundleMcpToolRuntime = Awaited<ReturnType<typeof createBundleMcpToolRuntime>>;
 const PROVIDER_CATALOG_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const PROVIDER_CATALOG_ORDER_SET = new Set<ProviderCatalogOrder>(PROVIDER_CATALOG_ORDERS);
 
@@ -158,14 +163,23 @@ export async function collectGatewayHealthFindings(
       tlsFingerprint: probeDetails.tlsFingerprint,
       preauthHandshakeTimeoutMs: probeDetails.preauthHandshakeTimeoutMs,
     });
-    return projectDoctorSecretRuntimeDegradations(status).map((owner) => ({
-      checkId: "core/doctor/gateway-health",
-      severity: "warning",
-      message: `Secret runtime degradation: ${owner.message}`,
-      path: owner.path,
-      target: owner.target,
-      fixHint: `Retry: ${owner.retryHint}`,
-    }));
+    const findings: HealthFinding[] = projectDoctorSecretRuntimeDegradations(status).map(
+      (owner) => ({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: `Secret runtime degradation: ${owner.message}`,
+        path: owner.path,
+        target: owner.target,
+        fixHint: `Retry: ${owner.retryHint}`,
+      }),
+    );
+    const sqliteWalWarning = formatSqliteWalHealthWarning(status.sqliteWal);
+    if (sqliteWalWarning) {
+      findings.push(
+        warning(`SQLite WAL: ${sqliteWalWarning}`, "Inspect openclaw status --deep output."),
+      );
+    }
+    return findings;
   } catch (error) {
     if (!probeDetails) {
       return [
@@ -192,7 +206,7 @@ export async function collectGatewayHealthFindings(
             fixHint:
               mode === "remote"
                 ? "Verify the remote Gateway URL, network path, TLS settings, and credentials."
-                : "Start the Gateway service or run `openclaw doctor --fix` for service repair prompts.",
+                : "Inspect the service with `openclaw gateway status --deep`, or run `openclaw doctor` for guided checks.",
           };
     return [warning(diagnostic.message, diagnostic.fixHint)];
   }
@@ -229,9 +243,36 @@ export async function collectGatewayDaemonFindings(
       message: "Gateway service is not installed.",
       path: "gateway.mode",
       target: service.label,
-      fixHint: "Run `openclaw doctor --fix` or `openclaw gateway install` to install it.",
+      fixHint: "Run `openclaw gateway install` to install the service.",
     });
     return findings;
+  }
+  const nodePath = state.command?.programArguments[0];
+  if (nodePath && isNodeRuntime(nodePath)) {
+    const runtime = await resolveNodeRuntimeInfo(nodePath, state.env);
+    const message =
+      runtime.status === "probe-failed"
+        ? runtime.error.message
+        : (runtime.capabilityError ?? runtime.note);
+    if (message) {
+      findings.push({
+        checkId: "core/doctor/gateway-daemon",
+        severity: runtime.status === "supported" ? "info" : "warning",
+        message,
+        path: state.command?.sourcePath,
+        target: nodePath,
+        ...(runtime.status !== "supported"
+          ? {
+              fixHint: [
+                ...(runtime.status === "unsupported"
+                  ? [formatUnsupportedNodeVersionMessage(runtime.version)]
+                  : []),
+                "Repair the Node runtime, then run `openclaw gateway install`.",
+              ].join("\n"),
+            }
+          : {}),
+      });
+    }
   }
   if (state.loadState.status === "not-loaded") {
     findings.push({
@@ -240,7 +281,7 @@ export async function collectGatewayDaemonFindings(
       message: "Gateway service is installed but not loaded.",
       path: state.command?.sourcePath,
       target: service.label,
-      fixHint: "Run `openclaw doctor --fix` or `openclaw gateway start` to load it.",
+      fixHint: "Start the installed service with `openclaw gateway start`.",
     });
   }
   const status = gatewayRuntimeStatus(state.runtime);
@@ -253,7 +294,8 @@ export async function collectGatewayDaemonFindings(
         : "Gateway service is loaded but runtime status could not confirm it is running.",
       path: state.command?.sourcePath,
       target: service.label,
-      fixHint: "Run `openclaw gateway status --deep` or `openclaw doctor --fix` for repair hints.",
+      fixHint:
+        "Run `openclaw gateway status --deep` to inspect the service before choosing a recovery action.",
     });
   }
   if (state.runtime?.missingGuiSession) {
@@ -266,7 +308,7 @@ export async function collectGatewayDaemonFindings(
       fixHint: state.runtime.detail ?? "Log into a GUI session, then rerun doctor.",
     });
   }
-  if (state.runtime?.missingSupervision || state.runtime?.missingUnit) {
+  if (state.runtime?.missingUnit) {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
       severity: "warning",
@@ -927,15 +969,16 @@ function agentRuntimeToolNormalizationFailureFinding(params: {
   };
 }
 
-function collectAgentRuntimeToolSchemaFindings(params: {
+async function collectAgentRuntimeToolSchemaFindings(params: {
   cfg: OpenClawConfig;
   agentId: string;
   workspaceDir: string;
   modelRef: { provider: string; model: string };
   model: ProviderRuntimeModel;
-}): readonly HealthFinding[] {
+}): Promise<readonly HealthFinding[]> {
   let tools: AnyAgentTool[];
   try {
+    const { createOpenClawCodingTools } = await import("../agents/agent-tools.js");
     tools = createOpenClawCodingTools({
       agentId: params.agentId,
       workspaceDir: params.workspaceDir,
@@ -1000,6 +1043,17 @@ function bundleMcpRuntimeDiagnosticFinding(diagnostic: McpToolCatalogDiagnostic)
     requirement: diagnostic.message,
     fixHint:
       "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
+  };
+}
+
+function bundleMcpRequesterInspectionFinding(serverName: string): HealthFinding {
+  return {
+    checkId: "core/doctor/runtime-tool-schemas",
+    severity: "info",
+    message: `Configured requester-scoped MCP server "${serverName}" was not probed without an authenticated requester.`,
+    path: `mcp.servers.${serverName}`,
+    requirement: "authenticated requester context",
+    fixHint: "Verify this server from an authenticated agent turn.",
   };
 }
 
@@ -1125,12 +1179,19 @@ function isAcpRuntimeAgent(cfg: OpenClawConfig, agentId: string): boolean {
 
 export async function collectRuntimeToolSchemaFindings(
   cfg: OpenClawConfig,
-  options?: { runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner },
+  options?: {
+    env?: NodeJS.ProcessEnv;
+    runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+  },
 ): Promise<readonly HealthFinding[]> {
   const findings: HealthFinding[] = [];
-  const bundleRuntimeByWorkspace = new Map<string, BundleMcpToolRuntime>();
-  const bundleRuntimeLoadErrorsByWorkspace = new Map<string, HealthFinding>();
+  const deferMcpProbes = isUpdateDoctorLintPass(options?.env ?? process.env);
+  const deferredServers = new Set<string>();
+  const bundleRuntimeByContext = new Map<string, BundleMcpToolRuntime>();
+  const bundleRuntimeLoadErrorsByContext = new Map<string, HealthFinding>();
+  const reportedBundleRuntimeDiagnostics = new Set<string>();
   const reportedBundleRuntimeLoadErrors = new Set<string>();
+  const reportedRequesterScopedServers = new Set<string>();
   try {
     for (const agentId of listAgentIds(cfg)) {
       if (isAcpRuntimeAgent(cfg, agentId)) {
@@ -1138,10 +1199,11 @@ export async function collectRuntimeToolSchemaFindings(
       }
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const collectForAgent = async () => {
-        const catalog = await loadPreparedModelCatalog({
+        const agentDir = resolveAgentDir(cfg, agentId);
+        const catalog = await readPreparedModelCatalog({
           config: cfg,
           agentId,
-          agentDir: resolveAgentDir(cfg, agentId),
+          agentDir,
           readOnly: true,
           providerDiscoveryProviderIds: [],
         });
@@ -1159,45 +1221,130 @@ export async function collectRuntimeToolSchemaFindings(
           return;
         }
         findings.push(
-          ...collectAgentRuntimeToolSchemaFindings({
+          ...(await collectAgentRuntimeToolSchemaFindings({
             cfg,
             agentId,
             workspaceDir,
             modelRef,
             model,
-          }),
+          })),
         );
         if (!shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })) {
           return;
         }
+        const fullMcpConfig = loadSessionMcpConfig({
+          workspaceDir,
+          cfg,
+          logDiagnostics: false,
+        });
+        if (deferMcpProbes) {
+          for (const serverName of Object.keys(fullMcpConfig.loaded.mcpServers)) {
+            if (deferredServers.has(serverName)) {
+              continue;
+            }
+            deferredServers.add(serverName);
+            findings.push({
+              checkId: "core/doctor/runtime-tool-schemas",
+              severity: "warning",
+              message: `MCP server "${sanitizeTerminalText(serverName)}" was not started for update validation. Run \`openclaw doctor --lint --only core/doctor/runtime-tool-schemas\` after the update to inspect its tools.`,
+              path: `mcp.servers.${serverName}`,
+            });
+          }
+          return;
+        }
+        const safeServerNamesByServer = assignSafeServerNames(
+          Object.keys(fullMcpConfig.loaded.mcpServers),
+        );
+        const { requesterScopedServerNames } = partitionMcpServersByConnectionScope(
+          fullMcpConfig.loaded.mcpServers,
+        );
+        for (const serverName of requesterScopedServerNames) {
+          if (reportedRequesterScopedServers.has(serverName)) {
+            continue;
+          }
+          const diagnostic: McpToolCatalogDiagnostic = {
+            serverName,
+            safeServerName: safeServerNamesByServer.get(serverName) ?? serverName,
+            launchSummary: "requester-scoped connection",
+            message: "authenticated requester context required",
+          };
+          if (shouldReportBundleMcpRuntimeDiagnostic({ cfg, agentId, modelRef, diagnostic })) {
+            findings.push(bundleMcpRequesterInspectionFinding(serverName));
+            reportedRequesterScopedServers.add(serverName);
+          }
+        }
+        const excludeServerNames = new Set(requesterScopedServerNames);
+        for (const [serverName, server] of Object.entries(fullMcpConfig.loaded.mcpServers)) {
+          if (excludeServerNames.has(serverName) || server.auth !== "oauth") {
+            continue;
+          }
+          // A private database cannot isolate refresh-token rotation at the server.
+          // Discarding its replacement would strand the live owner on a spent token.
+          // This also covers refresh-capable auth profiles, not just MCP-native OAuth.
+          excludeServerNames.add(serverName);
+          const diagnostic: McpToolCatalogDiagnostic = {
+            serverName,
+            safeServerName: safeServerNamesByServer.get(serverName) ?? serverName,
+            launchSummary: "OAuth inspection deferred",
+            message: "OAuth refresh requires durable credential ownership",
+          };
+          if (
+            !reportedBundleRuntimeDiagnostics.has(serverName) &&
+            shouldReportBundleMcpRuntimeDiagnostic({ cfg, agentId, modelRef, diagnostic })
+          ) {
+            findings.push({
+              checkId: "core/doctor/runtime-tool-schemas",
+              severity: "info",
+              message: `Configured MCP server "${serverName}" was not probed during read-only inspection because OAuth may rotate external credentials.`,
+              path: `mcp.servers.${serverName}`,
+              fixHint:
+                "For configured servers, run `openclaw mcp probe <name>` against the serving configuration. Validate plugin-provided or agent-local MCP servers from an authenticated serving-agent turn so refreshed credentials persist with their owner.",
+            });
+            reportedBundleRuntimeDiagnostics.add(serverName);
+          }
+        }
+        const staticMcpConfig = loadSessionMcpConfig({
+          workspaceDir,
+          cfg,
+          logDiagnostics: false,
+          excludeServerNames,
+          safeServerNamesByServer,
+        });
+        // Equivalent non-OAuth catalogs share one probe; refresh-capable profiles are deferred.
+        const runtimeContext = staticMcpConfig.fingerprint;
         if (
-          !bundleRuntimeByWorkspace.has(workspaceDir) &&
-          !bundleRuntimeLoadErrorsByWorkspace.has(workspaceDir)
+          !bundleRuntimeByContext.has(runtimeContext) &&
+          !bundleRuntimeLoadErrorsByContext.has(runtimeContext)
         ) {
           try {
-            bundleRuntimeByWorkspace.set(
-              workspaceDir,
+            const { createBundleMcpToolRuntime } =
+              await import("../agents/agent-bundle-mcp-tools.js");
+            bundleRuntimeByContext.set(
+              runtimeContext,
               await createBundleMcpToolRuntime({
                 workspaceDir,
+                agentDir,
                 cfg,
+                excludeServerNames,
+                safeServerNamesByServer,
               }),
             );
           } catch (error) {
-            bundleRuntimeLoadErrorsByWorkspace.set(
-              workspaceDir,
+            bundleRuntimeLoadErrorsByContext.set(
+              runtimeContext,
               bundleMcpRuntimeLoadFailureFinding(error),
             );
           }
         }
-        const bundleRuntimeLoadError = bundleRuntimeLoadErrorsByWorkspace.get(workspaceDir);
+        const bundleRuntimeLoadError = bundleRuntimeLoadErrorsByContext.get(runtimeContext);
         if (bundleRuntimeLoadError) {
-          if (!reportedBundleRuntimeLoadErrors.has(workspaceDir)) {
+          if (!reportedBundleRuntimeLoadErrors.has(runtimeContext)) {
             findings.push(bundleRuntimeLoadError);
-            reportedBundleRuntimeLoadErrors.add(workspaceDir);
+            reportedBundleRuntimeLoadErrors.add(runtimeContext);
           }
           return;
         }
-        const bundleRuntime = bundleRuntimeByWorkspace.get(workspaceDir);
+        const bundleRuntime = bundleRuntimeByContext.get(runtimeContext);
         if (bundleRuntime) {
           if (bundleRuntime.diagnostics && bundleRuntime.diagnostics.length > 0) {
             const policyActiveDiagnostics = filterPolicyActiveBundleMcpDiagnostics({
@@ -1206,7 +1353,13 @@ export async function collectRuntimeToolSchemaFindings(
               agentId,
               modelRef,
             });
-            findings.push(...policyActiveDiagnostics.map(bundleMcpRuntimeDiagnosticFinding));
+            for (const diagnostic of policyActiveDiagnostics) {
+              if (reportedBundleRuntimeDiagnostics.has(diagnostic.serverName)) {
+                continue;
+              }
+              findings.push(bundleMcpRuntimeDiagnosticFinding(diagnostic));
+              reportedBundleRuntimeDiagnostics.add(diagnostic.serverName);
+            }
           }
           findings.push(
             ...collectBundleMcpRuntimeToolSchemaFindings({
@@ -1227,7 +1380,21 @@ export async function collectRuntimeToolSchemaFindings(
       }
     }
   } finally {
-    await Promise.all([...bundleRuntimeByWorkspace.values()].map((runtime) => runtime.dispose()));
+    const cleanup = await Promise.allSettled(
+      [...bundleRuntimeByContext.values()].map(async (runtime) => await runtime.dispose()),
+    );
+    for (const outcome of cleanup) {
+      if (outcome.status === "rejected") {
+        findings.push({
+          checkId: "core/doctor/runtime-tool-schemas",
+          severity: "error",
+          message: "Configured MCP tool schema inspection could not confirm child-process cleanup.",
+          path: "mcp.servers",
+          requirement: formatErrorMessage(outcome.reason),
+          fixHint: "Inspect or stop the configured MCP server processes, then rerun doctor.",
+        });
+      }
+    }
   }
   return findings;
 }

@@ -1,5 +1,5 @@
 // Context-engine public types define the pluggable context-management lifecycle.
-import type { AgentMessage } from "../agents/runtime/index.js";
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
@@ -249,6 +249,7 @@ type ContextEnginePromptCacheUsage = {
 };
 
 type ContextEnginePromptCacheObservationChangeCode =
+  | "aggregateToolResultTruncation"
   | "cacheRetention"
   | "model"
   | "streamStrategy"
@@ -379,6 +380,11 @@ export interface ContextEngine {
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
+    /**
+     * Optional caller cancellation for maintenance work that may block.
+     * Engines should reject promptly when this signal aborts.
+     */
+    abortSignal?: AbortSignal;
   }): Promise<ContextEngineMaintenanceResult>;
 
   /**

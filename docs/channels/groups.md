@@ -46,7 +46,7 @@ always-on group chatter -> user request, or room event when configured
 
 For normal group/channel requests, OpenClaw defaults to `messages.groupChat.visibleReplies: "automatic"`: the final assistant text posts to the room as the visible reply.
 
-Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room should let the agent decide when to speak by calling `message(action=send)`. This works best with tool-reliable models (for example GPT-5.6 Sol). If the model misses the tool and returns substantive final text, OpenClaw keeps that text private instead of posting it to the room.
+Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room should let the agent decide when to speak by calling `message(action=send)`. This works best with models that reliably follow tool-only delivery. If the model misses the tool and returns substantive final text, OpenClaw keeps that text private instead of posting it to the room.
 
 Use `"automatic"` for models or runtimes that do not reliably follow tool-only delivery: normal text finals post directly to the room, and the agent may still call `message(action=send)` for files, images, or other attachments that cannot ride along with the final text.
 
@@ -54,7 +54,7 @@ If the message tool is unavailable under the active tool policy, OpenClaw falls 
 
 For direct chats and any other source event, `messages.visibleReplies: "message_tool"` applies the same tool-only behavior globally; `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract.
 
-Tool-only mode replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode the prompt does not define a `NO_REPLY` contract; doing nothing visible simply means not calling the message tool.
+Tool-only mode replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode the prompt does not define a `NO_REPLY` contract; doing nothing visible simply means not calling the message tool. `"automatic"` group replies still carry the silent-reply instruction, so `NO_REPLY` applies only there.
 
 Plugin-owned conversation bindings are the exception. Once a plugin binds a thread and claims the inbound turn, the plugin's returned reply is the visible binding response; it does not need `message(action=send)`. That reply is plugin runtime output, not private model final text.
 
@@ -117,9 +117,9 @@ By default OpenClaw keeps context as received: allowlists decide who can trigger
 | `"allowlist"`       | Only inject history/thread/quote/forwarded context from allowlisted senders.     |
 | `"allowlist_quote"` | `allowlist`, plus keep the explicitly quoted/replied-to message from any sender. |
 
-Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations fail closed and omit the context.
+Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Mattermost, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations fail closed and omit the context.
 
-These modes filter channel-supplied supplemental context only. Tool policy and the owner-only tool inventory are still selected from the current turn's originating requester, not every sender represented in the prompt. See [Requester-scoped controls and prompt context](/gateway/security#requester-scoped-controls-and-prompt-context).
+These modes filter channel-supplied supplemental context only. Tool policy and the owner-only tool inventory are still selected from the current turn's originating requester, not every sender represented in the prompt. See [Requester-scoped controls and prompt context](/gateway/security/hardened-baseline#requester-scoped-controls-and-prompt-context).
 
 ![Group message flow](/images/groups-flow.svg)
 
@@ -236,7 +236,7 @@ If you need truly separate workspaces/personas ("personal" and "public" must nev
 
 Related:
 
-- Configuration keys and defaults: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox)
+- Configuration keys and defaults: [Gateway configuration](/gateway/config-agents/sandbox#agentsdefaultssandbox)
 - Debugging why a tool is blocked: [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)
 - Bind mounts details: [Sandboxing](/gateway/sandboxing#multiple-folders-for-one-agent)
 
@@ -340,10 +340,10 @@ Supported implicit mention facts are channel-specific:
 | Fact                  | Current built-in producers                       |
 | --------------------- | ------------------------------------------------ |
 | Reply to the bot      | Discord, Microsoft Teams, QQBot, Slack, Telegram |
-| Quote of the bot      | WhatsApp, Zalo personal                          |
+| Quote of the bot      | LINE, WhatsApp, Zalo personal                    |
 | Bot joined the thread | Mattermost, Slack, Tlon                          |
 
-Each fact defaults to enabled when the channel produces it. Among bundled channels, Mattermost, Slack, and Tlon read the corresponding `implicitMentions` flag; set it to `false` to stop that fact from bypassing mention gating. Native explicit mentions remain unaffected. The other bundled producers listed above do not currently read `implicitMentions`, so their facts always count as mentions and the flag cannot turn them off. A flag also has no effect on channels that do not produce that fact.
+Each fact defaults to enabled when the channel produces it. Among bundled channels, LINE, Mattermost, Slack, and Tlon read the corresponding `implicitMentions` flag; set it to `false` to stop that fact from bypassing mention gating. LINE reads it from the shared `channels.defaults.implicitMentions` block only; it does not accept a channel- or account-scoped `implicitMentions` block of its own. Native explicit mentions remain unaffected. The other bundled producers listed above do not currently read `implicitMentions`, so their facts always count as mentions and the flag cannot turn them off. A flag also has no effect on channels that do not produce that fact.
 
 ```json5
 {
@@ -455,8 +455,8 @@ Account-level channel configs can set the same policy under `channels.<channel>.
 <AccordionGroup>
   <Accordion title="Mention gating notes">
     - `mentionPatterns` are case-insensitive safe regex patterns; invalid patterns and unsafe nested-repetition forms are ignored (with a warning).
-    - Pattern precedence: `agents.entries.*.groupChat.mentionPatterns` (useful when multiple agents share a group) overrides `messages.groupChat.mentionPatterns`; when neither is set, patterns are derived from the agent identity name/emoji.
-    - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
+    - Pattern precedence: `agents.entries.*.groupChat.mentionPatterns` (useful when multiple agents share a group) overrides `messages.groupChat.mentionPatterns`; when neither is set, patterns are derived from the routed agent's `identity.name` and `identity.emoji`. An explicit `mentionPatterns: []` at the selected level suppresses this derivation; native mentions remain separate.
+    - Mention gating can apply without explicitly configured patterns: identity-derived patterns also enable detection. On channels that require detectable mentions before gating, only the absence of both usable patterns and native mention support prevents enforcement.
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
     - Automatic group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.
     - Groups where automatic silent replies are allowed treat clean empty or reasoning-only model turns as silent, equivalent to `NO_REPLY`. Direct chats never receive `NO_REPLY` guidance, and message-tool-only group replies stay quiet by not calling `message(action=send)`.
@@ -520,9 +520,9 @@ Group/channel tool restrictions are applied in addition to global/agent tool pol
 
 When `channels.whatsapp.groups`, `channels.telegram.groups`, or `channels.imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.
 
-<Warning>
+<Note>
 Common confusion: DM pairing approval is not the same as group authorization. For channels that support DM pairing, the pairing store unlocks DMs only. Group commands still require explicit group sender authorization from config allowlists such as `groupAllowFrom` or the documented config fallback for that channel.
-</Warning>
+</Note>
 
 Common intents (copy/paste):
 
@@ -601,17 +601,13 @@ The agent system prompt includes a group intro on the first turn of a new group 
 - List chats: `imsg chats --limit 20`.
 - Group replies always go back to the same `chat_id`.
 
-## WhatsApp system prompts
-
-See [WhatsApp](/channels/whatsapp#system-prompts) for the canonical WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics.
-
-## WhatsApp specifics
-
-See [Group messages](/channels/group-messages) for WhatsApp-only behavior (history injection, mention handling details).
-
 ## Related
+
+<a id="whatsapp-system-prompts" />
+<a id="whatsapp-specifics" />
 
 - [Broadcast groups](/channels/broadcast-groups)
 - [Channel routing](/channels/channel-routing)
-- [Group messages](/channels/group-messages)
+- [Group messages](/channels/group-messages) — WhatsApp-only behavior (history injection, mention handling details)
 - [Pairing](/channels/pairing)
+- [WhatsApp](/channels/whatsapp#system-prompts) — canonical WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics

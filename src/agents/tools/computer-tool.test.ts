@@ -523,7 +523,7 @@ describe("createComputerTool v1 execution", () => {
     );
     // A click naming node B must not apply node A's frame; it needs its own screenshot.
     await expect(executeClick(tool, frameId, { node: "mac-b" }, "call")).rejects.toThrow(
-      /no screenshot of this node/i,
+      /no screenshot of this computer/i,
     );
   });
 

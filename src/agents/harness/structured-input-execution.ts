@@ -1,9 +1,6 @@
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
-import {
-  runAgentHarnessGatewayQuestion,
-  type AgentHarnessQuestionGatewayCall,
-} from "./gateway-question.js";
+import { runAgentHarnessGatewayQuestion } from "./gateway-question.js";
+import { STRUCTURED_INPUT_URL_COMPLETED_LABEL } from "./structured-input.js";
 import type {
   StructuredInputAnswerValue,
   StructuredInputCompileResult,
@@ -34,8 +31,8 @@ type StructuredInputExecutionParams = {
   agentId?: string;
   runId?: string;
   timeoutMs: number;
-  gatewayCall: AgentHarnessQuestionGatewayCall;
-  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
+  gatewayCall?: Parameters<typeof runAgentHarnessGatewayQuestion>[0]["gatewayCall"];
+  delivery: Parameters<typeof runAgentHarnessGatewayQuestion>[0]["delivery"];
   signal?: AbortSignal;
   isActive?: () => boolean;
   questionId?: (batch: number) => string | undefined;
@@ -77,7 +74,7 @@ async function runUrl(
     return cancellation;
   }
   const answer = result.answers.answers[question.id]?.[0];
-  return answer?.toLowerCase() === "continue"
+  return answer?.toLowerCase() === STRUCTURED_INPUT_URL_COMPLETED_LABEL.toLowerCase()
     ? { status: "answered", answers: result.answers.answers, content: {} }
     : { status: "declined" };
 }

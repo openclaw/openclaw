@@ -1,4 +1,5 @@
 // Tests volatile path filtering for backup operations.
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { isTransientSqliteBackupPath, isVolatileBackupPath } from "./backup-volatile-filter.js";
 
@@ -22,12 +23,16 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/ipc/gateway.sock`, true],
     [`${stateDir}/gateway.pid`, true],
     [`${stateDir}/tmp/pending.tmp`, true],
-    [`${stateDir}/audit/system-agent.jsonl.migrated.raw`, false],
-    [`${stateDir}/audit/system-agent.jsonl.migrated.2.raw`, false],
-    [`${stateDir}/audit/system-agent.jsonl.migrated.10.raw`, false],
-    [`${stateDir}/audit/system-agent.jsonl.migrated.raw.doctor-scrub-restore`, false],
-    [`${stateDir}/logs/config-audit.jsonl.migrated.raw.doctor-scrub-staging`, false],
-    [`${stateDir}/logs/config-audit.jsonl.migrated.raw.doctor-scrub-progress`, false],
+    [`${stateDir}/audit/system-agent.jsonl.migrated.raw`, true],
+    [`${stateDir}/audit/system-agent.jsonl.migrated.2.raw`, true],
+    [`${stateDir}/audit/system-agent.jsonl.migrated.10.raw`, true],
+    [`${stateDir}/audit/system-agent.jsonl.migrated.raw.doctor-scrub-restore`, true],
+    [`${stateDir}/logs/config-audit.jsonl.migrated.raw.doctor-scrub-staging`, true],
+    [`${stateDir}/logs/config-audit.jsonl.migrated.raw.doctor-scrub-progress`, true],
+    [`${stateDir}/logs/config-audit.jsonl.migrated.raw.quarantined-2026-09-17`, true],
+    [`${stateDir}/audit/crestodian.jsonl.migrated.2.raw.quarantined-copy`, true],
+    [`${stateDir}/logs/config-audit.jsonl.migrated`, false],
+    [`${stateDir}/logs/config-audit.jsonl.migrated.quarantined-copy`, false],
     [`${stateDir}/delivery-queue/pending.tmp`, true],
     [`${stateDir}/session-delivery-queue/pending.tmp`, true],
     [`${stateDir}/browser/openclaw/user-data/SingletonCookie`, true],
@@ -125,6 +130,12 @@ describe("isVolatileBackupPath", () => {
     expect(
       isVolatileBackupPath(`${winStateDir}\\sandbox\\skills-workspaces\\workspace-main`, winPlan),
     ).toBe(true);
+    expect(
+      isVolatileBackupPath(
+        `${winStateDir}\\logs\\config-audit.jsonl.migrated.raw.quarantined-copy`,
+        winPlan,
+      ),
+    ).toBe(true);
     // `..` escape via backslashes must also be rejected.
     expect(isVolatileBackupPath(`${winStateDir}\\sessions\\..\\config.jsonl`, winPlan)).toBe(false);
   });
@@ -133,7 +144,23 @@ describe("isVolatileBackupPath", () => {
     expect(
       isVolatileBackupPath("opt/openclaw/state/agents/main/sessions/transcript.jsonl", plan),
     ).toBe(true);
+    expect(
+      isVolatileBackupPath(
+        "opt/openclaw/state/logs/config-audit.jsonl.migrated.raw.quarantined-copy",
+        plan,
+      ),
+    ).toBe(true);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not resolve a Windows anchor into a relative POSIX directory",
+    () => {
+      const outside = path.resolve(
+        "C:/openclaw/state/logs/config-audit.jsonl.migrated.raw.quarantined-copy",
+      );
+      expect(isVolatileBackupPath(outside, { stateDirs: ["C:\\openclaw\\state"] })).toBe(false);
+    },
+  );
 
   it("treats session-delivery-queue json files under stateDir as volatile", () => {
     expect(
@@ -149,6 +176,10 @@ describe("isTransientSqliteBackupPath", () => {
   it.each([
     "memory/main.sqlite.reindex-lock.sqlite",
     "memory/main.sqlite.reindex-lock.sqlite-shm",
+    "memory/main.sqlite.generation-writer.sqlite",
+    "memory/main.sqlite.generation-writer.sqlite-wal",
+    "memory/main.sqlite.generation-lock.sqlite",
+    "memory/main.sqlite.generation-lock.sqlite-journal",
     "memory/main.sqlite.tmp-11111111-2222-3333-4444-555555555555",
   ])("classifies transient reindex state: %s", (filePath) => {
     expect(isTransientSqliteBackupPath(filePath)).toBe(true);

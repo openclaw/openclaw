@@ -117,14 +117,18 @@ async function readShardedEntriesDetailed(dir: string): Promise<ShardedRegistryR
   };
 }
 
-async function quarantineLegacyRegistry(registryPath: string): Promise<string> {
+async function quarantineLegacyRegistry(registryPath: string): Promise<string | null> {
   const quarantinePath = `${registryPath}.invalid-${Date.now()}`;
-  await fs.rename(registryPath, quarantinePath).catch(async (error: unknown) => {
+  try {
+    await fs.rename(registryPath, quarantinePath);
+  } catch (error) {
     const code = (error as { code?: string } | null)?.code;
-    if (code !== "ENOENT") {
-      await fs.rm(registryPath, { force: true });
+    if (code === "ENOENT") {
+      return null;
     }
-  });
+    // Failed quarantine must leave the original bytes available for repair.
+    throw error;
+  }
   return quarantinePath;
 }
 
@@ -194,6 +198,9 @@ async function migrateMonolithicIfNeeded(
       const registry = await readLegacyRegistryFile(registryPath);
       if (!registry) {
         const quarantinePath = await quarantineLegacyRegistry(registryPath);
+        if (quarantinePath === null) {
+          return { kind: target.kind, status: "missing" };
+        }
         return {
           kind: target.kind,
           status: "quarantined-invalid",

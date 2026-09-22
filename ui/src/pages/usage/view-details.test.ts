@@ -2,7 +2,9 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
-import type { SessionLogEntry, TimeSeriesPoint, UsageSessionEntry } from "./types.ts";
+import { i18n, t } from "../../i18n/index.ts";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import type { SessionLogEntry, TimeSeriesPoint, UsageProps, UsageSessionEntry } from "./types.ts";
 import { renderSessionDetailPanel } from "./view-details.ts";
 
 afterEach(() => {
@@ -24,7 +26,7 @@ function point(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
   };
 }
 
-function session(): UsageSessionEntry {
+function session(): UsageSessionEntry & { usage: NonNullable<UsageSessionEntry["usage"]> } {
   return {
     key: "agent:main:detail",
     label: "Detail session",
@@ -52,7 +54,7 @@ function session(): UsageSessionEntry {
         errors: 0,
       },
     },
-  } as UsageSessionEntry;
+  };
 }
 
 function mount(
@@ -69,28 +71,30 @@ function mount(
   errors: {
     timeSeries?: string;
     sessionLogs?: string;
-    sessionLogsData?: SessionLogEntry[];
+    sessionLogsData?: SessionLogEntry[] | null;
+    sessionLogsLoading?: boolean;
+    sessionLogsHasLoaded?: boolean;
+    logFilters?: UsageProps["detail"]["logFilters"];
+    session?: UsageSessionEntry;
     stale?: boolean;
-    onRetryTimeSeries?: () => void;
-    onRetrySessionLogs?: () => void;
     contextWeight?: UsageSessionEntry["contextWeight"];
     contextExpanded?: boolean;
     onToggleContextExpanded?: () => void;
   } = {},
 ) {
-  const status = (error?: string): PanelRefreshStatus => ({
+  const status = (error?: string, hasLoaded = errors.stale ?? false): PanelRefreshStatus => ({
     error: error ?? null,
-    hasLoaded: errors.stale ?? false,
+    hasLoaded,
     stale: errors.stale ?? false,
+    awaitingGateway: false,
   });
   const container = document.createElement("div");
   render(
     renderSessionDetailPanel(
-      { ...session(), contextWeight: errors.contextWeight },
+      { ...(errors.session ?? session()), contextWeight: errors.contextWeight },
       { points },
       false,
       status(errors.timeSeries),
-      errors.onRetryTimeSeries ?? vi.fn(),
       "per-turn",
       vi.fn(),
       breakdownMode,
@@ -102,18 +106,22 @@ function mount(
       filters.endDate ?? "",
       filters.selectedDays ?? [],
       filters.timeZone ?? "local",
-      errors.sessionLogsData ?? [],
+      errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
+      errors.sessionLogsLoading ?? false,
+      status(errors.sessionLogs, errors.sessionLogsHasLoaded),
       false,
-      status(errors.sessionLogs),
-      errors.onRetrySessionLogs ?? vi.fn(),
-      false,
       vi.fn(),
-      { roles: [], tools: [], hasTools: false, query: "" },
+      errors.logFilters ?? { roles: [], tools: [], hasTools: false, query: "" },
       vi.fn(),
       vi.fn(),
       vi.fn(),
       vi.fn(),
       vi.fn(),
+      {
+        weight: errors.contextWeight,
+        loading: false,
+        status: status(),
+      },
       errors.contextExpanded ?? false,
       errors.onToggleContextExpanded ?? vi.fn(),
       vi.fn(),
@@ -125,28 +133,44 @@ function mount(
 
 describe("renderSessionDetailPanel filtered usage", () => {
   it("formats timeline labels in the selected UTC time zone", () => {
-    vi.spyOn(Date.prototype, "toLocaleTimeString").mockImplementation((_locales, options) =>
-      options?.timeZone === "UTC" ? "utc-time" : "local-time",
-    );
-    vi.spyOn(Date.prototype, "toLocaleString").mockImplementation((_locales, options) =>
-      options?.timeZone === "UTC" ? "utc-date-time" : "local-date-time",
-    );
-
+    const timestamps = [
+      Date.parse("2026-05-13T18:00:00.000Z"),
+      Date.parse("2026-05-13T23:59:59.999Z"),
+    ];
     const container = mount(
-      [
-        point({ timestamp: Date.parse("2026-05-13T18:00:00.000Z") }),
-        point({ timestamp: Date.parse("2026-05-13T23:59:59.999Z") }),
-      ],
+      timestamps.map((timestamp) => point({ timestamp })),
       null,
       null,
       "total",
       { timeZone: "utc" },
     );
-
+    const locale = i18n.getLocale();
     expect(
       [...container.querySelectorAll(".ts-axis-label")].map((label) => label.textContent),
-    ).toEqual(expect.arrayContaining(["utc-time", "utc-time"]));
-    expect(container.querySelector(".ts-bar title")?.textContent).toContain("utc-date-time");
+    ).toEqual(
+      expect.arrayContaining(
+        timestamps.map((timestamp) =>
+          new Date(timestamp).toLocaleTimeString(locale, {
+            hour: "2-digit",
+            minute: "2-digit",
+            timeZone: "UTC",
+          }),
+        ),
+      ),
+    );
+    const bars = [...container.querySelectorAll(".ts-bar")];
+    expect(bars).toHaveLength(timestamps.length);
+    for (const [index, bar] of bars.entries()) {
+      const expectedDate = new Date(timestamps[index]!).toLocaleString(locale, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "UTC",
+      });
+      expect(bar.getAttribute("data-tooltip")).toBe(bar.getAttribute("aria-label"));
+      expect(bar.getAttribute("data-tooltip")?.startsWith(`${expectedDate} · `)).toBe(true);
+    }
   });
 
   it("filters detail points by the selected UTC day and keeps the final millisecond", () => {
@@ -188,68 +212,70 @@ describe("renderSessionDetailPanel filtered usage", () => {
     }
   });
 
-  it("ends a local range at the next calendar midnight after a skipped midnight", () => {
-    const previousTimeZone = process.env.TZ;
-    process.env.TZ = "America/Santiago";
-    try {
-      const container = mount(
-        [
-          point({ timestamp: new Date(2026, 8, 6, 1).getTime() }),
-          point({ timestamp: new Date(2026, 8, 6, 12).getTime() }),
-          point({ timestamp: new Date(2026, 8, 7, 0, 30).getTime() }),
-        ],
-        null,
-        null,
-        "total",
-        { startDate: "2026-09-06", endDate: "2026-09-06", timeZone: "local" },
-      );
-
-      expect(container.querySelectorAll(".ts-bar")).toHaveLength(2);
-    } finally {
-      if (previousTimeZone === undefined) {
-        delete process.env.TZ;
-      } else {
-        process.env.TZ = previousTimeZone;
-      }
-    }
-  });
-
-  it("aggregates token, cost, type, message, and duration data inside the selected range", () => {
-    const container = mount(
-      [
-        point({
-          timestamp: 1000,
-          totalTokens: 100,
-          cost: 0.1,
-          input: 10,
-          output: 0,
-          cacheRead: 5,
-          cacheWrite: 2,
-        }),
-        point({
-          timestamp: 2000,
-          totalTokens: 200,
-          cost: 0.2,
-          input: 0,
-          output: 20,
-          cacheRead: 7,
-          cacheWrite: 3,
-        }),
-        point({ timestamp: 3000, totalTokens: 300, cost: 0.3 }),
+  it("aggregates selected tokens while counting actual loaded message roles", () => {
+    const start = Date.parse("2026-08-20T12:00:00Z");
+    const end = start + 1000;
+    const points = [
+      point({
+        timestamp: start,
+        totalTokens: 100,
+        cost: 0.1,
+        input: 10,
+        output: 0,
+        cacheRead: 5,
+        cacheWrite: 2,
+      }),
+      point({
+        timestamp: end,
+        totalTokens: 200,
+        cost: 0.2,
+        input: 0,
+        output: 20,
+        cacheRead: 7,
+        cacheWrite: 3,
+      }),
+      point({ timestamp: end + 1000, totalTokens: 300, cost: 0.3 }),
+    ];
+    const entry = session();
+    entry.usage.messageCounts = {
+      total: 10,
+      user: 5,
+      assistant: 5,
+      toolCalls: 0,
+      toolResults: 4,
+      errors: 2,
+    };
+    entry.usage.toolUsage = {
+      totalCalls: 7,
+      uniqueTools: 2,
+      tools: [
+        { name: "read", count: 4 },
+        { name: "exec", count: 3 },
       ],
-      1000,
-      2000,
-      "by-type",
-    );
+    };
+    const logs: SessionLogEntry[] = [
+      { timestamp: start - 1000, role: "user", content: "Earlier request" },
+      { timestamp: 0, role: "user", content: "Undated request" },
+      { timestamp: start, role: "assistant", content: "[Tool: read]" },
+      { timestamp: start + 250, role: "toolResult", content: "First result" },
+      { timestamp: start + 500, role: "assistant", content: "Unmetered update" },
+      { timestamp: start + 750, role: "tool", content: "Second result" },
+      { timestamp: end, role: "assistant", content: "Finished" },
+    ];
+    const data = { session: entry, sessionLogsData: logs, sessionLogsHasLoaded: true };
+    const container = mount(points, start, end, "by-type", {}, data);
 
     expect(container.querySelector(".session-detail-stats")?.textContent).toContain("300");
     expect(container.querySelector(".session-detail-stats")?.textContent).toContain("$0.30");
     expect(container.querySelector(".session-detail-indicator")).not.toBeNull();
     const summary = [...container.querySelectorAll(".session-summary-card")];
-    expect(summary[0]?.textContent).toContain("2");
+    expect(summary[0]?.querySelector(".session-summary-value")?.textContent).toBe("3");
     const messageSummary = summary[0]?.textContent?.replaceAll(/\s+/g, " ");
-    expect(messageSummary).toContain("1 user");
-    expect(messageSummary).toContain("1 assistant");
+    expect(messageSummary).toContain("0 user");
+    expect(messageSummary).toContain("3 assistant");
+    expect(messageSummary).toContain("Loaded conversation · selected interval");
+    expect(summary[2]?.querySelector(".session-summary-value")?.textContent).toBe("—");
+    expect(summary[2]?.textContent?.replaceAll(/\s+/g, " ")).toContain("— tool results");
     expect(summary[3]?.textContent).toContain("1s");
     expect(
       [...container.querySelectorAll(".timeseries-breakdown .legend-item")].map((item) =>
@@ -259,7 +285,193 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(
       container.querySelector(".timeseries-breakdown .cost-breakdown-total")?.textContent,
     ).toContain("47");
+
+    const full = mount(points, null, null, "total", {}, data);
+    const fullSummary = [...full.querySelectorAll(".session-summary-card")];
+    expect(fullSummary[0]?.querySelector(".session-summary-value")?.textContent).toBe("10");
+    expect(fullSummary[0]?.textContent?.replaceAll(/\s+/g, " ")).toContain("5 user · 5 assistant");
+    expect(fullSummary[0]?.textContent).not.toContain("Loaded conversation");
+    expect(fullSummary[1]?.querySelector(".session-summary-value")?.textContent).toBe("7");
+    expect(fullSummary[1]?.textContent?.replaceAll(/\s+/g, " ")).toContain("2 tools used");
+    expect(
+      [...full.querySelectorAll(".usage-list-item")].map((item) => [
+        item.firstElementChild?.textContent,
+        item.querySelector(".usage-list-value > span")?.textContent,
+      ]),
+    ).toEqual([
+      ["read", "4"],
+      ["exec", "3"],
+    ]);
+    expect(fullSummary[2]?.querySelector(".session-summary-value")?.textContent).toBe("2");
+    expect(fullSummary[2]?.textContent?.replaceAll(/\s+/g, " ")).toContain("4 tool results");
   });
+
+  it.each<{
+    name: string;
+    logs: SessionLogEntry[] | null;
+    hasLoaded: boolean;
+    loading?: boolean;
+    error?: string;
+  }>([
+    { name: "initial loading", logs: null, hasLoaded: false, loading: true },
+    { name: "initial failure", logs: null, hasLoaded: false, error: "logs unavailable" },
+    { name: "empty loaded conversation", logs: [], hasLoaded: true },
+    {
+      name: "undated loaded messages",
+      logs: [
+        { timestamp: 0, role: "user", content: "Unknown time" },
+        { timestamp: 0, role: "assistant", content: "[Tool: read]" },
+      ],
+      hasLoaded: true,
+    },
+    {
+      name: "interval outside loaded history",
+      logs: [
+        { timestamp: Date.parse("2026-08-21T12:00:00Z"), role: "assistant", content: "Later" },
+      ],
+      hasLoaded: true,
+    },
+  ])(
+    "keeps interval message and tool counts unavailable for $name",
+    ({ logs, hasLoaded, loading, error }) => {
+      const start = Date.parse("2026-08-20T12:00:00Z");
+      const entry = session();
+      entry.usage.toolUsage = {
+        totalCalls: 7,
+        uniqueTools: 2,
+        tools: [
+          { name: "read", count: 4 },
+          { name: "exec", count: 3 },
+        ],
+      };
+      const container = mount(
+        [point({ timestamp: start }), point({ timestamp: start + 1000 })],
+        start,
+        start + 1000,
+        "total",
+        {},
+        {
+          session: entry,
+          sessionLogsData: logs,
+          sessionLogsHasLoaded: hasLoaded,
+          sessionLogsLoading: loading,
+          sessionLogs: error,
+        },
+      );
+      const messages = container.querySelector(".session-summary-card");
+      expect(messages?.querySelector(".session-summary-value")?.textContent).toBe("—");
+      expect(messages?.textContent).toContain("Loaded conversation · selected interval");
+      expect(messages?.textContent).not.toContain("0 user");
+      const tools = container.querySelectorAll(".session-summary-card")[1];
+      expect(tools?.querySelector(".session-summary-value")?.textContent).toBe("—");
+      expect(tools?.textContent?.replaceAll(/\s+/g, " ")).toContain("— tools used");
+      expect(
+        [...container.querySelectorAll(".usage-list-item")].map((item) => [
+          item.firstElementChild?.textContent,
+          item.querySelector(".usage-list-value > span")?.textContent,
+        ]),
+      ).toEqual([
+        ["read", "—"],
+        ["exec", "—"],
+      ]);
+    },
+  );
+
+  it.each(["refreshing", "stale"] as const)(
+    "keeps %s loaded counts independent of conversation search and role filters",
+    (state) => {
+      const start = Date.parse("2026-08-20T12:00:00Z");
+      const container = mount(
+        [point({ timestamp: start }), point({ timestamp: start + 1000 })],
+        start,
+        start + 1000,
+        "total",
+        {},
+        {
+          sessionLogsData: [
+            { timestamp: start, role: "user", content: "Question" },
+            { timestamp: start + 1000, role: "assistant", content: "Answer" },
+          ],
+          sessionLogsHasLoaded: true,
+          sessionLogsLoading: state === "refreshing",
+          sessionLogs: state === "stale" ? "refresh failed" : undefined,
+          stale: state === "stale",
+          logFilters: { roles: ["tool"], tools: [], hasTools: false, query: "not present" },
+        },
+      );
+      const messages = container.querySelector(".session-summary-card");
+      expect(messages?.querySelector(".session-summary-value")?.textContent).toBe("2");
+      expect(messages?.textContent?.replaceAll(/\s+/g, " ")).toContain("1 user · 1 assistant");
+      expect(messages?.textContent).toContain("Loaded conversation · selected interval");
+      expect(container.querySelectorAll(".session-log-entry")).toHaveLength(0);
+      expect(container.querySelectorAll(".session-summary-value")[1]?.textContent).toBe("0");
+      if (state === "stale") {
+        expect(container.querySelector(".usage-detail-error--conversation")?.textContent).toContain(
+          "Showing stale data",
+        );
+      }
+    },
+  );
+
+  it.each(["tool", "toolResult"] as const)(
+    "counts repeated assistant calls without counting %s results in the selected range",
+    (resultRole) => {
+      const start = Date.parse("2026-08-20T12:00:00Z");
+      const end = start + 2000;
+      const entry = session();
+      entry.usage = {
+        ...entry.usage,
+        toolUsage: {
+          totalCalls: 2,
+          uniqueTools: 2,
+          tools: [
+            { name: "read", count: 1 },
+            { name: "exec", count: 1 },
+          ],
+        },
+      };
+      const logs: SessionLogEntry[] = [
+        { timestamp: start, role: "assistant", content: "[Tool: read]\n[Tool: read]" },
+        {
+          timestamp: start + 500,
+          role: resultRole,
+          content: "[Tool: read]\n[Tool Result]\nFirst file",
+        },
+        {
+          timestamp: start + 1000,
+          role: resultRole,
+          content: "[Tool: read]\n[Tool Result]\nSecond file",
+        },
+        { timestamp: end, role: "assistant", content: "Both files reviewed." },
+        { timestamp: end + 1000, role: "assistant", content: "[Tool: exec]" },
+        { timestamp: 0, role: "assistant", content: "[Tool: exec]" },
+      ];
+      const points = [start, end, end + 1000].map((timestamp) => point({ timestamp }));
+      const data = { session: entry, sessionLogsData: logs, sessionLogsHasLoaded: true };
+      const selected = mount(points, start, end, "total", {}, data);
+      expect(selected.querySelectorAll(".session-summary-value")[1]?.textContent).toBe("2");
+      expect(selected.querySelectorAll(".session-summary-meta")[1]?.textContent?.trim()).toBe(
+        "1 tools used",
+      );
+      expect(
+        [...selected.querySelectorAll(".usage-list-item")].map((item) => [
+          item.firstElementChild?.textContent,
+          item.querySelector(".usage-list-value > span")?.textContent,
+        ]),
+      ).toEqual([
+        ["read", "2"],
+        ["exec", "0"],
+      ]);
+      expect(selected.querySelector(".session-log-tools-pill")?.textContent?.trim()).toBe(
+        "read × 2",
+      );
+      expect(
+        [...selected.querySelectorAll(".session-log-tools-pill")].map((pill) =>
+          pill.textContent?.trim(),
+        ),
+      ).toContain("exec × 1");
+    },
+  );
 
   it("accepts a reversed range and falls back to full totals when no points match", () => {
     const reversed = mount(
@@ -283,9 +495,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(container.textContent).not.toContain("Invalid Date");
   });
 
-  it("renders independent retry actions for detail request failures", () => {
-    const onRetryTimeSeries = vi.fn();
-    const onRetrySessionLogs = vi.fn();
+  it("renders detail request failure messages without retry buttons", () => {
     const container = mount(
       [],
       null,
@@ -295,8 +505,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
       {
         timeSeries: "timeline unavailable",
         sessionLogs: "logs unavailable",
-        onRetryTimeSeries,
-        onRetrySessionLogs,
       },
     );
 
@@ -311,32 +519,58 @@ describe("renderSessionDetailPanel filtered usage", () => {
       "Could not load conversation: logs unavailable",
     );
 
-    timelineError?.querySelector("button")?.click();
-    conversationError?.querySelector("button")?.click();
-    expect(onRetryTimeSeries).toHaveBeenCalledOnce();
-    expect(onRetrySessionLogs).toHaveBeenCalledOnce();
+    expect(timelineError?.querySelector("button")).toBeNull();
+    expect(conversationError?.querySelector("button")).toBeNull();
   });
 
-  it("keeps loaded details visible and marks them stale after refresh failures", () => {
-    const container = mount(
-      [point({ timestamp: 1000 }), point({ timestamp: 2000 })],
-      null,
-      null,
-      "total",
-      {},
-      {
-        timeSeries: "timeline unavailable",
-        sessionLogs: "logs unavailable",
-        sessionLogsData: [{ timestamp: 1000, role: "user", content: "retained message" }],
-        stale: true,
-      },
-    );
+  it("keeps loaded details visible and marks them stale after refresh failures", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
+    try {
+      for (const locale of ["en", "fr", "en"] as const) {
+        await i18n.setLocale(locale);
+        const container = mount(
+          [point({ timestamp: 1000 }), point({ timestamp: 2000 })],
+          null,
+          null,
+          "total",
+          {},
+          {
+            timeSeries: "timeline unavailable",
+            sessionLogs: "logs unavailable",
+            sessionLogsData: [
+              { timestamp, role: "user", content: "retained message" },
+              { timestamp: Number.NaN, role: "assistant", content: "undated message" },
+            ],
+            stale: true,
+          },
+        );
 
-    expect(container.querySelectorAll(".usage-detail-error--timeline strong")).toHaveLength(1);
-    expect(container.querySelectorAll(".usage-detail-error--conversation strong")).toHaveLength(1);
-    expect(container.querySelector(".timeseries-svg")).not.toBeNull();
-    expect(container.textContent).toContain("retained message");
-    expect(container.textContent).toContain("Showing stale data");
+        expect(container.querySelectorAll(".usage-detail-error--timeline strong")).toHaveLength(1);
+        expect(container.querySelectorAll(".usage-detail-error--conversation strong")).toHaveLength(
+          1,
+        );
+        expect(container.querySelector(".timeseries-svg")).not.toBeNull();
+        expect(container.textContent).toContain("retained message");
+        expect(container.textContent).toContain("undated message");
+        expect(container.textContent).toContain(
+          locale === "en" ? "Showing stale data" : t("common.staleData"),
+        );
+        const timestamps = [...container.querySelectorAll(".session-log-meta > span:nth-child(2)")];
+        expect(timestamps.map((element) => element.textContent)).toEqual([
+          new Date(timestamp).toLocaleString(locale, {
+            year: "numeric",
+            month: "numeric",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          }),
+          t("common.na"),
+        ]);
+      }
+    } finally {
+      await restoreI18n();
+    }
   });
 
   it("preserves context-category order, sorted cards, expansion, and callbacks", () => {

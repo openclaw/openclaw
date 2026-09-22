@@ -1,9 +1,12 @@
 // Defines agent-related Zod schema fragments for config parsing.
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
+
+export { BroadcastSchema } from "./zod-schema.messages.js";
 
 const AgentEntryConfigSchema = z.preprocess(
   (value, ctx) => {
@@ -46,6 +49,20 @@ export const AgentsSchema = z
         message: "agents.entries must contain at least one configured agent",
       });
     }
+    const firstKeyByAgentId = new Map<string, string>();
+    for (const [key] of entries) {
+      const agentId = normalizeAgentId(key);
+      const firstKey = firstKeyByAgentId.get(agentId);
+      if (!firstKey) {
+        firstKeyByAgentId.set(agentId, key);
+        continue;
+      }
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["entries", key],
+        message: `agents.entries keys "${firstKey}" and "${key}" resolve to the same agent id "${agentId}"; rename one key so each agent has a unique id`,
+      });
+    }
     const marked = entries.filter(([, entry]) => entry.default === true);
     if (marked.length > 1) {
       ctx.addIssue({
@@ -75,6 +92,12 @@ export const AgentsSchema = z
 const BindingMatchSchema = z
   .object({
     channel: z.string(),
+    /**
+     * Channel account to match.
+     * - Omitted/empty: matches only the channel default account.
+     * - "*": matches every account on the channel.
+     * - Any other string: matches that specific account id.
+     */
     accountId: z.string().optional(),
     peer: z
       .object({
@@ -85,12 +108,14 @@ const BindingMatchSchema = z
       .optional(),
     guildId: z.string().optional(),
     teamId: z.string().optional(),
+    /** Discord role IDs used for role-based routing. */
     roles: z.array(z.string()).optional(),
   })
   .strict();
 
 const BindingSessionSchema = z
   .object({
+    /** Optional session scoping override for conversations matched by this binding. */
     dmScope: z
       .enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"])
       .optional(),
@@ -100,6 +125,7 @@ const BindingSessionSchema = z
 
 const RouteBindingSchema = z
   .object({
+    /** Missing type is interpreted as route for backward compatibility. */
     type: z.literal("route").optional(),
     agentId: z.string(),
     comment: z.string().optional(),
@@ -137,12 +163,3 @@ const AcpBindingSchema = z
   });
 
 export const BindingsSchema = z.array(z.union([RouteBindingSchema, AcpBindingSchema])).optional();
-
-const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
-
-export const BroadcastSchema = z
-  .object({
-    strategy: BroadcastStrategySchema.optional(),
-  })
-  .catchall(z.array(z.string()))
-  .optional();

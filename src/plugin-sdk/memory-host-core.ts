@@ -221,7 +221,7 @@ export type {
   MemoryPromptSectionBuilder,
 } from "../plugins/memory-state.js";
 export { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
-export { resolveSessionAgentId } from "../agents/agent-scope.js";
+export { resolveSessionAgentId } from "./agent-scope-runtime.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 
 async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
@@ -267,7 +267,7 @@ async function materializeMemoryHostEventExport(params: {
   return memoryHostEventExportQueue.enqueue(owner.queueKey, async () => {
     const absolutePath = path.join(workspaceKey, ...owner.relativePath.split("/"));
     return await withFileLock(owner.lockTarget, MEMORY_HOST_EVENT_EXPORT_LOCK_OPTIONS, async () => {
-      const storedEvents = listStoredMemoryHostEvents({
+      const storedEvents = await listStoredMemoryHostEvents({
         workspaceDir: workspaceKey,
         limit: MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS,
       });

@@ -1,11 +1,16 @@
-// Memory Host SDK module implements session files behavior.
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentId } from "./config-utils.js";
 import { readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
-import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
+import {
+  captureSensitiveTextRedactionSnapshot,
+  createSubsystemLogger,
+  getSecretRedactionRegistryRevision,
+  redactSensitiveText,
+} from "./openclaw-runtime-io.js";
 import {
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
@@ -18,16 +23,20 @@ import {
   isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
+  isIncognitoOpenClawAgentSqlitePath,
+  isIncognitoSessionKey,
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
-  loadTranscriptEventsSync,
   materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
   parseSqliteSessionFileMarker,
+  prepareSessionEntryInWorker,
+  readRestoredSessionTranscript,
   readTranscriptStatsSync,
-  resolveTranscriptSessionKeyBySessionId,
+  readTranscriptExportSnapshotReadOnlySync,
   resolveSessionTranscriptsDirForAgent,
+  SessionTranscriptColdError,
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
@@ -35,7 +44,6 @@ import { retryTransientMemoryRead } from "./read-retry.js";
 import { classifySessionMessageOrigin } from "./session-provenance.js";
 import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
-  listSessionTranscriptCorpusEntriesForAgent,
   listSessionTranscriptCorpusEntriesForAgentSync,
   type SessionTranscriptCorpusEntry,
 } from "./session-transcript-corpus.js";
@@ -51,6 +59,7 @@ export {
   type SessionTranscriptCorpusEntry,
   type SessionTranscriptCorpusOptions,
 } from "./session-transcript-corpus.js";
+export { readTranscriptStatsBatchReadOnlySync } from "./openclaw-runtime-session.js";
 
 // Keep the historical one-line-per-message export shape for normal turns, but
 // wrap pathological long messages so downstream indexers never ingest a single
@@ -60,11 +69,15 @@ const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const SESSION_ENTRY_PARSE_YIELD_LINES = 250;
 const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
+const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
+type SessionResetRecallCutoff = ReturnType<typeof resolveSessionResetRecallCutoff>;
 
 export type SessionFileEntry = {
   path: string;
   absPath: string;
   mtimeMs: number;
+  /** Canonical SQLite mutation watermark, independent of source activity. */
+  revisionMs?: number;
   size: number;
   hash: string;
   content: string;
@@ -81,7 +94,10 @@ export type SessionFileEntry = {
   sessionKind: MemorySessionKind;
 };
 
-export type SessionFileState = Pick<SessionFileEntry, "path" | "absPath" | "mtimeMs" | "size">;
+export type SessionFileState = Pick<
+  SessionFileEntry,
+  "path" | "absPath" | "mtimeMs" | "revisionMs" | "size"
+>;
 
 export type BuildSessionEntryOptions = {
   /** Optional preclassification from a caller-managed dreaming transcript lookup. */
@@ -103,22 +119,80 @@ export type BuildSessionEntryOptions = {
   onTranscriptMessage?: (message: unknown, observedAt: number) => void;
 };
 
-export type SessionTranscriptClassification = {
+type SessionTranscriptClassification = {
   dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
   cronRunTranscriptPaths: ReadonlySet<string>;
 };
 
-export type ResolvedMemorySessionSyncTarget = {
-  agentId: string;
-  sessionFile: string;
-  sessionId: string;
-};
+function hashSessionEntrySnapshot(params: {
+  content: string;
+  lineMap: readonly number[];
+  messageTimestampsMs: readonly number[];
+  lineProvenance: readonly MemoryEntryProvenance[];
+  resetRecallCutoff: SessionResetRecallCutoff;
+}): string {
+  // Preserve persisted hash bytes without flattening another full export string.
+  return createHash("sha256")
+    .update(params.content)
+    .update("\n")
+    .update(params.lineMap.join(","))
+    .update("\n")
+    .update(params.messageTimestampsMs.join(","))
+    .update("\n")
+    .update(JSON.stringify(params.lineProvenance))
+    .update("\n")
+    .update(JSON.stringify(params.resetRecallCutoff))
+    .digest("hex");
+}
 
-export type ResolvedSessionTranscriptIdentity = {
-  agentId: string;
-  sessionId: string;
-  sessionKey?: string;
-};
+export function readSessionEntryResetRecallCutoff(
+  entry: SessionFileEntry,
+): SessionResetRecallCutoff {
+  const value: unknown = Object.getOwnPropertyDescriptor(entry, SESSION_RESET_RECALL_CUTOFF)?.value;
+  if (!value || typeof value !== "object" || !("state" in value)) {
+    return { state: "invalid" };
+  }
+  if (value.state === "absent" || value.state === "invalid") {
+    return { state: value.state };
+  }
+  if (value.state === "valid" && "cutoffLine" in value && typeof value.cutoffLine === "number") {
+    return { state: "valid", cutoffLine: value.cutoffLine };
+  }
+  return { state: "invalid" };
+}
+
+function attachSessionEntryResetRecallCutoff(
+  entry: SessionFileEntry,
+  cutoff: SessionResetRecallCutoff,
+): SessionFileEntry {
+  Object.defineProperty(entry, SESSION_RESET_RECALL_CUTOFF, {
+    configurable: false,
+    enumerable: false,
+    value: cutoff,
+    writable: false,
+  });
+  return entry;
+}
+
+export function matchesSessionEntryPrefixHash(
+  entry: SessionFileEntry,
+  lineCount: number,
+  expectedHash: string,
+): boolean {
+  const lines = entry.content ? entry.content.split("\n") : [];
+  if (!Number.isInteger(lineCount) || lineCount < 0 || lineCount > lines.length) {
+    return false;
+  }
+  const resetRecallCutoff = readSessionEntryResetRecallCutoff(entry);
+  const prefix = {
+    content: lines.slice(0, lineCount).join("\n"),
+    lineMap: entry.lineMap.slice(0, lineCount),
+    messageTimestampsMs: entry.messageTimestampsMs.slice(0, lineCount),
+    lineProvenance: entry.lineProvenance.slice(0, lineCount),
+  };
+  // Content alone is insufficient: rewrites and resets can retain the same rendered text.
+  return hashSessionEntrySnapshot({ ...prefix, resetRecallCutoff }) === expectedHash;
+}
 
 type SessionTranscriptStoreEntry = {
   sessionFile?: unknown;
@@ -155,71 +229,33 @@ function isUsageCountedSessionArchiveTranscriptPath(absPath: string): boolean {
   );
 }
 
-function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
-    return false;
-  }
-  const candidate = record as {
-    type?: unknown;
-    customType?: unknown;
-    data?: unknown;
-  };
-  if (
-    candidate.type !== "custom" ||
-    candidate.customType !== "openclaw:bootstrap-context:full" ||
-    !candidate.data ||
-    typeof candidate.data !== "object" ||
-    Array.isArray(candidate.data)
-  ) {
-    return false;
-  }
-  const runId = (candidate.data as { runId?: unknown }).runId;
-  return typeof runId === "string" && runId.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
-}
-
 function hasDreamingNarrativeIdentity(value: unknown): boolean {
   return typeof value === "string" && isDreamingNarrativeSessionStoreKey(value);
 }
 
 function isDreamingNarrativeGeneratedRecord(record: unknown): boolean {
-  if (isDreamingNarrativeBootstrapRecord(record)) {
-    return true;
-  }
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
+  const candidate = asOptionalRecord(record);
+  if (!candidate) {
     return false;
   }
-  const candidate = record as {
-    type?: unknown;
-    runId?: unknown;
-    sessionKey?: unknown;
-    data?: unknown;
-    message?: unknown;
-  };
+  const data = asOptionalRecord(candidate.data);
   if (
-    hasDreamingNarrativeIdentity(candidate.runId) ||
-    hasDreamingNarrativeIdentity(candidate.sessionKey)
+    candidate.type === "custom" &&
+    candidate.customType === "openclaw:bootstrap-context:full" &&
+    typeof data?.runId === "string" &&
+    data.runId.startsWith(DREAMING_NARRATIVE_RUN_PREFIX)
   ) {
     return true;
   }
   const message = candidate.type === "message" ? asOptionalRecord(candidate.message) : undefined;
-  if (message) {
-    const metadata = asOptionalRecord(message["__openclaw"]);
-    if (
-      (message.role === "assistant" || message.role === "toolResult") &&
-      hasDreamingNarrativeIdentity(metadata?.runId)
-    ) {
-      return true;
-    }
-  }
-  if (!candidate.data || typeof candidate.data !== "object" || Array.isArray(candidate.data)) {
-    return false;
-  }
-  const nested = candidate.data as {
-    runId?: unknown;
-    sessionKey?: unknown;
-  };
+  const metadata = asOptionalRecord(message?.["__openclaw"]);
   return (
-    hasDreamingNarrativeIdentity(nested.runId) || hasDreamingNarrativeIdentity(nested.sessionKey)
+    hasDreamingNarrativeIdentity(candidate.runId) ||
+    hasDreamingNarrativeIdentity(candidate.sessionKey) ||
+    hasDreamingNarrativeIdentity(data?.runId) ||
+    hasDreamingNarrativeIdentity(data?.sessionKey) ||
+    ((message?.role === "assistant" || message?.role === "toolResult") &&
+      hasDreamingNarrativeIdentity(metadata?.runId))
   );
 }
 
@@ -228,32 +264,16 @@ function hasCronRunSessionKey(value: unknown): boolean {
 }
 
 function isCronRunGeneratedRecord(record: unknown): boolean {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
-    return false;
-  }
-  const candidate = record as {
-    sessionKey?: unknown;
-    data?: unknown;
-  };
-  if (hasCronRunSessionKey(candidate.sessionKey)) {
-    return true;
-  }
-  if (!candidate.data || typeof candidate.data !== "object" || Array.isArray(candidate.data)) {
-    return false;
-  }
-  const nested = candidate.data as {
-    sessionKey?: unknown;
-  };
-  return hasCronRunSessionKey(nested.sessionKey);
+  const candidate = asOptionalRecord(record);
+  return (
+    hasCronRunSessionKey(candidate?.sessionKey) ||
+    hasCronRunSessionKey(asOptionalRecord(candidate?.data)?.sessionKey)
+  );
 }
 
 function normalizeComparablePath(pathname: string): string {
   const resolved = path.resolve(pathname);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-export function normalizeSessionTranscriptPathForComparison(pathname: string): string {
-  return normalizeComparablePath(pathname);
 }
 
 function resolveSessionStoreTranscriptPath(
@@ -291,7 +311,7 @@ function loadSessionTranscriptClassificationForSessionsDir(
   const agentId = extractAgentIdFromSessionsDir(sessionsDir);
   if (agentId && isCanonicalSessionsDirForAgent(sessionsDir, agentId)) {
     return classifySessionTranscriptCorpusEntries(
-      listSessionTranscriptCorpusEntriesForAgentSync(agentId),
+      listSessionTranscriptCorpusEntriesForAgentSync(agentId, { includeContentRevision: false }),
     );
   }
   const storePath = path.join(sessionsDir, "sessions.json");
@@ -353,20 +373,6 @@ function classifySessionTranscriptCorpusEntries(
   };
 }
 
-export function loadDreamingNarrativeTranscriptPathSetForAgent(
-  agentId: string,
-): ReadonlySet<string> {
-  return loadSessionTranscriptClassificationForAgent(agentId).dreamingNarrativeTranscriptPaths;
-}
-
-export function loadSessionTranscriptClassificationForAgent(
-  agentId: string,
-): SessionTranscriptClassification {
-  return classifySessionTranscriptCorpusEntries(
-    listSessionTranscriptCorpusEntriesForAgentSync(agentId),
-  );
-}
-
 function classifySessionTranscriptFromSessionStore(absPath: string): {
   generatedByDreamingNarrative: boolean;
   generatedByCronRun: boolean;
@@ -388,12 +394,6 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
     ),
     generatedByCronRun: hasClassifiedPath(classification.cronRunTranscriptPaths),
   };
-}
-
-export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
-  return (await listSessionTranscriptCorpusEntriesForAgent(agentId))
-    .filter((entry) => entry.transcriptSource !== "sqlite")
-    .map((entry) => entry.sessionFile);
 }
 
 export function sessionPathForFile(absPath: string): string {
@@ -436,58 +436,6 @@ export function parseCanonicalSessionSyncTargetFromPath(
     return null;
   }
   return { agentId, sessionId };
-}
-
-/**
- * Resolves a current transcript path back to the canonical session-store
- * identity when available, falling back to the usage-counted file identity.
- */
-export function resolveSessionIdentityForTranscriptFile(
-  sessionFile: string,
-): ResolvedSessionTranscriptIdentity | null {
-  const parsed = parseCanonicalSessionSyncTargetFromPath(sessionFile);
-  if (!parsed?.agentId) {
-    return null;
-  }
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(parsed.agentId);
-  const normalizedSessionFile = normalizeComparablePath(sessionFile);
-  const store = readSessionTranscriptClassificationStore(path.join(sessionsDir, "sessions.json"));
-  for (const [sessionKey, entry] of Object.entries(store)) {
-    const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
-    if (transcriptPath !== normalizedSessionFile) {
-      continue;
-    }
-    const sessionId = typeof entry.sessionId === "string" ? entry.sessionId.trim() : "";
-    if (!sessionId) {
-      continue;
-    }
-    return {
-      agentId: parsed.agentId,
-      sessionId,
-      ...(sessionKey.trim() ? { sessionKey } : {}),
-    };
-  }
-  return {
-    agentId: parsed.agentId,
-    sessionId: parsed.sessionId,
-  };
-}
-
-/** Resolves only deprecated path-shaped sync targets; live identity uses corpus entries. */
-export function resolveSessionFileForSyncTarget(
-  target: MemorySessionSyncTarget,
-  defaultAgentId?: string,
-): ResolvedMemorySessionSyncTarget | null {
-  const sessionId = target.sessionId.trim();
-  const rawAgentId = (target.agentId ?? defaultAgentId ?? "").trim();
-  if (!rawAgentId || !sessionId) {
-    return null;
-  }
-  return null;
-}
-
-async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
-  createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
 }
 
 function normalizeSessionText(value: string): string {
@@ -576,60 +524,22 @@ function renderSessionExportLines(label: string, text: string): string[] {
   return splitLongSessionLine(text).map((segment) => `${label}: ${segment}`);
 }
 
-/**
- * Strip OpenClaw-injected inbound metadata envelopes from a raw text block.
- *
- * User-role messages arriving from external channels (Telegram, Discord,
- * Slack, …) are stored with a multi-line prefix containing Conversation info,
- * Sender info, and other AI-facing metadata blocks. These envelopes must be
- * removed BEFORE normalization, because `stripInboundMetadata` relies on
- * newline structure and fenced `json` code fences to locate sentinels; once
- * `normalizeSessionText` collapses newlines into spaces, stripping is
- * impossible.
- *
- * See: https://github.com/openclaw/openclaw/issues/63921
- */
-function stripInboundMetadataForUserRole(text: string, role: "user" | "assistant"): string {
-  if (role !== "user") {
-    return text;
-  }
-  return stripInboundMetadata(text);
-}
-
 const GENERATED_SYSTEM_MESSAGE_RE = /^System(?: \(untrusted\))?: \[[^\]]+\]\s*/;
 
-function isGeneratedSystemWrapperMessage(text: string, role: "user" | "assistant"): boolean {
-  if (role !== "user") {
-    return false;
-  }
-  return GENERATED_SYSTEM_MESSAGE_RE.test(text);
-}
-
-function isGeneratedCronPromptMessage(text: string, role: "user" | "assistant"): boolean {
-  if (role !== "user") {
-    return false;
-  }
-  return DIRECT_CRON_PROMPT_RE.test(text);
-}
-
-function isGeneratedHeartbeatPromptMessage(text: string, role: "user" | "assistant"): boolean {
-  return role === "user" && isHeartbeatUserMessage({ role, content: text }, HEARTBEAT_PROMPT);
-}
-
 function sanitizeSessionText(text: string, role: "user" | "assistant"): string | null {
-  const strippedInbound = stripInboundMetadataForUserRole(text, role);
+  // Metadata envelopes require their original newlines; strip them before whitespace normalization.
+  const strippedInbound = role === "user" ? stripInboundMetadata(text) : text;
   const strippedInternal = stripInternalRuntimeContext(strippedInbound);
   const normalized = normalizeSessionText(strippedInternal);
   if (!normalized) {
     return null;
   }
-  if (isGeneratedSystemWrapperMessage(normalized, role)) {
-    return null;
-  }
-  if (isGeneratedCronPromptMessage(normalized, role)) {
-    return null;
-  }
-  if (isGeneratedHeartbeatPromptMessage(normalized, role)) {
+  if (
+    role === "user" &&
+    (GENERATED_SYSTEM_MESSAGE_RE.test(normalized) ||
+      DIRECT_CRON_PROMPT_RE.test(normalized) ||
+      isHeartbeatUserMessage({ role, content: normalized }, HEARTBEAT_PROMPT))
+  ) {
     return null;
   }
   if (isSilentReplyPayloadText(normalized)) {
@@ -679,18 +589,6 @@ function parseSessionTimestampMs(
   return 0;
 }
 
-function serializeTranscriptEvent(record: unknown): string | null {
-  const serialized = JSON.stringify(record);
-  return typeof serialized === "string" ? serialized : null;
-}
-
-function serializeTranscriptEvents(records: readonly unknown[]): string {
-  return records
-    .map(serializeTranscriptEvent)
-    .filter((line): line is string => line !== null)
-    .join("\n");
-}
-
 function resolveSessionEntryParseYieldLines(opts: BuildSessionEntryOptions): number {
   const configured = opts.parseYieldEveryLines;
   if (typeof configured === "number" && Number.isFinite(configured)) {
@@ -712,21 +610,30 @@ function resolveBuildSessionSqliteIdentity(absPath: string, opts: BuildSessionEn
   return marker && opts.sessionKey ? { ...marker, sessionKey: opts.sessionKey } : marker;
 }
 
+function sqliteSessionFileState(
+  absPath: string,
+  identity: { agentId: string; sessionId: string },
+  stats: ReturnType<typeof readTranscriptStatsSync>,
+  updatedAtMs?: number,
+): SessionFileState {
+  return {
+    absPath,
+    path: sessionPathForSessionIdentity(identity.agentId, identity.sessionId),
+    mtimeMs: updatedAtMs ?? stats.maxSeq,
+    revisionMs: stats.lastMutationAtMs ?? stats.maxSeq,
+    size: stats.sizeBytes,
+  };
+}
+
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
+  transcriptStats?: ReturnType<typeof readTranscriptStatsSync>,
 ): SessionFileState | null {
   const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
   if (sqliteIdentity) {
-    const stats = readTranscriptStatsSync({
-      ...sqliteIdentity,
-    });
-    return {
-      absPath,
-      path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
-      mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
-      size: stats.sizeBytes,
-    };
+    const stats = transcriptStats ?? readTranscriptStatsSync(sqliteIdentity);
+    return sqliteSessionFileState(absPath, sqliteIdentity, stats, opts.updatedAtMs);
   }
   try {
     const stat = fsSync.statSync(absPath);
@@ -758,36 +665,74 @@ export async function buildSessionEntry(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
 ): Promise<SessionFileEntry | null> {
+  const identity = resolveBuildSessionSqliteIdentity(absPath, opts);
+  const prepare = async () => {
+    // Archives may materialize files, observers own their callbacks, and incognito
+    // transcripts exist only in this process. Their existing local contracts stay intact.
+    if (
+      identity &&
+      !opts.onTranscriptMessage &&
+      opts.parseYieldEveryLines === undefined &&
+      !isIncognitoSessionKey(opts.sessionKey) &&
+      !isIncognitoOpenClawAgentSqlitePath(identity.storePath, { agentId: identity.agentId })
+    ) {
+      const options = { ...opts, ...identity };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const redaction = captureSensitiveTextRedactionSnapshot();
+        const prepared = await prepareSessionEntryInWorker(absPath, options, redaction);
+        if (redaction.registryRevision === getSecretRedactionRegistryRevision()) {
+          return prepared.entry
+            ? attachSessionEntryResetRecallCutoff(prepared.entry, prepared.resetRecallCutoff)
+            : null;
+        }
+      }
+      throw new Error(
+        "Session transcript redaction changed during preparation; retry the operation.",
+      );
+    }
+    return buildSessionEntryInProcess(absPath, opts);
+  };
   try {
-    const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
-    const rawSource = sqliteIdentity
-      ? (() => {
-          const stats = readTranscriptStatsSync({
-            ...sqliteIdentity,
-          });
-          const records = loadTranscriptEventsSync({
-            ...sqliteIdentity,
-          });
-          const resetRecallCutoff = resolveSessionResetRecallCutoff(records);
-          const raw = serializeTranscriptEvents(records);
-          return {
-            mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
-            path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
-            raw,
-            resetRecallCutoff,
-            size: stats.sizeBytes,
-          };
-        })()
+    return await prepare();
+  } catch (error) {
+    if (!(error instanceof SessionTranscriptColdError) || identity?.sessionId !== error.sessionId) {
+      throw error;
+    }
+    return readRestoredSessionTranscript(identity, prepare);
+  }
+}
+
+/** The shared transcript worker runs the same projection with task-local redaction. */
+export async function buildSessionEntryInProcess(
+  absPath: string,
+  opts: BuildSessionEntryOptions = {},
+  redactText: (text: string) => string = (text) => redactSensitiveText(text, { mode: "tools" }),
+): Promise<SessionFileEntry | null> {
+  const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
+  try {
+    const snapshot = sqliteIdentity
+      ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity)
       : null;
-    let raw: string;
+    const sqliteSource =
+      snapshot && sqliteIdentity
+        ? {
+            ...sqliteSessionFileState(absPath, sqliteIdentity, snapshot.stats, opts.updatedAtMs),
+            records: snapshot.events,
+            resetRecallCutoff: resolveSessionResetRecallCutoff(snapshot.events),
+            sessionKey: snapshot.sessionKey,
+          }
+        : null;
+    if (sqliteIdentity && !sqliteSource) {
+      return null;
+    }
+    let raw = "";
     let mtimeMs: number;
     let size: number;
     let memoryPath: string;
-    if (rawSource) {
-      raw = rawSource.raw;
-      mtimeMs = rawSource.mtimeMs;
-      size = rawSource.size;
-      memoryPath = rawSource.path;
+    if (sqliteSource) {
+      mtimeMs = sqliteSource.mtimeMs;
+      size = sqliteSource.size;
+      memoryPath = sqliteSource.path;
     } else {
       const regularFile = await statRegularFile(absPath);
       if (regularFile.missing) {
@@ -828,14 +773,7 @@ export async function buildSessionEntry(
     const messageTimestampsMs: number[] = [];
     const lineProvenance: MemoryEntryProvenance[] = [];
     const parseYieldEveryLines = resolveSessionEntryParseYieldLines(opts);
-    const sqliteSessionKey =
-      sqliteIdentity && !opts.sessionKey
-        ? resolveTranscriptSessionKeyBySessionId({
-            agentId: sqliteIdentity.agentId,
-            sessionId: sqliteIdentity.sessionId,
-            storePath: sqliteIdentity.storePath,
-          })
-        : undefined;
+    const sqliteSessionKey = !opts.sessionKey ? sqliteSource?.sessionKey : undefined;
     const sessionStoreClassification =
       !sqliteIdentity &&
       (opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined)
@@ -859,20 +797,30 @@ export async function buildSessionEntry(
     let insideHeartbeatTurn = false;
     let insideRecalledMemoryTurn = false;
     let turnOrigin: MemoryOriginClass = "untrusted";
-    for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
+    // SQLite is fully snapshotted before yielding or invoking observers. Archives
+    // retain raw line ordinals, including blank and malformed JSONL entries.
+    for (
+      let jsonlIdx = 0, lineStart = 0;
+      sqliteSource ? jsonlIdx < sqliteSource.records.length : lineStart <= raw.length;
+      jsonlIdx++
+    ) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
-      const newlineIndex = raw.indexOf("\n", lineStart);
-      const lineEnd = newlineIndex === -1 ? raw.length : newlineIndex;
-      const line = raw.slice(lineStart, lineEnd);
-      lineStart = newlineIndex === -1 ? raw.length + 1 : newlineIndex + 1;
-      if (!line.trim()) {
-        continue;
-      }
       let record: unknown;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        continue;
+      if (sqliteSource) {
+        record = sqliteSource.records[jsonlIdx];
+      } else {
+        const newlineIndex = raw.indexOf("\n", lineStart);
+        const lineEnd = newlineIndex === -1 ? raw.length : newlineIndex;
+        const line = raw.slice(lineStart, lineEnd);
+        lineStart = newlineIndex === -1 ? raw.length + 1 : newlineIndex + 1;
+        if (!line.trim()) {
+          continue;
+        }
+        try {
+          record = JSON.parse(line);
+        } catch {
+          continue;
+        }
       }
       const identifiesDreamingNarrative =
         !generatedByDreamingNarrative && isDreamingNarrativeGeneratedRecord(record);
@@ -924,6 +872,15 @@ export async function buildSessionEntry(
       if (message.role === "user" && hasInterSessionUserProvenance(message)) {
         continue;
       }
+      // Observers and turn provenance still see excluded messages; text export does not.
+      if (
+        insideHeartbeatTurn ||
+        insideRecalledMemoryTurn ||
+        generatedByDreamingNarrative ||
+        generatedByCronRun
+      ) {
+        continue;
+      }
       const rawText = collectRawSessionText(message.content);
       if (rawText === null) {
         continue;
@@ -935,13 +892,7 @@ export async function buildSessionEntry(
       if (!text) {
         continue;
       }
-      if (insideHeartbeatTurn || insideRecalledMemoryTurn) {
-        continue;
-      }
-      if (generatedByDreamingNarrative || generatedByCronRun) {
-        continue;
-      }
-      const safe = redactSensitiveText(text, { mode: "tools" });
+      const safe = redactText(text);
       const label = message.role === "user" ? "User" : "Assistant";
       const renderedLines = renderSessionExportLines(label, safe);
       const memoryProvenance: MemoryEntryProvenance = {
@@ -959,18 +910,15 @@ export async function buildSessionEntry(
       path: memoryPath,
       absPath,
       mtimeMs,
+      ...(sqliteSource ? { revisionMs: sqliteSource.revisionMs } : {}),
       size,
-      hash: hashText(
-        content +
-          "\n" +
-          lineMap.join(",") +
-          "\n" +
-          messageTimestampsMs.join(",") +
-          "\n" +
-          JSON.stringify(lineProvenance) +
-          "\n" +
-          JSON.stringify(rawSource?.resetRecallCutoff ?? { state: "absent" }),
-      ),
+      hash: hashSessionEntrySnapshot({
+        content,
+        lineMap,
+        messageTimestampsMs,
+        lineProvenance,
+        resetRecallCutoff: sqliteSource?.resetRecallCutoff ?? { state: "absent" },
+      }),
       content,
       lineMap,
       messageTimestampsMs,
@@ -979,15 +927,15 @@ export async function buildSessionEntry(
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
       ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
     };
-    Object.defineProperty(entry, Symbol.for("openclaw.memory.sessionResetRecallCutoff"), {
-      configurable: false,
-      enumerable: false,
-      value: rawSource?.resetRecallCutoff ?? { state: "absent" },
-      writable: false,
-    });
-    return entry;
+    return attachSessionEntryResetRecallCutoff(
+      entry,
+      sqliteSource?.resetRecallCutoff ?? { state: "absent" },
+    );
   } catch (err) {
-    void logSessionFileReadFailure(absPath, err);
+    if (sqliteIdentity) {
+      throw err;
+    }
+    createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
     return null;
   }
 }

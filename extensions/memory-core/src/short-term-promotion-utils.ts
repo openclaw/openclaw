@@ -216,27 +216,6 @@ export function hashQuery(query: string): string {
     .slice(0, 12);
 }
 
-export function mergeQueryHashes(existing: string[], queryHash: string): string[] {
-  if (!queryHash) {
-    return existing;
-  }
-  const seen = new Set<string>();
-  const next = existing.filter((value) => {
-    if (!value || seen.has(value)) {
-      return false;
-    }
-    seen.add(value);
-    return true;
-  });
-  if (!seen.has(queryHash)) {
-    next.push(queryHash);
-  }
-  if (next.length <= MAX_QUERY_HASHES) {
-    return next;
-  }
-  return next.slice(next.length - MAX_QUERY_HASHES);
-}
-
 export function mergeRecentDistinct(
   existing: string[],
   nextValue: string,
@@ -357,6 +336,15 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
       const queryHashes = Array.isArray(entry.queryHashes)
         ? normalizeDistinctStrings(entry.queryHashes, MAX_QUERY_HASHES)
         : [];
+      const storedUserQueryHashes = Array.isArray(entry.userQueryHashes)
+        ? normalizeDistinctStrings(entry.userQueryHashes, MAX_QUERY_HASHES)
+        : undefined;
+      // Legacy rows did not retain query provenance. Rows containing only recall
+      // signals are unambiguous, so preserve their earned diversity; mixed rows
+      // stay unqualified until fresh interactive recalls arrive.
+      const userQueryHashes =
+        storedUserQueryHashes ??
+        (dailyCount === 0 && groundedCount === 0 ? queryHashes : undefined);
       const recallDays = Array.isArray(entry.recallDays)
         ? entry.recallDays
             .map((recallDay) => (typeof recallDay === "string" ? normalizeIsoDay(recallDay) : null))
@@ -424,6 +412,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
         firstRecalledAt,
         lastRecalledAt,
         queryHashes,
+        ...(userQueryHashes ? { userQueryHashes } : {}),
         recallDays: recallDays.slice(-MAX_RECALL_DAYS),
         conceptTags,
         ...(provenance ? { provenance } : {}),

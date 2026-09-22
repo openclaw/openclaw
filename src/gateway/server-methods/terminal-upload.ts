@@ -1,4 +1,8 @@
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   type TerminalUploadParams,
@@ -45,7 +49,17 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      respond(true, result);
+      respond(true, {
+        path: result.path,
+        size: result.size,
+        ...(result.uploadPathStyle &&
+        hasGatewayClientCap(
+          opts.client?.connect?.caps,
+          GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE,
+        )
+          ? { uploadPathStyle: result.uploadPathStyle }
+          : {}),
+      });
     } catch (error) {
       respond(
         false,

@@ -4,10 +4,7 @@ import type {
   SessionMessageEntry,
 } from "../../sessions/index.js";
 import { isSessionContextMetadataEntry } from "../../sessions/session-manager-codec.js";
-import {
-  resolveMessageMergeStrategy,
-  type MessageMergeStrategy,
-} from "./message-merge-strategy.js";
+import { mergeOrphanedTrailingUserPrompt } from "./attempt-prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type OrphanRepairSessionManager = {
@@ -88,7 +85,6 @@ export function replayTrailingEntriesForOrphanRepair(
 type OrphanRepairPlan = Omit<OrphanRepairCandidate, "messageEntry"> & {
   contextEnginePrompt: string;
   messageEntry: SessionMessageEntry & { message: UserMessage };
-  strategy: MessageMergeStrategy;
   removeLeaf: boolean;
 };
 
@@ -101,14 +97,14 @@ function isUserSessionMessageEntry(
 export function resolveOrphanRepairPlan(params: {
   sessionManager: OrphanRepairSessionManager;
   prompt: string;
+  preserveLeaf: boolean;
   trigger: EmbeddedRunAttemptParams["trigger"];
 }): OrphanRepairPlan | undefined {
   const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
   if (!candidate || !isUserSessionMessageEntry(candidate.messageEntry)) {
     return undefined;
   }
-  const strategy = resolveMessageMergeStrategy();
-  const merge = strategy.mergeOrphanedTrailingUserPrompt({
+  const merge = mergeOrphanedTrailingUserPrompt({
     prompt: params.prompt,
     trigger: params.trigger,
     leafMessage: candidate.messageEntry.message,
@@ -117,7 +113,6 @@ export function resolveOrphanRepairPlan(params: {
     contextEnginePrompt: merge.prompt,
     messageEntry: candidate.messageEntry,
     trailingEntries: candidate.trailingEntries,
-    strategy,
-    removeLeaf: merge.removeLeaf,
+    removeLeaf: merge.removeLeaf || !params.preserveLeaf,
   };
 }

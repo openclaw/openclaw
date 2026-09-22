@@ -12,7 +12,6 @@ enum TailscaleServeGatewayDiscovery {
     private static let maxCandidates = 32
     private static let probeConcurrency = 6
     private static let defaultProbeTimeoutSeconds: TimeInterval = 1.6
-    private static let probeSession = URLSession(configuration: .ephemeral)
 
     struct DiscoveryContext {
         var tailscaleStatus: @Sendable () async -> String?
@@ -21,7 +20,11 @@ enum TailscaleServeGatewayDiscovery {
         static let live = DiscoveryContext(
             tailscaleStatus: { await readTailscaleStatus() },
             probeHost: { host, timeout in
-                await probeHostForGatewayChallenge(host: host, timeout: timeout)
+                var components = URLComponents()
+                components.scheme = "wss"
+                components.host = host
+                guard let url = components.url else { return false }
+                return await GatewayDiscoveryProbe.shared.hasGatewayChallenge(url: url, timeout: timeout)
             })
     }
 
@@ -212,16 +215,34 @@ enum TailscaleServeGatewayDiscovery {
         guard let data = raw.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(TailscaleStatus.self, from: data)
     }
+}
 
-    private static func probeHostForGatewayChallenge(host: String, timeout: TimeInterval) async -> Bool {
-        var components = URLComponents()
-        components.scheme = "wss"
-        components.host = host
-        guard let url = components.url else { return false }
+/// Owns the credential-free transport used to identify candidate Gateways.
+final class GatewayDiscoveryProbe: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static let shared = GatewayDiscoveryProbe()
 
+    private lazy var session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        // Candidate discovery must neither inherit credentials nor collect them
+        // from one peer for a later probe.
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    }()
+
+    override private init() {
+        super.init()
+        // Initialize once before concurrent peer probes access the shared session.
+        _ = self.session
+    }
+
+    func hasGatewayChallenge(url: URL, timeout: TimeInterval) async -> Bool {
+        guard !Task.isCancelled, timeout > 0, url.user == nil, url.password == nil else { return false }
         // Discovery fans out and retries during startup. Reuse the session;
         // AsyncTimeout owns each deadline and every websocket task owns its cancel.
-        let task = self.probeSession.webSocketTask(with: url)
+        let task = self.session.webSocketTask(with: url)
         task.resume()
 
         defer {
@@ -235,7 +256,7 @@ enum TailscaleServeGatewayDiscovery {
                 operation: {
                     while true {
                         let message = try await task.receive()
-                        if self.isConnectChallenge(message: message) {
+                        if Self.isConnectChallenge(message: message) {
                             return true
                         }
                     }
@@ -243,6 +264,38 @@ enum TailscaleServeGatewayDiscovery {
         } catch {
             return false
         }
+    }
+
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection _: HTTPURLResponse,
+        newRequest _: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void)
+    {
+        completionHandler(nil)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task _: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        self.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        // Keep ordinary certificate verification. Discovery never answers
+        // HTTP, proxy, or client-certificate authentication challenges.
+        let disposition: URLSession.AuthChallengeDisposition =
+            challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
+                ? .performDefaultHandling : .cancelAuthenticationChallenge
+        completionHandler(disposition, nil)
     }
 
     private static func isConnectChallenge(message: URLSessionWebSocketTask.Message) -> Bool {

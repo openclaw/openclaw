@@ -5,14 +5,17 @@
 import {
   embeddedAgentLog,
   formatToolExecutionErrorMessage,
+  normalizeQuestionTimeoutSeconds,
   resolveToolExecutionErrorKind,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { copyInternalToolResultState } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import {
   hasPendingInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
+  addSafeTimeoutDelayGraceMs,
   addTimerTimeoutGraceMs,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
@@ -36,7 +39,7 @@ export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 
 /** Default timeout for Codex dynamic tool calls. */
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
-/** Hard cap for per-call Codex dynamic tool timeout overrides. */
+/** Hard cap for ordinary per-call Codex dynamic tool timeout overrides. */
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 // timeoutSeconds is an inner tool budget. Keep enough outer-watchdog headroom
 // for bounded setup RPCs and the tool's structured timeout result to complete.
@@ -172,6 +175,10 @@ export async function handleDynamicToolCallWithTimeout(params: {
     const terminalResolution = params.observeToolTerminal?.({
       toolCallId: params.call.callId,
       toolName: params.call.tool,
+      result: copyInternalToolResultState(response, {
+        ...response,
+        details: response.transcriptDetails,
+      }),
       arguments:
         response.executedArguments ?? executionSnapshot?.executedArguments ?? params.call.arguments,
       ...(params.toolMeta ? { meta: params.toolMeta } : {}),
@@ -208,8 +215,9 @@ export async function handleDynamicToolCallWithTimeout(params: {
     try {
       params.onAgentToolResult?.(event);
     } catch (error) {
+      const message = formatToolExecutionErrorMessage(error, "Unknown error");
       embeddedAgentLog.warn(
-        `onAgentToolResult handler failed: tool=${params.call.tool} error=${String(error)}`,
+        `onAgentToolResult handler failed: tool=${params.call.tool} error=${message}`,
       );
     }
   };
@@ -503,7 +511,40 @@ export function hasPendingDynamicToolTerminalDiagnostic(params: {
 export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
+  toolBridge?: Pick<CodexDynamicToolBridge, "availableTools">;
 }): number {
+  const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
+  if (params.call.tool === "node_exec") {
+    const executionTimeoutMs = params.toolBridge?.availableTools
+      .find((tool) => tool.name === params.call.tool)
+      ?.getExecutionTimeoutMs?.(params.call.arguments);
+    if (executionTimeoutMs !== undefined) {
+      // Foreground node execution owns its command and transport budgets.
+      return addSafeTimeoutDelayGraceMs(
+        executionTimeoutMs,
+        CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+      );
+    }
+  }
+  if (
+    params.call.tool === "openclaw" ||
+    params.call.tool === "ask_user" ||
+    (params.call.tool === "secrets" && args?.action === "request")
+  ) {
+    try {
+      // Human entry owns a validated wait longer than ordinary tool execution.
+      // OpenClaw delegation uses that default for its ten-minute approval plus
+      // staging/application; it has no model-authored timeout override.
+      const timeoutSeconds = params.call.tool === "openclaw" ? undefined : args?.timeoutSeconds;
+      return (
+        normalizeQuestionTimeoutSeconds(timeoutSeconds) * 1_000 +
+        CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS
+      );
+    } catch {
+      // Invalid input still reaches the tool's validation under the ordinary watchdog.
+      return CODEX_DYNAMIC_TOOL_TIMEOUT_MS;
+    }
+  }
   if (params.call.tool === "computer") {
     return clampDynamicToolTimeoutMs(readComputerToolTimeoutMs(params.call.arguments));
   }
@@ -534,6 +575,18 @@ export function resolveDynamicToolCallTimeoutMs(params: {
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
       readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
       CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+  );
+}
+
+/** Transport guard stays outside the handler's bounded tool wait and completion grace. */
+export function resolveDynamicToolServerRequestTimeoutMs(
+  call?: CodexDynamicToolCallParams,
+): number {
+  return (
+    Math.max(
+      CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+      call ? resolveDynamicToolCallTimeoutMs({ call, config: undefined }) : 0,
+    ) + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS
   );
 }
 
@@ -599,10 +652,6 @@ function readConfiguredDynamicToolTimeoutMs(
           CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
       ),
     );
-  }
-
-  if (toolName === "message") {
-    return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
   }
 
   return undefined;

@@ -1,5 +1,6 @@
 // Tests restart deferral timeout behavior and fallback cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
@@ -166,10 +167,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
   });
 
   it("reopens admission when a blocked preparation is cancelled", async () => {
-    let releasePreparation: (() => void) | undefined;
-    const preparation = new Promise<void>((resolve) => {
-      releasePreparation = resolve;
-    });
+    const { promise: preparation, resolve: releasePreparation } = createDeferred();
     const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
     const handle = deferGatewayRestartUntilIdle({
       getPendingCount: () => 0,

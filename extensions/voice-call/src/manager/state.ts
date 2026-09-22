@@ -47,3 +47,13 @@ export function addTranscriptEntry(call: CallRecord, speaker: "bot" | "user", te
   };
   call.transcript.push(entry);
 }
+
+/** Stage persisted changes without exposing uncommitted state through active-call getters. */
+export function copyCallRecord(call: CallRecord): CallRecord {
+  return {
+    ...call,
+    transcript: [...call.transcript],
+    processedEventIds: [...call.processedEventIds],
+    ...(call.metadata ? { metadata: { ...call.metadata } } : {}),
+  };
+}

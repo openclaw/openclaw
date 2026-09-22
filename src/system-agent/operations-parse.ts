@@ -1,4 +1,5 @@
 // OpenClaw operation grammar, approval descriptions, and public types.
+import { listAgentRoles } from "../agents/agent-roles.js";
 import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
@@ -16,10 +17,10 @@ import {
 } from "./config-redaction.js";
 import type { SystemAgentOperation } from "./operation-types.js";
 import { INVALID_CONFIG_SET_MESSAGE } from "./operations-internal.js";
-import type { SystemAgentOverview } from "./overview.js";
+import type { loadSystemAgentOverview, SystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
 
-type SystemAgentOverviewLoader = () => Promise<SystemAgentOverview>;
+type SystemAgentOverviewLoader = typeof loadSystemAgentOverview;
 type SystemAgentOverviewFormatter = (overview: SystemAgentOverview) => string;
 
 export type { SystemAgentOperation };
@@ -42,7 +43,7 @@ export type SystemAgentOperationResult = {
 /** Injectable command dependencies used by tests and alternate runners. */
 export type SystemAgentCommandDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store.js").ensureAuthProfileStore;
+  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntime;
   resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
   formatOverview?: SystemAgentOverviewFormatter;
@@ -52,12 +53,19 @@ export type SystemAgentCommandDeps = {
     path?: string;
     value?: string;
     cliOptions: ConfigSetOptions;
+    beforePersistentApply?: () => void;
   }) => Promise<void>;
   runDoctor?: (runtime: RuntimeEnv, options: DoctorOptions) => Promise<void>;
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
-  runPluginUninstall?: (pluginId: string, runtime: RuntimeEnv) => Promise<void>;
+  applyPluginRuntime?: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
+  gatewayHostLifecycle?: import("../gateway/server-public.js").GatewayHostLifecycle;
+  runPluginUninstall?: (
+    pluginId: string,
+    runtime: RuntimeEnv,
+    options?: { beforePersistentApply?: () => void },
+  ) => Promise<void>;
   runPluginsList?: (runtime: RuntimeEnv) => Promise<void>;
   runPluginsSearch?: (query: string, runtime: RuntimeEnv) => Promise<void>;
   runTui?: (opts: {
@@ -67,7 +75,7 @@ export type SystemAgentCommandDeps = {
     historyLimit?: number;
     message?: string;
   }) => Promise<TuiResult | void>;
-  /** Where setup side effects run; the gateway surface never manages its own daemon. */
+  /** Where setup side effects run; hosted lifecycle actions require the exact host capability. */
   setupSurface?: "cli" | "gateway";
   applySetup?: typeof import("./setup-apply.js").applySystemAgentSetup;
   verifyInferenceConfig?: typeof import("./setup-inference.js").verifySetupInferenceConfig;
@@ -99,7 +107,11 @@ const MODEL_SETUP_RE = new RegExp(
   "i",
 );
 const CREATE_AGENT_RE = new RegExp(
-  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
+  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+role\s+(?<role>\S+))?(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
+  "i",
+);
+const CREATE_TEAM_RE = new RegExp(
+  String.raw`^create\s+team(?:\s+coordinator\s+(?<coordinatorId>\S+))?(?:\s+prefix\s+(?<prefix>\S+))?(?:\s+workspace\s+(?<workspaceRoot>${ARG_WORD}))?$`,
   "i",
 );
 // "talk to agent for ~/Projects/work" is a documented selector; "for|in" are
@@ -292,6 +304,10 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     case "models":
     case "list models":
       return { kind: "models" };
+    case "model accounts":
+    case "personal model accounts":
+    case "manage model accounts":
+      return { kind: "model-accounts" };
     case "tui":
     case "open tui":
     case "chat":
@@ -445,13 +461,33 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   }
   const createMatch = trimmed.match(CREATE_AGENT_RE);
   if (createMatch?.groups?.agent) {
+    const role = listAgentRoles().find((candidate) => candidate === createMatch.groups?.role);
+    if (createMatch.groups.role && !role) {
+      return {
+        kind: "none",
+        message: `Unknown agent role. Choose ${listAgentRoles().join(", ")}.`,
+      };
+    }
     const workspace = trimShellishToken(createMatch.groups.workspace);
     const model = createMatch.groups.model;
     return {
       kind: "create-agent",
       agentId: normalizeExplicitSystemAgentId(createMatch.groups.agent),
+      ...(role ? { role } : {}),
       ...(workspace ? { workspace } : {}),
       ...(model ? { model } : {}),
+    };
+  }
+  const teamMatch = trimmed.match(CREATE_TEAM_RE);
+  if (teamMatch) {
+    const coordinatorId = teamMatch.groups?.coordinatorId;
+    const prefix = teamMatch.groups?.prefix;
+    const workspaceRoot = trimShellishToken(teamMatch.groups?.workspaceRoot);
+    return {
+      kind: "create-team",
+      ...(coordinatorId ? { coordinatorId } : {}),
+      ...(prefix ? { prefix } : {}),
+      ...(workspaceRoot ? { workspaceRoot } : {}),
     };
   }
   const talkMatch = trimmed.match(TALK_AGENT_RE);
@@ -513,7 +549,9 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
     operation.kind === "config-set-ref" ||
     operation.kind === "setup" ||
     operation.kind === "plugin-install" ||
+    operation.kind === "plugin-activate-artifact" ||
     operation.kind === "plugin-uninstall" ||
+    operation.kind === "create-team" ||
     (operation.kind === "create-agent" &&
       !operation.model?.trim() &&
       !isReservedSystemAgentId(operation.agentId)) ||
@@ -542,12 +580,28 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
       return "run openclaw doctor --fix on the machine running OpenClaw, with OpenClaw stopped";
     case "plugin-install":
       return `install plugin ${operation.spec}`;
+    case "plugin-activate-artifact":
+      return `install the trusted plugin artifact ${operation.path} (SHA256 ${operation.sha256}), including its declared capabilities and native UI; restart the Gateway to load it`;
     case "plugin-uninstall":
       return `uninstall plugin ${operation.pluginId}`;
     case "create-agent":
       return [
         `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}`,
+        operation.role
+          ? `role: ${operation.role === "coordinator" ? "Chief of staff" : operation.role.charAt(0).toUpperCase() + operation.role.slice(1)}`
+          : undefined,
         operation.requesterAgentId ? `requested by agent ${operation.requesterAgentId}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(", ");
+    case "create-team":
+      return [
+        "create team of 4: chief of staff, researcher, writer, reviewer",
+        operation.coordinatorId ? `coordinator id: ${operation.coordinatorId}` : undefined,
+        operation.prefix ? `prefix: ${operation.prefix}` : undefined,
+        operation.workspaceRoot
+          ? `workspace root: ${shortenHomePath(resolveUserPath(operation.workspaceRoot))}`
+          : undefined,
       ]
         .filter(Boolean)
         .join(", ");
@@ -562,13 +616,25 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
   }
 }
 
+export const SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF =
+  "The host applies the requesting session's permission policy to this exact proposal and returns the final outcome. Do not request conversational approval or claim the change was applied before that outcome.";
+
+export const SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF =
+  "Channel, model, and setup flows need a human operator in the OpenClaw app; they cannot run from a delegated agent request. Open `openclaw dashboard` or run `openclaw setup` on the Gateway host.";
+
 /** Format the standard approval plan text for a persistent operation. */
-export function formatSystemAgentPersistentPlan(operation: SystemAgentOperation): string {
-  return `Plan: ${describeSystemAgentPersistentOperation(operation)}. Say yes to apply.`;
+export function formatSystemAgentPersistentPlan(
+  operation: SystemAgentOperation,
+  operatorApprovalOnly = false,
+): string {
+  const description = describeSystemAgentPersistentOperation(operation);
+  return operatorApprovalOnly
+    ? `Proposed: ${description}.\n\n${SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF}`
+    : `Plan: ${description}. Say yes to apply.`;
 }
 
 function formatCreateAgentWorkspace(workspace: string | undefined): string {
-  return workspace ? shortenHomePath(resolveUserPath(workspace)) : shortenHomePath(process.cwd());
+  return workspace ? shortenHomePath(resolveUserPath(workspace)) : "the default for this agent";
 }
 
 function formatConfigSetValueForPlan(configPath: string, value: string): string {

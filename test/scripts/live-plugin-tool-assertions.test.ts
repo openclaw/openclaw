@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/live-plugin-tool/assertions.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
+const testNodeExecPath = resolveTestNodeExecPath();
 
 function nodeOptionsWithoutExperimentalWarnings(extra?: string): string {
   const current = [process.env.NODE_OPTIONS, extra].filter(Boolean).join(" ");
@@ -26,7 +28,7 @@ function runAssertion(root: string, env: Record<string, string> = {}) {
 }
 
 function runAssertionCommand(command: string, root: string, env: Record<string, string> = {}) {
-  return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, command], {
+  return spawnSync(testNodeExecPath, [ASSERTIONS_SCRIPT, command], {
     encoding: "utf8",
     env: {
       ...process.env,

@@ -1,5 +1,20 @@
 const TABLE_CONSTRAINT_KEYWORDS = new Set(["CHECK", "FOREIGN", "PRIMARY", "UNIQUE"]);
 
+/** Select canonical DDL without opening a database or changing its installation lifecycle. */
+export function extractSqliteTableSchema(
+  schema: string,
+  table: string,
+  options: { endMarker?: string; includeEndMarker?: boolean; errorMessage?: string } = {},
+): string {
+  const start = schema.indexOf(`CREATE TABLE IF NOT EXISTS ${table} (`);
+  const endMarker = options.endMarker ?? "\n) STRICT;";
+  const end = schema.indexOf(endMarker, start);
+  if (start < 0 || end < start) {
+    throw new Error(options.errorMessage ?? `Canonical schema markers are missing for ${table}`);
+  }
+  return schema.slice(start, end + (options.includeEndMarker === false ? 0 : endMarker.length));
+}
+
 type SqlToken = {
   end: number;
   keyword: string | null;
@@ -58,12 +73,10 @@ export function normalizeSchemaSql(sql: string | null): string | null {
     return null;
   }
   const normalized = normalizeSqlWhitespace(sql).replace(/;\s*$/u, "").trim();
-  return normalized
-    .replace(/^(CREATE TABLE) IF NOT EXISTS /iu, "$1 ")
-    .replace(/^(CREATE VIRTUAL TABLE) IF NOT EXISTS /iu, "$1 ")
-    .replace(/^(CREATE UNIQUE INDEX) IF NOT EXISTS /iu, "$1 ")
-    .replace(/^(CREATE INDEX) IF NOT EXISTS /iu, "$1 ")
-    .replace(/^(CREATE TRIGGER) IF NOT EXISTS /iu, "$1 ");
+  return normalized.replace(
+    /^(CREATE (?:TABLE|VIRTUAL TABLE|UNIQUE INDEX|INDEX|TRIGGER)) IF NOT EXISTS /iu,
+    "$1 ",
+  );
 }
 
 export function splitSqlList(sql: string): string[] {
@@ -134,35 +147,37 @@ export function findSqlClosingParenthesis(sql: string, open: number): number {
 export function normalizeSqlWhitespace(sql: string): string {
   let normalized = "";
   let pendingSpace = false;
-  let index = 0;
-  while (index < sql.length) {
-    const quoted = skipSqlQuoted(sql, index, sql[index] ?? "");
+  // Ordinary spans have no quote, comment opener or whitespace to interpret.
+  const segments = /[^\s'"`[/-]+|\s+|./gsu;
+  let segment: RegExpExecArray | null;
+  while ((segment = segments.exec(sql))) {
+    const index = segment.index;
+    const char = segment[0][0] ?? "";
+    const quoted = skipSqlQuoted(sql, index, char);
     if (quoted !== index) {
       if (pendingSpace && normalized.length > 0) {
         normalized += " ";
       }
       normalized += sql.slice(index, quoted);
       pendingSpace = false;
-      index = quoted;
+      segments.lastIndex = quoted;
       continue;
     }
     const comment = skipSqlComment(sql, index);
     if (comment !== index) {
       pendingSpace = true;
-      index = comment;
+      segments.lastIndex = comment;
       continue;
     }
-    const char = sql[index] ?? "";
     if (/\s/u.test(char)) {
       pendingSpace = true;
     } else {
       if (pendingSpace && normalized.length > 0) {
         normalized += " ";
       }
-      normalized += char;
+      normalized += segment[0];
       pendingSpace = false;
     }
-    index += 1;
   }
   return normalized.trim();
 }

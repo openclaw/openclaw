@@ -39,9 +39,36 @@ function createA2aInboundFixture(peerName = "hermes") {
 }
 
 describe("A2A channel inbound dispatch", () => {
+  it.each(["/status", "  /reset", "/approve pending allow-once", "/ custom-command"])(
+    "rejects peer slash command %s before dispatch even with a command allowlist",
+    async (text) => {
+      const fixture = createA2aInboundFixture();
+      try {
+        await dispatchA2aInbound({
+          ...fixture.params,
+          text,
+          config: { commands: { allowFrom: { "*": ["*"] } } },
+        });
+
+        expect(fixture.store.get(fixture.task.id)?.status).toMatchObject({
+          state: "TASK_STATE_REJECTED",
+          message: { parts: [{ text: expect.stringContaining("only users") }] },
+        });
+        expect(fixture.runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+      } finally {
+        fixture.store.stop();
+      }
+    },
+  );
+
   it("ignores non-final replies and completes the task with its final artifact", async () => {
     const fixture = createA2aInboundFixture();
     vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => {
+      expect(turn.ctxPayload).toMatchObject({
+        BodyForAgent: fixture.params.text,
+        CommandAuthorized: false,
+        CommandInterpretationSuppressed: true,
+      });
       await turn.delivery.deliver({ text: "preview" }, { kind: "block" });
       expect(fixture.store.get(fixture.task.id)?.status.state).toBe("TASK_STATE_WORKING");
       await turn.delivery.deliver({ text: "agent answer" }, { kind: "final" });
@@ -128,6 +155,76 @@ describe("A2A channel inbound dispatch", () => {
     });
     expect(fixture.store.get(crewTask.id)?.artifacts[0]?.parts[0]).toEqual({ text: "a2a:crew" });
     fixture.store.stop();
+  });
+
+  it("routes a stable peer binding before account fallback while preserving exact context overrides", async () => {
+    const fixture = createA2aInboundFixture();
+    const exactTask = fixture.store.create("ctx-exact", "hermes");
+    fixture.store.start(exactTask.id);
+    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => ({
+      admission: { kind: "dispatch" },
+      dispatched: true,
+      ctxPayload: turn.ctxPayload,
+      routeSessionKey: turn.route.sessionKey,
+      dispatchResult: createA2aDispatchResult(false),
+    }));
+    const config = {
+      agents: {
+        entries: {
+          main: {},
+          a2a_restricted: {},
+          a2a_context: {},
+        },
+      },
+      bindings: [
+        {
+          type: "route" as const,
+          agentId: "a2a_context",
+          match: {
+            channel: "a2a",
+            accountId: "default",
+            peer: { kind: "direct" as const, id: "hermes:ctx-exact" },
+          },
+        },
+        {
+          type: "route" as const,
+          agentId: "a2a_restricted",
+          match: {
+            channel: "a2a",
+            accountId: "default",
+            peer: { kind: "direct" as const, id: "hermes" },
+          },
+        },
+        {
+          type: "route" as const,
+          agentId: "main",
+          match: { channel: "a2a", accountId: "default" },
+        },
+      ],
+    };
+
+    try {
+      await dispatchA2aInbound({ ...fixture.params, config });
+      await dispatchA2aInbound({
+        ...fixture.params,
+        config,
+        taskId: exactTask.id,
+        contextId: exactTask.contextId,
+        messageId: "exact-message",
+      });
+
+      const dispatches = vi.mocked(fixture.runtime.channel.inbound.dispatch).mock.calls;
+      expect(dispatches.map(([turn]) => turn.route.agentId)).toEqual([
+        "a2a_restricted",
+        "a2a_context",
+      ]);
+      expect(dispatches.map(([turn]) => turn.route.sessionKey)).toEqual([
+        "agent:a2a_restricted:a2a:default:direct:hermes:ctx-inbound",
+        "agent:a2a_context:a2a:default:direct:hermes:ctx-exact",
+      ]);
+    } finally {
+      fixture.store.stop();
+    }
   });
 
   it("rejects a sender missing from the configured peer allowlist before dispatch", async () => {

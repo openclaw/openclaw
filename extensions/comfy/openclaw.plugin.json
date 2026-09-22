@@ -1,10 +1,16 @@
 {
   "id": "comfy",
+  "categories": ["media"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["comfy"],
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "headers.*", "expected": "string" }]
+    }
+  },
   "setup": {
     "providers": [
       {
@@ -179,6 +185,54 @@
       ]
     }
   },
+  "configGroups": [
+    {
+      "id": "comfy-connection",
+      "title": "Comfy connection",
+      "order": 10,
+      "properties": ["mode", "baseUrl", "apiKey", "allowPrivateNetwork", "headers"]
+    },
+    {
+      "id": "shared-workflow",
+      "title": "Shared workflow",
+      "order": 20,
+      "properties": [
+        "workflowPath",
+        "workflow",
+        "promptNodeId",
+        "promptInputName",
+        "seedNodeId",
+        "seedInputName",
+        "inputImageNodeId",
+        "inputImageInputName",
+        "outputNodeId"
+      ]
+    },
+    {
+      "id": "image-workflow",
+      "title": "Image workflow",
+      "order": 30,
+      "properties": ["image"]
+    },
+    {
+      "id": "video-workflow",
+      "title": "Video workflow",
+      "order": 40,
+      "properties": ["video"]
+    },
+    {
+      "id": "music-workflow",
+      "title": "Music workflow",
+      "order": 50,
+      "properties": ["music"]
+    },
+    {
+      "id": "execution-limits",
+      "title": "Execution limits",
+      "order": 60,
+      "properties": ["pollIntervalMs", "timeoutMs"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -196,6 +250,10 @@
       "allowPrivateNetwork": {
         "type": "boolean"
       },
+      "headers": {
+        "type": "object",
+        "additionalProperties": { "type": ["string", "object"] }
+      },
       "workflowPath": {
         "type": "string"
       },
@@ -206,6 +264,12 @@
         "type": "string"
       },
       "promptInputName": {
+        "type": "string"
+      },
+      "seedNodeId": {
+        "type": "string"
+      },
+      "seedInputName": {
         "type": "string"
       },
       "inputImageNodeId": {
@@ -233,6 +297,8 @@
           "workflow": { "type": "object" },
           "promptNodeId": { "type": "string" },
           "promptInputName": { "type": "string" },
+          "seedNodeId": { "type": "string" },
+          "seedInputName": { "type": "string" },
           "inputImageNodeId": { "type": "string" },
           "inputImageInputName": { "type": "string" },
           "outputNodeId": { "type": "string" },
@@ -248,6 +314,8 @@
           "workflow": { "type": "object" },
           "promptNodeId": { "type": "string" },
           "promptInputName": { "type": "string" },
+          "seedNodeId": { "type": "string" },
+          "seedInputName": { "type": "string" },
           "inputImageNodeId": { "type": "string" },
           "inputImageInputName": { "type": "string" },
           "outputNodeId": { "type": "string" },
@@ -263,6 +331,8 @@
           "workflow": { "type": "object" },
           "promptNodeId": { "type": "string" },
           "promptInputName": { "type": "string" },
+          "seedNodeId": { "type": "string" },
+          "seedInputName": { "type": "string" },
           "outputNodeId": { "type": "string" },
           "pollIntervalMs": { "type": "integer", "minimum": 100 },
           "timeoutMs": { "type": "integer", "minimum": 1000 }

@@ -5,28 +5,46 @@ import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
+  readChannelContextGatewayContextResolver,
 } from "../channels/message-access/admission-evidence.js";
 import type { ResolvedChannelMessageIngress } from "../channels/message-access/runtime-types.js";
 import { resolveStableChannelMessageIngress } from "../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestContext,
+} from "../gateway/server-methods/types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createPluginRegistry } from "./registry.js";
+import {
+  bindGatewayContextResolver,
+  hasGatewayContextOwner,
+} from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
-function createRuntimeBuilder(params: { origin: PluginOrigin; id?: string }) {
+function createRuntimeBuilder(params: {
+  origin: PluginOrigin;
+  id?: string;
+  trustedOfficialInstall?: boolean;
+  gatewayContextResolver?: GatewayContextResolver;
+}) {
+  const subagent = {} as PluginRuntime["subagent"];
+  bindGatewayContextResolver(subagent, params.gatewayContextResolver);
   const registryBuilder = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: {
       channel: { inbound: { buildContext: buildChannelInboundEventContext } },
+      subagent,
     } as PluginRuntime,
     activateGlobalSideEffects: false,
   });
   const record = createPluginRecord({
     id: params.id ?? "channel-owner",
     origin: params.origin,
+    trustedOfficialInstall: params.trustedOfficialInstall,
   });
   const api = registryBuilder.createApi(record, {
     config: {} as OpenClawConfig,
@@ -135,6 +153,27 @@ function inspect(context: object) {
 }
 
 describe("bundled channel ingress runtime ownership", () => {
+  it.each(["bundled", "global", "config"] as const)(
+    "retains the host Gateway resolver for a trusted %s channel ingress",
+    async (origin) => {
+      const gatewayContext = {} as GatewayRequestContext;
+      const gatewayContextResolver = vi.fn(() => gatewayContext);
+      const channel = createRuntimeBuilder({
+        origin,
+        trustedOfficialInstall: origin !== "bundled",
+        gatewayContextResolver,
+      });
+      const ingress = await resolveIngress("person-a");
+      const context = channel.buildContext(contextParams({ ingress }));
+
+      const retainedResolver = readChannelContextGatewayContextResolver(context);
+      expect(retainedResolver?.()).toBe(gatewayContext);
+      expect(hasGatewayContextOwner(retainedResolver!, gatewayContextResolver)).toBe(true);
+      markPluginRegistryRetired(channel.registryBuilder.registry);
+      expect(retainedResolver?.()).toBeUndefined();
+    },
+  );
+
   it("binds authenticated owner turns to the exact live trusted channel plugin", async () => {
     const runtime = createPluginRuntime();
     const command = vi.fn(async () => ({ payloads: [] }));
@@ -222,7 +261,8 @@ describe("bundled channel ingress runtime ownership", () => {
 
   it("defers and preserves the exact active runtime across an inactive prepared load", async () => {
     let channelReads = 0;
-    const channel = { inbound: { buildContext: buildChannelInboundEventContext } };
+    const inbound = { buildContext: buildChannelInboundEventContext, dispatch: vi.fn() };
+    const channel = { inbound, turn: inbound };
     const runtime = Object.defineProperty({} as PluginRuntime, "channel", {
       configurable: true,
       get: () => {
@@ -275,13 +315,15 @@ describe("bundled channel ingress runtime ownership", () => {
     const registeredRuntime = registryBuilder.registry.channels[0]?.resolveChannelRuntime?.();
     expect(registeredRuntime).toBeDefined();
     expect(channelReads).toBe(1);
+    expect(registeredRuntime!.turn).toBe(registeredRuntime!.inbound);
+    expect(registeredRuntime!.turn.dispatch).toBe(inbound.dispatch);
 
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     try {
       const ingress = await resolveIngress("person-a", { channelId: "deferred-channel" });
       expect(
         inspect(
-          registeredRuntime!.inbound.buildContext(
+          registeredRuntime!.turn.buildContext(
             contextParams({ ingress, channelId: "deferred-channel" }),
           ),
         ),
@@ -291,26 +333,29 @@ describe("bundled channel ingress runtime ownership", () => {
     }
   });
 
-  it("mints only for the exact active bundled record", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const external = createRuntimeBuilder({ origin: "workspace" });
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const ingress = await resolveIngress("person-a");
+  it.each(["workspace", "global"] as const)(
+    "does not mint for %s plugins, only the exact active bundled record",
+    async (origin) => {
+      const cleanup = configureChannelAdmissionEvidenceCollection(true);
+      try {
+        const external = createRuntimeBuilder({ origin });
+        const bundled = createRuntimeBuilder({ origin: "bundled" });
+        const ingress = await resolveIngress("person-a");
 
-      expect(inspect(external.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "unknown",
-        invoker: { state: "unknown" },
-      });
-      expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "present",
-        invoker: { state: "present", kind: "person" },
-        decisionCoverage: "enforced",
-      });
-    } finally {
-      cleanup();
-    }
-  });
+        expect(inspect(external.buildContext(contextParams({ ingress })))).toMatchObject({
+          ingressState: "unknown",
+          invoker: { state: "unknown" },
+        });
+        expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
+          ingressState: "present",
+          invoker: { state: "present", kind: "person" },
+          decisionCoverage: "enforced",
+        });
+      } finally {
+        cleanup();
+      }
+    },
+  );
 
   it("consumes the exact resolution-to-context handoff on its first attempt", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
@@ -652,10 +697,16 @@ describe("bundled channel ingress runtime ownership", () => {
     }
   });
 
-  it("invalidates the pre-retirement closure and result across reactivation", async () => {
+  it("preserves a live channel owner but never revives its retired instance", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);
     try {
       const bundled = createRuntimeBuilder({ origin: "bundled" });
+      markPluginRegistryActive(bundled.registryBuilder.registry);
+      const liveIngress = await resolveIngress("person-a");
+      expect(inspect(bundled.buildContext(contextParams({ ingress: liveIngress })))).toMatchObject({
+        ingressState: "present",
+        invoker: { state: "present" },
+      });
       const ingress = await resolveIngress("person-a");
       markPluginRegistryRetired(bundled.registryBuilder.registry);
       markPluginRegistryActive(bundled.registryBuilder.registry);
@@ -668,6 +719,14 @@ describe("bundled channel ingress runtime ownership", () => {
       const reactivatedIngress = await resolveIngress("person-a");
       expect(
         inspect(reactivatedBuildContext(contextParams({ ingress: reactivatedIngress }))),
+      ).toMatchObject({
+        ingressState: "unknown",
+        invoker: { state: "unknown" },
+      });
+      const replacement = createRuntimeBuilder({ origin: "bundled" });
+      const replacementIngress = await resolveIngress("person-a");
+      expect(
+        inspect(replacement.buildContext(contextParams({ ingress: replacementIngress }))),
       ).toMatchObject({
         ingressState: "present",
         invoker: { state: "present" },

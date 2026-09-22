@@ -8,8 +8,16 @@ import {
   type ClawHubSkillVerificationResponse,
   type ClawHubSkillsShTrustState,
 } from "../../infra/clawhub-skills.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { readJsonIfExists, tryReadJson, writeJson } from "../../infra/json-files.js";
+import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
+import { statRegularFile } from "../../infra/fs-safe.js";
+import {
+  JsonFileReadError,
+  readJson,
+  readJsonIfExists,
+  tryReadJson,
+  writeJson,
+} from "../../infra/json-files.js";
+import { replaceFileAtomicSync } from "../../infra/replace-file.js";
 import { normalizeTrackedSkillSlug, validateRequestedSkillSlug } from "./archive-install.js";
 
 export { normalizeOptionalStringValue };
@@ -266,17 +274,34 @@ function normalizeClawHubSkillOrigin(
   };
 }
 
+function parseClawHubSkillsLockfile(
+  raw: Partial<ClawHubSkillsLockfile> | null,
+): ClawHubSkillsLockfile {
+  if (raw?.version !== 1 || !raw.skills || typeof raw.skills !== "object") {
+    throw new Error("expected version 1 lockfile with skills");
+  }
+  return { version: 1, skills: raw.skills };
+}
+
 export async function readClawHubSkillsLockfile(
   workspaceDir: string,
 ): Promise<ClawHubSkillsLockfile> {
   for (const candidate of metadataPaths(workspaceDir, "lock.json")) {
     try {
-      const raw = await tryReadJson<Partial<ClawHubSkillsLockfile>>(candidate);
-      if (raw?.version === 1 && raw.skills && typeof raw.skills === "object") {
-        return { version: 1, skills: raw.skills };
+      // Missing metadata is normal before installation. Leave present-file races
+      // and uncertain paths to the strict reader, including its error diagnostics.
+      if ((await statRegularFile(candidate).catch(() => undefined))?.missing) {
+        continue;
       }
-    } catch {
-      // ignore
+      return parseClawHubSkillsLockfile(await readJson<Partial<ClawHubSkillsLockfile>>(candidate));
+    } catch (err) {
+      if (err instanceof JsonFileReadError && hasErrnoCode(err.cause, "ENOENT")) {
+        continue;
+      }
+      throw new Error(
+        `Malformed workspace ClawHub lockfile at ${candidate}: ${formatErrorMessage(err)}. Repair or restore it before retrying.`,
+        { cause: err },
+      );
     }
   }
   return { version: 1, skills: {} };
@@ -313,14 +338,11 @@ export function readClawHubSkillsLockfileStatusSync(
       if (!read.exists) {
         continue;
       }
-      const raw = read.value as Partial<ClawHubSkillsLockfile>;
-      return raw?.version === 1 && raw.skills && typeof raw.skills === "object"
-        ? { kind: "found", path: candidate, lock: { version: 1, skills: raw.skills } }
-        : {
-            kind: "malformed",
-            path: candidate,
-            error: "expected version 1 lockfile with skills",
-          };
+      return {
+        kind: "found",
+        path: candidate,
+        lock: parseClawHubSkillsLockfile(read.value as Partial<ClawHubSkillsLockfile>),
+      };
     } catch (err) {
       return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
     }
@@ -402,6 +424,8 @@ export async function readTrackedClawHubSkillSlugs(workspaceDir: string): Promis
 export async function untrackClawHubSkill(
   workspaceDir: string,
   slug: string,
+  beforePersistentApply?: () => void,
+  beforeRollback = beforePersistentApply,
 ): Promise<() => Promise<void>> {
   const trackedSlug = normalizeTrackedSkillSlug(slug);
   const lock = await readClawHubSkillsLockfile(workspaceDir);
@@ -409,14 +433,29 @@ export async function untrackClawHubSkill(
   if (!previous) {
     return async () => undefined;
   }
+  // Keep the authority check and atomic publication in one synchronous commit section.
+  // The async atomic writer awaits identity checks after its pre-rename callback.
+  const writeLock = (value: ClawHubSkillsLockfile, assertCurrent = beforePersistentApply) => {
+    assertCurrent?.();
+    return replaceFileAtomicSync({
+      filePath: path.join(workspaceDir, DOT_DIR, "lock.json"),
+      content: `${JSON.stringify(value, null, 2)}\n`,
+      mode: 0o600,
+      dirMode: 0o777 & ~process.umask(),
+      copyFallbackOnPermissionError: true,
+      syncTempFile: true,
+      syncParentDir: true,
+      beforeRename: assertCurrent,
+    });
+  };
   delete lock.skills[trackedSlug];
-  await writeClawHubSkillsLockfile(workspaceDir, lock);
+  writeLock(lock);
   return async () => {
     const current = await readClawHubSkillsLockfile(workspaceDir);
     if (current.skills[trackedSlug]) {
       throw new Error(`Skill ${JSON.stringify(trackedSlug)} was retracked during rollback.`);
     }
     current.skills[trackedSlug] = previous;
-    await writeClawHubSkillsLockfile(workspaceDir, current);
+    writeLock(current, beforeRollback);
   };
 }

@@ -1,3 +1,6 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   registerProviderPlugin,
   registerSingleProviderPlugin,
@@ -6,7 +9,6 @@ import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runt
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
-// Opencode Go tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -56,6 +58,53 @@ function upstreamModel(id: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
+async function captureGoWirePayload({
+  thinkingLevel,
+  payload,
+  standalone = false,
+  sourceApi = "openai-completions",
+}: {
+  thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"];
+  payload: Record<string, unknown> & { model: string };
+  standalone?: boolean;
+  sourceApi?: "openai-completions" | "anthropic-messages";
+}) {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const modelId = payload.model;
+  const model: Parameters<StreamFn>[0] = {
+    id: modelId,
+    name: modelId,
+    provider: "opencode-go",
+    api: standalone ? "openclaw-provider-simple:synthetic" : sourceApi,
+    baseUrl:
+      sourceApi === "anthropic-messages"
+        ? "https://opencode.ai/zen/go"
+        : "https://opencode.ai/zen/go/v1",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 200_000,
+    maxTokens: 8192,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  const baseStreamFn = vi.fn<StreamFn>((runtimeModel, _context, options) => {
+    void options?.onPayload?.(payload, runtimeModel);
+    return createAssistantMessageEventStream();
+  });
+  const wrap = standalone ? provider.wrapSimpleCompletionStreamFn : provider.wrapStreamFn;
+  const streamFn = wrap?.({
+    streamFn: baseStreamFn,
+    provider: "opencode-go",
+    modelId,
+    model,
+    sourceApi: standalone ? sourceApi : undefined,
+    thinkingLevel,
+  });
+  expect(streamFn).toBeTypeOf("function");
+  await streamFn?.(model, { messages: [] }, {});
+  expect(baseStreamFn).toHaveBeenCalledOnce();
+  return payload;
+}
+
 function createCatalogFetchGuard(params: {
   upstreamModels: Record<string, unknown>;
   liveModelIds: string[] | (() => string[]);
@@ -90,6 +139,68 @@ describe("opencode-go provider plugin", () => {
     clearLiveCatalogCacheForTests();
   });
 
+  it.each(["deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3"] as const)(
+    "keeps %s thinking per invocation on one standalone completion wrapper",
+    async (modelId) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const catalog = buildStaticOpencodeGoProviderConfig();
+      const entry = catalog.models.find((model) => model.id === modelId);
+      if (!entry) {
+        throw new Error(`Missing ${modelId} catalog entry`);
+      }
+      const model: Parameters<StreamFn>[0] = {
+        ...entry,
+        input: entry.input.filter((kind) => kind === "text" || kind === "image"),
+        provider: "opencode-go",
+        api: "openclaw-provider-simple:synthetic",
+        baseUrl: catalog.baseUrl,
+      };
+      let payload: Record<string, unknown> | undefined;
+      const baseStreamFn: StreamFn = async (runtimeModel, context, options) => {
+        const request = buildOpenAICompletionsParams(
+          { ...runtimeModel, api: "openai-completions" },
+          context,
+          options,
+        );
+        await options?.onPayload?.(request, runtimeModel);
+        payload = request;
+        return createAssistantMessageEventStream();
+      };
+      const wrapped = provider.wrapSimpleCompletionStreamFn?.({
+        provider: "opencode-go",
+        modelId: model.id,
+        model,
+        sourceApi: "openai-completions",
+        streamFn: baseStreamFn,
+      });
+      if (!wrapped) {
+        throw new Error("Missing standalone completion wrapper");
+      }
+      for (const reasoning of ["off", "max", undefined] as const) {
+        await wrapped(
+          model,
+          {
+            messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }],
+          },
+          { reasoning },
+        );
+
+        if (modelId === "kimi-k3") {
+          expect(payload).not.toHaveProperty("thinking");
+        } else {
+          expect(payload?.thinking).toEqual({ type: reasoning === "off" ? "disabled" : "enabled" });
+        }
+        const expectedEffort =
+          reasoning === "off" ? undefined : modelId === "kimi-k3" ? "max" : (reasoning ?? "high");
+        if (expectedEffort === undefined) {
+          expect(payload).not.toHaveProperty("reasoning_effort");
+        } else {
+          expect(payload?.reasoning_effort).toBe(expectedEffort);
+        }
+      }
+    },
+  );
+
   it("registers only the Go auth choice from its own provider manifest", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -117,8 +228,6 @@ describe("opencode-go provider plugin", () => {
     }
     expect(mediaProvider.capabilities).toEqual(["image"]);
     expect(mediaProvider.defaultModels).toEqual({ image: "kimi-k2.6" });
-    expect(typeof mediaProvider.describeImage).toBe("function");
-    expect(typeof mediaProvider.describeImages).toBe("function");
   });
 
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
@@ -473,21 +582,17 @@ describe("opencode-go provider plugin", () => {
   it("does not mix provider-specific runtime auth with shared discovery auth", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("blocked fetch"));
+    const resolveProviderApiKey = vi.fn((providerId: string) =>
+      providerId === "opencode-go"
+        ? { apiKey: NON_ENV_SECRETREF_MARKER, discoveryApiKey: undefined }
+        : { apiKey: "shared-opencode-key", discoveryApiKey: "shared-opencode-key" },
+    );
 
     try {
       const result = await provider.catalog?.run({
         config: {},
         env: {},
-        resolveProviderApiKey: (providerId: string) =>
-          providerId === "opencode-go"
-            ? {
-                apiKey: NON_ENV_SECRETREF_MARKER,
-                discoveryApiKey: undefined,
-              }
-            : {
-                apiKey: "shared-opencode-key",
-                discoveryApiKey: "shared-opencode-key",
-              },
+        resolveProviderApiKey,
         resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
       } as never);
 
@@ -496,13 +601,36 @@ describe("opencode-go provider plugin", () => {
       }
       expect(result.provider.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
       expect(result.provider.models.map((model) => model.id)).toContain("deepseek-v4-pro");
+      expect(resolveProviderApiKey).toHaveBeenCalledExactlyOnceWith("opencode-go");
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       fetchMock.mockRestore();
     }
   });
 
-  it("caches both catalog requests and falls back to trusted seeds on failure", async () => {
+  it("uses Zen credentials for the Go catalog only when Go has no credentials", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const resolveProviderApiKey = vi.fn((providerId?: string) => ({
+      apiKey: providerId === "opencode" ? NON_ENV_SECRETREF_MARKER : undefined,
+    }));
+
+    await expect(
+      provider.catalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey,
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      }),
+    ).resolves.toMatchObject({
+      provider: {
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        apiKey: NON_ENV_SECRETREF_MARKER,
+      },
+    });
+    expect(resolveProviderApiKey.mock.calls).toEqual([["opencode-go"], ["opencode"]]);
+  });
+
+  it("caches both catalog requests without concealing later acquisition failure", async () => {
     const liveIds = ["minimax-m3", "qwen3.7-max", "qwen3.7-plus"];
     const fetchGuard = createCatalogFetchGuard({
       upstreamModels: Object.fromEntries(liveIds.map((id) => [id, upstreamModel(id)])),
@@ -527,15 +655,13 @@ describe("opencode-go provider plugin", () => {
 
     clearLiveCatalogCacheForTests();
     fetchGuard.mockRejectedValue(new Error("network unavailable"));
-    const fallback = await buildOpencodeGoLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
-    expect(fallback.apiKey).toBe("OPENCODE_API_KEY");
-    expect(fallback.models.map((model) => model.id).toSorted()).toEqual(
-      ACTIVE_MODEL_IDS.toSorted(),
-    );
+    await expect(
+      buildOpencodeGoLiveProviderConfig({
+        apiKey: "OPENCODE_API_KEY",
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      }),
+    ).rejects.toThrow("network unavailable");
   });
 
   it.each([
@@ -543,7 +669,7 @@ describe("opencode-go provider plugin", () => {
     ["retired seed", "filtered"],
     ["activated preview", "failed"],
   ] as const)(
-    "uses refreshed %s lifecycle on the first fallback after %s model advertising",
+    "keeps refreshed %s metadata separate from %s model advertising",
     async (lifecycle, advertising) => {
       const retired = lifecycle === "retired seed";
       const modelId = retired ? "deepseek-v4-pro" : "hy3-preview";
@@ -564,19 +690,17 @@ describe("opencode-go provider plugin", () => {
         expect(buildStaticOpencodeGoProviderConfig().models.map((model) => model.id)).toEqual(
           ACTIVE_MODEL_IDS,
         );
-        const fallback = await buildOpencodeGoLiveProviderConfig({
+        const discovery = buildOpencodeGoLiveProviderConfig({
           apiKey: "runtime-key",
           discoveryApiKey: "discovery-key",
           fetchGuard,
         });
 
-        expect(fallback.apiKey).toBe("runtime-key");
-        expect(fallback.models.map((model) => model.id).toSorted()).toEqual(
-          (retired
-            ? ACTIVE_MODEL_IDS.filter((id) => id !== modelId)
-            : [...ACTIVE_MODEL_IDS, modelId]
-          ).toSorted(),
-        );
+        if (advertising === "failed") {
+          await expect(discovery).rejects.toThrow("model advertising unavailable");
+        } else {
+          await expect(discovery).resolves.toMatchObject({ models: [] });
+        }
         expect(provider.resolveDynamicModel?.({ modelId } as never)).toMatchObject({
           id: modelId,
         });
@@ -597,40 +721,142 @@ describe("opencode-go provider plugin", () => {
     expect(provider.wrapStreamFn?.({ streamFn: undefined } as never)).toBeUndefined();
   });
 
-  it.each(["deepseek-v4-pro", "deepseek-v4-flash"] as const)(
-    "disables invalid DeepSeek V4 reasoning_effort off payloads on OpenCode Go for %s",
-    async (modelId) => {
-      const provider = await registerSingleProviderPlugin(plugin);
-      const capturedPayloads: Record<string, unknown>[] = [];
+  it("attaches a stable conversation id only to native OpenCode Go requests", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const resolveTurnState = provider.resolveTransportTurnState;
+
+    expect(
+      resolveTurnState?.({
+        provider: "opencode-go",
+        modelId: "glm-5",
+        model: {
+          provider: "opencode-go",
+          id: "glm-5",
+          api: "openai-completions",
+          baseUrl: "https://opencode.ai/zen/go/v1",
+        },
+        sessionId: "conversation-123",
+        turnId: "turn-1",
+        attempt: 1,
+        transport: "stream",
+      } as never),
+    ).toEqual({ headers: { "x-opencode-session": "conversation-123" } });
+    expect(
+      resolveTurnState?.({
+        provider: "opencode-go",
+        modelId: "glm-5",
+        model: {
+          provider: "opencode-go",
+          id: "glm-5",
+          api: "openai-completions",
+          baseUrl: "https://opencode.ai/zen/go/v1",
+          headers: { "X-OpenCode-Session": "configured-session" },
+        },
+        turnId: "turn-1",
+        attempt: 1,
+        transport: "stream",
+      } as never),
+    ).toBeUndefined();
+    expect(
+      resolveTurnState?.({
+        provider: "opencode-go",
+        modelId: "glm-5",
+        model: {
+          provider: "opencode-go",
+          id: "glm-5",
+          api: "openai-completions",
+          baseUrl: "https://proxy.example.com/v1",
+        },
+        sessionId: "conversation-123",
+        turnId: "turn-1",
+        attempt: 1,
+        transport: "stream",
+      } as never),
+    ).toBeUndefined();
+  });
+
+  it("identifies native Anthropic stream and simple requests without tagging proxies", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    for (const testCase of [
+      {
+        wrap: provider.wrapStreamFn,
+        runtimeApi: "anthropic-messages",
+        sourceApi: undefined,
+      },
+      {
+        wrap: provider.wrapSimpleCompletionStreamFn,
+        runtimeApi: "openclaw-provider-simple:opencode-go:qwen3.8-max",
+        sourceApi: "anthropic-messages",
+      },
+    ] as const) {
+      const capturedHeaders: Array<Record<string, string> | undefined> = [];
       const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-        const payload = {
-          model: modelId,
-          reasoning_effort: "off",
-          reasoning: "off",
-        };
-        (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(
-          payload,
-        );
-        capturedPayloads.push(payload);
+        capturedHeaders.push((options as { headers?: Record<string, string> })?.headers);
         return {} as never;
       };
-
-      const streamFn = provider.wrapStreamFn?.({
+      const streamFn = testCase.wrap?.({
         streamFn: baseStreamFn as never,
         providerId: "opencode-go",
-        modelId,
-        thinkingLevel: "off",
+        modelId: "qwen3.8-max",
+        thinkingLevel: "high",
+        sourceApi: testCase.sourceApi,
       } as never);
 
       expect(streamFn).toBeTypeOf("function");
-      await streamFn?.({ provider: "opencode-go", id: modelId } as never, {} as never, {});
-
-      expect(capturedPayloads).toEqual([
+      await streamFn?.(
         {
-          model: modelId,
-          thinking: { type: "disabled" },
+          provider: "opencode-go",
+          id: "qwen3.8-max",
+          api: testCase.runtimeApi,
+          baseUrl: "https://opencode.ai/zen/go",
+        } as never,
+        {} as never,
+        { headers: { "User-Agent": "configured-client/1.0", "X-Custom": "1" } },
+      );
+      await streamFn?.(
+        {
+          provider: "opencode-go",
+          id: "qwen3.8-max",
+          api: testCase.runtimeApi,
+          baseUrl: "https://proxy.example.com",
+        } as never,
+        {} as never,
+        { headers: { "User-Agent": "configured-client/2.0", "X-Custom": "2" } },
+      );
+
+      expect(capturedHeaders).toEqual([
+        {
+          "User-Agent": expect.stringMatching(/^openclaw\//),
+          "X-Custom": "1",
         },
+        { "User-Agent": "configured-client/2.0", "X-Custom": "2" },
       ]);
+    }
+  });
+
+  it.each([
+    ["deepseek-v4-pro", "off", undefined],
+    ["deepseek-v4-flash", "off", undefined],
+    ["deepseek-v4-flash", "low", "low"],
+    ["deepseek-v4-flash", "high", "high"],
+    ["deepseek-v4-flash", "max", "max"],
+  ] as const)(
+    "maps OpenCode Go %s thinking %s to %s reasoning effort",
+    async (modelId, thinkingLevel, reasoningEffort) => {
+      const disabled = thinkingLevel === "off";
+      const payload = await captureGoWirePayload({
+        thinkingLevel,
+        payload: {
+          model: modelId,
+          ...(disabled ? { reasoning_effort: "off", reasoning: "off" } : {}),
+        },
+      });
+
+      expect(payload).toEqual({
+        model: modelId,
+        thinking: { type: disabled ? "disabled" : "enabled" },
+        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+      });
     },
   );
 
@@ -678,173 +904,87 @@ describe("opencode-go provider plugin", () => {
     },
   );
 
-  it.each([
-    ["low", "low"],
-    ["high", "high"],
-    ["max", "max"],
-  ] as const)(
-    "maps OpenCode Go DeepSeek V4 %s thinking to %s reasoning effort",
-    async (thinkingLevel, reasoningEffort) => {
-      const provider = await registerSingleProviderPlugin(plugin);
-      const capturedPayloads: Record<string, unknown>[] = [];
-      const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-        const payload = { model: "deepseek-v4-flash" };
-        (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(
-          payload,
-        );
-        capturedPayloads.push(payload);
-        return {} as never;
-      };
+  it("does not apply DeepSeek V4 thinking payloads to unrelated OpenCode Go models", async () => {
+    const payload = await captureGoWirePayload({
+      thinkingLevel: "max",
+      payload: { model: "glm-5", reasoning_effort: "max" },
+    });
 
-      const streamFn = provider.wrapStreamFn?.({
-        streamFn: baseStreamFn as never,
-        providerId: "opencode-go",
-        modelId: "deepseek-v4-flash",
-        thinkingLevel,
-      } as never);
+    expect(payload).toEqual({ model: "glm-5", reasoning_effort: "max" });
+  });
 
-      expect(streamFn).toBeTypeOf("function");
-      await streamFn?.(
-        { provider: "opencode-go", id: "deepseek-v4-flash" } as never,
-        {} as never,
-        {},
-      );
-
-      expect(capturedPayloads).toEqual([
-        {
-          model: "deepseek-v4-flash",
-          thinking: { type: "enabled" },
-          reasoning_effort: reasoningEffort,
+  it.each([false, true])(
+    "strips unsupported Kimi reasoning on Go (standalone=%s)",
+    async (standalone) => {
+      const payload = await captureGoWirePayload({
+        thinkingLevel: "high",
+        standalone,
+        payload: {
+          model: "kimi-k2.6",
+          reasoning_effort: "high",
+          reasoning: { effort: "high" },
+          reasoningEffort: "high",
+          messages: [
+            { role: "assistant", content: "done", reasoning_content: "earlier reasoning" },
+          ],
+          input: [
+            { type: "reasoning", summary: [] },
+            { role: "assistant", content: "done", reasoning_details: [] },
+          ],
         },
-      ]);
+      });
+
+      expect(payload).toEqual({
+        model: "kimi-k2.6",
+        messages: [{ role: "assistant", content: "done" }],
+        input: [{ role: "assistant", content: "done" }],
+      });
     },
   );
 
-  it("does not apply DeepSeek V4 thinking payloads to unrelated OpenCode Go models", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const capturedPayloads: Record<string, unknown>[] = [];
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload = { model: "glm-5", reasoning_effort: "max" };
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayloads.push(payload);
-      return {} as never;
-    };
-
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "opencode-go",
-      modelId: "glm-5",
-      thinkingLevel: "max",
-    } as never);
-
-    expect(streamFn).toBeTypeOf("function");
-    await streamFn?.({ provider: "opencode-go", id: "glm-5" } as never, {} as never, {});
-
-    expect(capturedPayloads).toEqual([{ model: "glm-5", reasoning_effort: "max" }]);
-  });
-
-  it("strips unsupported Kimi reasoning payloads on OpenCode Go", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const capturedPayloads: Record<string, unknown>[] = [];
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload = {
-        model: "kimi-k2.6",
-        reasoning_effort: "high",
-        reasoning: { effort: "high" },
-        reasoningEffort: "high",
-      };
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayloads.push(payload);
-      return {} as never;
-    };
-
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "opencode-go",
-      modelId: "kimi-k2.6",
-      thinkingLevel: "high",
-    } as never);
-
-    expect(streamFn).toBeTypeOf("function");
-    await streamFn?.(
-      { provider: "opencode-go", id: "kimi-k2.6", api: "openai-completions" } as never,
-      {} as never,
-      {},
-    );
-
-    expect(capturedPayloads).toEqual([
-      {
-        model: "kimi-k2.6",
-      },
-    ]);
-  });
-
-  it.each(["minimax-m2.5", "minimax-m2.7"])(
-    "keeps fixed-reasoning %s on the provider default wire path",
-    async (modelId) => {
-      const provider = await registerSingleProviderPlugin(plugin);
-      const capturedPayloads: Record<string, unknown>[] = [];
-      const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-        const payload = {
+  it.each(
+    ["minimax-m2.5", "minimax-m2.7"].flatMap((modelId) =>
+      [false, true].map((standalone) => ({ modelId, standalone })),
+    ),
+  )(
+    "keeps fixed reasoning for $modelId on the Go wire (standalone=$standalone)",
+    async ({ modelId, standalone }) => {
+      const payload = await captureGoWirePayload({
+        thinkingLevel: "high",
+        standalone,
+        sourceApi: "anthropic-messages",
+        payload: {
           model: modelId,
           thinking: { type: "enabled", budget_tokens: 8192 },
           output_config: { effort: "high" },
-        };
-        (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(
-          payload,
-        );
-        capturedPayloads.push(payload);
-        return {} as never;
-      };
-      const streamFn = provider.wrapStreamFn?.({
-        streamFn: baseStreamFn as never,
-        providerId: "opencode-go",
-        modelId,
-        thinkingLevel: "high",
-      } as never);
-
-      await streamFn?.(
-        { provider: "opencode-go", id: modelId, api: "anthropic-messages" } as never,
-        {} as never,
-        {},
-      );
-      expect(capturedPayloads).toEqual([{ model: modelId }]);
+        },
+      });
+      expect(payload).toEqual({ model: modelId });
     },
   );
 
-  it.each([
-    ["off", undefined],
-    ["max", "max"],
-  ] as const)("keeps Kimi K3 reasoning %s exact", async (thinkingLevel, expectedEffort) => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const capturedPayloads: Record<string, unknown>[] = [];
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload: Record<string, unknown> = {
-        model: "kimi-k3",
-        reasoning_effort: "max",
-      };
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayloads.push(payload);
-      return {} as never;
-    };
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "opencode-go",
-      modelId: "kimi-k3",
-      thinkingLevel,
-    } as never);
-
-    await streamFn?.(
-      { provider: "opencode-go", id: "kimi-k3", api: "openai-completions" } as never,
-      {} as never,
-      {},
-    );
-    expect(capturedPayloads).toEqual([
-      expectedEffort === undefined
-        ? { model: "kimi-k3" }
-        : { model: "kimi-k3", reasoning_effort: expectedEffort },
-    ]);
-  });
+  it.each(
+    (["off", "max"] as const).flatMap((thinkingLevel) =>
+      [false, true].map((standalone) => ({ thinkingLevel, standalone })),
+    ),
+  )(
+    "keeps Kimi K3 reasoning $thinkingLevel exact (standalone=$standalone)",
+    async ({ thinkingLevel, standalone }) => {
+      const payload = await captureGoWirePayload({
+        thinkingLevel,
+        standalone,
+        payload: {
+          model: "kimi-k3",
+          reasoning_effort: "max",
+        },
+      });
+      expect(payload).toEqual(
+        thinkingLevel === "off"
+          ? { model: "kimi-k3" }
+          : { model: "kimi-k3", reasoning_effort: "max" },
+      );
+    },
+  );
 
   it("canonicalizes stale OpenCode Go base URLs", async () => {
     const provider = await registerSingleProviderPlugin(plugin);

@@ -4,12 +4,18 @@ import {
   addChannelAllowFromStoreEntry,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it } from "vitest";
 
 let openClawState: OpenClawTestState | undefined;
 
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   closeOpenClawStateDatabaseForTest();
   await openClawState?.cleanup();
   openClawState = undefined;
@@ -19,7 +25,17 @@ import {
   isTelegramAmbientSpooledUpdate,
   isTelegramSpooledUpdateSenderAuthorized,
 } from "./telegram-ingress-supersede-auth.js";
-import { createShouldSupersedeTelegramSpooledPending } from "./telegram-ingress-supersede.js";
+import { createShouldSupersedeTelegramSpooledPending as createSupersedePredicate } from "./telegram-ingress-supersede.js";
+
+function createShouldSupersedeTelegramSpooledPending(
+  auth: Parameters<typeof isTelegramSpooledUpdateSenderAuthorized>[1],
+) {
+  const predicate = createSupersedePredicate({ ...auth, getConfig: () => auth.cfg });
+  return async (...events: Parameters<typeof predicate>) => {
+    const decision = await predicate(...events);
+    return typeof decision === "function" ? decision() : decision;
+  };
+}
 
 const OWNER_ID = "111";
 const STRANGER_ID = "999";
@@ -118,6 +134,82 @@ function claim(
 describe("telegram ingress supersede policy", () => {
   const auth = { cfg: cfgWithOwner(), accountId: "default" };
   const shouldSupersede = createShouldSupersedeTelegramSpooledPending(auth);
+
+  it.each(["root", "account"])(
+    "follows %s runtime policy and expires prepared decisions",
+    async (scope) => {
+      const policy = (allowFrom: string[]): OpenClawConfig => ({
+        channels: {
+          telegram:
+            scope === "root"
+              ? { dmPolicy: "allowlist", allowFrom }
+              : { accounts: { default: { dmPolicy: "allowlist", allowFrom } } },
+        },
+      });
+      const initial = policy([]);
+      setRuntimeConfigSnapshot(initial);
+      const predicate = createSupersedePredicate({
+        getConfig: getRuntimeConfig,
+        accountId: "default",
+      });
+      const candidate = record(
+        "2",
+        messageUpdate({ updateId: 2, text: "stop", senderId: OWNER_ID }),
+      );
+      const pending = claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID }));
+      expect(await predicate(candidate, pending)).toBe(false);
+
+      setRuntimeConfigSnapshot(policy([OWNER_ID]));
+      const decision = await predicate(candidate, pending);
+      expect(typeof decision).toBe("function");
+      if (typeof decision !== "function") {
+        throw new Error("expected a prepared policy guard");
+      }
+      expect(decision()).toBe(true);
+      setRuntimeConfigSnapshot(policy([]));
+      expect(decision()).toBe(false);
+      expect(await predicate(candidate, pending)).toBe(false);
+    },
+  );
+
+  it.each(["root", "account", "group", "topic"])(
+    "honors disabled %s group policy for an allowlisted sender",
+    async (scope) => {
+      const groupConfig = {
+        allowFrom: [OWNER_ID],
+        ...(scope === "group" ? { groupPolicy: "disabled" as const } : {}),
+        ...(scope === "topic" ? { topics: { "10": { groupPolicy: "disabled" as const } } } : {}),
+      };
+      const account = {
+        groupAllowFrom: [OWNER_ID],
+        groupPolicy: scope === "account" ? ("disabled" as const) : ("open" as const),
+        groups: { "-1001": groupConfig },
+      };
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram:
+            scope === "root"
+              ? { ...account, groupPolicy: "disabled" }
+              : { accounts: { default: account } },
+        },
+      };
+      expect(
+        await isTelegramSpooledUpdateSenderAuthorized(
+          messageUpdate({
+            updateId: 1,
+            text: "hello",
+            senderId: OWNER_ID,
+            chatId: -1001,
+            chatType: "supergroup",
+            messageThreadId: 10,
+            isTopicMessage: true,
+            isForum: true,
+          }),
+          { cfg, accountId: "default" },
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("never supersedes on normal messages even from owner", async () => {
     expect(

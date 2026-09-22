@@ -1,4 +1,8 @@
 // Channel test helper exports provide shared fixtures for plugin channel contract tests.
+export {
+  createAccountPolicyInheritanceCases,
+  validateTestChannelConfig,
+} from "./test-helpers/channel-config.js";
 export { createDirectoryTestRuntime, expectDirectorySurface } from "./test-helpers/directory.js";
 export { expectDirectoryIds, type DirectoryListFn } from "./test-helpers/directory-ids.js";
 export {
@@ -53,3 +57,7 @@ export {
 } from "./test-helpers/envelope-timestamp.js";
 export { expectPairingReplyText, extractPairingCode } from "./test-helpers/pairing-reply.js";
 export { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+export {
+  createNativeApprovalTestFixture,
+  createLocalApprovalPromptTestFixture,
+} from "./test-helpers/native-approval.js";

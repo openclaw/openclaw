@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
   serializeWorkerWorkspaceManifest,
@@ -16,6 +18,9 @@ import {
 } from "./workspace-result-staging.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(async () => {
+  await drainGlobalSingletonLifecycleState();
+});
 
 async function temporaryDirectory(name: string): Promise<string> {
   return tempDirs.make(`openclaw-${name}-`);
@@ -109,6 +114,15 @@ it("recovers the shipped v1 full tree while applying only changed entries", asyn
     manifest: currentManifest,
   });
   await fs.writeFile(path.join(local, "keep.txt"), "local edit\n");
+
+  const artifacts = await runGitWorkerOperation({
+    type: "workspace.artifacts",
+    input: { root: local, ref, previewPath: "changed.txt" },
+  });
+  expect(artifacts.changes).toEqual([
+    { path: "changed.txt", status: "modified", additions: 0, deletions: 0 },
+  ]);
+  expect(Buffer.from(artifacts.preview!).toString()).toBe("worker\n");
 
   const result = await applyStagedWorkerWorkspaceResult({
     root: local,
@@ -268,6 +282,20 @@ it("stages only a one-file delta for a 31,274-entry Git baseline", async () => {
     currentManifestRef: current.ref,
     baseManifestRaw: base.raw,
     currentManifestRaw: current.raw,
+  });
+
+  const artifacts = await runGitWorkerOperation({
+    type: "workspace.artifacts",
+    input: { root: local, ref, previewPath: "changed.txt" },
+  });
+  expect(artifacts).toEqual({
+    baseManifestRef: base.ref,
+    currentManifestRef: current.ref,
+    base: { baseCommit: baseManifest.baseCommit },
+    current: { baseCommit: currentManifest.baseCommit },
+    changedEntries: [currentManifest.entries[0]],
+    changes: [{ path: "changed.txt", status: "modified", additions: 0, deletions: 0 }],
+    preview: new Uint8Array(currentContent),
   });
 
   const tree = await runCommandWithTimeout(

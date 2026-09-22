@@ -4,6 +4,44 @@ import { describe, expect, it } from "vitest";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
 describe("memory FTS schema reconciliation", () => {
+  it("rebuilds a populated body index when its row count diverges", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      db.exec(`
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES
+          ('kept', 'memory/kept.md', 'memory', 1, 1, 'kept-hash', 'model', 'kept body', '[]', 1),
+          ('missing', 'memory/missing.md', 'memory', 1, 1, 'missing-hash', 'model', 'missing body', '[]', 1);
+      `);
+      expect(
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true }).ftsAvailable,
+      ).toBe(true);
+      db.exec("DELETE FROM memory_index_chunks_fts WHERE id = 'missing'");
+
+      expect(
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true }).ftsAvailable,
+      ).toBe(true);
+
+      expect(db.prepare("SELECT id FROM memory_index_chunks_fts ORDER BY id").all()).toEqual([
+        { id: "kept" },
+        { id: "missing" },
+      ]);
+      expect(
+        db
+          .prepare("SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
+          .all("missing"),
+      ).toEqual([{ id: "missing" }]);
+      expect(db.prepare("SELECT id FROM memory_index_chunks ORDER BY id").all()).toEqual([
+        { id: "kept" },
+        { id: "missing" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("rebuilds body and path indexes when their tokenizer changes", () => {
     const db = new DatabaseSync(":memory:");
     try {
@@ -61,10 +99,12 @@ describe("memory FTS schema reconciliation", () => {
     }
   });
 
-  it("repairs malformed derived tables without changing canonical rows", () => {
+  it.each(["fts5", "ordinary"])("repairs malformed %s derived tables", (kind) => {
     const db = new DatabaseSync(":memory:");
     try {
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      const tableDefinition = kind === "fts5" ? "VIRTUAL TABLE" : "TABLE";
+      const columns = kind === "fts5" ? "USING fts5(wrong)" : "(wrong TEXT)";
       db.exec(`
         INSERT INTO memory_index_sources (path, source, hash, mtime, size)
         VALUES ('memory/kept.md', 'memory', 'source-hash', 1, 1);
@@ -72,8 +112,8 @@ describe("memory FTS schema reconciliation", () => {
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES
           ('kept', 'memory/kept.md', 'memory', 1, 1, 'chunk-hash', 'model', 'kept body', '[]', 1);
-        CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(wrong);
-        CREATE VIRTUAL TABLE memory_index_paths_fts USING fts5(wrong);
+        CREATE ${tableDefinition} memory_index_chunks_fts ${columns};
+        CREATE ${tableDefinition} memory_index_paths_fts ${columns};
         CREATE TRIGGER memory_index_paths_fts_after_insert
         AFTER INSERT ON memory_index_sources BEGIN SELECT 1; END;
       `);
@@ -101,6 +141,53 @@ describe("memory FTS schema reconciliation", () => {
       db.close();
     }
   });
+
+  it.each(["memory_index_chunks_fts", "memory_index_paths_fts", "custom_memory_fts"])(
+    "rejects a colliding view at %s without changing it or canonical rows",
+    (viewName) => {
+      const db = new DatabaseSync(":memory:");
+      try {
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+        db.exec(`
+          INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+          VALUES ('memory/kept.md', 'memory', 'source-hash', 1, 1);
+          INSERT INTO memory_index_chunks
+            (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+          VALUES
+            ('kept', 'memory/kept.md', 'memory', 1, 1, 'chunk-hash', 'model', 'kept body', '[]', 1);
+          CREATE VIEW ${viewName} AS SELECT ${
+            viewName === "memory_index_paths_fts"
+              ? "path, source FROM memory_index_sources"
+              : "text, id, path, source, model, start_line, end_line FROM memory_index_chunks"
+          };
+        `);
+        const readView = () =>
+          db.prepare("SELECT type, sql FROM sqlite_schema WHERE name = ?").get(viewName);
+        const viewBefore = readView();
+        const rowsBefore = db.prepare(`SELECT * FROM ${viewName}`).all();
+
+        expect(
+          ensureMemoryIndexSchema({
+            db,
+            cacheEnabled: false,
+            ftsEnabled: true,
+            ...(viewName === "custom_memory_fts" ? { ftsTable: viewName } : {}),
+          }).ftsAvailable,
+        ).toBe(false);
+
+        expect(readView()).toEqual(viewBefore);
+        expect(db.prepare(`SELECT * FROM ${viewName}`).all()).toEqual(rowsBefore);
+        expect(db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
+          { id: "kept", text: "kept body" },
+        ]);
+        expect(db.prepare("SELECT path, source FROM memory_index_sources").all()).toEqual([
+          { path: "memory/kept.md", source: "memory" },
+        ]);
+      } finally {
+        db.close();
+      }
+    },
+  );
 
   it.each([
     {

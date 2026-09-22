@@ -1,6 +1,9 @@
 // Control UI tests cover config form behavior.
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
+import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
+import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
 import { analyzeConfigSchema, renderConfigForm as renderConfigFormBase } from "./config-form.ts";
 
 function renderConfigForm(
@@ -60,7 +63,56 @@ function selectSegmented(control: HTMLElement) {
   group.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+afterEach(async () => {
+  await i18n.setLocale("en");
+});
+
 describe("config form renderer", () => {
+  it("renders translated schema hint labels and help with English fallback", async () => {
+    const label = "Gateway Token";
+    const help = "Token used to authenticate with the Gateway.";
+    const labelHash = configHintTranslationKey("gateway.auth.token", "label", label)
+      .split(".")
+      .at(-1)!;
+    const helpHash = configHintTranslationKey("gateway.auth.token", "help", help)
+      .split(".")
+      .at(-1)!;
+    i18n.registerTranslation("tr", {
+      configHints: {
+        "gateway%2Eauth%2Etoken": {
+          label: { [labelHash]: "Ağ geçidi belirteci" },
+          help: { [helpHash]: "Ağ geçidi kimlik doğrulamasında kullanılan belirteç." },
+        },
+      },
+    });
+    await i18n.setLocale("tr");
+    const container = document.createElement("div");
+    const props = {
+      schema: rootAnalysis.schema,
+      uiHints: {
+        "gateway.auth.token": {
+          label,
+          help,
+        },
+      },
+      unsupportedPaths: rootAnalysis.unsupportedPaths,
+      value: {},
+      onPatch: vi.fn(),
+    };
+
+    render(renderConfigForm(props), container);
+
+    expect(container.querySelector("input")?.getAttribute("aria-label")).toBe(
+      "Ağ geçidi belirteci",
+    );
+    expect(container.textContent).toContain("Ağ geçidi kimlik doğrulamasında kullanılan belirteç.");
+
+    await i18n.setLocale("en");
+    render(renderConfigForm(props), container);
+    expect(container.querySelector("input")?.getAttribute("aria-label")).toBe("Gateway Token");
+    expect(container.textContent).toContain("Token used to authenticate with the Gateway.");
+  });
+
   it("conceals core-classified encryption, private-key, and local service env values", () => {
     const container = document.createElement("div");
     const analysis = analyzeConfigSchema({
@@ -80,21 +132,15 @@ describe("config form renderer", () => {
       },
     });
 
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {
-          encryptKey: "encrypt-value",
-          privateKey: "private-value",
-          localService: { env: { FOO: "env-value" } },
-        },
-        revealSensitive: false,
-        onPatch: vi.fn(),
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: {
+        encryptKey: "encrypt-value",
+        privateKey: "private-value",
+        localService: { env: { FOO: "env-value" } },
+      },
+      revealSensitive: false,
+      onPatch: vi.fn(),
+    });
 
     for (const label of ["Encrypt Key", "Private Key", "FOO"]) {
       const input = expectElement(
@@ -114,19 +160,14 @@ describe("config form renderer", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     const analysis = rootAnalysis;
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "gateway.auth.token": { label: "Gateway Token", sensitive: true },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { allowFrom: ["+1"], bind: "auto" },
-        revealSensitive: true,
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      uiHints: {
+        "gateway.auth.token": { label: "Gateway Token", sensitive: true },
+      },
+      value: { allowFrom: ["+1"], bind: "auto" },
+      revealSensitive: true,
+      onPatch,
+    });
 
     const tokenInput = expectElement(
       container.querySelector<HTMLInputElement>(
@@ -203,24 +244,19 @@ describe("config form renderer", () => {
         },
       },
     });
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          fromNumber: { presentation: "phone-number" },
-          target: { presentation: "phone-number" },
-          "accounts.*.allowFrom.*": { presentation: "phone-number" },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {
-          fromNumber: "+4930123456",
-          target: "token-value",
-          accounts: { work: { allowFrom: ["+81312345678"] } },
-        },
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      uiHints: {
+        fromNumber: { presentation: "phone-number" },
+        target: { presentation: "phone-number" },
+        "accounts.*.allowFrom.*": { presentation: "phone-number" },
+      },
+      value: {
+        fromNumber: "+4930123456",
+        target: "token-value",
+        accounts: { work: { allowFrom: ["+81312345678"] } },
+      },
+      onPatch,
+    });
 
     const phoneInputs = Array.from(
       container.querySelectorAll<HTMLInputElement>(".settings-phone-presentation input"),
@@ -265,16 +301,11 @@ describe("config form renderer", () => {
       properties: { phone: { type: "string" } },
     });
     const renderValue = (phone: string) => {
-      render(
-        renderConfigForm({
-          schema: analysis.schema,
-          uiHints: { phone: { presentation: "phone-number", advanced: false } },
-          unsupportedPaths: analysis.unsupportedPaths,
-          value: { phone },
-          onPatch: vi.fn(),
-        }),
-        container,
-      );
+      renderAnalyzedFormFixture(container, analysis, {
+        uiHints: { phone: { presentation: "phone-number", advanced: false } },
+        value: { phone },
+        onPatch: vi.fn(),
+      });
     };
 
     renderValue("+123");
@@ -300,22 +331,18 @@ describe("config form renderer", () => {
 
   it("renders subsection labels exactly once", () => {
     const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: rootAnalysis.schema,
-        uiHints: {},
-        unsupportedPaths: rootAnalysis.unsupportedPaths,
-        value: {},
-        activeSection: "gateway",
-        activeSubsection: "auth",
-        onPatch: vi.fn(),
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, rootAnalysis, {
+      value: {},
+      activeSection: "gateway",
+      activeSubsection: "auth",
+      onPatch: vi.fn(),
+    });
 
-    const headings = Array.from(container.querySelectorAll(".settings-section__heading")).map(
-      (node) => node.textContent?.trim(),
-    );
+    const headings = Array.from(
+      container.querySelectorAll(
+        ".settings-section > .settings-section__header .settings-section__heading",
+      ),
+    ).map((node) => node.textContent?.trim());
     expect(headings).toEqual(["Auth"]);
     // The subsection object emits its fields directly; no nested details block
     // repeats the subsection title inside the group.
@@ -340,16 +367,10 @@ describe("config form renderer", () => {
         },
       },
     });
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { features: { beta: false } },
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { features: { beta: false } },
+      onPatch,
+    });
 
     const checkbox = expectElement(
       container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
@@ -391,16 +412,10 @@ describe("config form renderer", () => {
     };
     const analysis = analyzeConfigSchema(schema);
 
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { provider: "openai", bind: "tailnet" },
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { provider: "openai", bind: "tailnet" },
+      onPatch,
+    });
 
     const selects = container.querySelectorAll<HTMLSelectElement>("select.settings-select");
     expect(selects).toHaveLength(2);
@@ -425,16 +440,10 @@ describe("config form renderer", () => {
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { slack: { channelA: "ok" } },
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { slack: { channelA: "ok" } },
+      onPatch,
+    });
 
     const removeButton = expectElement(
       container.querySelector(".cfg-map button[aria-label='Remove entry']"),
@@ -467,18 +476,13 @@ describe("config form renderer", () => {
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "plugins.entries.*.enabled": { label: "Plugin Enabled" },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { plugins: { entries: { "voice-call": { enabled: true } } } },
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      uiHints: {
+        "plugins.entries.*.enabled": { label: "Plugin Enabled" },
+      },
+      value: { plugins: { entries: { "voice-call": { enabled: true } } } },
+      onPatch,
+    });
 
     const label = expectElement(
       Array.from(container.querySelectorAll(".settings-row__title")).find(
@@ -489,42 +493,28 @@ describe("config form renderer", () => {
     expect(label.textContent?.trim()).toBe("Plugin Enabled");
   });
 
-  it("renders tags from uiHints metadata", () => {
+  it("filters by authored metadata tags without rendering field chips", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     const analysis = rootAnalysis;
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "gateway.auth.token": { tags: ["security", "advanced", "secret"] },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {},
-        showAdvanced: true,
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      uiHints: {
+        "gateway.auth.token": { tags: ["security", "advanced", "secret"] },
+      },
+      value: {},
+      onPatch,
+    });
 
-    const tags = Array.from(container.querySelectorAll(".cfg-tag")).map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(tags).toEqual(["security", "secret"]);
+    expect(container.querySelector(".cfg-tag")).toBeNull();
 
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "gateway.auth.token": { tags: ["security", "advanced"] },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {},
-        searchQuery: "tag:advanced",
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      uiHints: {
+        "gateway.auth.token": { tags: ["security", "advanced"] },
+      },
+      value: {},
+      searchQuery: "tag:advanced",
+      onPatch,
+    });
 
     const sectionTitle = expectElement(
       container.querySelector(".settings-section__heading"),
@@ -599,19 +589,14 @@ describe("config form renderer", () => {
     const analysis = analyzeConfigSchema(schema);
     expect(analysis.unsupportedPaths).toEqual([]);
 
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {
-          "models.providers.*.apiKey": { sensitive: true },
-        },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { models: { providers: { openai: { apiKey: "old" } } } }, // pragma: allowlist secret
-        revealSensitive: true,
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      uiHints: {
+        "models.providers.*.apiKey": { sensitive: true },
+      },
+      value: { models: { providers: { openai: { apiKey: "old" } } } }, // pragma: allowlist secret
+      revealSensitive: true,
+      onPatch,
+    });
 
     const apiKeyInput = expectElement(
       Array.from(
@@ -716,21 +701,15 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).toEqual([]);
 
     const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: {
-          lastTouchedAt: "2026-05-05T00:00:00.000Z",
-          setupCommand: "apt-get update",
-          allowedDomains: ["example.com"],
-          displayWidth: "960px",
-        },
-        onPatch: vi.fn(),
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: {
+        lastTouchedAt: "2026-05-05T00:00:00.000Z",
+        setupCommand: "apt-get update",
+        allowedDomains: ["example.com"],
+        displayWidth: "960px",
+      },
+      onPatch: vi.fn(),
+    });
     expect(container.textContent).not.toContain("Unsupported schema node");
   });
 
@@ -749,16 +728,10 @@ describe("config form renderer", () => {
 
     const onPatch = vi.fn();
     const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { accounts: { default: { enabled: true } } },
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { accounts: { default: { enabled: true } } },
+      onPatch,
+    });
 
     const removeButton = expectElement(
       container.querySelector(".cfg-map button[aria-label='Remove entry']"),
@@ -780,18 +753,13 @@ describe("config form renderer", () => {
         },
       },
     });
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        // Item paths collapse their numeric segment, so the item rows resolve
-        // this same hint; only the array header should render it.
-        uiHints: { allowFrom: { help: "Sender ids allowed to reach the agent." } },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { allowFrom: ["+15550001111", "+15550002222"] },
-        onPatch: vi.fn(),
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      // Item paths collapse their numeric segment, so the item rows resolve
+      // this same hint; only the array header should render it.
+      uiHints: { allowFrom: { help: "Sender ids allowed to reach the agent." } },
+      value: { allowFrom: ["+15550001111", "+15550002222"] },
+      onPatch: vi.fn(),
+    });
 
     const help = Array.from(container.querySelectorAll(".settings-row__desc")).filter(
       (node) => node.textContent?.trim() === "Sender ids allowed to reach the agent.",
@@ -816,16 +784,11 @@ describe("config form renderer", () => {
         },
       },
     });
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: { groups: { help: "Group sender ids." } },
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { groups: [["first"], ["second"]] },
-        onPatch: vi.fn(),
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      uiHints: { groups: { help: "Group sender ids." } },
+      value: { groups: [["first"], ["second"]] },
+      onPatch: vi.fn(),
+    });
 
     const descriptions = Array.from(container.querySelectorAll(".settings-row__desc")).map((node) =>
       node.textContent?.trim(),
@@ -841,27 +804,29 @@ describe("config form renderer", () => {
 
   it("renders section help when the top-level hint has a docs URL", () => {
     const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: rootAnalysis.schema,
-        uiHints: { gateway: { docsUrl: "https://docs.openclaw.ai/gateway/configuration" } },
-        unsupportedPaths: rootAnalysis.unsupportedPaths,
-        value: {},
-        activeSection: "gateway",
-        onPatch: vi.fn(),
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, rootAnalysis, {
+      uiHints: { gateway: { docsUrl: "https://docs.openclaw.ai/gateway/configuration" } },
+      value: {},
+      activeSection: "gateway",
+      onPatch: vi.fn(),
+    });
 
     const button = expectElement(
       container.querySelector<HTMLButtonElement>(".settings-section__help-button"),
       "section help button",
     );
     expect(button.getAttribute("aria-label")).toBe("Help for Gateway");
+    expect(button.querySelector("svg")).not.toBeNull();
+    const tooltip = expectElement(button.closest("openclaw-tooltip"), "section help tooltip");
+    expect((tooltip as HTMLElement & { content: string }).content).toBe("Help for Gateway");
     const link = expectElement(
       container.querySelector<HTMLAnchorElement>(".settings-section__help-popover a"),
       "section guide link",
     );
+    expect(link.textContent?.trim()).toBe("Learn more");
+    expect(link.classList.contains("learn-more-link")).toBe(true);
+    const popover = expectElement(link.closest("wa-popover"), "section help popover");
+    expect(button.getAttribute("aria-controls")).toBe(popover.id);
     expect(link.getAttribute("href")).toBe("https://docs.openclaw.ai/gateway/configuration");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
@@ -869,17 +834,11 @@ describe("config form renderer", () => {
 
   it("omits section help when the top-level hint has no docs URL", () => {
     const container = document.createElement("div");
-    render(
-      renderConfigForm({
-        schema: rootAnalysis.schema,
-        uiHints: {},
-        unsupportedPaths: rootAnalysis.unsupportedPaths,
-        value: {},
-        activeSection: "gateway",
-        onPatch: vi.fn(),
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, rootAnalysis, {
+      value: {},
+      activeSection: "gateway",
+      onPatch: vi.fn(),
+    });
 
     expect(container.querySelector(".settings-section__help-button")).toBeNull();
   });

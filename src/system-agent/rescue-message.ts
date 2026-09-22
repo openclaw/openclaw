@@ -5,6 +5,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentRoles } from "../agents/agent-roles.js";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
@@ -178,10 +179,22 @@ function parsePendingOperation(value: unknown): SystemAgentOperation | null {
       break;
     case "create-agent":
       if (
-        !hasExactKeys(operation, ["kind", "agentId"], ["workspace", "model"]) ||
+        !hasExactKeys(operation, ["kind", "agentId"], ["workspace", "model", "role"]) ||
         !isNonEmptyString(operation.agentId) ||
+        (operation.role !== undefined &&
+          !listAgentRoles().some((role) => role === operation.role)) ||
         !hasOptionalString(operation, "workspace") ||
         !hasOptionalString(operation, "model")
+      ) {
+        return null;
+      }
+      break;
+    case "create-team":
+      if (
+        !hasExactKeys(operation, ["kind"], ["coordinatorId", "prefix", "workspaceRoot"]) ||
+        !hasOptionalString(operation, "coordinatorId") ||
+        !hasOptionalString(operation, "prefix") ||
+        !hasOptionalString(operation, "workspaceRoot")
       ) {
         return null;
       }
@@ -229,12 +242,6 @@ function formatUnsupportedRemoteOperation(operation: SystemAgentOperation): stri
     return [
       "OpenClaw rescue cannot host the interactive channel setup from a message channel.",
       "Run `openclaw setup` locally and say `connect " + operation.channel + "` instead.",
-    ].join(" ");
-  }
-  if (operation.kind === "model-setup") {
-    return [
-      "OpenClaw rescue cannot host model-provider credential setup from a message channel.",
-      "Run `openclaw onboard` locally; it live-tests the candidate route before saving it.",
     ].join(" ");
   }
   if (operation.kind === "doctor-fix") {

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
@@ -320,80 +319,6 @@ describe("worker environment service", () => {
       bootstrapReceipt: support.BOOTSTRAP_RECEIPT,
     });
     expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(1);
-  });
-
-  it("tears down an attached worker whose admitted bundle is stale", async () => {
-    const environmentId = "worker-attached-stale";
-    support.seedBootstrapping(environmentId);
-    const ready = support.testState.store.transition({
-      environmentId,
-      from: "bootstrapping",
-      to: "ready",
-      patch: support.readyPatch(environmentId, {
-        ...support.BOOTSTRAP_RECEIPT,
-        bundleHash: "b".repeat(64),
-      }),
-    });
-    support.testState.store.transition({
-      environmentId,
-      from: ready.state,
-      to: "attached",
-      patch: support.attachedPatch(environmentId, "session-1"),
-    });
-    const destroy = vi.fn(async () => {});
-
-    await support.createService(support.createProvider({ destroy })).reconcileOnce();
-
-    expect(destroy).toHaveBeenCalledOnce();
-    expect(destroy).toHaveBeenCalledWith({
-      leaseId: `lease:${environmentId}`,
-      profile: { region: "test" },
-    });
-    expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "failed",
-      leaseId: null,
-      attachedSessionIds: [],
-      lastError: STALE_WORKER_BUILD_REASON,
-    });
-  });
-
-  it("retires a node environment whose installed Gateway bundle is stale", async () => {
-    const destroy = vi.fn(async () => {});
-    const provider = support.createProvider({
-      supportedExecutionModes: ["worker-turn"],
-      provisionBeforeInstallation: true,
-      provision: async () => ({
-        leaseId: "device-lease-stale",
-        node: { deviceId: "device-1" },
-        sharedHost: true,
-      }),
-      inspect: async () => ({ status: "active", sharedHost: true }),
-      destroy,
-    });
-    const workerService = support.createService(provider, {
-      ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
-    });
-    const environment = await workerService.create("development", "request-stale-node-bundle");
-    await workerService.attachSession({
-      environmentId: environment.environmentId,
-      ownerEpoch: environment.ownerEpoch,
-      sessionId: "session-stale-node-bundle",
-    });
-    support.testState.stateDb.db
-      .prepare(
-        "UPDATE worker_environments SET bootstrap_bundle_hash = ?, bootstrap_install_kind = 'local' WHERE environment_id = ?",
-      )
-      .run("b".repeat(64), environment.environmentId);
-
-    await workerService.reconcileOnce();
-
-    expect(destroy).toHaveBeenCalledOnce();
-    expect(support.testState.store.get(environment.environmentId)).toMatchObject({
-      state: "failed",
-      leaseId: null,
-      attachedSessionIds: [],
-      lastError: STALE_WORKER_BUILD_REASON,
-    });
   });
 
   it("does not resolve npm while an admitted receipt matches the local bundle", async () => {
@@ -919,37 +844,7 @@ describe("worker environment service", () => {
     expect(support.testState.store.getCredential(environmentId)?.sessionId).toBe("session-new");
   });
 
-  it("adopts an unpersisted provision result before destroying", async () => {
-    const intent = support.testState.store.createIntent({
-      environmentId: "worker-pending-destroy",
-      providerId: "fake",
-      profileId: "development",
-      profileSnapshot: { settings: { region: "test" } },
-      provisionOperationId: "provision:pending-destroy",
-    });
-    support.testState.store.transition({
-      environmentId: intent.environmentId,
-      from: "requested",
-      to: "provisioning",
-    });
-    const destroyed: WorkerLifecycleLease[] = [];
-    const provider = support.createProvider({
-      provision: async () => {
-        expect(
-          support.testState.store.get(intent.environmentId)?.destroyRequestedAtMs,
-        ).not.toBeNull();
-        return { leaseId: "lease-1", ssh: support.SSH_ENDPOINT };
-      },
-      destroy: async (lease) => void destroyed.push(lease),
-    });
-
-    const result = await support.createService(provider).destroy(intent.environmentId);
-
-    expect(result.state).toBe("destroyed");
-    expect(destroyed).toEqual([{ leaseId: "lease-1", profile: { region: "test" } }]);
-  });
-
-  it("retains teardown intent across an indeterminate provision failure", async () => {
+  it("retains teardown intent across an indeterminate allocation resolution", async () => {
     support.testState.prepareInstallation = vi.fn(async () => {
       throw new Error("bundle preparation must not block teardown adoption");
     });
@@ -965,14 +860,14 @@ describe("worker environment service", () => {
       from: "requested",
       to: "provisioning",
     });
-    let provisionFails = true;
+    let resolutionFails = true;
     const destroyed: WorkerLifecycleLease[] = [];
     const provider = support.createProvider({
-      provision: async () => {
-        if (provisionFails) {
-          throw new Error("provision outcome unknown");
+      resolveAllocation: async () => {
+        if (resolutionFails) {
+          throw new Error("allocation identity unavailable");
         }
-        return { leaseId: "lease-retried", ssh: support.SSH_ENDPOINT };
+        return { leaseId: "lease-retried", sharedHost: false };
       },
       destroy: async (lease) => void destroyed.push(lease),
     });
@@ -993,7 +888,7 @@ describe("worker environment service", () => {
       destroyRequestedAtMs: expect.any(Number),
     });
 
-    provisionFails = false;
+    resolutionFails = false;
     await workerService.reconcileOnce();
     expect(support.testState.store.get(intent.environmentId)?.state).toBe("destroyed");
     expect(destroyed).toEqual([{ leaseId: "lease-retried", profile: { region: "test" } }]);

@@ -43,8 +43,9 @@ export type ManagedImageRecordDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "managed_outgoing_image_records"
 >;
-type ManagedImageRecordRow = Selectable<
-  ManagedImageRecordDatabase["managed_outgoing_image_records"]
+type ManagedImageRecordRow = Omit<
+  Selectable<ManagedImageRecordDatabase["managed_outgoing_image_records"]>,
+  "record_json"
 >;
 type ManagedImageRecordInsert = Insertable<
   ManagedImageRecordDatabase["managed_outgoing_image_records"]
@@ -53,6 +54,26 @@ type ManagedImageRecordEntry = {
   record: ManagedImageRecord;
   cleanupPending: boolean;
 };
+
+const MANAGED_IMAGE_RECORD_COLUMNS = [
+  "attachment_id",
+  "session_key",
+  "agent_id",
+  "message_id",
+  "created_at",
+  "updated_at",
+  "retention_class",
+  "alt",
+  "original_media_root",
+  "original_media_id",
+  "original_media_subdir",
+  "original_content_type",
+  "original_width",
+  "original_height",
+  "original_size_bytes",
+  "original_filename",
+  "cleanup_pending",
+] as const satisfies readonly (keyof ManagedImageRecordRow)[];
 
 function stateDatabaseOptions(stateDir?: string): OpenClawStateDatabaseOptions {
   return stateDir
@@ -123,7 +144,7 @@ export function readManagedImageRecord(
     database.db,
     getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
       .selectFrom("managed_outgoing_image_records")
-      .selectAll()
+      .select(MANAGED_IMAGE_RECORD_COLUMNS)
       .where("attachment_id", "=", attachmentId)
       .where("cleanup_pending", "=", 0),
   );
@@ -136,7 +157,9 @@ export function listManagedImageRecordEntries(params: {
 }): ManagedImageRecordEntry[] {
   const database = openOpenClawStateDatabase(stateDatabaseOptions(params.stateDir));
   const stateDb = getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db);
-  let query = stateDb.selectFrom("managed_outgoing_image_records").selectAll();
+  let query = stateDb
+    .selectFrom("managed_outgoing_image_records")
+    .select(MANAGED_IMAGE_RECORD_COLUMNS);
   if (params.sessionKey) {
     query = query.where("session_key", "=", params.sessionKey);
   }
@@ -147,6 +170,25 @@ export function listManagedImageRecordEntries(params: {
     record: managedImageRecordFromRow(row),
     cleanupPending: row.cleanup_pending === 1,
   }));
+}
+
+export function listManagedImageOriginalMediaIds(stateDir?: string): string[] {
+  const database = openOpenClawStateDatabase(stateDatabaseOptions(stateDir));
+  return executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
+      .selectFrom("managed_outgoing_image_records")
+      // Preserve native integer decoding failures before destructive orphan cleanup.
+      .select([
+        "original_media_id",
+        "original_width",
+        "original_height",
+        "original_size_bytes",
+        "cleanup_pending",
+      ])
+      .orderBy("created_at", "desc")
+      .orderBy("attachment_id", "asc"),
+  ).rows.map((row) => row.original_media_id);
 }
 
 export function insertManagedImageRecord(record: ManagedImageRecord, stateDir?: string): void {
@@ -174,7 +216,7 @@ export function attachManagedImageRecordToMessage(params: {
       db,
       stateDb
         .selectFrom("managed_outgoing_image_records")
-        .selectAll()
+        .select(MANAGED_IMAGE_RECORD_COLUMNS)
         .where("attachment_id", "=", params.attachmentId)
         .where("session_key", "=", params.sessionKey),
     );
@@ -222,7 +264,7 @@ export function claimManagedImageRecordCleanupIfCurrent(
       db,
       stateDb
         .selectFrom("managed_outgoing_image_records")
-        .selectAll()
+        .select(MANAGED_IMAGE_RECORD_COLUMNS)
         .where("attachment_id", "=", planned.attachmentId),
     );
     if (
@@ -254,7 +296,7 @@ export function deleteClaimedManagedImageRecord(
       db,
       stateDb
         .selectFrom("managed_outgoing_image_records")
-        .selectAll()
+        .select(MANAGED_IMAGE_RECORD_COLUMNS)
         .where("attachment_id", "=", planned.attachmentId),
     );
     if (

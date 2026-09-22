@@ -1,5 +1,6 @@
 // Fast mode tests cover isolated cron run behavior in fast execution mode.
-import { describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it, vi } from "vitest";
 import {
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
@@ -16,6 +17,8 @@ import {
   resolveFastModeStateMock,
   resolveCronSessionMock,
   runEmbeddedAgentMock,
+  runCliAgentMock,
+  isCliProviderMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -29,22 +32,16 @@ function mockSuccessfulModelFallback() {
     await runInitialModelFallbackAttempt(params);
     return {
       result: {
-        payloads: [{ text: "ok" }],
-        meta: { agentMeta: {} },
+        result: {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: {} },
+        },
       },
       provider: params.provider,
       model: params.model,
       attempts: [],
     };
   });
-}
-
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 }
 
 async function runFastModeCase(params: {
@@ -59,6 +56,7 @@ async function runFastModeCase(params: {
   sessionId?: string;
   sessionFastMode?: boolean | "auto";
   sessionTarget?: string;
+  cli?: boolean;
 }) {
   const baseSession = makeCronSession();
   resolveCronSessionMock.mockReturnValue(
@@ -73,6 +71,10 @@ async function runFastModeCase(params: {
     }),
   );
   mockSuccessfulModelFallback();
+  if (params.cli) {
+    isCliProviderMock.mockReturnValue(true);
+    runCliAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { agentMeta: {} } });
+  }
   resolveFastModeStateMock.mockImplementation(({ cfg, sessionEntry }) => {
     const sessionFastMode = sessionEntry?.fastMode;
     if (typeof sessionFastMode === "boolean" || sessionFastMode === "auto") {
@@ -122,22 +124,25 @@ async function runFastModeCase(params: {
   );
 
   expect(result.status).toBe("ok");
-  expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  const [embeddedRunParams] = requireFirstMockCall(runEmbeddedAgentMock, "embedded run");
+  const selectedRunner = params.cli ? runCliAgentMock : runEmbeddedAgentMock;
+  expect(selectedRunner).toHaveBeenCalledOnce();
+  const [embeddedRunParams] = expectDefined(selectedRunner.mock.calls[0], "embedded run call");
   expect(embeddedRunParams.provider).toBe("openai");
   expect(embeddedRunParams.model).toBe(EXPECTED_OPENAI_MODEL);
   expect(embeddedRunParams.fastMode).toBe(params.expectedFastMode);
   expect(embeddedRunParams.fastModeAutoOnSeconds).toBe(params.expectedFastModeAutoOnSeconds ?? 60);
-  expect(embeddedRunParams.cleanupBundleMcpOnRunEnd).toBe(
-    params.expectedCleanupBundleMcpOnRunEnd ?? true,
-  );
-  expect(embeddedRunParams.allowGatewaySubagentBinding).toBe(true);
+  if (!params.cli) {
+    expect(embeddedRunParams.cleanupBundleMcpOnRunEnd).toBe(
+      params.expectedCleanupBundleMcpOnRunEnd ?? true,
+    );
+    expect(embeddedRunParams.allowGatewaySubagentBinding).toBe(true);
+  }
   const isIsolated = (params.sessionTarget ?? "isolated") === "isolated";
   if (params.expectedRetiredSessionId) {
     expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
-    const [retireParams] = requireFirstMockCall(
-      retireSessionMcpRuntimeMock,
-      "retire session mcp runtime",
+    const [retireParams] = expectDefined(
+      retireSessionMcpRuntimeMock.mock.calls[0],
+      "MCP retirement call",
     );
     expect(retireParams.sessionId).toBe(params.expectedRetiredSessionId);
     expect(retireParams.reason).toBe("cron-session-rollover");
@@ -146,9 +151,9 @@ async function runFastModeCase(params: {
   if (isIsolated) {
     // disposeCronRunContext now retires MCP for isolated sessions
     expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
-    const [disposeRetireParams] = requireFirstMockCall(
-      retireSessionMcpRuntimeMock,
-      "dispose retire session mcp runtime",
+    const [disposeRetireParams] = expectDefined(
+      retireSessionMcpRuntimeMock.mock.calls[0],
+      "MCP disposal call",
     );
     expect(disposeRetireParams.reason).toBe("isolated-cron-dispose");
   } else {
@@ -160,6 +165,10 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
   it("deletes the run-scoped cron session after delivery-none deleteAfterRun jobs", async () => {
+    dispatchCronDeliveryMock.mockImplementationOnce(
+      (await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js"))
+        .dispatchCronDelivery,
+    );
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({
         job: makeIsolatedAgentJobFixture({
@@ -185,39 +194,54 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
     });
   });
 
-  it("does not repeat deleteAfterRun cleanup after dispatch already handled it", async () => {
-    resolveCronDeliveryPlanMock.mockReturnValue({
-      requested: true,
-      mode: "announce",
-      channel: "messagechat",
-      to: "test-target",
-    });
-    dispatchCronDeliveryMock.mockImplementationOnce(
-      ({ deliveryPayloads, summary, outputText, synthesizedText }) => ({
-        delivered: true,
-        deliveryAttempted: true,
-        cronRunSessionCleanupAttempted: true,
-        summary,
-        outputText,
-        synthesizedText,
-        deliveryPayloads,
-      }),
-    );
+  it.each([false, true])(
+    "leaves transcript cleanup with dispatch when it rejects=%s",
+    async (rejects) => {
+      resolveCronDeliveryPlanMock.mockReturnValue({
+        requested: true,
+        mode: "announce",
+        channel: "messagechat",
+        to: "test-target",
+      });
+      dispatchCronDeliveryMock.mockImplementationOnce(
+        ({ deliveryPayloads, summary, outputText, synthesizedText }) => {
+          if (rejects) {
+            throw new Error("delivery receipt store unavailable");
+          }
+          return {
+            delivered: true,
+            deliveryAttempted: true,
+            summary,
+            outputText,
+            synthesizedText,
+            deliveryPayloads,
+          };
+        },
+      );
 
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({
-        job: makeIsolatedAgentJobFixture({
-          deleteAfterRun: true,
-          delivery: { mode: "announce", channel: "messagechat", to: "test-target" },
-          payload: { kind: "agentTurn", message: "cleanup once", model: OPENAI_GPT4_MODEL },
+      const result = await runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          job: makeIsolatedAgentJobFixture({
+            deleteAfterRun: true,
+            delivery: { mode: "announce", channel: "messagechat", to: "test-target" },
+            payload: { kind: "agentTurn", message: "cleanup once", model: OPENAI_GPT4_MODEL },
+          }),
         }),
-      }),
-    );
+      );
 
-    expect(result.status).toBe("ok");
-    expect(dispatchCronDeliveryMock).toHaveBeenCalledOnce();
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
+      expect(result.status).toBe(rejects ? "error" : "ok");
+      if (rejects) {
+        expect(result.error).toBe("delivery receipt store unavailable");
+      }
+      expect(dispatchCronDeliveryMock).toHaveBeenCalledOnce();
+      expect(callGatewayMock).not.toHaveBeenCalled();
+      expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith({
+        sessionId: "test-session-id",
+        reason: "isolated-cron-dispose",
+        onError: expect.any(Function),
+      });
+    },
+  );
 
   it("passes config-driven fast mode into embedded cron runs", async () => {
     await runFastModeCase({
@@ -226,6 +250,20 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
       message: "test fast mode",
     });
   });
+
+  it.each([true, false, "auto"] as const)(
+    "forwards fast mode %s through CLI cron runs",
+    async (mode) => {
+      await runFastModeCase({
+        configFastMode: mode,
+        expectedFastMode: mode,
+        configFastAutoOnSeconds: 15,
+        expectedFastModeAutoOnSeconds: 15,
+        message: "CLI fast mode",
+        cli: true,
+      });
+    },
+  );
 
   it("passes config-driven fast auto cutoff into embedded cron runs", async () => {
     await runFastModeCase({

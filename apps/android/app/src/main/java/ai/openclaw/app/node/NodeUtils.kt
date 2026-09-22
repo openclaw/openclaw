@@ -1,5 +1,7 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.AppearanceThemeFamily
+import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.gateway.parseInvokeErrorFromThrowable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -84,6 +86,30 @@ fun resolveProfileAccentArgb(entries: JsonObject?): Long? {
   return parseHexColorArgb((value as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull)
 }
 
+fun resolveGatewayThemeFamily(config: JsonObject?): AppearanceThemeFamily {
+  val raw =
+    config
+      ?.get("ui")
+      .asObjectOrNull()
+      ?.get("prefs")
+      .asObjectOrNull()
+      ?.get("theme")
+      .asStringOrNull()
+  return AppearanceThemeFamily.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeFamily.Claw
+}
+
+fun resolveGatewayThemeMode(config: JsonObject?): AppearanceThemeMode {
+  val raw =
+    config
+      ?.get("ui")
+      .asObjectOrNull()
+      ?.get("prefs")
+      .asObjectOrNull()
+      ?.get("themeMode")
+      .asStringOrNull()
+  return AppearanceThemeMode.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeMode.System
+}
+
 fun resolveGatewayAccentArgb(config: JsonObject?): Long? {
   val ui = config?.get("ui").asObjectOrNull()
   // Control UI precedence (gateway talk.config): a present user accent wins over the
@@ -104,10 +130,4 @@ fun invokeErrorFromThrowable(err: Throwable): Pair<String, String> {
   val parsed = parseInvokeErrorFromThrowable(err, fallbackMessage = "UNAVAILABLE: error")
   val message = if (parsed.hadExplicitCode) parsed.prefixedMessage else parsed.message
   return parsed.code to message
-}
-
-/** Normalizes user/session keys while preserving main as the canonical session id. */
-fun normalizeMainKey(raw: String?): String? {
-  val trimmed = raw?.trim().orEmpty()
-  return if (trimmed.isEmpty()) null else trimmed
 }

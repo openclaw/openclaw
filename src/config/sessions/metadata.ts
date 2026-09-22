@@ -26,10 +26,6 @@ import {
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
-function isSystemEventProvider(provider?: string): boolean {
-  return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
-}
-
 // Origin updates merge sparse channel metadata without deleting previously known fields.
 const mergeSessionOrigin = (
   existing: SessionOrigin | undefined,
@@ -47,8 +43,7 @@ const mergeSessionOrigin = (
   const nextIsDeliverableChannel =
     nextProvider != null &&
     nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-    !isInternalNonDeliveryChannel(nextProvider) &&
-    !isSystemEventProvider(nextProvider);
+    !isInternalNonDeliveryChannel(nextProvider);
   const channelChanged =
     existing != null &&
     nextIsDeliverableChannel &&
@@ -105,7 +100,7 @@ export function deriveSessionOrigin(
   ctx: MsgContext,
   opts?: { skipSystemEventOrigin?: boolean },
 ): SessionOrigin | undefined {
-  if (opts?.skipSystemEventOrigin && isSystemEventProvider(ctx.Provider)) {
+  if (opts?.skipSystemEventOrigin && ctx.InternalTurnSource !== undefined) {
     return undefined;
   }
   const label = normalizeOptionalString(resolveConversationLabel(ctx));
@@ -176,7 +171,8 @@ function deriveGroupSessionPatch(params: {
   }
 
   const channel = resolution.channel;
-  const subject = params.ctx.GroupSubject?.trim();
+  const subject = normalizeOptionalString(params.ctx.GroupSubject);
+  const topicName = normalizeOptionalString(params.ctx.TopicName);
   const space = params.ctx.GroupSpace?.trim();
   const explicitChannel = params.ctx.GroupChannel?.trim();
   const subjectLooksChannel = Boolean(subject?.startsWith("#"));
@@ -212,10 +208,14 @@ function deriveGroupSessionPatch(params: {
   if (space) {
     patch.space = space;
   }
+  if (topicName) {
+    patch.topicName = topicName;
+  }
 
   const displayName = buildGroupDisplayName({
     provider: channel,
     subject: nextSubject ?? (nextGroupChannel ? undefined : params.existing?.subject),
+    topicName: topicName ?? params.existing?.topicName,
     groupChannel: nextGroupChannel ?? (nextSubject ? undefined : params.existing?.groupChannel),
     space: space ?? params.existing?.space,
     id: resolution.id,
@@ -255,8 +255,7 @@ export function deriveSessionMetaPatch(params: {
     const nextOwnsExternalRoute = Boolean(
       nextProvider &&
       nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-      !isInternalNonDeliveryChannel(nextProvider) &&
-      !isSystemEventProvider(nextProvider),
+      !isInternalNonDeliveryChannel(nextProvider),
     );
     const existingRoute = sessionDeliveryRoute(params.existing);
     const existingRouteAccountId =

@@ -22,7 +22,10 @@ const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
 );
 const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
 const stopSubagentsForRequesterMock = vi.hoisted(() =>
-  vi.fn(async () => ({ stopped: 0, failed: 0 })),
+  vi.fn(async (params: { beforeKill?: () => Promise<boolean> }) => {
+    await params.beforeKill?.();
+    return { stopped: 0, failed: 0 };
+  }),
 );
 const abortSessionRunTargetWithOutcomeMock = vi.hoisted(() =>
   vi.fn(() => ({ active: false, aborted: false })),
@@ -47,12 +50,18 @@ vi.mock("./abort-cutoff.js", () => ({
   shouldPersistAbortCutoff: vi.fn(() => false),
 }));
 
-vi.mock("./abort.js", () => ({
+vi.mock("./abort-operation.js", () => ({
   abortSessionRunTargetWithOutcome: abortSessionRunTargetWithOutcomeMock,
-  formatAbortReplyText: formatAbortReplyTextMock,
+  stopSubagentsForRequester: stopSubagentsForRequesterMock,
+}));
+
+vi.mock("./abort-primitives.js", () => ({
   isAbortTrigger: vi.fn(() => false),
   setAbortMemory: vi.fn(),
-  stopSubagentsForRequester: stopSubagentsForRequesterMock,
+}));
+
+vi.mock("./abort.js", () => ({
+  formatAbortReplyText: formatAbortReplyTextMock,
 }));
 
 vi.mock("./commands-session-store.js", () => ({

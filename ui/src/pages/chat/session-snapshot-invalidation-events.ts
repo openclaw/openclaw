@@ -1,27 +1,56 @@
-type SnapshotInvalidation = { sessionKey: string } | { sessionKey?: undefined };
+export type SessionSnapshotInvalidationReason = "cache-eviction";
+
+type SnapshotInvalidation =
+  | { sessionKey: string; reason?: SessionSnapshotInvalidationReason }
+  | { sessionKey?: undefined; reason?: undefined };
 
 type SnapshotInvalidationListener = (invalidation: SnapshotInvalidation) => void | Promise<void>;
 
 const SNAPSHOT_INVALIDATION_STORAGE_KEY = "openclaw.control.chatSnapshots.invalidate.v1";
 const invalidationListeners = new Set<SnapshotInvalidationListener>();
-let broadcastVersion = 0;
+export let snapshotStoreGeneration = 0;
 
 function notifySnapshotInvalidation(invalidation: SnapshotInvalidation): Promise<void> {
+  if (!invalidation.sessionKey) {
+    snapshotStoreGeneration += 1;
+  }
   return Promise.all(
     [...invalidationListeners].map((listener) => Promise.resolve(listener(invalidation))),
   ).then(() => undefined);
 }
 
-function broadcastSnapshotInvalidation(): void {
+function broadcastSnapshotInvalidation(invalidation: SnapshotInvalidation): void {
   try {
-    localStorage.setItem(SNAPSHOT_INVALIDATION_STORAGE_KEY, String(++broadcastVersion));
+    localStorage.setItem(SNAPSHOT_INVALIDATION_STORAGE_KEY, JSON.stringify(invalidation));
     localStorage.removeItem(SNAPSHOT_INVALIDATION_STORAGE_KEY);
   } catch {}
 }
 
+function parseSnapshotInvalidation(value: string): SnapshotInvalidation {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      "sessionKey" in parsed &&
+      typeof parsed.sessionKey === "string" &&
+      parsed.sessionKey
+    ) {
+      return {
+        sessionKey: parsed.sessionKey,
+        ...("reason" in parsed && parsed.reason === "cache-eviction"
+          ? { reason: "cache-eviction" as const }
+          : {}),
+      };
+    }
+  } catch {}
+  // Counter values from older tabs carried no scope, so they still retire every snapshot.
+  return {};
+}
+
 export function publishSnapshotInvalidation(invalidation: SnapshotInvalidation): Promise<void> {
   const notified = notifySnapshotInvalidation(invalidation);
-  broadcastSnapshotInvalidation();
+  broadcastSnapshotInvalidation(invalidation);
   return notified;
 }
 
@@ -33,10 +62,11 @@ export function subscribeSnapshotInvalidation(listener: SnapshotInvalidationList
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key === SNAPSHOT_INVALIDATION_STORAGE_KEY && event.newValue !== null) {
-      // The cross-tab signal carries no session identifiers; peers safely drop all memory state.
-      void notifySnapshotInvalidation({}).catch((error: unknown) => {
-        console.error("[chat-snapshot-cache] cross-tab invalidation failed", error);
-      });
+      void notifySnapshotInvalidation(parseSnapshotInvalidation(event.newValue)).catch(
+        (error: unknown) => {
+          console.error("[chat-snapshot-cache] cross-tab invalidation failed", error);
+        },
+      );
     }
   });
 }

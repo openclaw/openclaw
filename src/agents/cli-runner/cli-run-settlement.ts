@@ -14,6 +14,7 @@ import {
   resolveCliRuntimeOwnerFingerprint,
 } from "../cli-auth-epoch.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
+import { shouldClearInterruptedCliSessionBinding } from "../cli-session.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "../command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../embedded-agent-runner/delivery-evidence.js";
@@ -21,7 +22,10 @@ import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/au
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { mergeAttemptToolMediaPayloads } from "../embedded-agent-runner/run/tool-media-payloads.js";
 import { coerceToFailoverError, isFailoverError } from "../failover-error.js";
+import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
+import { runCliCleanup } from "./cleanup.js";
+import { resolveCliSessionId } from "./cli-run-recovery.js";
 import { hashCliReseedPrompt } from "./reseed-envelope.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./run-diagnostics.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
@@ -177,6 +181,7 @@ export async function settlePreparedCliRun(params: {
   const terminalRunError = runError;
   let cleanupError: unknown;
   const recordCleanupError = (error: unknown) => {
+    recordAgentCleanupFailure();
     cleanupError ??= error;
   };
   if (runParams.cleanupCliLiveSessionOnRunEnd === true) {
@@ -192,10 +197,12 @@ export async function settlePreparedCliRun(params: {
     // a newer run. Never retire the newer runtime or close the shared listener.
     try {
       const { retireSessionMcpRuntime } = await import("../agent-bundle-mcp-tools.js");
-      await retireSessionMcpRuntime({
-        sessionId: runParams.sessionId,
-        reason: "cli-run-end",
-        onError: recordCleanupError,
+      await runCliCleanup(runParams, "cli-bundle-mcp-retire", async () => {
+        await retireSessionMcpRuntime({
+          sessionId: runParams.sessionId,
+          reason: "cli-run-end",
+          onError: recordCleanupError,
+        });
       });
     } catch (error) {
       recordCleanupError(error);
@@ -210,6 +217,8 @@ export async function settlePreparedCliRun(params: {
         cleanupError instanceof Error ? cleanupError : new Error(formatErrorMessage(cleanupError));
     }
   }
+  // Retiring a caller is not a provider failure and must not quarantine its credential.
+  runParams.assertCurrent?.();
   // Settle only after backend recovery is exhausted. Recording inside an
   // attempt would quarantine a healthy profile for a recovered session fault.
   if (context.effectiveAuthProfileId && context.authProfileStore) {
@@ -410,6 +419,7 @@ export function buildCliDeliveredFailure(params: {
     ...(evidence.didDeliverSourceReplyViaMessageTool
       ? { didDeliverSourceReplyViaMessageTool: true }
       : {}),
+    ...(evidence.sourceReplyDelivered ? { sourceReplyDelivered: true } : {}),
     ...(evidence.messagingToolSentTexts?.length
       ? { messagingToolSentTexts: evidence.messagingToolSentTexts }
       : {}),
@@ -489,16 +499,18 @@ export function buildCliRunResult(params: {
     toolTrustedLocalMedia: output.toolTrustedLocalMedia,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
   });
-  const unflushedCliSessionId =
-    !sessionBindingDisabled && effectiveCliSessionId && bindingFlushOk === false
-      ? effectiveCliSessionId
-      : undefined;
+  const unflushed = !sessionBindingDisabled && effectiveCliSessionId && bindingFlushOk === false;
   const terminalInterruption = output.terminalInterruption;
-  // An interrupted process cannot preserve its now-invalid native session binding.
+  // Cancellation preserves established continuity, but an unfinished replacement
+  // still needs cleanup even when managed sessions skip the transcript probe.
   const cliSessionBindingCleared =
-    terminalInterruption !== undefined ||
     sessionBindingDisabled ||
-    unflushedCliSessionId !== undefined;
+    unflushed ||
+    shouldClearInterruptedCliSessionBinding({
+      interrupted: terminalInterruption !== undefined,
+      bindingReplacedDuringRun:
+        effectiveCliSessionId !== resolveCliSessionId(context.reusableCliSession),
+    });
   const persistedCliSessionId = cliSessionBindingCleared ? undefined : effectiveCliSessionId;
   const createdReseedReceipt =
     persistedCliSessionId &&
@@ -522,7 +534,7 @@ export function buildCliRunResult(params: {
       : undefined;
   const reseedReceipt = createdReseedReceipt ?? preservedReseedReceipt;
   const agentSessionId =
-    terminalInterruption || unflushedCliSessionId
+    terminalInterruption || unflushed
       ? ""
       : sessionBindingDisabled
         ? (runParams.sessionId ?? "")
@@ -651,6 +663,7 @@ export function buildCliRunResult(params: {
     ...(output.didDeliverSourceReplyViaMessageTool
       ? { didDeliverSourceReplyViaMessageTool: true }
       : {}),
+    ...(output.sourceReplyDelivered ? { sourceReplyDelivered: true } : {}),
     ...(output.messagingToolSentTexts?.length
       ? { messagingToolSentTexts: output.messagingToolSentTexts }
       : {}),
@@ -662,6 +675,9 @@ export function buildCliRunResult(params: {
       : {}),
     ...(output.messagingToolSourceReplyPayloads?.length
       ? { messagingToolSourceReplyPayloads: output.messagingToolSourceReplyPayloads }
+      : {}),
+    ...(output.acceptedSessionSpawns?.length
+      ? { acceptedSessionSpawns: output.acceptedSessionSpawns }
       : {}),
   };
 }
@@ -685,6 +701,7 @@ export function settleCliBackendOutcome(params: {
     runResult,
   } = params;
   if (cleanupError) {
+    recordAgentCleanupFailure();
     if (!deliveredMessagingSideEffect) {
       if (runFailed) {
         log.warn(`CLI run also failed before backend cleanup: ${formatErrorMessage(runError)}`);

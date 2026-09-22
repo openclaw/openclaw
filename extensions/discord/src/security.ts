@@ -53,7 +53,7 @@ const collectDiscordSecurityWarnings =
 const collectDiscordSecurityFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectDiscordSecurityWarnings,
   checkId: "channels.discord.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Discord security warning",
 });
 

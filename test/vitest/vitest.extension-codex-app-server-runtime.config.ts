@@ -1,4 +1,5 @@
 // Vitest extension codex app server runtime config wires the extension codex app server runtime test shard.
+import { databaseWorkerExtensionTestFiles } from "./vitest.extension-database-workers-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 function createExtensionCodexAppServerRuntimeVitestConfig(
@@ -23,6 +24,7 @@ function createExtensionCodexAppServerRuntimeVitestConfig(
     {
       dir: "extensions",
       env,
+      exclude: databaseWorkerExtensionTestFiles,
       fileParallelism: false,
       name: "extension-codex-app-server-runtime",
       passWithNoTests: true,

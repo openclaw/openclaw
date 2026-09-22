@@ -9,7 +9,7 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
 import {
-  isChatModelUnavailable,
+  resolveChatModelUnavailableReason,
   resolveChatFastModeSelectState,
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
@@ -20,11 +20,14 @@ type ChatModelStateInput = Parameters<typeof resolveChatModelSelectState>[0];
 function createChatModelState(
   params: Partial<Omit<ChatModelStateInput, "sessionKey">> = {},
 ): ChatModelStateInput {
+  const sessionsResult =
+    params.sessionsResult ?? createSessionsListResult({ model: null, modelProvider: null });
   return {
+    activeSession: params.activeSession ?? sessionsResult.sessions[0],
     sessionKey: "main",
     modelOverrides: {},
     chatModelCatalog: [],
-    sessionsResult: createSessionsListResult({ model: null, modelProvider: null }),
+    sessionsResult,
     ...params,
   };
 }
@@ -51,16 +54,64 @@ function resolveFastModeState(params: {
     catalog: [],
     connected: true,
     currentModelOverride: `${params.provider}/model`,
+    fastModeTarget: sessionsResult.sessions[0],
     gatewayAvailable: true,
     loading: false,
     sending: false,
-    sessionKey: "main",
     sessionsResult,
     stream: null,
   });
 }
 
 describe("chat-model-select-state", () => {
+  it.each([
+    { reason: "missing-auth", expected: "missing-auth" },
+    { reason: "auth-failed", expected: "auth-failed" },
+    { reason: "cooldown", expected: "cooldown" },
+    { reason: undefined, expected: undefined },
+  ] as const)("preserves the recorded $reason availability reason", ({ reason, expected }) => {
+    const catalog = [
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: "openai",
+        available: false,
+        unavailableReason: reason,
+      },
+    ];
+    expect(resolveChatModelUnavailableReason("gpt-5.6-luna", "openai", catalog)).toBe(expected);
+    expect(resolveChatModelUnavailableReason("other-model", "openai", catalog)).toBeUndefined();
+  });
+
+  it.each([
+    { available: true, reason: undefined, expected: undefined },
+    { available: undefined, reason: undefined, expected: undefined },
+    { available: false, reason: undefined, expected: undefined },
+    { available: false, reason: "cooldown", expected: "cooldown" },
+    { available: false, reason: "missing-auth", expected: "auth-failed" },
+  ] as const)(
+    "does not let an auth-failed alias override a $reason/$available route",
+    ({ available, reason, expected }) => {
+      const catalog = [
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "codex",
+          available: false,
+          unavailableReason: "auth-failed" as const,
+        },
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          available,
+          unavailableReason: reason,
+        },
+      ];
+      expect(resolveChatModelUnavailableReason("gpt-5.6-luna", "openai", catalog)).toBe(expected);
+    },
+  );
+
   it("toggles between Standard and Fast for OpenAI models", () => {
     expect(resolveFastModeState({ provider: "openai" })).toMatchObject({
       active: false,
@@ -357,12 +408,14 @@ describe("chat-model-select-state", () => {
           name: "GPT-5.6 Sol",
           provider: "openai",
           available: false,
+          unavailableReason: "missing-auth",
         },
         {
           id: "gpt-5.6-luna",
           name: "GPT-5.6 Luna",
           provider: "openai",
           available: false,
+          unavailableReason: "missing-auth",
         },
       ),
       sessionsResult: createSessionsListResult({
@@ -375,10 +428,22 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.defaultLabel).toBe("Default (GPT-5.6 Sol)");
-    expect(isChatModelUnavailable("gpt-5.6-sol", "openai", state.chatModelCatalog)).toBe(true);
+    expect(resolveChatModelUnavailableReason("gpt-5.6-sol", "openai", state.chatModelCatalog)).toBe(
+      "missing-auth",
+    );
     expect(resolved.options).toEqual([
-      { value: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol", disabled: true },
-      { value: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna", disabled: true },
+      {
+        value: "openai/gpt-5.6-sol",
+        label: "GPT-5.6 Sol",
+        disabled: true,
+        unavailableReason: "missing-auth",
+      },
+      {
+        value: "openai/gpt-5.6-luna",
+        label: "GPT-5.6 Luna",
+        disabled: true,
+        unavailableReason: "missing-auth",
+      },
     ]);
   });
 
@@ -396,10 +461,10 @@ describe("chat-model-select-state", () => {
         catalog: [],
         connected: true,
         currentModelOverride: "",
+        fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
         sending: false,
-        sessionKey: "main",
         sessionsResult,
         stream: null,
       }).supported,
@@ -424,10 +489,10 @@ describe("chat-model-select-state", () => {
         catalog: providers.map((provider) => ({ id: model, name: "Gemma", provider })),
         connected: true,
         currentModelOverride: model,
+        fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
         sending: false,
-        sessionKey: "main",
         sessionsResult,
         stream: null,
       }).supported,
@@ -476,10 +541,10 @@ describe("chat-model-select-state", () => {
         ],
         connected: true,
         currentModelOverride: "anthropic/claude-opus-4-8",
+        fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
         sending: false,
-        sessionKey: "main",
         sessionsResult,
         stream: null,
       }).supported,
@@ -516,10 +581,10 @@ describe("chat-model-select-state", () => {
         ],
         connected: true,
         currentModelOverride: "anthropic/claude-opus-4-8",
+        fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
         sending: false,
-        sessionKey: "main",
         sessionsResult,
         stream: null,
       }).supported,
@@ -551,10 +616,10 @@ describe("chat-model-select-state", () => {
         ],
         connected: true,
         currentModelOverride: "google/gemini-2.5-pro",
+        fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
         sending: false,
-        sessionKey: "main",
         sessionsResult,
         stream: null,
       }).supported,
@@ -586,10 +651,10 @@ describe("chat-model-select-state", () => {
         ],
         connected: true,
         currentModelOverride: "vendor/model",
+        fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
         sending: false,
-        sessionKey: "main",
         sessionsResult,
         stream: null,
       }).supported,
@@ -859,5 +924,124 @@ describe("chat-model-select-state", () => {
         label: "Claude Sonnet · claude-3-7-sonnet-thinking · anthropic",
       },
     ]);
+  });
+});
+
+describe("selected Fast applicability", () => {
+  function state(
+    support: boolean | undefined,
+    fastMode?: boolean | "auto",
+    selected = "claude-sonnet-5",
+    runtime?: {
+      id: string;
+      catalogRuntime?: string;
+      alternativeFastSupport?: boolean;
+    },
+  ) {
+    const sessionsResult = createSessionsListResult({
+      model: "claude-sonnet-5",
+      modelProvider: "anthropic",
+    });
+    const session = expectDefined(sessionsResult.sessions[0], "Fast applicability session");
+    if (runtime) {
+      session.agentRuntime = { id: runtime.id, source: "session-key" };
+    }
+    return resolveChatFastModeSelectState({
+      activeRunId: null,
+      connected: true,
+      gatewayAvailable: true,
+      loading: false,
+      sending: false,
+      stream: null,
+      currentModelOverride: `anthropic/${selected}`,
+      sessionsResult,
+      fastModeTarget: { ...session, ...(fastMode === undefined ? {} : { fastMode }) },
+      catalog: [
+        {
+          id: "claude-sonnet-5",
+          name: "Sonnet 5",
+          provider: "anthropic",
+          supportsFastMode: support,
+          ...(runtime?.catalogRuntime
+            ? { agentRuntime: { id: runtime.catalogRuntime, source: "model" as const } }
+            : {}),
+          ...(runtime?.alternativeFastSupport === undefined
+            ? {}
+            : {
+                runtimeChoices: [
+                  {
+                    agentRuntime: { id: "claude-cli", source: "model" as const },
+                    available: true,
+                    supportsFastMode: runtime.alternativeFastSupport,
+                  },
+                ],
+              }),
+        },
+        { id: "claude-opus-5", name: "Opus 5", provider: "anthropic", supportsFastMode: true },
+      ],
+    });
+  }
+
+  it.each([
+    [undefined, undefined],
+    ["claude-cli", undefined],
+    ["claude-cli", "openclaw"],
+  ] as const)(
+    "disables a confirmed no-op offer with runtime %s and catalog runtime %s without alternatives",
+    (runtime, catalogRuntime) => {
+      expect(
+        state(false, undefined, undefined, runtime ? { id: runtime, catalogRuntime } : undefined),
+      ).toMatchObject({
+        supported: false,
+        disabled: true,
+        nextValue: "",
+      });
+    },
+  );
+  it.each([
+    { id: "acpx", supported: false },
+    { id: "claude-cli", supported: true },
+  ])(
+    "uses runtime-specific Fast capability only for a listed runtime: $id",
+    ({ id, supported }) => {
+      expect(
+        state(false, undefined, undefined, {
+          id,
+          catalogRuntime: "openclaw",
+          alternativeFastSupport: true,
+        }),
+      ).toMatchObject({
+        supported,
+        disabled: !supported,
+        nextValue: supported ? "on" : "",
+      });
+    },
+  );
+  it("uses canonical spelling when matching the selected applicability", () => {
+    expect(state(false, undefined, "CLAUDE-SONNET-5")).toMatchObject({
+      supported: false,
+      disabled: true,
+      nextValue: "",
+    });
+  });
+  it.each([true, false, "auto"] as const)(
+    "keeps saved %s clearable on a no-op route",
+    (fastMode) => {
+      expect(state(false, fastMode)).toMatchObject({
+        supported: true,
+        disabled: false,
+        nextValue: "",
+      });
+    },
+  );
+  it("preserves the existing unknown behavior", () => {
+    expect(state(undefined)).toMatchObject({ supported: true, disabled: false, nextValue: "on" });
+  });
+  it("uses the selected model's support before the stale session model", () => {
+    expect(state(false, undefined, "claude-opus-5")).toMatchObject({
+      supported: true,
+      disabled: false,
+      nextValue: "on",
+    });
   });
 });

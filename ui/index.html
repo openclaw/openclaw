@@ -15,13 +15,25 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
-    <script>
+    <script data-cfasync="false">
       // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
       globalThis.__zod_globalConfig ??= {};
       globalThis.__zod_globalConfig.jitless = true;
 
       (function () {
-        var THEMES = { claw: 1, knot: 1, dash: 1, absolutely: 1, tide: 1, beacon: 1, phosphor: 1 };
+        var THEMES = {
+          claw: 1,
+          knot: 1,
+          dash: 1,
+          absolutely: 1,
+          tide: 1,
+          beacon: 1,
+          phosphor: 1,
+          crt: 1,
+          manuscript: 1,
+          rose: 1,
+          miami: 1,
+        };
         var MODES = { system: 1, light: 1, dark: 1 };
         var LEGACY = {
           dark: "claw:dark",
@@ -40,8 +52,7 @@
               if (raw) break;
             }
           }
-          if (!raw) return;
-          var s = JSON.parse(raw);
+          var s = raw ? JSON.parse(raw) : null;
           var t = s && s.theme;
           var m = s && s.themeMode;
           if (typeof t !== "string") t = "";
@@ -61,6 +72,10 @@
             tide: ["tide", "tide-light"],
             beacon: ["beacon", "beacon-light"],
             phosphor: ["phosphor", "phosphor-light"],
+            crt: ["crt", "crt-light"],
+            manuscript: ["manuscript", "manuscript-light"],
+            rose: ["rose", "rose-light"],
+            miami: ["miami", "miami-light"],
           };
           var pair = FAMILIES[theme];
           var resolved = pair
@@ -70,9 +85,13 @@
               : "dark";
           if (pair) {
             // Script-created links need explicit render blocking before first paint.
-            // The gateway stamps the mount prefix on <html> before this runs.
+            // The gateway stamps the mount prefix and asset version before this runs.
             var base =
               document.documentElement.getAttribute("data-openclaw-control-ui-base-path") || "";
+            var buildId = document.documentElement.getAttribute(
+              "data-openclaw-control-ui-build-id",
+            );
+            var version = buildId ? "?v=" + encodeURIComponent(buildId) : "";
             var palette = document.createElement("link");
             palette.rel = "stylesheet";
             palette.setAttribute("blocking", "render");
@@ -80,13 +99,13 @@
             palette.onerror = function () {
               palette.remove();
             };
-            palette.href = base + "/themes/" + theme + ".css";
+            palette.href = base + "/themes/" + theme + ".css" + version;
             document.head.appendChild(palette);
           }
           document.documentElement.setAttribute("data-theme", resolved);
           var resolvedMode = resolved.includes("light") ? "light" : "dark";
           document.documentElement.setAttribute("data-theme-mode", resolvedMode);
-          // Carapace CSS selects on [data-theme-resolved]; keep in lockstep.
+          // Plugin semantic styles select on [data-theme-resolved]; keep in lockstep.
           document.documentElement.setAttribute("data-theme-resolved", resolvedMode);
         } catch (e) {}
       })();
@@ -155,6 +174,38 @@
 
       html[data-theme="phosphor-light"] {
         background: #f4f7f4;
+      }
+
+      html[data-theme="crt"] {
+        background: #090a09;
+      }
+
+      html[data-theme="crt-light"] {
+        background: #f5f5f4;
+      }
+
+      html[data-theme="manuscript"] {
+        background: #211e18;
+      }
+
+      html[data-theme="manuscript-light"] {
+        background: #f6f1e4;
+      }
+
+      html[data-theme="rose"] {
+        background: #191724;
+      }
+
+      html[data-theme="rose-light"] {
+        background: #faf4ed;
+      }
+
+      html[data-theme="miami"] {
+        background: #140f1e;
+      }
+
+      html[data-theme="miami-light"] {
+        background: #f7f3f6;
       }
 
       body {
@@ -320,7 +371,7 @@
           restarting, or this page may reference assets from a different OpenClaw version.
         </p>
         <ul>
-          <li>OpenClaw will retry the current app bundle automatically.</li>
+          <li>If startup fails, OpenClaw will retry the current app bundle automatically.</li>
           <li>If this persists, reload or try a clean browser profile.</li>
           <li>
             See
@@ -346,14 +397,16 @@
         </div>
       </div>
     </section>
-    <script>
+    <script data-cfasync="false">
       (function () {
         var app = document.querySelector("openclaw-app");
         var fallback = document.getElementById("openclaw-mount-fallback");
         if (!app || !fallback) return;
 
         var panel = fallback.querySelector(".mount-fallback__panel");
+        var title = document.getElementById("openclaw-mount-fallback-title");
         var summary = document.getElementById("openclaw-mount-fallback-summary");
+        var failureSummary = summary.textContent;
         var retry = document.getElementById("openclaw-mount-retry");
         var wait = document.getElementById("openclaw-mount-wait");
         var rawDelay = Number(fallback.getAttribute("data-openclaw-mount-timeout-ms"));
@@ -362,9 +415,10 @@
         var timer;
         var recoveryTimer;
         var recoveryAttempt = 0;
-        var recoveryInFlight = false;
         var recoveryNavigation = false;
         var appStarted = false;
+        var documentLoaded = document.readyState === "complete";
+        var recoveryController;
 
         try {
           var initialUrl = new URL(window.location.href);
@@ -384,6 +438,12 @@
           if (summary) summary.textContent = text;
         }
 
+        function cancelRecovery() {
+          window.clearTimeout(recoveryTimer);
+          if (recoveryController) recoveryController.abort();
+          recoveryController = undefined;
+        }
+
         function scheduleRecovery() {
           window.clearTimeout(recoveryTimer);
           if (appStarted || recoveryAttempt >= maxRecoveryAttempts) return;
@@ -392,7 +452,7 @@
         }
 
         function finishRecoveryAttempt() {
-          recoveryInFlight = false;
+          recoveryController = undefined;
           if (appStarted) return;
           if (recoveryAttempt >= maxRecoveryAttempts) {
             setSummary(
@@ -425,7 +485,7 @@
         function retryCurrentDocument() {
           if (
             appStarted ||
-            recoveryInFlight ||
+            recoveryController ||
             recoveryAttempt >= maxRecoveryAttempts ||
             typeof window.fetch !== "function"
           )
@@ -437,24 +497,26 @@
             );
             return;
           }
-          recoveryInFlight = true;
           recoveryAttempt += 1;
           documentUrl.searchParams.set("openclaw_mount_recovery", String(Date.now()));
-          var recoveryController = new AbortController();
+          var controller = new AbortController();
+          recoveryController = controller;
           var requestTimer = window.setTimeout(function () {
-            recoveryController.abort();
+            controller.abort();
           }, delay);
           window
             .fetch(documentUrl.href, {
               cache: "no-store",
               credentials: "same-origin",
-              signal: recoveryController.signal,
+              signal: controller.signal,
             })
             .then(function (response) {
               if (!response.ok) throw new Error("gateway unavailable");
-              if (!appStarted) window.location.replace(documentUrl.href);
+              if (!appStarted && recoveryController === controller)
+                window.location.replace(documentUrl.href);
             })
             .catch(function () {
+              if (recoveryController !== controller) return;
               unregisterServiceWorkers();
               finishRecoveryAttempt();
             })
@@ -465,10 +527,19 @@
 
         function showFallback() {
           if (appStarted) return;
-          retryCurrentDocument();
+          title.textContent = documentLoaded
+            ? "Control UI did not start"
+            : "Control UI is still loading";
+          fallback.setAttribute("role", documentLoaded ? "alert" : "status");
+          setSummary(
+            documentLoaded
+              ? failureSummary
+              : "The browser is still loading the app. OpenClaw will keep waiting without interrupting the download.",
+          );
+          if (documentLoaded) retryCurrentDocument();
           fallback.hidden = false;
           document.body.classList.add("openclaw-mount-fallback-active");
-          if (panel && typeof panel.focus === "function") {
+          if (documentLoaded && panel && typeof panel.focus === "function") {
             try {
               panel.focus({ preventScroll: true });
             } catch (e) {
@@ -484,12 +555,23 @@
 
         armFallbackTimer();
 
+        // Deferred module graphs settle before DOMContentLoaded. A slow download
+        // is not a failed bootstrap: replacing the document would cancel it.
+        document.addEventListener(
+          "DOMContentLoaded",
+          function () {
+            documentLoaded = true;
+            if (!fallback.hidden) showFallback();
+          },
+          { once: true },
+        );
+
         window.addEventListener(
           "openclaw-control-ui-rendered",
           function () {
             appStarted = true;
             window.clearTimeout(timer);
-            window.clearTimeout(recoveryTimer);
+            cancelRecovery();
             hideFallback();
           },
           { once: true },
@@ -497,6 +579,7 @@
 
         if (retry) {
           retry.addEventListener("click", function () {
+            cancelRecovery();
             unregisterServiceWorkers();
             window.location.reload();
           });
@@ -504,13 +587,13 @@
         if (wait) {
           wait.addEventListener("click", function () {
             hideFallback();
+            cancelRecovery();
             recoveryAttempt = 0;
-            retryCurrentDocument();
             armFallbackTimer();
           });
         }
       })();
     </script>
-    <script type="module" src="/src/main.ts"></script>
+    <script data-cfasync="false" type="module" src="/src/main.ts"></script>
   </body>
 </html>

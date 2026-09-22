@@ -16,8 +16,14 @@ const loggerMocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
+// Lifecycle projection formats stored failures without initializing provider runtime.
+vi.mock("../plugins/loader-runtime-load.js", () => {
+  throw new Error("Session lifecycle presentation imported plugin runtime ownership");
+});
+
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  updateSessionEntry: persistenceMocks.updateSessionEntry,
+  patchSessionEntryCore: persistenceMocks.updateSessionEntry,
+  appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
 }));
 
 vi.mock("./session-utils.js", () => ({
@@ -29,12 +35,13 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import {
+  deriveGatewaySessionLifecycleProjectionPatch,
   isStaleLifecycleEventForSession,
   persistGatewaySessionLifecycleEvent,
 } from "./session-lifecycle-state.js";
 
 type UpdateSessionEntry =
-  typeof import("../config/sessions/session-accessor.js").updateSessionEntry;
+  typeof import("../config/sessions/session-accessor.js").patchSessionEntryCore;
 type LifecycleEvent = Parameters<typeof persistGatewaySessionLifecycleEvent>[0]["event"];
 
 const exactCronSessionKey = "agent:main:cron:job-1:run:cron-run-1";
@@ -70,7 +77,9 @@ async function persistExactCronLifecycle(options: {
     .mockReset()
     .mockImplementation(async (...args: Parameters<UpdateSessionEntry>) => {
       const [, update] = args;
-      const patch = await update(structuredClone(currentEntry));
+      const patch = await update(structuredClone(currentEntry), {
+        existingEntry: structuredClone(currentEntry),
+      });
       if (patch) {
         currentEntry = { ...currentEntry, ...patch };
       }
@@ -99,7 +108,9 @@ async function persistLifecycle(entry: SessionEntry, event: LifecycleEvent): Pro
     .mockReset()
     .mockImplementation(async (...args: Parameters<UpdateSessionEntry>) => {
       const [, update] = args;
-      const patch = await update(structuredClone(currentEntry));
+      const patch = await update(structuredClone(currentEntry), {
+        existingEntry: structuredClone(currentEntry),
+      });
       if (patch) {
         currentEntry = { ...currentEntry, ...patch };
       }
@@ -239,6 +250,32 @@ describe("session lifecycle state", () => {
       runtimeMs: 1_100,
     });
     expect(completed.lifecycleRunId).toBeUndefined();
+  });
+
+  it("does not reopen a terminal row when its same-run start persistence arrives late", async () => {
+    const completed = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 2_000,
+        status: "done",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        runtimeMs: 1_000,
+        lastRunId: "run-a",
+      },
+      {
+        ts: 2_100,
+        sessionId: "session-id",
+        runId: "run-a",
+        data: { phase: "start", startedAt: 1_000 },
+      },
+    );
+
+    expect(completed).toMatchObject({
+      status: "done",
+      endedAt: 2_000,
+      lastRunId: "run-a",
+    });
   });
 
   it("keeps provider lifecycle ownership while recording the client terminal run", async () => {
@@ -495,6 +532,39 @@ describe("session lifecycle state", () => {
       restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
       mainRestartRecovery,
     });
+  });
+
+  it("settles a hard timeout even when shutdown already marked the run for recovery", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_000,
+        lifecycleRunId: "timed-out-run",
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "timed-out-run", lifecycleGeneration }],
+        mainRestartRecovery: { cycleId: "cycle-1", revision: 2, chargedAttempts: 2 },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "timed-out-run",
+        lifecycleGeneration,
+        data: {
+          phase: "error",
+          aborted: true,
+          stopReason: "restart",
+          timeoutPhase: "provider",
+          providerStarted: true,
+          endedAt: 2_000,
+        },
+      },
+    );
+    expect(persisted).toMatchObject({ status: "timeout", abortedLastRun: false, endedAt: 2_000 });
+    expect(persisted.restartRecoveryRuns).toBeUndefined();
+    expect(persisted.mainRestartRecovery).toBeUndefined();
   });
 
   it("ignores an unidentified completion while recovery remains pending", async () => {
@@ -815,5 +885,81 @@ describe("session lifecycle state", () => {
     expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[2]).toMatchObject({
       requireWriteSuccess: true,
     });
+  });
+
+  it("checks terminal authority before committing the session patch", async () => {
+    const entry: SessionEntry = {
+      sessionId: "terminal-authority-session",
+      updatedAt: 1_000,
+      startedAt: 1_000,
+      status: "running",
+      lifecycleRunId: "terminal-authority-run",
+    };
+    let storedEntry = structuredClone(entry);
+    persistenceMocks.loadSessionEntry.mockReturnValue({
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:terminal-authority",
+      entry,
+    });
+    persistenceMocks.updateSessionEntry.mockImplementation(
+      async (...args: Parameters<UpdateSessionEntry>) => {
+        const [, update, options] = args;
+        const patch = await update(structuredClone(storedEntry), {
+          existingEntry: structuredClone(storedEntry),
+        });
+        options?.assertCommitAllowed?.();
+        if (patch) {
+          storedEntry = { ...storedEntry, ...patch };
+        }
+        return storedEntry;
+      },
+    );
+
+    await expect(
+      persistGatewaySessionLifecycleEvent({
+        sessionKey: "agent:main:terminal-authority",
+        event: {
+          runId: "terminal-authority-run",
+          sessionId: entry.sessionId,
+          ts: 2_000,
+          data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+        },
+        assertCommitAllowed: () => {
+          throw new Error("terminal authority retired");
+        },
+      }),
+    ).rejects.toThrow("terminal authority retired");
+    expect(storedEntry.status).toBe("running");
+  });
+});
+
+it("keeps a suppressed lifecycle projection empty while preserving intentional field clears", () => {
+  const current: SessionEntry = {
+    sessionId: "projection-recovery",
+    updatedAt: 1_000,
+    startedAt: 900,
+    status: "running",
+    lifecycleRunId: "foreground-run",
+    abortedLastRun: true,
+    restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
+    mainRestartRecovery: { cycleId: "cycle-1", revision: 2, chargedAttempts: 2 },
+  };
+  const suppressed = deriveGatewaySessionLifecycleProjectionPatch({
+    entry: current,
+    event: { ts: 2_000, sessionId: current.sessionId, data: { phase: "end", endedAt: 1_800 } },
+  });
+  expect({ ...current, ...suppressed }).toStrictEqual(current);
+  expect(suppressed).toStrictEqual({});
+
+  const next = deriveGatewaySessionLifecycleProjectionPatch({
+    entry: { status: "done", endedAt: 1_800, runtimeMs: 900 },
+    event: { ts: 2_100, runId: "new-run", data: { phase: "start", startedAt: 2_100 } },
+  });
+  expect(next.status).toBe("running");
+  expect(Object.hasOwn(next, "endedAt")).toBe(true);
+  expect(Object.hasOwn(next, "runtimeMs")).toBe(true);
+  expect({ endedAt: 1_800, runtimeMs: 900, ...next }).toMatchObject({
+    endedAt: undefined,
+    runtimeMs: undefined,
   });
 });

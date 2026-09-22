@@ -49,20 +49,21 @@ describe("resolveChannelModelOverride", () => {
       expected: { model: "demo-provider/demo-topic-model", matchKey: "-100123:topic:99" },
     },
     {
+      // Use the registered thread fixture; an unknown id triggers real plugin discovery.
       name: "falls back to parent session key when thread id does not match",
       input: {
         cfg: {
           channels: {
             modelByChannel: {
-              "demo-thread": {
+              discord: {
                 "123": "demo-provider/demo-parent-model",
               },
             },
           },
         } as unknown as OpenClawConfig,
-        channel: "demo-thread",
+        channel: "discord",
         groupId: "999",
-        parentSessionKey: "agent:main:demo-thread:channel:123:thread:456",
+        parentSessionKey: "agent:main:discord:channel:123:thread:456",
       },
       expected: { model: "demo-provider/demo-parent-model", matchKey: "123" },
     },

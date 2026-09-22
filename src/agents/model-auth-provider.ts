@@ -25,15 +25,21 @@ import {
 } from "./auth-profiles.js";
 import { assertAuthProfileMigrationReady } from "./auth-profiles/legacy-source-diagnostic.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
+import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-openai.js";
 import * as authConfig from "./model-auth-provider-config.js";
+import { resolveModelProviderAuthConfig } from "./model-auth-provider-route.js";
 import {
   assertRuntimeProviderSecretOwnerAvailable,
   resolveManagedSecretRefRuntimeProviderAuth,
 } from "./model-auth-runtime-config.js";
-import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
-import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
+import {
+  ProviderAuthError,
+  resolveDirectProviderCredentialMode,
+  type ResolvedProviderAuth,
+} from "./model-auth-runtime-shared.js";
+import { prepareSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
 
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
@@ -81,12 +87,85 @@ export function resolveScopedAuthProfileStore(params: {
   preferredProfile?: string;
 }): AuthProfileStore {
   return ensureAuthProfileStore(params.agentDir, {
+    migrationProvider: params.provider,
+    config: params.cfg,
+    profileId: params.profileId,
     externalCli: externalCliDiscoveryForProviderAuth(params),
   });
 }
 
+function assertProviderAuthReady(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): void {
+  // Pending credential files own their providers' auth routes until Doctor commits
+  // and archives them; do not fall through to env/config credentials.
+  assertAuthProfileMigrationReady(params.agentDir, undefined, params.provider, params.cfg);
+  // A failed explicit ref owns the provider. Stop before profile/env discovery so requests cannot
+  // silently switch credentials while this configured owner is cold.
+  assertRuntimeProviderSecretOwnerAvailable({ cfg: params.cfg, provider: params.provider });
+}
+
+/** Resolves a stored provider-entry binding without general credential discovery. */
+export async function resolveProviderEntryApiKeyAuth(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  store: AuthProfileStore;
+  agentDir?: string;
+  modelApi?: string;
+  secretSentinels?: boolean;
+}): Promise<ResolvedProviderAuth | undefined> {
+  const { provider, cfg } = params;
+  assertProviderAuthReady(params);
+  const reference = authConfig.resolveProviderEntryApiKeyProfileReference(params);
+  if (!("profileId" in reference)) {
+    return undefined;
+  }
+  assertAuthProfileNotRetired({
+    profileId: reference.profileId,
+    deprecatedProfileIds: new Set(
+      resolveProviderDeprecatedAuthProfileIds({ provider, config: cfg }),
+    ),
+  });
+  // A matched binding is terminal: never replace a bad profile with a different
+  // credential or send the profile id as literal bearer text.
+  const binding = await authConfig.resolveProviderEntryApiKeyBinding(params);
+  if (binding.kind === "profile-resolved") {
+    assertAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      profileId: binding.auth.profileId ?? provider,
+      mode: binding.auth.mode,
+    });
+    return binding.auth;
+  }
+  if (binding.kind === "profile-incompatible") {
+    const reason =
+      binding.reason === "credential-class"
+        ? "which is not a bearer-style auth class"
+        : "which is not compatible with this provider entry's auth binding";
+    const action =
+      binding.reason === "credential-class"
+        ? "Use an api-key or token profile, or set apiKey to a literal bearer token."
+        : "Use a compatible provider auth alias, configure the referenced provider entry with the same baseUrl, or set apiKey to a literal bearer token.";
+    throw new Error(
+      `Per-entry apiKey "${binding.profileId}" for provider "${provider}" references a "${binding.credentialType}" credential for provider "${binding.credentialProvider}", ${reason}. ${action}`,
+    );
+  }
+  if (binding.kind === "profile-unresolved") {
+    const cause = binding.error
+      ? formatErrorMessage(binding.error)
+      : "credential resolution returned no key";
+    throw new Error(
+      `Per-entry apiKey "${binding.profileId}" for provider "${provider}" matched a stored profile but failed to resolve: ${cause}. Fix the referenced profile or set apiKey to a literal bearer token.`,
+    );
+  }
+  return undefined;
+}
+
 /** Resolves the credential that should be used for one provider request. */
-export async function resolveApiKeyForProviderCore(params: {
+export async function resolveApiKeyForProviderCore(input: {
   provider: string;
   cfg?: OpenClawConfig;
   profileId?: string;
@@ -95,7 +174,7 @@ export async function resolveApiKeyForProviderCore(params: {
   agentDir?: string;
   workspaceDir?: string;
   /** When true, treat profileId as a user-locked selection that must not be
-   *  silently overridden by env/config credentials. */
+   *  silently replaced by another profile or env/config credentials. */
   lockedProfile?: boolean;
   forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
@@ -105,9 +184,18 @@ export async function resolveApiKeyForProviderCore(params: {
   skipSetupProviderFallback?: boolean;
   modelId?: string;
   modelApi?: string;
+  modelBaseUrl?: string;
   /** Keep SecretRef-backed model credentials opaque until a sentinel-aware transport boundary. */
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
+  const modelAuthConfig = resolveModelProviderAuthConfig({
+    provider: input.provider,
+    config: input.cfg,
+    workspaceDir: input.workspaceDir,
+    modelBaseUrl: input.modelBaseUrl,
+  });
+  const changedAuthProvider = modelAuthConfig !== input.cfg;
+  const params = { ...input, cfg: modelAuthConfig };
   const { provider, cfg, profileId, preferredProfile } = params;
   let deprecatedProfileIds: ReadonlySet<string> | undefined;
   const getDeprecatedProfileIds = () =>
@@ -115,12 +203,7 @@ export async function resolveApiKeyForProviderCore(params: {
       resolveProviderDeprecatedAuthProfileIds({ provider, config: cfg }),
     ));
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
-  // Pending credential files own this agent's auth route until Doctor commits
-  // and archives them; do not fall through to env/config credentials.
-  assertAuthProfileMigrationReady(agentDir);
-  // A failed explicit ref owns the provider. Stop before profile/env discovery so requests cannot
-  // silently switch credentials while this configured owner is cold.
-  assertRuntimeProviderSecretOwnerAvailable({ cfg, provider });
+  assertProviderAuthReady({ cfg, provider, agentDir });
   let scopedStore: AuthProfileStore | undefined = params.store;
   const getScopedStore = (requestedProfileId?: string) =>
     (scopedStore ??= resolveScopedAuthProfileStore({
@@ -160,11 +243,24 @@ export async function resolveApiKeyForProviderCore(params: {
       profileId,
       agentDir,
       forceRefresh: params.forceRefresh,
+      allowProfileFallback: !params.lockedProfile,
     });
     if (!resolved) {
       throw new Error(`No credentials found for profile "${profileId}".`);
     }
     const resolvedProfileId = resolved.profileId ?? profileId;
+    if (params.lockedProfile && resolvedProfileId !== profileId) {
+      throw new Error("Locked auth profile resolution returned a different profile.");
+    }
+    const credential = store.profiles[resolvedProfileId];
+    if (
+      changedAuthProvider &&
+      (!credential || !isStoredCredentialCompatibleWithAuthProvider({ cfg, provider, credential }))
+    ) {
+      throw new Error(
+        `Auth profile "${resolvedProfileId}" is not compatible with the resolved model endpoint for "${provider}".`,
+      );
+    }
     const mode = resolved.profileType ?? store.profiles[resolvedProfileId]?.type;
     const result: ResolvedProviderAuth = {
       apiKey: authConfig.sentinelizeSecretRefProfileApiKey({
@@ -246,7 +342,7 @@ export async function resolveApiKeyForProviderCore(params: {
       params.skipSetupProviderFallback,
     );
     if (envResolved) {
-      const resolvedMode = authConfig.resolveDirectProviderCredentialMode({
+      const resolvedMode = resolveDirectProviderCredentialMode({
         cfg,
         provider,
         inferredMode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
@@ -287,57 +383,17 @@ export async function resolveApiKeyForProviderCore(params: {
     }
   }
 
-  // Resolve stored profile-id references before literal apiKey fallbacks.
-  // Matched profile references are terminal so bad bindings cannot silently
-  // fall through to a different credential or to the profile id as bearer text.
-  const providerEntryStore = getScopedStore();
-  const providerEntryReference = authConfig.resolveProviderEntryApiKeyProfileReference({
+  // General model auth keeps its AWS/env precedence ahead of per-entry bindings.
+  const providerEntryAuth = await resolveProviderEntryApiKeyAuth({
     cfg,
     provider,
-    store: providerEntryStore,
-  });
-  if ("profileId" in providerEntryReference) {
-    assertAuthProfileNotRetired({
-      profileId: providerEntryReference.profileId,
-      deprecatedProfileIds: getDeprecatedProfileIds(),
-    });
-  }
-  const providerEntryBinding = await authConfig.resolveProviderEntryApiKeyBinding({
-    cfg,
-    provider,
-    store: providerEntryStore,
+    store: getScopedStore(),
     agentDir,
+    modelApi: params.modelApi,
     secretSentinels: params.secretSentinels,
   });
-  if (providerEntryBinding.kind === "profile-resolved") {
-    assertAuthModeAllowedForModel({
-      provider,
-      modelApi: params.modelApi,
-      profileId: providerEntryBinding.auth.profileId ?? provider,
-      mode: providerEntryBinding.auth.mode,
-    });
-    return providerEntryBinding.auth;
-  }
-  if (providerEntryBinding.kind === "profile-incompatible") {
-    const reason =
-      providerEntryBinding.reason === "credential-class"
-        ? "which is not a bearer-style auth class"
-        : "which is not compatible with this provider entry's auth binding";
-    const action =
-      providerEntryBinding.reason === "credential-class"
-        ? "Use an api-key or token profile, or set apiKey to a literal bearer token."
-        : "Use a compatible provider auth alias, configure the referenced provider entry with the same baseUrl, or set apiKey to a literal bearer token.";
-    throw new Error(
-      `Per-entry apiKey "${providerEntryBinding.profileId}" for provider "${provider}" references a "${providerEntryBinding.credentialType}" credential for provider "${providerEntryBinding.credentialProvider}", ${reason}. ${action}`,
-    );
-  }
-  if (providerEntryBinding.kind === "profile-unresolved") {
-    const cause = providerEntryBinding.error
-      ? formatErrorMessage(providerEntryBinding.error)
-      : "credential resolution returned no key";
-    throw new Error(
-      `Per-entry apiKey "${providerEntryBinding.profileId}" for provider "${provider}" matched a stored profile but failed to resolve: ${cause}. Fix the referenced profile or set apiKey to a literal bearer token.`,
-    );
+  if (providerEntryAuth) {
+    return providerEntryAuth;
   }
 
   if (authConfig.shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
@@ -404,6 +460,7 @@ export async function resolveApiKeyForProviderCore(params: {
           provider,
           preferredProfile,
           forModel: params.modelId,
+          includePendingOAuthRefresh: true,
         });
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   let refreshFailure: OAuthRefreshFailureError | undefined;
@@ -512,7 +569,7 @@ export async function resolveApiKeyForProviderCore(params: {
     params.skipSetupProviderFallback,
   );
   if (envResolved) {
-    const resolvedMode = authConfig.resolveDirectProviderCredentialMode({
+    const resolvedMode = resolveDirectProviderCredentialMode({
       cfg,
       provider,
       inferredMode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
@@ -585,7 +642,7 @@ export async function resolveApiKeyForProviderCore(params: {
     secretSentinels: params.secretSentinels,
   });
   if (customKey) {
-    const mode = authConfig.resolveDirectProviderCredentialMode({
+    const mode = resolveDirectProviderCredentialMode({
       cfg,
       provider,
       inferredMode: "api-key",
@@ -600,10 +657,11 @@ export async function resolveApiKeyForProviderCore(params: {
     return deferredAuthProfileResult;
   }
 
-  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({
+  const syntheticLocalAuth = await prepareSyntheticLocalProviderAuth({
     cfg,
     provider,
     modelApi: params.modelApi,
+    workspaceDir: params.workspaceDir,
     secretSentinels: params.secretSentinels,
     allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,
   });

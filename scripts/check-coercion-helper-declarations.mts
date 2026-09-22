@@ -7,6 +7,7 @@ import ts from "typescript";
 import { isCodeFile, listRepoFilesSync } from "./check-file-utils.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
+import { escapeRegExp } from "./lib/regexp.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { getPropertyNameText, toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
 
@@ -62,6 +63,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     file: "packages/normalization-core/src/string-normalization.ts",
     kind: "function",
     names: [
+      "containsAsciiControlCharacter",
       "filterStringEntries",
       "normalizeArrayBackedTrimmedStringList",
       "normalizeAtHashSlug",
@@ -154,6 +156,9 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     kind: "function",
     names: [
       "coerceErrorMessage",
+      "collectErrorGraphCandidates",
+      "collectNestedErrorCandidates",
+      "extractErrorCodeOrErrno",
       "stringifyNonErrorCause",
       "toErrorObject",
       "toStringifiedError",
@@ -203,6 +208,16 @@ const MIXED_CANONICAL_COERCION_MODULES = ["scripts/lib/arg-utils.runtime.mjs"] a
 export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
   {
     file: "packages/normalization-core/src/error-coercion.ts",
+    name: "extractErrorCode",
+    reason: "Provider adapters share this name for nested response-code extraction.",
+  },
+  {
+    file: "packages/normalization-core/src/error-coercion.ts",
+    name: "readErrorName",
+    reason: "Diagnostic adapters share this name for filtered or non-blank error names.",
+  },
+  {
+    file: "packages/normalization-core/src/error-coercion.ts",
     name: "formatErrorMessage",
     reason: "Structural formatter shares its public name with redacting owner adapters.",
   },
@@ -215,13 +230,19 @@ export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
 
 const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
   {
+    file: "scripts/lib/ci-test-timings-schema.mts",
+    name: "isRecord",
+    kind: "function",
+    reason: "Dependency-free CI preflight runs before install and cannot use workspace resolution.",
+  },
+  {
     file: "ui/src/test-helpers/control-ui-e2e.ts",
     name: "isRecord",
     kind: "function",
     reason: "Serialized mock Gateway closure cannot capture module imports.",
   },
   {
-    file: "src/gateway/mcp-app-standalone.ts",
+    file: "src/gateway/mcp-app-standalone-host.ts",
     name: "asStandaloneRecord",
     kind: "variable",
     reason: "Serialized standalone app closure cannot capture module imports.",
@@ -282,6 +303,10 @@ export const BANNED_COERCION_HELPER_NAMES: readonly BannedCoercionHelperName[] =
   ]),
 ];
 const BANNED_HELPER_NAMES: ReadonlySet<string> = new Set(BANNED_COERCION_HELPER_NAMES);
+const BANNED_HELPER_NAME_PATTERN = new RegExp(
+  [...BANNED_HELPER_NAMES].map(escapeRegExp).join("|"),
+  "u",
+);
 // One tracked-tree scan covers root configs plus config, Actions, skills, apps, plugins, and packages.
 const SCAN_ROOTS = ["."];
 const GENERATED_OR_FIXTURE_PATH_RE =
@@ -398,7 +423,7 @@ export function findBannedCoercionHelperDeclarations(
   source: string,
   file = "source.ts",
 ): CoercionHelperDeclaration[] {
-  if (![...BANNED_HELPER_NAMES].some((name) => source.includes(name))) {
+  if (!BANNED_HELPER_NAME_PATTERN.test(source)) {
     return [];
   }
   const scriptKind = file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;

@@ -1,19 +1,27 @@
 // Shared media tool tests cover root separation, provider availability, and
 // model-registry normalization for generation/understanding tools.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createSandboxFsBridge } from "../sandbox/fs-bridge.js";
+import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
+import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import {
   hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
-  readBooleanToolParam,
+  loadMediaToolReferences,
   resolveGenerateAction,
   resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolReferenceAccess,
+  resolveMediaToolSandboxConfig,
 } from "./media-tool-shared.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // Keep media-tool-shared tests focused on root separation; channel-inbound
 // tests cover the real bundled contract loader.
@@ -44,14 +52,6 @@ function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
 }
 
-describe("readBooleanToolParam", () => {
-  it("parses booleans and true/false string tokens", () => {
-    expect(readBooleanToolParam({ audio: true }, "audio")).toBe(true);
-    expect(readBooleanToolParam({ audio: " FALSE " }, "audio")).toBe(false);
-    expect(readBooleanToolParam({ audio: "yes" }, "audio")).toBeUndefined();
-  });
-});
-
 describe("resolveGenerateAction", () => {
   it.each([
     { name: "absent action", args: {}, expected: "generate" },
@@ -72,6 +72,67 @@ describe("resolveGenerateAction", () => {
 });
 
 describe("resolveMediaToolLocalRoots", () => {
+  it("adds host-owned attachment roots to workspace-scoped reads", async () => {
+    const workspaceDir = path.join("/tmp", "openclaw-media-workspace");
+    const attachmentRoot = path.join("/tmp", "openclaw-subagent-attachments");
+
+    const { localRoots } = await resolveMediaToolReferenceAccess({
+      input: path.join(attachmentRoot, "receipt.png"),
+      isDataUrl: false,
+      workspaceDir,
+      fsPolicy: { workspaceOnly: true, readOnlyRoots: [attachmentRoot] },
+    });
+
+    expect(localRoots.map(normalizeHostPath)).toEqual([
+      normalizeHostPath(workspaceDir),
+      normalizeHostPath(attachmentRoot),
+    ]);
+  });
+
+  it("adds host-owned attachment roots to default local reads", async () => {
+    const workspaceDir = path.join("/tmp", "openclaw-media-workspace");
+    const attachmentRoot = path.join("/tmp", "openclaw-subagent-attachments");
+
+    const { localRoots } = await resolveMediaToolReferenceAccess({
+      input: path.join(attachmentRoot, "receipt.png"),
+      isDataUrl: false,
+      workspaceDir,
+      fsPolicy: { workspaceOnly: false, readOnlyRoots: [attachmentRoot] },
+    });
+
+    expect(localRoots.map(normalizeHostPath)).toContain(normalizeHostPath(attachmentRoot));
+  });
+
+  it("admits only the declared attachment mount in workspace-only sandboxes", async () => {
+    const root = path.join("/tmp", "openclaw-media-workspace");
+    const hostPath = path.join("/tmp", "openclaw-subagent-attachments");
+    const mount = { hostPath, containerPath: "/openclaw/attachments" };
+    const sandbox = resolveMediaToolSandboxConfig(
+      {
+        root,
+        bridge: createSandboxFsBridge({
+          sandbox: createSandboxTestContext({
+            overrides: {
+              workspaceDir: root,
+              agentWorkspaceDir: root,
+              readOnlyResourceMounts: [mount],
+            },
+          }),
+        }),
+        readOnlyResourceMounts: [mount],
+      },
+      true,
+    );
+
+    await expect(
+      resolveMediaToolReferenceAccess({
+        input: "/openclaw/attachments/receipt.png",
+        isDataUrl: false,
+        sandbox,
+      }),
+    ).resolves.toMatchObject({ resolvedPath: path.join(hostPath, "receipt.png") });
+  });
+
   it("does not widen default local roots from media sources", async () => {
     const stateDir = path.join("/tmp", "openclaw-media-tool-roots-state");
     const picturesDir =
@@ -110,30 +171,13 @@ describe("resolveMediaToolLocalRoots", () => {
       },
     };
 
-    const withoutChannel = await resolveMediaToolReferenceAccess({
+    const { localRoots } = await resolveMediaToolReferenceAccess({
       input: "relative/reference.png",
       isDataUrl: false,
-      rootOptions: { cfg },
     });
-    expect(withoutChannel.localRoots.map(normalizeHostPath)).not.toContain(
-      normalizeHostPath(accountRoot),
-    );
-    expect(withoutChannel.localRoots.map(normalizeHostPath)).not.toContain(
-      normalizeHostPath(sharedRoot),
-    );
+    expect(localRoots.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
+    expect(localRoots.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
     expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
-
-    const withImessage = await resolveMediaToolReferenceAccess({
-      input: "relative/reference.png",
-      isDataUrl: false,
-      rootOptions: { cfg, channelId: "imessage", accountId: "work" },
-    });
-    expect(withImessage.localRoots.map(normalizeHostPath)).not.toContain(
-      normalizeHostPath(accountRoot),
-    );
-    expect(withImessage.localRoots.map(normalizeHostPath)).not.toContain(
-      normalizeHostPath(sharedRoot),
-    );
     expect(
       resolveMediaToolInboundRoots({
         cfg,
@@ -159,7 +203,7 @@ describe("resolveMediaToolReferenceAccess", () => {
     ).resolves.toMatchObject({ resolvedPath: filePath });
   });
 
-  it.each(["relative/reference.png", "https://example.com/reference.png", "media://inbound/a.png"])(
+  it.each(["https://example.com/reference.png", "media://inbound/a.png"])(
     "preserves non-file reference %s",
     async (input) => {
       await expect(
@@ -194,6 +238,87 @@ describe("resolveMediaToolReferenceAccess", () => {
         workspaceDir: process.cwd(),
       }),
     ).rejects.toThrow(expected);
+  });
+
+  it.each(["image_generate", "video_generate", "music_generate"] as const)(
+    "loads a producer-staged bare handle for %s references",
+    async (toolName) => {
+      const root = tempDirs.make("openclaw-media-tool-staged-");
+      const stagedPath = "media/inbound/openclaw-staged-proof/input-file_upload.png";
+      const fullPath = path.join(root, stagedPath);
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+      await fs.writeFile(
+        fullPath,
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
+          "base64",
+        ),
+      );
+      const sandbox = resolveMediaToolSandboxConfig(
+        {
+          root,
+          bridge: createHostSandboxFsBridge(root),
+          stagedMediaPaths: new Map([["file_upload", stagedPath]]),
+        },
+        true,
+      );
+
+      const loaded = await loadMediaToolReferences({
+        inputs: ["file_upload"],
+        toolName,
+        expectedKind: "image",
+        sandbox,
+        workspaceDir: root,
+        maxBytes: 1024,
+        mapMedia: (media) => media.buffer,
+      });
+
+      expect(loaded).toMatchObject([
+        { resolvedInput: "file_upload", rewrittenFrom: "file_upload" },
+      ]);
+    },
+  );
+});
+
+describe("resolveCapabilityModelConfigForTool", () => {
+  it("does not load runtime providers while resolving an explicitly configured model", () => {
+    const listProviders = vi.fn(() => {
+      throw new Error("runtime provider list should not run for explicit model config");
+    });
+
+    expect(
+      resolveCapabilityModelConfigForTool({
+        modelConfig: { primary: "qwen/wan2.6-t2v" },
+        providers: listProviders,
+      }),
+    ).toEqual({ primary: "qwen/wan2.6-t2v" });
+    expect(listProviders).not.toHaveBeenCalled();
+  });
+
+  it("orders auto-detected provider defaults by canonical aliases", () => {
+    expect(
+      resolveCapabilityModelConfigForTool({
+        cfg: {
+          agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } },
+        },
+        providers: [
+          {
+            id: "fal",
+            defaultModel: "fal-ai/minimax/video-01-live",
+            isConfigured: () => true,
+          },
+          {
+            id: "openai",
+            aliases: ["media-alias"],
+            defaultModel: "sora-2",
+            isConfigured: () => true,
+          },
+        ],
+      }),
+    ).toEqual({
+      primary: "openai/sora-2",
+      fallbacks: ["fal/fal-ai/minimax/video-01-live"],
+    });
   });
 });
 

@@ -237,6 +237,7 @@ export async function startBuzzBus(options: {
   onFatalError?: (error: Error) => void;
   onDedupeError?: (error: Error) => void;
   onHistoryError?: (error: Error) => void;
+  onRoomUnavailable?: (error: Error) => void;
   onPresenceError?: (error: Error) => void;
   profileName?: string;
   onProfilePublished?: (eventId: string) => void;
@@ -294,6 +295,8 @@ export async function startBuzzBus(options: {
   });
   let directoryRelay: ReturnType<typeof startBuzzDirectoryRelay> | undefined;
   let stopPresenceHeartbeat = () => {};
+  let profileTask: Promise<void> | undefined;
+  let membershipTracker: Awaited<ReturnType<typeof createBuzzRoomMembershipTracker>> | undefined;
   const bus: BuzzBus = {
     publicKey,
     directory,
@@ -340,6 +343,9 @@ export async function startBuzzBus(options: {
       directoryRelay?.close();
       replayGuard.clearMemory();
       relay.close();
+      await membershipTracker?.close();
+      // Relay close rejects pending publishes; join their profile continuation afterward.
+      await profileTask;
     },
   };
 
@@ -369,9 +375,11 @@ export async function startBuzzBus(options: {
       configuredRoomIds: options.channelIds,
       since: sessionStartedAt,
       signal,
+      onNotification: (notification) =>
+        membershipTracker?.handleNotification(notification) ?? false,
       onFatalError: reportFatalError,
     });
-    const membershipTracker =
+    membershipTracker =
       activeChannelIds.length > 0
         ? await createBuzzRoomMembershipTracker({
             relay,
@@ -383,6 +391,7 @@ export async function startBuzzBus(options: {
             messageLimit: resolveBuzzRoomHistoryLimit(activeChannelIds.length),
             reserveDispatchCapacity: (slots) => dispatchQueue.reserveCapacity(slots),
             onHistoryError: options.onHistoryError,
+            onRoomUnavailable: options.onRoomUnavailable,
             onMessageEvent: (event, isMember, reservation) => {
               if (signal.aborted || event.pubkey === publicKey) {
                 return;
@@ -455,7 +464,7 @@ export async function startBuzzBus(options: {
       onFatalError: reportFatalError,
     });
     if (options.profileName?.trim()) {
-      void syncBuzzProfile({
+      profileTask = syncBuzzProfile({
         relay,
         secretKey,
         publicKey,
@@ -465,7 +474,7 @@ export async function startBuzzBus(options: {
         signal,
       })
         .then((result) => {
-          if (result.status === "published") {
+          if (!signal.aborted && result.status === "published") {
             options.onProfilePublished?.(result.eventId);
           }
         })

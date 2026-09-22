@@ -5,7 +5,7 @@ import { createStatusScanResultFixture } from "./status.test-support.ts";
 
 const mocks = vi.hoisted(() => ({
   buildStatusJsonPayload: vi.fn((input) => ({ built: true, input })),
-  readBackupFreshness: vi.fn(() => ({
+  readBackupRunFreshness: vi.fn(async () => ({
     latest: {
       id: "backup-1",
       createdAt: 123,
@@ -17,8 +17,8 @@ const mocks = vi.hoisted(() => ({
   resolveStatusRuntimeSnapshot: vi.fn(),
 }));
 
-vi.mock("./backup-health.js", () => ({
-  readBackupFreshness: mocks.readBackupFreshness,
+vi.mock("../state/backup-run-records.js", () => ({
+  readBackupRunFreshness: mocks.readBackupRunFreshness,
 }));
 
 vi.mock("./status-json-payload.ts", () => ({
@@ -85,6 +85,34 @@ describe("status-json-runtime", () => {
     });
   });
 
+  it("records requested local inspections as not collected for online JSON", async () => {
+    const scan = createScan();
+    scan.collection = {
+      source: "gateway",
+      notCollected: [{ fields: ["memory"], reason: "local inspection skipped" }],
+    };
+    const result = await resolveStatusJsonOutput({
+      scan,
+      opts: {},
+      includeSecurityAudit: true,
+      includePluginCompatibility: true,
+    });
+
+    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ includeSecurityAudit: false }),
+    );
+    expect(requireStatusPayloadInput().securityAudit).toMatchObject({ collected: false });
+    expect(result.pluginCompatibility).toEqual({
+      count: 0,
+      warnings: [],
+      collected: false,
+      reason: "Local plugin inspection is not collected in online status.",
+    });
+    expect(result.collection?.notCollected).toEqual(
+      expect.arrayContaining([expect.objectContaining({ fields: ["securityAudit"] })]),
+    );
+  });
+
   it("builds the full json output for status --json", async () => {
     const scan = createScan();
     const result = await resolveStatusJsonOutput({
@@ -106,7 +134,7 @@ describe("status-json-runtime", () => {
       suppressHealthErrors: undefined,
     });
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledOnce();
-    expect(mocks.readBackupFreshness).toHaveBeenCalledWith(scan.env);
+    expect(mocks.readBackupRunFreshness).toHaveBeenCalledWith(scan.env);
     const payloadInput = requireStatusPayloadInput();
     expect(payloadInput.surface.gatewayConnection).toStrictEqual({
       url: "ws://127.0.0.1:18789",
@@ -132,7 +160,7 @@ describe("status-json-runtime", () => {
     expect(result).toEqual({
       built: true,
       input: payloadInput,
-      backups: mocks.readBackupFreshness(),
+      backups: await mocks.readBackupRunFreshness(),
     });
   });
 
@@ -165,7 +193,7 @@ describe("status-json-runtime", () => {
       suppressHealthErrors: undefined,
     });
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledOnce();
-    expect(mocks.readBackupFreshness).toHaveBeenCalledWith({});
+    expect(mocks.readBackupRunFreshness).toHaveBeenCalledWith({});
     const payloadInput = requireStatusPayloadInput();
     expect(payloadInput.surface.gatewayProbeAuth).toStrictEqual({ token: "tok" });
     expect(payloadInput.securityAudit).toBeUndefined();

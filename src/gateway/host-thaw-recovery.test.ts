@@ -1,16 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHostThawRecovery } from "./host-thaw-recovery.js";
+import { TICK_INTERVAL_MS } from "./server-constants.js";
 
 // Mirrors the module-private threshold contract in host-thaw-recovery.ts.
 const HOST_THAW_MIN_FROZEN_MS = 45_000;
-import { TICK_INTERVAL_MS } from "./server-constants.js";
 
 function createHarness() {
   let nowMs = 0;
+  let cpuUsage = { user: 0, system: 0 };
+  vi.spyOn(process, "cpuUsage").mockImplementation(() => cpuUsage);
   let admissionClosed = false;
+  let restartReason: "active-work" | "admission-closed" | "channel-restart-incomplete" | undefined;
   const deps = {
     nowMs: () => nowMs,
-    restartChannels: vi.fn(async () => {}),
+    restartChannelsIfIdle: vi.fn(async () =>
+      restartReason === undefined
+        ? ({ status: "completed" } as const)
+        : ({ status: "retry", reason: restartReason } as const),
+    ),
     refreshHealth: vi.fn(async () => {}),
     refreshPresence: vi.fn(),
     resetEventLoopHealth: vi.fn(),
@@ -23,21 +30,33 @@ function createHarness() {
     setAdmissionClosed: (closed: boolean) => {
       admissionClosed = closed;
     },
-    advance: async (gapMs: number) => {
+    setRestartIdle: (idle: boolean) => {
+      restartReason = idle ? undefined : "active-work";
+    },
+    setRestartReason: (reason: typeof restartReason) => {
+      restartReason = reason;
+    },
+    advance: async (gapMs: number, cpuCoreRatio = 0) => {
       nowMs += gapMs;
+      cpuUsage = {
+        user: cpuUsage.user + gapMs * 1_000 * cpuCoreRatio * 0.6,
+        system: cpuUsage.system + gapMs * 1_000 * cpuCoreRatio * 0.4,
+      };
       await recovery.tick();
     },
   };
 }
 
 function expectRecoveryCount(harness: ReturnType<typeof createHarness>, count: number) {
-  expect(harness.deps.restartChannels).toHaveBeenCalledTimes(count);
+  expect(harness.deps.restartChannelsIfIdle).toHaveBeenCalledTimes(count);
   expect(harness.deps.refreshHealth).toHaveBeenCalledTimes(count);
   expect(harness.deps.refreshPresence).toHaveBeenCalledTimes(count);
   expect(harness.deps.resetEventLoopHealth).toHaveBeenCalledTimes(count);
 }
 
 describe("host thaw recovery", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it.each([
     ["normal cadence", TICK_INTERVAL_MS],
     ["one millisecond below the thaw threshold", TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS - 1],
@@ -50,15 +69,131 @@ describe("host thaw recovery", () => {
     expect(harness.deps.logger.info).not.toHaveBeenCalled();
   });
 
-  it("recovers and reports the frozen duration at the threshold", async () => {
+  it.each([0, 0.499])("recovers at the threshold with CPU ratio %s", async (cpuCoreRatio) => {
     const harness = createHarness();
 
-    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS);
+    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS, cpuCoreRatio);
 
     expectRecoveryCount(harness, 1);
     expect(harness.deps.logger.info).toHaveBeenCalledWith(
       expect.stringContaining(`frozen ~${HOST_THAW_MIN_FROZEN_MS}ms`),
     );
+  });
+
+  it.each([0.5, 1, 2.2])(
+    "does not recover from a CPU-busy gap with ratio %s",
+    async (cpuCoreRatio) => {
+      const harness = createHarness();
+      const gapMs = TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS;
+
+      await harness.advance(TICK_INTERVAL_MS, 0);
+      await harness.advance(gapMs, cpuCoreRatio);
+      await harness.advance(TICK_INTERVAL_MS);
+
+      expectRecoveryCount(harness, 0);
+      expect(harness.deps.logger.info).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(`gap ${gapMs}ms, CPU ratio ${cpuCoreRatio.toFixed(2)}`),
+      );
+
+      await harness.advance(gapMs);
+      expectRecoveryCount(harness, 1);
+    },
+  );
+
+  it("defers channel restart until active Gateway work settles", async () => {
+    const harness = createHarness();
+    harness.setRestartIdle(false);
+
+    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS);
+    expect(harness.deps.restartChannelsIfIdle).toHaveBeenCalledOnce();
+    expect(harness.deps.refreshHealth).toHaveBeenCalledOnce();
+    expect(harness.deps.refreshPresence).toHaveBeenCalledOnce();
+    expect(harness.deps.resetEventLoopHealth).toHaveBeenCalledOnce();
+
+    await harness.advance(TICK_INTERVAL_MS);
+    expect(harness.deps.restartChannelsIfIdle).toHaveBeenCalledTimes(2);
+    expect(harness.deps.refreshHealth).toHaveBeenCalledOnce();
+    expect(harness.deps.refreshPresence).toHaveBeenCalledOnce();
+    expect(harness.deps.resetEventLoopHealth).toHaveBeenCalledOnce();
+
+    harness.setRestartIdle(true);
+    await harness.advance(TICK_INTERVAL_MS);
+
+    expect(harness.deps.restartChannelsIfIdle).toHaveBeenCalledTimes(3);
+    expect(harness.deps.restartChannelsIfIdle.mock.calls).toEqual([
+      ["new-thaw"],
+      ["deferred-retry"],
+      ["deferred-retry"],
+    ]);
+    expect(harness.deps.refreshHealth).toHaveBeenCalledOnce();
+    expect(harness.deps.refreshPresence).toHaveBeenCalledOnce();
+    expect(harness.deps.resetEventLoopHealth).toHaveBeenCalledOnce();
+    expect(harness.deps.logger.info).toHaveBeenCalledWith(
+      "host thaw channel restart deferred: gateway still has active work",
+    );
+  });
+
+  it("reports an incomplete channel restart without blaming active work", async () => {
+    const harness = createHarness();
+    harness.setRestartReason("channel-restart-incomplete");
+
+    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS);
+
+    expect(harness.deps.logger.info).toHaveBeenCalledWith(
+      "host thaw channel restart deferred: one or more channel accounts remain pending",
+    );
+    expect(harness.deps.logger.info).not.toHaveBeenCalledWith(
+      "host thaw channel restart deferred: gateway still has active work",
+    );
+  });
+
+  it("abandons busy retries after ten minutes, logging deferral and abandonment once", async () => {
+    const harness = createHarness();
+    harness.setRestartIdle(false);
+    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS);
+
+    for (let elapsedMs = TICK_INTERVAL_MS; elapsedMs < 10 * 60_000; elapsedMs += TICK_INTERVAL_MS) {
+      await harness.advance(TICK_INTERVAL_MS);
+    }
+    expect(harness.deps.restartChannelsIfIdle).toHaveBeenCalledTimes(20);
+
+    await harness.advance(TICK_INTERVAL_MS);
+    harness.setRestartIdle(true);
+    await harness.advance(TICK_INTERVAL_MS);
+    expect(harness.deps.restartChannelsIfIdle).toHaveBeenCalledTimes(20);
+    expect(
+      harness.deps.logger.info.mock.calls.filter(([message]) =>
+        message.includes("restart deferred"),
+      ),
+    ).toEqual([["host thaw channel restart deferred: gateway still has active work"]]);
+    expect(
+      harness.deps.logger.info.mock.calls.filter(([message]) =>
+        message.includes("restart abandoned"),
+      ),
+    ).toEqual([[expect.stringContaining("gateway stayed busy")]]);
+
+    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS);
+    expect(harness.deps.restartChannelsIfIdle).toHaveBeenCalledTimes(21);
+  });
+
+  it("does not renew the restart window while admission stays closed", async () => {
+    const harness = createHarness();
+    harness.setAdmissionClosed(true);
+    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS);
+    for (let elapsedMs = 0; elapsedMs < 10 * 60_000; elapsedMs += TICK_INTERVAL_MS) {
+      await harness.advance(TICK_INTERVAL_MS);
+    }
+    harness.setAdmissionClosed(false);
+    await harness.advance(TICK_INTERVAL_MS);
+
+    expect(harness.deps.restartChannelsIfIdle).not.toHaveBeenCalled();
+    expect(harness.deps.refreshHealth).toHaveBeenCalledOnce();
+    expect(harness.deps.refreshPresence).toHaveBeenCalledOnce();
+    expect(
+      harness.deps.logger.info.mock.calls.filter(([message]) =>
+        message.includes("restart abandoned"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("defers a detected thaw until admission reopens and recovers once", async () => {
@@ -84,14 +219,14 @@ describe("host thaw recovery", () => {
     await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS);
 
     expect(harness.deps.resetEventLoopHealth).toHaveBeenCalledTimes(1);
-    expect(harness.deps.restartChannels).not.toHaveBeenCalled();
+    expect(harness.deps.restartChannelsIfIdle).not.toHaveBeenCalled();
     expect(harness.deps.refreshHealth).not.toHaveBeenCalled();
     expect(harness.deps.refreshPresence).not.toHaveBeenCalled();
 
     harness.setAdmissionClosed(false);
     await harness.advance(TICK_INTERVAL_MS);
 
-    expect(harness.deps.restartChannels).toHaveBeenCalledTimes(1);
+    expect(harness.deps.restartChannelsIfIdle).toHaveBeenCalledTimes(1);
     expect(harness.deps.refreshHealth).toHaveBeenCalledTimes(1);
     expect(harness.deps.refreshPresence).toHaveBeenCalledTimes(1);
     expect(harness.deps.resetEventLoopHealth).toHaveBeenCalledTimes(2);
@@ -108,5 +243,6 @@ describe("host thaw recovery", () => {
     await harness.advance(thawGap);
 
     expectRecoveryCount(harness, 2);
+    expect(harness.deps.restartChannelsIfIdle.mock.calls).toEqual([["new-thaw"], ["new-thaw"]]);
   });
 });

@@ -10,9 +10,13 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import {
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { getFreePort } from "../../../../src/test-utils/ports.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const FIXTURE_PLUGIN_ID = "qa-voice-call-runtime";
@@ -121,15 +125,23 @@ function findStringByKey(value: unknown, key: string): string | undefined {
   return undefined;
 }
 
-async function waitForFinalToolResult(filePath: string) {
+async function waitForFinalToolResult(params: {
+  filePath: string;
+  bridgeCallsPath: string;
+  streamUrl: string;
+  mediaStream: WebSocket;
+  gatewayLogs: () => string;
+}) {
   const deadline = Date.now() + 30_000;
+  let latestEntries: Array<Record<string, unknown>> = [];
   while (Date.now() < deadline) {
-    const raw = await fs.readFile(filePath, "utf8").catch(() => "");
+    const raw = await fs.readFile(params.filePath, "utf8").catch(() => "");
     const entries = raw
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean)
       .map((line) => JSON.parse(line) as Record<string, unknown>);
+    latestEntries = entries;
     const final = entries.find(
       (entry) =>
         entry.callId === "qa-consult-call" &&
@@ -145,7 +157,10 @@ async function waitForFinalToolResult(filePath: string) {
       setTimeout(resolve, 100);
     });
   }
-  throw new Error("timed out waiting for final Voice Call consult tool result");
+  const bridgeCalls = await fs.readFile(params.bridgeCallsPath, "utf8").catch(() => "");
+  throw new Error(
+    `timed out waiting for final Voice Call consult tool result; streamUrl=${params.streamUrl}; websocketState=${params.mediaStream.readyState}; bridgeCalls=${bridgeCalls}; entries=${JSON.stringify(latestEntries)}\n${params.gatewayLogs()}`,
+  );
 }
 
 async function openRealtimeMediaStream(params: {
@@ -153,7 +168,8 @@ async function openRealtimeMediaStream(params: {
   servePort: number;
   streamUrl: string;
 }) {
-  const streamPath = new URL(params.streamUrl).pathname;
+  const issuedStreamUrl = new URL(params.streamUrl);
+  const streamPath = `${issuedStreamUrl.pathname}${issuedStreamUrl.search}`;
   const ws = new WebSocket(`ws://127.0.0.1:${params.servePort}${streamPath}`);
   await new Promise<void>((resolve, reject) => {
     ws.once("open", resolve);
@@ -218,10 +234,11 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
   const fixture = createFixturePlugin(options.repoRoot, fixtureRoot);
   const mock = await startQaMockOpenAiServer();
   const servePort = await getFreePort();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let mediaStream: WebSocket | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -385,7 +402,13 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
       servePort,
       streamUrl: stream.streamUrl,
     });
-    const toolResults = await waitForFinalToolResult(fixture.toolResultsPath);
+    const toolResults = await waitForFinalToolResult({
+      filePath: fixture.toolResultsPath,
+      bridgeCallsPath: fixture.bridgeCallsPath,
+      streamUrl: stream.streamUrl,
+      mediaStream,
+      gatewayLogs: gateway.logs,
+    });
     const finalToolResult = toolResults.final.result as Record<string, unknown>;
     if (typeof finalToolResult.error === "string") {
       throw new Error(`embedded consult failed: ${finalToolResult.error}`);
@@ -427,7 +450,7 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
     if (mediaStream && mediaStream.readyState < WebSocket.CLOSING) {
       mediaStream.close();
     }
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
     await fs.rm(fixtureRoot, { force: true, recursive: true });
   }

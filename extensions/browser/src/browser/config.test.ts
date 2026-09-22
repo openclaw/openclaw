@@ -2,9 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { BrowserConfig, BrowserProfileConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserConfig, BrowserProfileConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import {
   getManagedBrowserMissingDisplayError,
@@ -33,6 +33,32 @@ function withProfile(
 }
 
 describe("browser config", () => {
+  it("fills defaults without changing caller-owned profiles or prototype-like names", () => {
+    const selected = Object.freeze({ driver: "existing-session" as const, attachOnly: true });
+    const profiles = Object.freeze({
+      ["__proto__"]: Object.freeze({ cdpPort: 18802 }),
+      constructor: Object.freeze({ cdpPort: 18803 }),
+      user: selected,
+    });
+    const resolved = resolveBrowserConfig(
+      Object.freeze({ profiles, defaultProfile: "user", cdpUrl: "http://127.0.0.1:9222/" }),
+    );
+
+    expect(Object.keys(profiles)).toEqual(["__proto__", "constructor", "user"]);
+    expect(selected).not.toHaveProperty("cdpUrl");
+    expect(Object.keys(resolved.profiles)).toEqual([
+      "__proto__",
+      "constructor",
+      "user",
+      "openclaw",
+      "chrome",
+    ]);
+    expect(Object.getPrototypeOf(resolved.profiles)).toBe(Object.prototype);
+    expect(resolveProfile(resolved, "__proto__")?.cdpPort).toBe(18802);
+    expect(resolveProfile(resolved, "constructor")?.cdpPort).toBe(18803);
+    expect(resolveProfile(resolved, "user")?.cdpUrl).toBe("http://127.0.0.1:9222");
+  });
+
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {
     const resolved = resolveBrowserConfig(undefined);
     expect(resolved.enabled).toBe(true);

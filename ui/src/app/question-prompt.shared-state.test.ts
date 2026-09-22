@@ -93,6 +93,28 @@ afterEach(() => {
 });
 
 describe("Gateway-client question outcome ownership", () => {
+  it("shares connection hydration across sidebar, favicon, and later chat mounts", async () => {
+    vi.useFakeTimers();
+    const client: QuestionClient = { request: vi.fn(async () => ({ questions: [] })) };
+    const mount = () => {
+      const state = createQuestionPromptState(vi.fn());
+      states.push(state);
+      setQuestionPromptClient(state, client);
+      refreshPendingQuestionsWithRetry(state, client);
+      return state;
+    };
+    const sidebar = mount();
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    mount();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(client.request).toHaveBeenCalledTimes(1);
+    requestQuestion(sidebar);
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.request).toHaveBeenCalledTimes(2);
+  });
+
   it.each(resolutionCases)(
     "publishes an authoritative $action to every same-client pane and sidebar owner",
     async ({ resolve, status }) => {
@@ -414,7 +436,7 @@ describe("Gateway-client question outcome ownership", () => {
       setQuestionPromptClient(projection, client);
       refreshPendingQuestionsWithRetry(projection, client);
     }
-    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1_000);
 

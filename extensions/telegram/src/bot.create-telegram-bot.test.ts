@@ -1,10 +1,10 @@
 // Telegram tests cover bot.create telegram bot plugin behavior.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildPluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
@@ -19,13 +19,19 @@ import type {
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord, sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  createTelegramNativeCommandTestDeps,
-  telegramBotInfoForTest,
-} from "./bot.create-telegram-bot.test-support.js";
+  createConfiguredAcpTopicBinding,
+  createConfiguredBindingRoute,
+} from "./bot-native-command-dispatch.test-support.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import {
   createTelegramCallbackContext,
   runTelegramTestMiddlewareChain,
@@ -34,6 +40,10 @@ import {
 } from "./bot.test-helpers.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramGetChat } from "./bot/types.js";
+import {
+  startTelegramCallbackQueryAnswer,
+  takeTelegramCallbackQueryAdmissionAnswer,
+} from "./callback-query-answer-state.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import type { TelegramPollRegistryEntry } from "./poll-registry.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -44,6 +54,8 @@ const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const pluginStateTestRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
 const modelSessionRuntime = await import("openclaw/plugin-sdk/model-session-runtime");
+const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
+const telegramMediaResolver = await import("./bot/delivery.resolve-media.js");
 const EYES_EMOJI = "\u{1F440}";
 const tempStateDirs: string[] = [];
 let previousStateDir: string | undefined;
@@ -98,8 +110,11 @@ const {
 } = await import("./bot-processing-outcome.js");
 const { TELEGRAM_RICH_TEXT_LIMIT } = await import("./rich-message.js");
 const { resolveTelegramConversationRoute } = await import("./conversation-route.js");
-const { clearTelegramRuntimeForTest, resetTelegramAccountThrottlersForTest } =
-  await import("./runtime.test-support.js");
+const {
+  clearTelegramRuntimeForTest,
+  resetTelegramAccountThrottlersForTest,
+  resetTelegramTopicNameCacheForTest,
+} = await import("./runtime.test-support.js");
 const { setTelegramRuntime } = await import("./runtime.js");
 const {
   buildTelegramGroupFrom,
@@ -290,6 +305,46 @@ async function dispatchSpooledPrivateText(
   });
 }
 
+function installTelegramTopicStateForTest(): void {
+  resetTelegramTopicNameCacheForTest();
+  const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>(
+    options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0],
+  ) => pluginStateTestRuntime.createPluginStateKeyedStoreForTests<T>("telegram", options);
+  const openSyncKeyedStore: TelegramRuntime["state"]["openSyncKeyedStore"] = <T>(
+    options: Parameters<TelegramRuntime["state"]["openSyncKeyedStore"]>[0],
+  ) => pluginStateTestRuntime.createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
+  setTelegramRuntime({
+    state: { openKeyedStore, openSyncKeyedStore },
+    channel: {},
+  } as TelegramRuntime);
+}
+
+async function dispatchSpooledNativeStop(
+  params: Omit<Parameters<typeof dispatchSpooledPrivateText>[1], "text" | "replayUpdate"> & {
+    match?: string;
+  },
+) {
+  const { match = "", ...messageParams } = params;
+  const stopHandler = requireValue(
+    commandSpy.mock.calls.find((call) => call[0] === "stop")?.[1] as
+      | TelegramMessageHandler
+      | undefined,
+    "registered native stop handler",
+  );
+  return await dispatchSpooledPrivateText(
+    async (ctx) => await stopHandler({ ...ctx, me: telegramBotInfoForTest, match }),
+    {
+      ...messageParams,
+      text: match ? `/stop ${match}` : "/stop",
+      replayUpdate: "full",
+      message: {
+        ...messageParams.message,
+        entities: [{ type: "bot_command", offset: 0, length: 5 }],
+      },
+    },
+  );
+}
+
 function setupUpdateOffsetTracker(params: {
   lastUpdateId: number;
   onUpdateId?: ReturnType<typeof vi.fn<(updateId: number) => void | Promise<void>>>;
@@ -422,7 +477,8 @@ describe("createTelegramBot", () => {
       process.env.TZ = ORIGINAL_TZ;
     }
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     pluginStateTestRuntime.resetPluginStateStoreForTests();
     clearPluginInteractiveHandlers();
     if (previousStateDir === undefined) {
@@ -444,10 +500,7 @@ describe("createTelegramBot", () => {
       createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
         ...opts,
-        telegramDeps: {
-          ...telegramBotDepsForTest,
-          ...createTelegramNativeCommandTestDeps(dispatchReplyWithBufferedBlockDispatcher),
-        },
+        telegramDeps: telegramBotDepsForTest,
       });
     pluginStateTestRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
   });
@@ -818,6 +871,49 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
   });
 
+  it("reuses the callback answer started at durable admission", async () => {
+    const bot = createTelegramBot({ token: "tok" });
+    const callbackId = "cbq-durable-admission-1";
+    await startTelegramCallbackQueryAnswer(bot, callbackId, true);
+
+    await runTelegramMiddlewareChain({
+      ctx: makeGenericCallbackContext({ id: callbackId, updateId: 403 }),
+      finalHandler: async () => {},
+    });
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledOnce();
+    expect(takeTelegramCallbackQueryAdmissionAnswer(bot, callbackId)).toBeUndefined();
+  });
+
+  it("re-answers a durable callback after bot restart loses admission state", async () => {
+    const callbackId = "cbq-restart-replay-1";
+    const stoppedBot = createTelegramBot({ token: "tok" });
+    await startTelegramCallbackQueryAnswer(stoppedBot, callbackId, true);
+    middlewareUseSpy.mockClear();
+    const restartedBot = createTelegramBot({ token: "tok" });
+    const pendingAnswer = createDeferred<true>();
+    answerCallbackQuerySpy.mockImplementationOnce(() => pendingAnswer.promise);
+    const ctx = makeGenericCallbackContext({ id: callbackId, updateId: 404 });
+
+    await withTelegramSpooledReplayUpdate(
+      requireRecord(ctx.update, "callback update"),
+      async () => {
+        await runTelegramMiddlewareChain({ ctx, finalHandler: async () => {} });
+      },
+    );
+
+    try {
+      const duplicate = startTelegramCallbackQueryAnswer(restartedBot, callbackId, false);
+      expect(duplicate).toBe(pendingAnswer.promise);
+      expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(2);
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith(callbackId);
+    } finally {
+      pendingAnswer.resolve(true);
+      await pendingAnswer.promise;
+    }
+    expect(takeTelegramCallbackQueryAdmissionAnswer(restartedBot, callbackId)).toBeUndefined();
+  });
+
   it("acknowledges question callbacks before their handler completes", async () => {
     installPerKeySequentializer();
     loadConfig.mockReturnValue({ channels: { telegram: { dmPolicy: "disabled" } } });
@@ -1101,6 +1197,290 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it.each([0, 500, 1000, 3000])(
+    "preserves ordinary short-pair behavior with Telegram debounce %i ms",
+    async (debounceMs) => {
+      loadConfig.mockReturnValue({
+        messages: { inbound: { debounceMs: 9999, byChannel: { telegram: debounceMs } } },
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      });
+      installPerKeySequentializer();
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      replySpy.mockResolvedValue(undefined);
+      const sourceWork: Promise<unknown>[] = [];
+
+      try {
+        createTelegramBot({ token: "tok" });
+        const messageHandler = getMessageHandler();
+        const first = await dispatchSpooledPrivateText(messageHandler, {
+          updateId: 501,
+          messageId: 501,
+          text: "first short message",
+          replayUpdate: "full",
+        });
+        if (first.deferredWork) {
+          sourceWork.push(first.deferredWork.task);
+        }
+        expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(
+          debounceMs === 0 ? ["first short message"] : [],
+        );
+        await vi.advanceTimersByTimeAsync(100);
+        const second = await dispatchSpooledPrivateText(messageHandler, {
+          updateId: 502,
+          messageId: 502,
+          text: "second short message",
+          replayUpdate: "full",
+        });
+        if (second.deferredWork) {
+          sourceWork.push(second.deferredWork.task);
+        }
+
+        if (debounceMs > 0) {
+          expect(first.deferredWork).toBeDefined();
+          expect(second.deferredWork).toBeDefined();
+          await vi.advanceTimersByTimeAsync(debounceMs - 1);
+          expect(replySpy).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        // Timer expiry starts the flush; its source participants own completion.
+        await Promise.all(sourceWork);
+        expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(
+          debounceMs === 0
+            ? ["first short message", "second short message"]
+            : ["first short message\nsecond short message"],
+        );
+        expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(
+          debounceMs === 0 ? ["501", "502"] : ["502"],
+        );
+      } finally {
+        await vi.advanceTimersByTimeAsync(10_000);
+        await Promise.all(sourceWork);
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("applies committed Telegram debounce changes only when new input arrives", async () => {
+    const initialConfig: OpenClawConfig = {
+      messages: { inbound: { byChannel: { telegram: 1000 } } },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    };
+    loadConfig.mockReturnValue(initialConfig);
+    setRuntimeConfigSnapshot(initialConfig, initialConfig);
+    installPerKeySequentializer();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    replySpy.mockResolvedValue(undefined);
+    const sourceWork: Promise<unknown>[] = [];
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getMessageHandler();
+      const first = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 511,
+        messageId: 511,
+        text: "before delay change",
+        replayUpdate: "full",
+      });
+      const firstParticipant = requireValue(first.deferredWork, "first source participant");
+      sourceWork.push(firstParticipant.task);
+      await vi.advanceTimersByTimeAsync(100);
+      const shorterConfig: OpenClawConfig = {
+        ...initialConfig,
+        messages: { inbound: { byChannel: { telegram: 500 } } },
+      };
+      loadConfig.mockReturnValue(shorterConfig);
+      setRuntimeConfigSnapshot(shorterConfig, shorterConfig);
+      await vi.advanceTimersByTimeAsync(899);
+      expect(replySpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(firstParticipant.task).resolves.toEqual({ kind: "completed" });
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["before delay change"]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["511"]);
+
+      const second = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 512,
+        messageId: 512,
+        text: "new batch",
+        replayUpdate: "full",
+      });
+      sourceWork.push(requireValue(second.deferredWork, "second source participant").task);
+      await vi.advanceTimersByTimeAsync(100);
+      const longerConfig: OpenClawConfig = {
+        ...initialConfig,
+        messages: { inbound: { byChannel: { telegram: 1500 } } },
+      };
+      loadConfig.mockReturnValue(longerConfig);
+      setRuntimeConfigSnapshot(longerConfig, longerConfig);
+      const third = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 513,
+        messageId: 513,
+        text: "extends batch",
+        replayUpdate: "full",
+      });
+      sourceWork.push(requireValue(third.deferredWork, "third source participant").task);
+      await vi.advanceTimersByTimeAsync(1499);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["before delay change"]);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(Promise.all(sourceWork)).resolves.toEqual([
+        { kind: "completed" },
+        { kind: "completed" },
+        { kind: "completed" },
+      ]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
+        "before delay change",
+        "new batch\nextends batch",
+      ]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["511", "513"]);
+    } finally {
+      await vi.advanceTimersByTimeAsync(3000);
+      await Promise.all(sourceWork);
+      vi.useRealTimers();
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("preserves mixed short and fragment admission order with complete source text", async () => {
+    loadConfig.mockReturnValue({
+      agents: { defaults: { envelopeTimezone: "utc" } },
+      messages: { inbound: { byChannel: { telegram: 3000 } } },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    installPerKeySequentializer();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(1736380800000);
+    replySpy.mockResolvedValue(undefined);
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getMessageHandler();
+      const short = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 301,
+        messageId: 301,
+        text: "A".repeat(611),
+        replayUpdate: "full",
+      });
+      await vi.advanceTimersByTimeAsync(283);
+      const long = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 302,
+        messageId: 302,
+        text: "B".repeat(4065),
+        date: 1736380801,
+        replayUpdate: "full",
+      });
+      await vi.advanceTimersByTimeAsync(14);
+      const continuation = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 303,
+        messageId: 303,
+        text: "C".repeat(3354),
+        date: 1736380802,
+        replayUpdate: "full",
+      });
+
+      await vi.advanceTimersByTimeAsync(2703);
+      await expect(
+        Promise.all([
+          requireValue(short.deferredWork, "short source participant").task,
+          requireValue(long.deferredWork, "long source participant").task,
+          requireValue(continuation.deferredWork, "continuation source participant").task,
+        ]),
+      ).resolves.toEqual([{ kind: "completed" }, { kind: "completed" }, { kind: "completed" }]);
+
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
+        "A".repeat(611),
+        "B".repeat(4065) + "C".repeat(3354),
+      ]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["301", "303"]);
+      expect(
+        replySpy.mock.calls.map(([ctx]) => ctx.SessionTranscriptContext?.beforeTimestampMs),
+      ).toEqual([1736380800000, 1736380800283]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.Timestamp)).toEqual([
+        1736380800000, 1736380802000,
+      ]);
+
+      const next = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 304,
+        messageId: 304,
+        text: "next independent message",
+        replayUpdate: "full",
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+      await expect(
+        requireValue(next.deferredWork, "next source participant").task,
+      ).resolves.toEqual({
+        kind: "completed",
+      });
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
+        "A".repeat(611),
+        "B".repeat(4065) + "C".repeat(3354),
+        "next independent message",
+      ]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["301", "303", "304"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels an expired fragment behind an earlier active message before releasing that message", async () => {
+    configureOpenDm({ debounceMs: 3000, timezone: "envelopeTimezone" });
+    installPerKeySequentializer();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const earlierStarted = createDeferred<void>();
+    const releaseEarlier = createDeferred<void>();
+    let earlierWork: Promise<unknown> | undefined;
+    replySpy.mockImplementation(async (ctx: MsgContext) => {
+      if (ctx.RawBody === "earlier message") {
+        earlierStarted.resolve();
+        await releaseEarlier.promise;
+      }
+      return undefined;
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getMessageHandler();
+      const earlier = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 311,
+        messageId: 311,
+        text: "earlier message",
+        replayUpdate: "full",
+      });
+      earlierWork = requireValue(earlier.deferredWork, "earlier source participant").task;
+      await vi.advanceTimersByTimeAsync(3000);
+      await earlierStarted.promise;
+      const fragment = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 312,
+        messageId: 312,
+        text: "B".repeat(4065),
+        replayUpdate: "full",
+      });
+      const fragmentParticipant = requireValue(
+        fragment.deferredWork,
+        "fragment source participant",
+      );
+      await vi.advanceTimersByTimeAsync(1500);
+      await dispatchPrivateText(messageHandler, {
+        updateId: 313,
+        messageId: 313,
+        text: "stop",
+      });
+
+      expect(fragmentParticipant.isSettled()).toBe(true);
+      await expect(fragmentParticipant.task).resolves.toEqual({ kind: "skipped" });
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["earlier message", "stop"]);
+
+      releaseEarlier.resolve();
+      await expect(earlierWork).resolves.toEqual({
+        kind: "completed",
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["earlier message", "stop"]);
+    } finally {
+      releaseEarlier.resolve();
+      await earlierWork;
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["stop", "/stop@openclaw_bot"] as const)(
     "lets %s bypass and cancel pending same-chat inbound debounce",
     async (stopText) => {
@@ -1188,32 +1568,519 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("settles spooled replay participants when stop cancels pending text fragments", async () => {
-    configureOpenDm({ timezone: "envelopeTimezone" });
-
+  it("settles a fragment waiting for continuation on stop and allows same-key reuse", async () => {
+    configureOpenDm({ debounceMs: 3000, timezone: "envelopeTimezone" });
     installPerKeySequentializer();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    replySpy.mockResolvedValue(undefined);
 
-    createTelegramBot({ token: "tok" });
-    const messageHandler = getMessageHandler();
-    const replay = await dispatchSpooledPrivateText(messageHandler, {
-      updateId: 211,
-      messageId: 211,
-      text: "A".repeat(4050),
-    });
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getMessageHandler();
+      const replay = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 211,
+        messageId: 211,
+        text: "A".repeat(4065),
+        replayUpdate: "full",
+      });
+      const participant = requireValue(replay.deferredWork, "fragment source participant");
+      await vi.advanceTimersByTimeAsync(100);
+      await dispatchPrivateText(messageHandler, {
+        updateId: 212,
+        messageId: 212,
+        text: "stop",
+      });
+      expect(participant.isSettled()).toBe(true);
+      await expect(participant.task).resolves.toEqual({ kind: "skipped" });
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["stop"]);
 
-    const deferredWork = replay.deferredWork;
-    expect(deferredWork).toBeDefined();
-    if (!deferredWork) {
-      throw new Error("Expected spooled replay deferred work");
+      const next = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 213,
+        messageId: 213,
+        text: "message after stop",
+        replayUpdate: "full",
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+      await expect(
+        requireValue(next.deferredWork, "next source participant").task,
+      ).resolves.toEqual({
+        kind: "completed",
+      });
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
+        "stop",
+        "message after stop",
+      ]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["212", "213"]);
+    } finally {
+      vi.useRealTimers();
     }
-    await dispatchPrivateText(messageHandler, {
-      updateId: 212,
-      messageId: 212,
-      text: "stop",
-      date: 1736380801,
+  });
+
+  it.each([
+    { buffer: "ordinary text", text: "A".repeat(611) },
+    { buffer: "text fragments", text: "B".repeat(4065) },
+  ])("native stop cancels pending $buffer and permits same-key reuse", async ({ text }) => {
+    loadConfig.mockReturnValue({
+      commands: { native: true, allowFrom: { telegram: ["42"] } },
+      messages: { inbound: { byChannel: { telegram: 3000 } } },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    installPerKeySequentializer();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    replySpy.mockResolvedValue(undefined);
+    const sourceWork: Promise<unknown>[] = [];
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getMessageHandler();
+      const pending = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 401,
+        messageId: 401,
+        text,
+        replayUpdate: "full",
+      });
+      const participant = requireValue(pending.deferredWork, "pending source participant");
+      sourceWork.push(participant.task);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await dispatchSpooledNativeStop({ updateId: 402, messageId: 402 });
+
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        CommandSource: "native",
+        CommandBody: "/stop",
+        CommandAuthorized: true,
+        MessageSid: "402",
+      });
+      expect(participant.isSettled()).toBe(true);
+      await expect(participant.task).resolves.toEqual({ kind: "skipped" });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["/stop"]);
+
+      const next = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 403,
+        messageId: 403,
+        text: "message after native stop",
+        replayUpdate: "full",
+      });
+      const nextParticipant = requireValue(next.deferredWork, "next source participant");
+      sourceWork.push(nextParticipant.task);
+      await vi.advanceTimersByTimeAsync(3000);
+      await expect(nextParticipant.task).resolves.toEqual({ kind: "completed" });
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
+        "/stop",
+        "message after native stop",
+      ]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["402", "403"]);
+    } finally {
+      await vi.advanceTimersByTimeAsync(3000);
+      await Promise.all(sourceWork);
+      vi.useRealTimers();
+    }
+  });
+
+  it("unauthorized native group stop leaves the sender's pending fragment intact", async () => {
+    installTelegramTopicStateForTest();
+    const chatId = nextForumCacheChatId();
+    const topic = {
+      chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops", is_forum: true },
+      message_thread_id: 99,
+      is_topic_message: true,
+    };
+    loadConfig.mockReturnValue({
+      commands: { native: true, allowFrom: { telegram: ["99"] } },
+      messages: { inbound: { byChannel: { telegram: 3000 } } },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+    installPerKeySequentializer();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    replySpy.mockResolvedValue(undefined);
+    let sourceWork: Promise<unknown> | undefined;
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const pending = await dispatchSpooledPrivateText(getMessageHandler(), {
+        updateId: 411,
+        messageId: 411,
+        text: "U".repeat(4065),
+        message: topic,
+        replayUpdate: "full",
+      });
+      const participant = requireValue(pending.deferredWork, "pending source participant");
+      sourceWork = participant.task;
+      await vi.advanceTimersByTimeAsync(100);
+
+      await dispatchSpooledNativeStop({ updateId: 412, messageId: 412, message: topic });
+
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(participant.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(3000);
+      await expect(participant.task).resolves.toEqual({ kind: "completed" });
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["U".repeat(4065)]);
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        MessageSid: "411",
+        SenderId: "42",
+        MessageThreadId: 99,
+      });
+    } finally {
+      await vi.advanceTimersByTimeAsync(3000);
+      await sourceWork;
+      vi.useRealTimers();
+      clearTelegramRuntimeForTest();
+      resetTelegramTopicNameCacheForTest();
+    }
+  });
+
+  it.each([
+    { scope: "another sender", senderId: 43, threadId: 99 },
+    { scope: "another topic", senderId: 42, threadId: 100 },
+  ])("native stop preserves a pending fragment from $scope", async ({ senderId, threadId }) => {
+    installTelegramTopicStateForTest();
+    const chatId = nextForumCacheChatId();
+    const chat = { id: chatId, type: "supergroup", title: "OpenClaw Ops", is_forum: true };
+    loadConfig.mockReturnValue({
+      commands: { native: true, allowFrom: { telegram: ["42"] } },
+      messages: { inbound: { byChannel: { telegram: 3000 } } },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+    installPerKeySequentializer();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    replySpy.mockResolvedValue(undefined);
+    const sourceWork: Promise<unknown>[] = [];
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const target = await dispatchSpooledPrivateText(getMessageHandler(), {
+        updateId: 419,
+        messageId: 419,
+        text: "T".repeat(4065),
+        message: { chat, message_thread_id: 99, is_topic_message: true },
+        replayUpdate: "full",
+      });
+      const targetParticipant = requireValue(target.deferredWork, "stop target participant");
+      sourceWork.push(targetParticipant.task);
+      const pending = await dispatchSpooledPrivateText(getMessageHandler(), {
+        updateId: 421,
+        messageId: 421,
+        from: { id: senderId, first_name: "Pending sender" },
+        text: "P".repeat(4065),
+        message: { chat, message_thread_id: threadId, is_topic_message: true },
+        replayUpdate: "full",
+      });
+      const participant = requireValue(pending.deferredWork, "other source participant");
+      sourceWork.push(participant.task);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await dispatchSpooledNativeStop({
+        updateId: 422,
+        messageId: 422,
+        message: { chat, message_thread_id: 99, is_topic_message: true },
+      });
+
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        CommandSource: "native",
+        CommandAuthorized: true,
+        MessageSid: "422",
+        SenderId: "42",
+        MessageThreadId: 99,
+      });
+      expect(targetParticipant.isSettled()).toBe(true);
+      await expect(targetParticipant.task).resolves.toEqual({ kind: "skipped" });
+      expect(participant.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(3000);
+      await expect(participant.task).resolves.toEqual({ kind: "completed" });
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["/stop", "P".repeat(4065)]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["422", "421"]);
+      expect(replySpy.mock.calls[1]?.[0]).toMatchObject({
+        SenderId: String(senderId),
+        MessageThreadId: threadId,
+      });
+    } finally {
+      await vi.advanceTimersByTimeAsync(3000);
+      await Promise.all(sourceWork);
+      vi.useRealTimers();
+      clearTelegramRuntimeForTest();
+      resetTelegramTopicNameCacheForTest();
+    }
+  });
+
+  it("native stop with unsupported arguments leaves pending input intact", async () => {
+    loadConfig.mockReturnValue({
+      commands: { native: true, allowFrom: { telegram: ["42"] } },
+      messages: { inbound: { byChannel: { telegram: 3000 } } },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    installPerKeySequentializer();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    replySpy.mockResolvedValue(undefined);
+    let sourceWork: Promise<unknown> | undefined;
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const pending = await dispatchSpooledPrivateText(getMessageHandler(), {
+        updateId: 431,
+        messageId: 431,
+        text: "Q".repeat(4065),
+        replayUpdate: "full",
+      });
+      const participant = requireValue(pending.deferredWork, "pending source participant");
+      sourceWork = participant.task;
+      await vi.advanceTimersByTimeAsync(100);
+
+      const command = await dispatchSpooledNativeStop({
+        updateId: 432,
+        messageId: 432,
+        match: "later",
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(participant.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(3000);
+      await requireValue(command.deferredWork, "buffered command participant").task;
+      expect(replySpy.mock.calls.find(([ctx]) => ctx.MessageSid === "432")?.[0]).toMatchObject({
+        CommandSource: "native",
+        CommandAuthorized: true,
+        CommandBody: "/stop later",
+        MessageSid: "432",
+      });
+      await expect(participant.task).resolves.toEqual({ kind: "completed" });
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
+        "Q".repeat(4065),
+        "/stop later",
+      ]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["431", "432"]);
+    } finally {
+      await vi.advanceTimersByTimeAsync(3000);
+      await sourceWork;
+      vi.useRealTimers();
+    }
+  });
+
+  it("authorized stop caption cancels pending ordinary and forwarded text", async () => {
+    configureOpenDm({ debounceMs: 3000, timezone: "envelopeTimezone" });
+    installPerKeySequentializer();
+    const attachmentPath = path.join(
+      requireValue(process.env.OPENCLAW_STATE_DIR, "test state directory"),
+      "caption.txt",
+    );
+    writeFileSync(attachmentPath, "attachment");
+    const resolveMedia = vi.spyOn(telegramMediaResolver, "resolveMedia");
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    replySpy.mockResolvedValue(undefined);
+    const sourceWork: Promise<unknown>[] = [];
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getMessageHandler();
+      const ordinary = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 441,
+        messageId: 441,
+        text: "A".repeat(611),
+        replayUpdate: "full",
+      });
+      const ordinaryParticipant = requireValue(
+        ordinary.deferredWork,
+        "ordinary source participant",
+      );
+      sourceWork.push(ordinaryParticipant.task);
+      const forwarded = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 442,
+        messageId: 442,
+        text: "F".repeat(611),
+        message: { forward_date: 1736380700 },
+        replayUpdate: "full",
+      });
+      const forwardedParticipant = requireValue(
+        forwarded.deferredWork,
+        "forwarded source participant",
+      );
+      sourceWork.push(forwardedParticipant.task);
+
+      resolveMedia.mockResolvedValueOnce({
+        id: "caption-fixture",
+        fileUniqueId: "caption-document-unique",
+        path: attachmentPath,
+        size: 10,
+        contentType: "text/plain",
+        kind: "document",
+        savedAt: 1736380800000,
+      });
+      await dispatchPrivateText(messageHandler, {
+        updateId: 443,
+        messageId: 443,
+        text: "",
+        message: {
+          text: undefined,
+          caption: "stop",
+          document: {
+            file_id: "caption-document",
+            file_unique_id: "caption-document-unique",
+            file_name: "caption.txt",
+            mime_type: "text/plain",
+          },
+        },
+      });
+
+      expect(ordinaryParticipant.isSettled()).toBe(true);
+      expect(forwardedParticipant.isSettled()).toBe(true);
+      await expect(Promise.all(sourceWork)).resolves.toEqual([
+        { kind: "skipped" },
+        { kind: "skipped" },
+      ]);
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["443"]);
+    } finally {
+      await vi.advanceTimersByTimeAsync(3000);
+      await Promise.all(sourceWork);
+      vi.useRealTimers();
+      resolveMedia.mockRestore();
+    }
+  });
+
+  it("native stop cancels pending input before configured binding preparation finishes", async () => {
+    installTelegramTopicStateForTest();
+    const topic = {
+      chat: { id: -1001234567890, type: "supergroup", title: "Bound topic", is_forum: true },
+      message_thread_id: 42,
+      is_topic_message: true,
+    };
+    loadConfig.mockReturnValue({
+      commands: { native: true, allowFrom: { telegram: ["42"] } },
+      messages: { inbound: { byChannel: { telegram: 3000 } } },
+      channels: { telegram: { groupPolicy: "open", groups: { "*": { requireMention: false } } } },
+    });
+    installPerKeySequentializer();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    replySpy.mockResolvedValue(undefined);
+    const preparationStarted = createDeferred<void>();
+    const releasePreparation = createDeferred<void>();
+    let sourceWork: Promise<unknown> | undefined;
+    let stopDispatch: ReturnType<typeof dispatchSpooledNativeStop> | undefined;
+    const bindingRoute = vi.spyOn(conversationRuntime, "resolveConfiguredBindingRoute");
+    const bindingReady = vi.spyOn(conversationRuntime, "ensureConfiguredBindingRouteReady");
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const pending = await dispatchSpooledPrivateText(getMessageHandler(), {
+        updateId: 451,
+        messageId: 451,
+        text: "H".repeat(4065),
+        message: topic,
+        replayUpdate: "full",
+      });
+      const participant = requireValue(pending.deferredWork, "pending source participant");
+      sourceWork = participant.task;
+      bindingRoute.mockImplementation(({ route }) =>
+        createConfiguredBindingRoute(
+          route,
+          createConfiguredAcpTopicBinding("agent:main:acp:binding:telegram:default:held"),
+        ),
+      );
+      bindingReady.mockImplementationOnce(async () => {
+        preparationStarted.resolve();
+        await releasePreparation.promise;
+        return { ok: false, error: "binding unavailable" };
+      });
+
+      stopDispatch = dispatchSpooledNativeStop({ updateId: 452, messageId: 452, message: topic });
+      await preparationStarted.promise;
+
+      expect(participant.isSettled()).toBe(true);
+      await expect(participant.task).resolves.toEqual({ kind: "skipped" });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(replySpy).not.toHaveBeenCalled();
+      releasePreparation.resolve();
+      await stopDispatch;
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+    } finally {
+      releasePreparation.resolve();
+      await stopDispatch;
+      bindingRoute.mockRestore();
+      bindingReady.mockRestore();
+      await vi.advanceTimersByTimeAsync(3000);
+      await sourceWork;
+      vi.useRealTimers();
+      clearTelegramRuntimeForTest();
+      resetTelegramTopicNameCacheForTest();
+    }
+  });
+
+  it("waits for a forced fragment flush before admitting the triggering forwarded message", async () => {
+    configureOpenDm({ debounceMs: 3000, timezone: "envelopeTimezone" });
+    installPerKeySequentializer();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const fragmentStarted = createDeferred<void>();
+    const releaseFragment = createDeferred<void>();
+    let fragmentWork: Promise<unknown> | undefined;
+    let forwardDispatch: ReturnType<typeof dispatchSpooledPrivateText> | undefined;
+    let forwardHandlerCompleted = false;
+    replySpy.mockImplementation(async (ctx: MsgContext) => {
+      if (ctx.MessageSid === "321") {
+        fragmentStarted.resolve();
+        await releaseFragment.promise;
+      }
+      return undefined;
     });
 
-    await expect(deferredWork.task).resolves.toEqual({ kind: "skipped" });
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getMessageHandler();
+      const fragment = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 321,
+        messageId: 321,
+        text: "B".repeat(4065),
+        replayUpdate: "full",
+      });
+      fragmentWork = requireValue(fragment.deferredWork, "fragment source participant").task;
+      await vi.advanceTimersByTimeAsync(100);
+      forwardDispatch = dispatchSpooledPrivateText(messageHandler, {
+        updateId: 322,
+        messageId: 323,
+        text: "forwarded message",
+        message: { forward_date: 1736380700 },
+        replayUpdate: "full",
+      }).then((result) => {
+        forwardHandlerCompleted = true;
+        return result;
+      });
+
+      await fragmentStarted.promise;
+      await vi.advanceTimersByTimeAsync(80);
+      expect(forwardHandlerCompleted).toBe(false);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["B".repeat(4065)]);
+
+      releaseFragment.resolve();
+      const forwarded = await forwardDispatch;
+      await vi.advanceTimersByTimeAsync(80);
+      await expect(
+        Promise.all([
+          fragmentWork,
+          requireValue(forwarded.deferredWork, "forwarded source participant").task,
+        ]),
+      ).resolves.toEqual([{ kind: "completed" }, { kind: "completed" }]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
+        "B".repeat(4065),
+        "forwarded message",
+      ]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["321", "323"]);
+    } finally {
+      releaseFragment.resolve();
+      await fragmentWork;
+      const forwarded = await forwardDispatch;
+      await vi.advanceTimersByTimeAsync(80);
+      await forwarded?.deferredWork?.task;
+      vi.useRealTimers();
+    }
   });
 
   it("keeps forced text-fragment flush settlement isolated from the triggering replay", async () => {
@@ -1713,85 +2580,83 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("does not let unauthorized group stop cancel pending same-sender inbound debounce", async () => {
-    const chatId = nextForumCacheChatId();
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          envelopeTimezone: "utc",
-        },
-      },
-      messages: {
-        inbound: {
-          debounceMs: INBOUND_DEBOUNCE_MS,
-        },
-      },
-      channels: {
-        telegram: {
-          dmPolicy: "pairing",
-          groupPolicy: "open",
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
-
-    installPerKeySequentializer();
-
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const startedBodies: string[] = [];
-    replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onReplyStart?.();
-      const body = ctx.Body ?? "";
-      startedBodies.push(body);
-      return { text: `reply:${body}` };
-    });
-
-    try {
-      createTelegramBot({ token: "tok" });
-      const messageHandler = getMessageHandler();
-
-      await runTelegramMiddlewareChain({
-        ctx: {
-          update: { update_id: 104 },
-          message: {
-            chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops" },
-            text: "first",
-            date: 1736380804,
-            message_id: 104,
-            from: { id: 42, first_name: "Ada" },
+  it.each([
+    { buffer: "inbound debounce", text: "first", delayMs: INBOUND_DEBOUNCE_MS },
+    { buffer: "text fragments", text: "B".repeat(4065), delayMs: 1500 },
+  ])(
+    "does not let unauthorized group stop cancel pending same-sender $buffer",
+    async ({ text, delayMs }) => {
+      const chatId = nextForumCacheChatId();
+      loadConfig.mockReturnValue({
+        agents: {
+          defaults: {
+            envelopeTimezone: "utc",
           },
-          me: { username: "openclaw_bot" },
-          getFile: async () => ({}),
         },
-        finalHandler: messageHandler,
-      });
-
-      const flushFirst = takeLatestTimerCallback(INBOUND_DEBOUNCE_MS);
-
-      await runTelegramMiddlewareChain({
-        ctx: {
-          update: { update_id: 105 },
-          message: {
-            chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops" },
-            text: "stop",
-            date: 1736380805,
-            message_id: 105,
-            from: { id: 42, first_name: "Ada" },
+        messages: {
+          inbound: {
+            debounceMs: INBOUND_DEBOUNCE_MS,
           },
-          me: { username: "openclaw_bot" },
-          getFile: async () => ({}),
         },
-        finalHandler: messageHandler,
+        channels: {
+          telegram: {
+            dmPolicy: "pairing",
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
       });
 
-      flushFirst();
-      await vi.waitFor(() => {
-        expect(startedBodies.some((body) => body.includes("first"))).toBe(true);
-      });
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
-  });
+      installPerKeySequentializer();
+
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      replySpy.mockResolvedValue(undefined);
+
+      try {
+        createTelegramBot({ token: "tok" });
+        const messageHandler = getMessageHandler();
+
+        await runTelegramMiddlewareChain({
+          ctx: {
+            update: { update_id: 104 },
+            message: {
+              chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops" },
+              text,
+              date: 1736380804,
+              message_id: 104,
+              from: { id: 42, first_name: "Ada" },
+            },
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({}),
+          },
+          finalHandler: messageHandler,
+        });
+
+        await runTelegramMiddlewareChain({
+          ctx: {
+            update: { update_id: 105 },
+            message: {
+              chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops" },
+              text: "stop",
+              date: 1736380805,
+              message_id: 105,
+              from: { id: 42, first_name: "Ada" },
+            },
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({}),
+          },
+          finalHandler: messageHandler,
+        });
+
+        await vi.advanceTimersByTimeAsync(delayMs);
+        await vi.waitFor(() => {
+          expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toContain(text);
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("routes generic callback_query payloads as callback_data messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });
@@ -2177,7 +3042,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).toHaveBeenCalledWith(
       1234,
-      "Only a configured OpenClaw owner can start Codex login from Telegram.",
+      "Only an OpenClaw owner can sign in here. Ask the owner to connect this provider or grant you owner access.",
       {},
     );
   });
@@ -2194,6 +3059,7 @@ describe("createTelegramBot", () => {
         return {
           providerId: "openai",
           methodId: "device-code",
+          authRefresh: "refreshed",
           profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
         };
       });
@@ -4953,7 +5819,7 @@ describe("createTelegramBot", () => {
     }
   });
   it("honors routed group activation from session store", async () => {
-    const storePath = "/tmp/openclaw-telegram-group-activation.json";
+    const storePath = path.join(createTelegramBotTestStateDir(), "group-activation.json");
     const routedGroupEntry = {
       sessionId: "agent:ops:telegram:group:123",
       updatedAt: 0,
@@ -5061,6 +5927,7 @@ describe("createTelegramBot", () => {
         chat: { id: 1234, type: "private" },
         from: { id: 42, first_name: "Ada" },
         text: "/compact",
+        entities: [{ type: "bot_command", offset: 0, length: 8 }],
         date: 1736380800,
         message_id: 5,
       },
@@ -5073,44 +5940,6 @@ describe("createTelegramBot", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
 
-  it("threads native command replies inside topics", async () => {
-    const chatId = nextForumCacheChatId();
-    commandSpy.mockClear();
-    sendMessageSpy.mockClear();
-    replySpy.mockResolvedValue({ text: "response" });
-
-    loadConfig.mockReturnValue({
-      commands: { native: true },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          replyToMode: "first",
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    expect(commandSpy).toHaveBeenCalled();
-    const handler = requireValue(commandSpy.mock.calls.at(0), "commandSpy call")[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      ...makeForumGroupMessageCtx({ chatId, threadId: 99, text: "/status" }),
-      match: "",
-    });
-
-    const statusCall = requireValue(sendMessageSpy.mock.calls.at(0), "status reply call");
-    expect(statusCall[0]).toBe(String(chatId));
-    expect(statusCall[1]).toBeTypeOf("string");
-    expectRecordFields(
-      statusCall[2],
-      { message_thread_id: 99, reply_to_message_id: 42 },
-      "status reply options",
-    );
-  });
   it("reloads native command routing bindings between invocations without recreating the bot", async () => {
     commandSpy.mockClear();
     replySpy.mockClear();
@@ -5165,45 +5994,6 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(2);
     expect(replySpy.mock.calls.at(1)?.[0].SessionKey).toContain("agent:agent-b:");
   });
-  it("skips tool summaries for native slash commands", async () => {
-    commandSpy.mockClear();
-    replySpy.mockImplementation(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({ text: "tool update" });
-      return { text: "final reply" };
-    });
-
-    loadConfig.mockReturnValue({
-      commands: { native: true },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const verboseHandler = commandSpy.mock.calls.find((call) => call[0] === "verbose")?.[1] as
-      | ((ctx: Record<string, unknown>) => Promise<void>)
-      | undefined;
-    if (!verboseHandler) {
-      throw new Error("verbose command handler missing");
-    }
-
-    await verboseHandler({
-      message: {
-        chat: { id: 12345, type: "private" },
-        from: { id: 12345, username: "testuser" },
-        text: "/verbose on",
-        date: 1736380800,
-        message_id: 42,
-      },
-      match: "on",
-    });
-
-    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-    expect(sendMessageSpy.mock.calls.at(0)?.[1]).toContain("final reply");
-  });
   it("dedupes duplicate message updates by update_id", async () => {
     onSpy.mockReset();
     replySpy.mockReset();
@@ -5252,7 +6042,10 @@ describe("createTelegramBot", () => {
     }
 
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
-      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, verboseHandler);
+      withTelegramSpooledReplayUpdate(
+        ctx,
+        async () => await runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, verboseHandler),
+      );
 
     const ctx = {
       update: { update_id: 333 },
@@ -5260,6 +6053,7 @@ describe("createTelegramBot", () => {
         chat: { id: 12345, type: "private" },
         from: { id: 12345, username: "testuser" },
         text: "/verbose on",
+        entities: [{ type: "bot_command", offset: 0, length: 8 }],
         date: 1736380800,
         message_id: 42,
       },
@@ -5638,6 +6432,67 @@ describe("createTelegramBot", () => {
     });
   });
 
+  it.each(["mdl_prov", "mdl_list_xai_1"])(
+    "explains missing access in %s callbacks",
+    async (data) => {
+      loadConfig.mockReturnValue({
+        agents: { defaults: { model: "xai/grok-test" } },
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      });
+      setSessionStoreEntriesForTest({
+        "agent:main:main": {
+          sessionId: "pinned-model-account",
+          updatedAt: 0,
+          authProfileOverride: "xai:missing",
+          authProfileOverrideSource: "user",
+        },
+      });
+      vi.mocked(telegramBotDepsForTest.buildModelsProviderData).mockImplementationOnce(
+        async (_cfg, _agentId, options) => {
+          const missingAccess = options?.sessionEntry?.authProfileOverride === "xai:missing";
+          return {
+            byProvider: new Map([["xai", new Set(["grok-test"])]]),
+            providers: ["xai"],
+            resolvedDefault: { provider: "xai", model: "grok-test" },
+            modelNames: new Map([["xai/grok-test", "Grok Test"]]),
+            modelCatalog: [{ provider: "xai", id: "grok-test", name: "Grok Test" }],
+            modelMenu: {
+              modelNames: new Map([
+                ["xai/grok-test", missingAccess ? "Sign-in needed — Grok Test" : "Grok Test"],
+              ]),
+              byProvider: new Map([
+                [
+                  "xai",
+                  {
+                    available: missingAccess ? 0 : 1,
+                    notice: missingAccess ? "xai: Sign-in needed. Connect with /login xai." : "",
+                  },
+                ],
+              ]),
+            },
+          };
+        },
+      );
+      createTelegramBot({ token: "tok" });
+      await getCallbackHandler()(
+        makeCallbackRetryContext({ id: `missing-access-${data}`, data, messageId: 24 }),
+      );
+
+      expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("Connect with /login xai.");
+      if (data === "mdl_list_xai_1") {
+        expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("0 of 1 available");
+        expect(editMessageTextSpy.mock.calls.at(-1)?.[3]).toMatchObject({
+          reply_markup: {
+            inline_keyboard: expect.arrayContaining([
+              [expect.objectContaining({ text: expect.stringContaining("Sign-in needed") })],
+            ]),
+          },
+        });
+      }
+      expect(replySpy).not.toHaveBeenCalled();
+    },
+  );
+
   it("retries model selection callbacks after a bubbled session-store failure", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
@@ -5667,7 +6522,7 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     const finalEditMessageText = editMessageTextSpy.mock.calls.at(-1)?.[2];
     expect(typeof finalEditMessageText === "string" ? finalEditMessageText : "").toContain(
-      "Session-only model selection. Runtime unchanged.",
+      "Session-only model selection. Runtime set to <b>codex</b> from configured policy.",
     );
     expect(
       editMessageTextSpy.mock.calls.some((call) =>

@@ -1,9 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { MEMORY_INDEX_CHUNK_PROVENANCE_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
 import { MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import {
   MEMORY_INDEX_SOURCES_TABLE,
+  hasLegacyMemoryRecallMetadataColumns,
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
@@ -13,10 +13,7 @@ import {
   getCanonicalSqliteTableNames,
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
-import {
-  createNewerSqliteSchemaVersionError,
-  readSqliteUserVersion,
-} from "../infra/sqlite-user-version.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   AGENT_V14_BOARD_SCHEMA_SQL,
@@ -24,20 +21,31 @@ import {
 } from "./openclaw-agent-board-schema.js";
 import { CONTEXT_ENGINE_TURN_OUTBOX_TABLE } from "./openclaw-agent-context-engine-turn-outbox-schema.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "./openclaw-agent-db-additive-columns.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
-import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  SESSION_PARTICIPANTS_TABLE,
+} from "./openclaw-agent-db-contract.js";
+import {
+  readExistingAgentSchemaMeta,
+  assertExistingAgentSchemaOwner,
+} from "./openclaw-agent-db-schema-read.js";
 import {
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
 } from "./openclaw-agent-db-session-migrations.js";
+import { SESSION_GOAL_OPERATIONS_TABLE } from "./openclaw-agent-goal-operations-schema.js";
 import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
+import { LEGACY_PARTICIPANT_OPTIONAL_COLUMNS } from "./openclaw-agent-participants-migration.js";
+import {
+  SESSION_PENDING_INPUTS_TABLE,
+  SESSION_INPUT_COMPLETIONS_TABLE,
+} from "./openclaw-agent-pending-inputs-schema.js";
 import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
   AGENT_PROGRESS_CARD_SCHEMA_SQL,
   SESSION_PROGRESS_CARDS_TABLE,
 } from "./openclaw-agent-progress-card-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { SESSION_PARTICIPANTS_TABLE } from "./openclaw-agent-session-participants-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
   AGENT_V14_CORE_SCHEMA_SQL,
@@ -50,11 +58,20 @@ import {
   STANDING_INTENTS_TABLE,
 } from "./openclaw-agent-standing-intents-schema.js";
 
-type ExistingAgentSchemaMeta = {
-  agentId: string | null;
-  role: string | null;
-  schemaVersion: number | null;
-};
+export {
+  assertSupportedAgentSchemaVersion,
+  assertCanonicalAgentPersistenceVersion,
+  readExistingAgentSchemaMeta,
+  assertExistingAgentSchemaOwner,
+} from "./openclaw-agent-db-schema-read.js";
+
+export function migratedSessionColumn(
+  columns: ReadonlySet<string>,
+  columnName: string,
+  fallback: string,
+): string {
+  return columns.has(columnName) ? columnName : fallback;
+}
 
 const AGENT_SCHEMA_COMPATIBILITY = {
   allowCompatibleAdditiveColumns: true,
@@ -65,6 +82,9 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
     CONTEXT_ENGINE_TURN_OUTBOX_TABLE,
     MESSAGE_TOOL_RUN_OUTCOMES_TABLE,
+    SESSION_GOAL_OPERATIONS_TABLE,
+    SESSION_PENDING_INPUTS_TABLE,
+    SESSION_INPUT_COMPLETIONS_TABLE,
     SESSION_PARTICIPANTS_TABLE,
     SESSION_PROGRESS_CARDS_TABLE,
     SESSION_TRANSCRIPT_ARCHIVES_TABLE,
@@ -73,9 +93,9 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
   allowedMissingColumns: [
+    "session_pending_inputs.consumed_event_id",
+    "session_transcript_active_events.context_eligible",
     "session_conversations.route_context_json",
-    "session_participants.actor_source",
-    "session_participants.contribution_count",
     "standing_intents.creator_sender",
     ...FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS.map(
       ({ columnName, tableName }) => `${tableName}.${columnName}`,
@@ -84,6 +104,7 @@ const AGENT_SCHEMA_COMPATIBILITY = {
   allowedColumnDefinitions: {
     "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
   },
+  allowedMissingIndexes: ["idx_agent_transcript_context_pending", "idx_agent_session_nodes_label"],
   optionalCanonicalTriggerGroups: [
     {
       tableName: MEMORY_INDEX_SOURCES_TABLE,
@@ -92,7 +113,7 @@ const AGENT_SCHEMA_COMPATIBILITY = {
   ],
 } satisfies SqliteSchemaCompatibility;
 
-function hasRetiredAgentStateLeaseSchema(database: DatabaseSync): boolean {
+export function hasRetiredAgentStateLeaseSchema(database: DatabaseSync): boolean {
   return Boolean(
     database.prepare("SELECT 1 FROM main.sqlite_schema WHERE name = 'state_leases'").get(),
   );
@@ -102,8 +123,20 @@ export function assertOpenClawAgentSchemaContains(
   database: DatabaseSync,
   pathname: string,
   schemaSql: string,
+  participantSchema: "current" | "legacy" = "current",
 ): void {
-  assertSqliteSchemaContains(database, pathname, schemaSql, AGENT_SCHEMA_COMPATIBILITY);
+  assertSqliteSchemaContains(database, pathname, schemaSql, {
+    ...AGENT_SCHEMA_COMPATIBILITY,
+    allowedMissingTables: [
+      ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingTables,
+      // Legacy migration preflight precedes creation of the required v20 table.
+      ...(participantSchema === "legacy" ? ["session_transcript_cold_archives"] : []),
+    ],
+    allowedMissingColumns: [
+      ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingColumns,
+      ...(participantSchema === "legacy" ? LEGACY_PARTICIPANT_OPTIONAL_COLUMNS : []),
+    ],
+  });
 }
 
 export function assertOpenClawAgentCurrentRuntimeSchema(
@@ -153,7 +186,7 @@ function repairAndAssertAgentSchemaGroup(
   repairCanonicalSqliteIndexes(database, pathname, schemaSql, {
     verifyPhysicalIntegrity: false,
   });
-  assertOpenClawAgentSchemaContains(database, pathname, schemaSql);
+  assertOpenClawAgentSchemaContains(database, pathname, schemaSql, "legacy");
 }
 
 const SESSION_KEY_CONTRACT_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_key_contract (";
@@ -224,74 +257,66 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
   }
 }
 
-export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): void {
-  const userVersion = readSqliteUserVersion(db);
-  if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
-    throw createNewerSqliteSchemaVersionError(
-      "OpenClaw agent database",
-      pathname,
-      userVersion,
-      OPENCLAW_AGENT_SCHEMA_VERSION,
-    );
-  }
-}
+const RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL = `
+CREATE TABLE state_leases (
+  scope TEXT NOT NULL,
+  lease_key TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  expires_at INTEGER,
+  heartbeat_at INTEGER,
+  payload_json TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, lease_key)
+) STRICT;
+`;
 
-/** Refuse steady-state reads until Doctor has completed the v16 media cutover. */
-export function assertCanonicalAgentMediaPersistenceVersion(
+export function migrateRetiredAgentStateLeaseSchema(
   db: DatabaseSync,
   pathname: string,
+  targetVersion: number,
 ): void {
-  const userVersion = readSqliteUserVersion(db);
-  const hasApplicationSchema = db
-    .prepare("SELECT 1 FROM sqlite_master WHERE substr(name, 1, 7) <> 'sqlite_' LIMIT 1")
-    .get();
-  const isNewUnownedDatabase =
-    userVersion === 0 && readExistingAgentSchemaMeta(db) === null && !hasApplicationSchema;
-  if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION && !isNewUnownedDatabase) {
-    throw new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, userVersion);
-  }
-}
-
-export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSchemaMeta | null {
-  const schemaMetaTable = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'")
-    .get();
-  if (!schemaMetaTable) {
-    return null;
-  }
-  const row = db
-    .prepare("SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'")
-    .get() as { agent_id?: unknown; role?: unknown; schema_version?: unknown } | undefined;
-  if (!row) {
-    return null;
-  }
-  return {
-    agentId: normalizeNullableString(row.agent_id),
-    role: typeof row.role === "string" ? row.role : null,
-    schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
-  };
-}
-
-export function assertExistingAgentSchemaOwner(
-  existing: ExistingAgentSchemaMeta | null,
-  agentId: string,
-  pathname: string,
-): void {
-  if (!existing) {
+  if (targetVersion < 17 || !hasRetiredAgentStateLeaseSchema(db)) {
     return;
   }
-  // Agent DB files are not interchangeable; opening another role/id would corrupt ownership.
-  if (existing.role !== "agent") {
+  // The 2026-08-10 tenant audit found no agent-DB lease writers after #121113;
+  // #121615 removed the unreachable routing arm, so v17 retires this table.
+  assertSqliteSchemaContains(db, pathname, RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL);
+  // DROP TABLE also removes the retired indexes and sqlite_stat rows atomically.
+  db.exec("DROP TABLE state_leases;");
+}
+
+export function assertAgentSchemaVersion(
+  db: DatabaseSync,
+  options: { agentId: string; pathname: string; version: number },
+  schemaSql: string,
+): void {
+  const metadata = readExistingAgentSchemaMeta(db);
+  assertExistingAgentSchemaOwner(metadata, options.agentId, options.pathname);
+  const userVersion = readSqliteUserVersion(db);
+  if (userVersion !== options.version || metadata?.schemaVersion !== options.version) {
     throw new Error(
-      `OpenClaw agent database ${pathname} has schema role ${existing.role ?? "unknown"}; expected agent.`,
+      `OpenClaw agent database ${options.pathname} did not converge on schema version ${options.version}.`,
     );
   }
-  if (!existing.agentId) {
-    throw new Error(`OpenClaw agent database ${pathname} has no agent owner.`);
-  }
-  if (normalizeAgentId(existing.agentId) !== agentId) {
-    throw new Error(
-      `OpenClaw agent database ${pathname} belongs to agent ${existing.agentId}; requested agent ${agentId}.`,
-    );
-  }
+  assertOpenClawAgentSchemaContains(
+    db,
+    options.pathname,
+    schemaSql,
+    options.version < 18 ? "legacy" : "current",
+  );
+}
+
+function hasLegacyMemoryChunkProvenanceTrigger(db: DatabaseSync): boolean {
+  return Boolean(
+    db
+      .prepare(
+        "SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
+      )
+      .get(),
+  );
+}
+
+export function hasPendingMemoryChunkMetadataMigration(db: DatabaseSync): boolean {
+  return hasLegacyMemoryRecallMetadataColumns(db) || hasLegacyMemoryChunkProvenanceTrigger(db);
 }

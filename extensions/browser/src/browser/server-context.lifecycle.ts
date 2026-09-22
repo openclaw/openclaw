@@ -8,10 +8,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { RunningChrome } from "./chrome.js";
-import { stopOpenClawChrome } from "./chrome.js";
-import type { ResolvedBrowserProfile } from "./config.js";
+import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
+import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
-import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
+import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { getLoadedPwAiModule } from "./pw-ai-module.js";
 import type { PlaywrightConnectionRetirement } from "./pw-session.js";
@@ -30,7 +30,7 @@ type ProfileLifecycleActor = {
   handles: Set<RunningChrome>;
   cleanupChromeMcp: Set<string>;
   cleanupPlaywright: Map<string, PlaywrightConnectionRetirement>;
-  cleanupRelays: Set<ExtensionRelayHandle>;
+  cleanupRelays: Set<ExtensionRelayResource>;
   terminal: ProfileLifecycleTerminal | null;
   transitionReason: string | null;
   blockedReason: string | null;
@@ -46,6 +46,7 @@ type ProfileTransitionOptions = {
   captureProfileResources?: boolean;
   /** Bridge runtimes must not retire process-global adapters shared by another runtime. */
   closeSharedAdapters?: boolean;
+  managedChrome?: "stop" | "release-profile-data";
   exposeReason?: boolean;
   afterCleanup?: () => Promise<void>;
   rollbackTerminalOnFailure?: boolean;
@@ -392,6 +393,11 @@ async function cleanupProfileResources(params: {
   runtime: ProfileRuntimeState;
   eagerMcpClose: Promise<boolean> | null;
   hadPendingWork: boolean;
+  managedChrome?: {
+    mode: NonNullable<ProfileTransitionOptions["managedChrome"]>;
+    profile: ResolvedBrowserProfile;
+    resolved: ResolvedBrowserConfig;
+  };
 }): Promise<ProfileTransitionResult> {
   const { runtime } = params;
   let stopped = params.hadPendingWork;
@@ -454,6 +460,16 @@ async function cleanupProfileResources(params: {
   if (firstError) {
     throw firstError;
   }
+  if (params.managedChrome) {
+    const { mode, profile, resolved } = params.managedChrome;
+    const result = await stopOwnedOpenClawChrome(resolved, profile);
+    if (mode === "release-profile-data" && result.status === "unverified") {
+      throw new BrowserProfileUnavailableError(
+        `Cannot release browser profile "${profile.name}" data: ${result.reason}. Close that browser and retry.`,
+      );
+    }
+    stopped = result.status === "stopped" || stopped;
+  }
   return { stopped };
 }
 
@@ -466,10 +482,18 @@ export function beginProfileTransition(
 ): Promise<ProfileTransitionResult> {
   const actor = getProfileLifecycle(params.runtime);
   const ownerProfile = params.runtime.profile;
+  const managedChrome =
+    params.managedChrome &&
+    ownerProfile.driver === "openclaw" &&
+    ownerProfile.cdpIsLoopback &&
+    !ownerProfile.attachOnly
+      ? { mode: params.managedChrome, profile: ownerProfile, resolved: params.state.resolved }
+      : undefined;
   const hadPendingWork = actor.starts.size > 0 || actor.leases.size > 0 || actor.handles.size > 0;
   const reason = lifecycleError(params.runtime.profile.name, params.reason);
 
   actor.generation += 1;
+  params.runtime.externalBrowserMode = undefined;
   if (params.advanceConfigRevision) {
     actor.configRevision += 1;
   }
@@ -524,6 +548,7 @@ export function beginProfileTransition(
         runtime: params.runtime,
         eagerMcpClose,
         hadPendingWork: hadPendingWork || Boolean(eagerPlaywrightRetirement?.retired),
+        managedChrome,
       });
       cleanupCompleted = true;
       await params.afterCleanup?.();

@@ -13,25 +13,31 @@ export function renderChatTranscriptLayout<T>({
   renderRow,
   virtualizer,
   overlay,
+  header,
   scrollElementRef,
   captureInteractionResize,
   measureRowRefFor,
+  measureRows,
 }: {
   rows: readonly TranscriptRow<T>[];
   renderRow: (row: TranscriptRow<T>) => unknown;
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
   overlay: unknown;
+  header: unknown;
   scrollElementRef: (element?: Element) => void;
   captureInteractionResize: (event: Event) => void;
   measureRowRefFor: (key: string) => (element?: Element) => void;
+  measureRows: boolean;
 }): TemplateResult {
   const virtualRows = virtualizer.getVirtualItems();
   return html`
     <div
       class="chat-thread-inner chat-thread-inner--virtual"
+      ?data-measuring-rows=${measureRows}
       ${ref(scrollElementRef)}
       @click=${{ handleEvent: captureInteractionResize, capture: true }}
     >
+      ${header}
       <div
         class="chat-virtual-sizer"
         style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
@@ -59,13 +65,15 @@ export function renderChatTranscriptLayout<T>({
                   ? virtualRow.start - previous.end
                   : 0;
               return html`
-                ${gap > 0
-                  ? html`<div aria-hidden="true" style=${styleMap({ height: `${gap}px` })}></div>`
-                  : nothing}
+                ${
+                  gap > 0
+                    ? html`<div aria-hidden="true" style=${styleMap({ height: `${gap}px` })}></div>`
+                    : nothing
+                }
                 <div
-                  class="chat-virtual-row ${virtualRow.index === 0
-                    ? "chat-virtual-row--first"
-                    : ""}"
+                  class="chat-virtual-row ${
+                    virtualRow.index === 0 ? "chat-virtual-row--first" : ""
+                  }"
                   style=${styleMap({
                     // Keep skipped overscan rows at the virtualizer's known size.
                     containIntrinsicBlockSize: `auto ${virtualRow.size}px`,

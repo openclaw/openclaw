@@ -105,22 +105,18 @@ type OpenClawCompileCacheRespawnPlan = {
 };
 
 type OpenClawCompileCacheRespawnRuntime = RespawnChildRuntime & {
-  writeError: (message: string) => void;
+  writeError: (message: string) => void | Promise<void>;
 };
 
 function buildOpenClawCompileCacheRespawnPlan(params: {
   currentFile: string;
-  env?: NodeJS.ProcessEnv;
-  execArgv?: string[];
-  execPath?: string;
   installRoot: string;
-  argv?: string[];
   compileCacheDir?: string;
-  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
 }): OpenClawCompileCacheRespawnPlan | undefined {
   const env = params.env ?? process.env;
-  const argv = params.argv ?? process.argv;
-  const platform = params.platform ?? process.platform;
+  const argv = process.argv;
+  const platform = process.platform;
   if (isForegroundGmailRunArgv(argv) || shouldKeepNativeHookRelayInProcess(argv, platform)) {
     return undefined;
   }
@@ -140,8 +136,8 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
   };
   delete nextEnv.NODE_COMPILE_CACHE;
   return {
-    command: params.execPath ?? process.execPath,
-    args: [...(params.execArgv ?? process.execArgv), params.currentFile, ...argv.slice(2)],
+    command: process.execPath,
+    args: [...process.execArgv, params.currentFile, ...argv.slice(2)],
     env: nextEnv,
     detachForProcessTree: platform !== "win32" && !isTerminalInteractiveRespawnArgv(argv),
   };
@@ -150,12 +146,14 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
 export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   currentFile: string;
   installRoot: string;
-  prepareWriteError?: () => Promise<(message: string) => void>;
+  env?: NodeJS.ProcessEnv;
+  prepareWriteError?: () => Promise<(message: string) => void | Promise<void>>;
 }): Promise<boolean> {
   const plan = buildOpenClawCompileCacheRespawnPlan({
     currentFile: params.currentFile,
     installRoot: params.installRoot,
     compileCacheDir: getCompileCacheDir?.(),
+    env: params.env,
   });
   if (!plan) {
     return false;
@@ -181,7 +179,9 @@ function runOpenClawCompileCacheRespawnPlan(
     spawn,
     attachChildProcessBridge,
     exit: process.exit.bind(process) as (code?: number) => never,
-    writeError: (message: string) => process.stderr.write(message),
+    writeError: (message: string) => {
+      process.stderr.write(message);
+    },
   },
 ): ChildProcess {
   return runRespawnChildWithSignalBridge({
@@ -191,7 +191,7 @@ function runOpenClawCompileCacheRespawnPlan(
     detachForProcessTree: plan.detachForProcessTree,
     runtime,
     onError: (error) => {
-      runtime.writeError(
+      return runtime.writeError(
         `[openclaw] Failed to respawn CLI without compile cache: ${
           error instanceof Error ? (error.stack ?? error.message) : String(error)
         }\n`,
@@ -212,14 +212,4 @@ export function enableOpenClawCompileCache(params: {
   } catch {
     // Best-effort only; never block startup.
   }
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.entryCompileCacheTestApi")] = {
-    buildOpenClawCompileCacheRespawnPlan,
-    isSourceCheckoutInstallRoot,
-    resolveOpenClawCompileCacheDirectory,
-    runOpenClawCompileCacheRespawnPlan,
-    shouldEnableOpenClawCompileCache,
-  };
 }

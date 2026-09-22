@@ -1,5 +1,6 @@
 // Transient user-turn transcript context carried through runtime queues.
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import { createMessageInjectionAuthority } from "../auto-reply/reply/message-injection-authority.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
@@ -54,12 +55,37 @@ export function attachRuntimeUserTurnTranscriptRecorder(
   return runtimeMessage;
 }
 
+function readRuntimeUserTurnTranscriptRecorder(
+  runtimeMessage: AgentMessage,
+): UserTurnTranscriptRecorder | undefined {
+  return Reflect.get(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_RECORDER) as
+    | UserTurnTranscriptRecorder
+    | undefined;
+}
+
+/** A steered message retains its own live custody while another turn owns the runtime. */
+export function withRuntimeUserTurnTranscriptRecorder<T>(
+  runtimeMessage: AgentMessage,
+  append: (beforeFreshMessageCommit?: () => void) => T,
+): T {
+  const recorder = readRuntimeUserTurnTranscriptRecorder(runtimeMessage);
+  const assertCommit = recorder?.assertOriginalInputCommit;
+  // Capture before SessionManager canonicalizes the message and drops its symbols.
+  // Only the fresh SQL append invokes this assertion; replay keeps its recorded result.
+  const beforeFreshMessageCommit = assertCommit
+    ? createMessageInjectionAuthority(() => {
+        assertCommit();
+        return true;
+      })
+    : undefined;
+  const persist = () => append(beforeFreshMessageCommit);
+  return recorder?.withPendingInput ? recorder.withPendingInput(persist) : persist();
+}
+
 export function takeRuntimeUserTurnTranscriptRecorder(
   runtimeMessage: AgentMessage,
 ): UserTurnTranscriptRecorder | undefined {
-  const recorder = Reflect.get(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_RECORDER) as
-    | UserTurnTranscriptRecorder
-    | undefined;
+  const recorder = readRuntimeUserTurnTranscriptRecorder(runtimeMessage);
   if (recorder) {
     Reflect.deleteProperty(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_RECORDER);
   }

@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   executorTestMocks,
   expectRecordFields,
@@ -168,7 +168,7 @@ describe("Telegram native command built-ins", () => {
 
     expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalled();
     const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
-      ([params]) => params.command.key === "think",
+      ([params]) => params.command.key === "think" && params.catalog === runtimeCatalog,
     )?.[0];
     const menuRecord = expectRecordFields(menuCall, {}, "default-model thinking menu call");
     expect(menuRecord.provider).toBeUndefined();
@@ -285,7 +285,7 @@ describe("Telegram native command built-ins", () => {
     await handler(createTelegramPrivateCommandContext());
 
     const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
-      ([params]) => params.command.key === "fast",
+      ([params]) => params.command.key === "fast" && params.cfg === cfg,
     )?.[0];
     expectRecordFields(menuCall, { cfg }, "fast menu call");
     expect(
@@ -442,16 +442,72 @@ describe("Telegram native command built-ins", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
+  it.each(["high", "off"] as const)(
+    "uses the routed agent's per-model %s thinking default",
+    async (thinking) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            thinkingDefault: "medium",
+            models: { "openai/gpt-5.5": { params: { thinking: "low" } } },
+          },
+          entries: {
+            main: {},
+            alpha: {
+              models: { "openai/gpt-5.5": { params: { thinking } } },
+            },
+          },
+        },
+        bindings: [{ agentId: "alpha", match: { channel: "telegram", accountId: "default" } }],
+      };
+      const { handler, sendMessage } = registerAndResolveCommandHandler({
+        commandName: "think",
+        cfg,
+        allowFrom: ["*"],
+      });
+      await handler(createTelegramPrivateCommandContext());
+
+      expectSendMessageCall({
+        sendMessage,
+        chatId: 100,
+        textIncludes: `Current thinking level: ${thinking}.\nChoose level for /think.`,
+        requireReplyMarkup: true,
+        label: "routed agent model thinking menu",
+      });
+      expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    },
+  );
+
+  it("falls through when the prepared argument menu has no choices", async () => {
+    commandAuthMocks.resolveCommandArgMenu.mockReturnValue(null);
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg: {},
+      allowFrom: ["*"],
+    });
+    const next = vi.fn(async () => {});
+
+    await handler(createTelegramPrivateCommandContext(), next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
   it("does not load the session store when a native argument menu is skipped", async () => {
     const { handler } = registerAndResolveCommandHandler({
       commandName: "think",
       cfg: {},
       allowFrom: ["*"],
     });
-    await handler(createTelegramPrivateCommandContext({ match: "high" }));
+    const next = vi.fn(async () => {});
+    await handler(createTelegramPrivateCommandContext({ match: "high" }), next);
 
     expect(sessionMocks.sessionStoreEntries).not.toHaveBeenCalled();
     expect(agentRuntimeMocks.loadModelCatalog).not.toHaveBeenCalled();
-    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(next).toHaveBeenCalledOnce();
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 });

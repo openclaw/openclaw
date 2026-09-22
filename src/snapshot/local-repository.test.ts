@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as directoryDurability from "@openclaw/fs-safe/durability";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -9,8 +10,14 @@ import { createPrivateSqliteDirectory } from "../infra/sqlite-private-directory.
 import { runExec } from "../process/exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import {
+  createGenericDatabase,
+  expectMissing,
+  withDatabase,
+  withRestoredSpies,
+} from "./local-repository.test-support.js";
 import { hashSnapshotArtifact, readSnapshotManifest } from "./manifest.js";
 import {
   SNAPSHOT_MANIFEST_FILENAME,
@@ -18,8 +25,6 @@ import {
   type SnapshotManifest,
   type SnapshotResult,
 } from "./snapshot-provider.js";
-
-type RestorableSpy = { mockRestore: () => void };
 
 const durabilityTestState = vi.hoisted(() => ({
   beforePin: undefined as ((directoryPath: string) => void | Promise<void>) | undefined,
@@ -81,54 +86,6 @@ async function createTempDir(): Promise<string> {
     return privateTempDir;
   }
   return tempDir;
-}
-
-function createGenericDatabase(
-  databasePath: string,
-  options: { userVersion?: number; values?: string[]; wal?: boolean } = {},
-): void {
-  withDatabase(databasePath, (database) => {
-    database.exec(`
-      ${options.wal ? "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;" : ""}
-      PRAGMA user_version = ${options.userVersion ?? 7};
-      CREATE TABLE entries (
-        id INTEGER PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-    `);
-    const insert = database.prepare("INSERT INTO entries (value) VALUES (?)");
-    for (const value of options.values ?? ["one"]) {
-      insert.run(value);
-    }
-  });
-}
-
-function withDatabase<T>(
-  databasePath: string,
-  action: (database: InstanceType<ReturnType<typeof requireNodeSqlite>["DatabaseSync"]>) => T,
-  options: { readOnly?: boolean } = {},
-): T {
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(databasePath, options);
-  try {
-    return action(database);
-  } finally {
-    database.close();
-  }
-}
-
-async function withRestoredSpies<T>(spies: RestorableSpy[], action: () => Promise<T>): Promise<T> {
-  try {
-    return await action();
-  } finally {
-    for (const spy of spies) {
-      spy.mockRestore();
-    }
-  }
-}
-
-async function expectMissing(filePath: string): Promise<void> {
-  await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 function readGenericValues(databasePath: string): unknown[] {
@@ -520,13 +477,15 @@ describe("local SQLite snapshot repository", () => {
         }
         return handle;
       });
-      const originalLink = fs.link.bind(fs);
-      const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
-        if (snapshotDir && path.dirname(String(target)) === snapshotDir) {
-          events.push(`publish:${path.basename(String(target))}`);
-        }
-        await originalLink(source, target);
-      });
+      const publish = directoryDurability.publishFileExclusive;
+      const publicationSpy = vi
+        .spyOn(directoryDurability, "publishFileExclusive")
+        .mockImplementation(async (options) => {
+          if (snapshotDir && path.dirname(options.targetPath) === snapshotDir) {
+            events.push(`publish:${path.basename(options.targetPath)}`);
+          }
+          return await publish(options);
+        });
       const originalUnlink = fsSync.unlinkSync.bind(fsSync);
       const unlinkSpy = vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
         if (path.basename(String(filePath)) === ".pending") {
@@ -535,7 +494,7 @@ describe("local SQLite snapshot repository", () => {
         originalUnlink(filePath);
       });
 
-      await withRestoredSpies([openSpy, linkSpy, unlinkSpy], async () => {
+      await withRestoredSpies([openSpy, publicationSpy, unlinkSpy], async () => {
         try {
           await createGenericSnapshot(provider, sourcePath, "publication-order");
         } finally {
@@ -1122,8 +1081,8 @@ describe("local SQLite snapshot repository", () => {
   it("preserves both restore and cleanup failures", async () => {
     const { provider, restorePath, snapshot } =
       await createGenericSnapshotFixture("combined-failure");
-    const linkSpy = vi
-      .spyOn(fs, "link")
+    const publicationSpy = vi
+      .spyOn(directoryDurability, "publishFileExclusive")
       .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" }));
     const originalUnlink = fs.unlink.bind(fs);
     const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (filePath) => {
@@ -1133,7 +1092,7 @@ describe("local SQLite snapshot repository", () => {
       return await originalUnlink(filePath);
     });
 
-    await withRestoredSpies([unlinkSpy, linkSpy], async () => {
+    await withRestoredSpies([unlinkSpy, publicationSpy], async () => {
       const error = await provider
         .restoreFresh(snapshot.ref, restorePath)
         .catch((cause: unknown) => cause);
@@ -1227,21 +1186,24 @@ describe("local SQLite snapshot repository", () => {
 
   it("rejects an artifact changed after entering the final directory", async () => {
     const { provider, sourcePath } = await createGenericRepositoryFixture();
-    const originalLink = fs.link.bind(fs);
-    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
-      await originalLink(source, target);
-      if (
-        path.basename(String(target)) === SNAPSHOT_MANIFEST_FILENAME &&
-        !path.basename(path.dirname(String(target))).startsWith(".tmp-")
-      ) {
-        await fs.appendFile(
-          path.join(path.dirname(String(target)), SNAPSHOT_SQLITE_FILENAME),
-          "changed-after-final-move",
-        );
-      }
-    });
+    const publish = directoryDurability.publishFileExclusive;
+    const publicationSpy = vi
+      .spyOn(directoryDurability, "publishFileExclusive")
+      .mockImplementation(async (options) => {
+        const published = await publish(options);
+        if (
+          path.basename(options.targetPath) === SNAPSHOT_MANIFEST_FILENAME &&
+          !path.basename(path.dirname(options.targetPath)).startsWith(".tmp-")
+        ) {
+          await fs.appendFile(
+            path.join(path.dirname(options.targetPath), SNAPSHOT_SQLITE_FILENAME),
+            "changed-after-final-move",
+          );
+        }
+        return published;
+      });
 
-    await withRestoredSpies([linkSpy], async () => {
+    await withRestoredSpies([publicationSpy], async () => {
       await expect(
         createGenericSnapshot(provider, sourcePath, "final-directory-race"),
       ).rejects.toThrow(/size mismatch/u);
@@ -1307,32 +1269,35 @@ describe("local SQLite snapshot repository", () => {
 
   it("cleans a linked entry when post-link inspection fails", async () => {
     const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
-    const originalLink = fs.link.bind(fs);
+    const publish = directoryDurability.publishFileExclusive;
     const originalLstat = fs.lstat.bind(fs);
     let linkedArtifactPath: string | undefined;
     let failedInspection = false;
-    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
-      await originalLink(source, target);
-      if (
-        path.basename(String(target)) === SNAPSHOT_SQLITE_FILENAME &&
-        !path.basename(path.dirname(String(target))).startsWith(".tmp-")
-      ) {
-        linkedArtifactPath = path.resolve(String(target));
-      }
-    });
-    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (filePath) => {
+    const publicationSpy = vi
+      .spyOn(directoryDurability, "publishFileExclusive")
+      .mockImplementation(async (options) => {
+        const published = await publish(options);
+        if (
+          path.basename(options.targetPath) === SNAPSHOT_SQLITE_FILENAME &&
+          !path.basename(path.dirname(options.targetPath)).startsWith(".tmp-")
+        ) {
+          linkedArtifactPath = path.resolve(options.targetPath);
+        }
+        return published;
+      });
+    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
       if (
         linkedArtifactPath &&
         !failedInspection &&
-        path.resolve(String(filePath)) === linkedArtifactPath
+        path.resolve(String(args[0])) === linkedArtifactPath
       ) {
         failedInspection = true;
         throw Object.assign(new Error("post-link inspection failed"), { code: "EIO" });
       }
-      return await originalLstat(filePath);
+      return await originalLstat(...args);
     });
 
-    await withRestoredSpies([lstatSpy, linkSpy], async () => {
+    await withRestoredSpies([lstatSpy, publicationSpy], async () => {
       await expect(
         createGenericSnapshot(provider, sourcePath, "post-link-inspection"),
       ).rejects.toThrow(/post-link inspection failed/u);
@@ -1341,53 +1306,74 @@ describe("local SQLite snapshot repository", () => {
     });
   });
 
-  it("cleans an entry linked from a replaced staging pathname", async () => {
-    const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
-    const originalLink = fs.link.bind(fs);
-    let raced = false;
-    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
-      if (
-        !raced &&
-        path.basename(String(target)) === SNAPSHOT_SQLITE_FILENAME &&
-        !path.basename(path.dirname(String(target))).startsWith(".tmp-")
-      ) {
-        await fs.unlink(source);
-        await fs.writeFile(source, "raced staging bytes");
-        raced = true;
-      }
-      await originalLink(source, target);
-    });
+  it.each(["before", "after"] as const)(
+    "cleans an entry when its staging pathname changes %s publication",
+    async (phase) => {
+      const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
+      const publish = directoryDurability.publishFileExclusive;
+      let raced = false;
+      const publicationSpy = vi
+        .spyOn(directoryDurability, "publishFileExclusive")
+        .mockImplementation(async (options) => {
+          const replaceStaging = async () => {
+            if (
+              !raced &&
+              path.basename(options.targetPath) === SNAPSHOT_SQLITE_FILENAME &&
+              !path.basename(path.dirname(options.targetPath)).startsWith(".tmp-")
+            ) {
+              await fs.unlink(options.sourcePath);
+              await fs.writeFile(options.sourcePath, "raced staging bytes");
+              raced = true;
+            }
+          };
+          if (phase === "before") {
+            // Keep the removed inode live so the replacement cannot reuse its identity.
+            const stagingHandle = await fs.open(options.sourcePath, "r");
+            try {
+              await replaceStaging();
+              return await publish(options);
+            } finally {
+              await stagingHandle.close();
+            }
+          }
+          const published = await publish(options);
+          await replaceStaging();
+          return published;
+        });
 
-    await withRestoredSpies([linkSpy], async () => {
-      await expect(
-        createGenericSnapshot(provider, sourcePath, "replaced-entry-staging"),
-      ).rejects.toThrow(/publication|staging|target/u);
-      expect(raced).toBe(true);
-      await expect(provider.list()).resolves.toEqual([]);
-      await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
-    });
-  });
+      await withRestoredSpies([publicationSpy], async () => {
+        await expect(
+          createGenericSnapshot(provider, sourcePath, "replaced-entry-staging"),
+        ).rejects.toThrow(/publication|staging|target/u);
+        expect(raced).toBe(true);
+        await expect(provider.list()).resolves.toEqual([]);
+        await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+      });
+    },
+  );
 
   it("never overwrites a file raced into the final snapshot directory", async () => {
     const { provider, repositoryPath, sourcePath } = await createGenericRepositoryFixture();
-    const originalLink = fs.link.bind(fs);
+    const publish = directoryDurability.publishFileExclusive;
     let racedPath: string | undefined;
-    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
-      const targetPath = path.resolve(String(target));
-      if (
-        path.basename(targetPath) === SNAPSHOT_SQLITE_FILENAME &&
-        path.dirname(targetPath) !== repositoryPath &&
-        !path.basename(path.dirname(targetPath)).startsWith(".tmp-")
-      ) {
-        racedPath = targetPath;
-        await fs.writeFile(targetPath, "racer", { flag: "wx" });
-      }
-      await originalLink(source, target);
-    });
+    const publicationSpy = vi
+      .spyOn(directoryDurability, "publishFileExclusive")
+      .mockImplementation(async (options) => {
+        const targetPath = path.resolve(options.targetPath);
+        if (
+          path.basename(targetPath) === SNAPSHOT_SQLITE_FILENAME &&
+          path.dirname(targetPath) !== repositoryPath &&
+          !path.basename(path.dirname(targetPath)).startsWith(".tmp-")
+        ) {
+          racedPath = targetPath;
+          await fs.writeFile(targetPath, "racer", { flag: "wx" });
+        }
+        return await publish(options);
+      });
 
-    await withRestoredSpies([linkSpy], async () => {
-      await expect(createGenericSnapshot(provider, sourcePath, "entry-race")).rejects.toThrow(
-        /EEXIST/u,
+    await withRestoredSpies([publicationSpy], async () => {
+      await expect(createGenericSnapshot(provider, sourcePath, "entry-race")).rejects.toMatchObject(
+        { code: "EEXIST" },
       );
     });
     expect(racedPath).toBeDefined();
@@ -1659,13 +1645,16 @@ describe("local SQLite snapshot repository", () => {
   it("fails closed when fresh restore cannot publish atomically", async () => {
     const { provider, restorePath, snapshot } =
       await createGenericSnapshotFixture("atomic-restore");
-    const linkSpy = vi
-      .spyOn(fs, "link")
+    const publicationSpy = vi
+      .spyOn(directoryDurability, "publishFileExclusive")
       .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" }));
 
-    await withRestoredSpies([linkSpy], async () => {
+    await withRestoredSpies([publicationSpy], async () => {
       await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
         /requires hard-link support/u,
+      );
+      expect(publicationSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ targetPath: restorePath, strategy: "link-required" }),
       );
       await expectMissing(restorePath);
     });
@@ -1804,15 +1793,18 @@ describe("local SQLite snapshot repository", () => {
         "restore",
         "source.sqlite",
       );
-      const originalLink = fs.link.bind(fs);
-      const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
-        await originalLink(source, target);
-        if (path.resolve(String(target)) === canonicalRestorePath) {
-          await fs.writeFile(`${canonicalRestorePath}-wal`, "racer");
-        }
-      });
+      const publish = directoryDurability.publishFileExclusive;
+      const publicationSpy = vi
+        .spyOn(directoryDurability, "publishFileExclusive")
+        .mockImplementation(async (options) => {
+          const published = await publish(options);
+          if (path.resolve(options.targetPath) === canonicalRestorePath) {
+            await fs.writeFile(`${canonicalRestorePath}-wal`, "racer");
+          }
+          return published;
+        });
 
-      await withRestoredSpies([linkSpy], async () => {
+      await withRestoredSpies([publicationSpy], async () => {
         await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
           /unexpected sidecar/u,
         );

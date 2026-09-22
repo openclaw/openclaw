@@ -14,7 +14,10 @@ import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/s
 import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   collectHeartbeatTaskMigrationFindings,
@@ -52,6 +55,7 @@ beforeEach(() => {
 afterEach(async () => {
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   if (originalHome === undefined) {
     delete process.env.HOME;
@@ -148,6 +152,46 @@ async function createExistingInboxJob(fixture: Awaited<ReturnType<typeof createF
 }
 
 describe("heartbeat scratch task cron migration", () => {
+  it("preserves persisted tasks for a disabled owner until it is re-enabled", async () => {
+    const fixture = await createFixture(2_000_000_000_000);
+    fixture.cfg.agents!.defaults!.heartbeat!.every = "0m";
+
+    await expect(collectHeartbeatTaskMigrationFindings(fixture.cfg, fixture.env)).resolves.toEqual(
+      [],
+    );
+    await expect(
+      maybeMigrateHeartbeatTasksToCron({
+        cfg: fixture.cfg,
+        env: fixture.env,
+        shouldRepair: true,
+        nowMs: fixture.nowMs,
+      }),
+    ).resolves.toEqual({ changes: [], warnings: [] });
+    expect(
+      (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob),
+    ).toEqual([]);
+    expect(
+      readCronJobScratchState(fixture.storePath, fixture.monitor.id, { env: fixture.env }).scratch
+        ?.content,
+    ).toContain("tasks:");
+
+    fixture.cfg.agents!.defaults!.heartbeat!.every = "30m";
+    await expect(
+      maybeMigrateHeartbeatTasksToCron({
+        cfg: fixture.cfg,
+        env: fixture.env,
+        shouldRepair: true,
+        nowMs: fixture.nowMs,
+      }),
+    ).resolves.toMatchObject({
+      warnings: [],
+      changes: [expect.stringContaining("2 heartbeat tasks")],
+    });
+    expect(
+      (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob),
+    ).toHaveLength(2);
+  });
+
   it("does not create shared state while detecting heartbeat tasks", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-task-detect-"));
     tempDirs.push(root);
@@ -164,6 +208,7 @@ describe("heartbeat scratch task cron migration", () => {
 
   it("does not migrate older shared state while detecting heartbeat tasks", async () => {
     const fixture = await createFixture(2_000_000_000_000);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const statePath = resolveOpenClawStateSqlitePath(fixture.env);
     const older = openNodeSqliteDatabase(statePath);

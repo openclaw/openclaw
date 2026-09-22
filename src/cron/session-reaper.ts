@@ -3,7 +3,7 @@ import path from "node:path";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntriesCore,
+  listSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
@@ -12,7 +12,9 @@ import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCompetingSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
+import { deleteCronSessionViaGateway } from "./isolated-agent/session-cleanup.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { Logger } from "./service/state.js";
 
@@ -73,6 +75,15 @@ export async function removeCronJobBaseSession(params: {
   if (!existing) {
     return false;
   }
+  const sessionId = existing.sessionId.trim();
+  if (sessionId) {
+    return await deleteCronSessionViaGateway({
+      agentSessionKey: sessionKey,
+      sessionId,
+      lifecycleRevision: existing.lifecycleRevision,
+      sessionUpdatedAt: existing.updatedAt,
+    });
+  }
   const result = await applySessionEntryLifecycleMutation({
     agentId: params.agentId,
     storePath: params.sessionStorePath,
@@ -84,18 +95,17 @@ export async function removeCronJobBaseSession(params: {
 /**
  * Sweeps completed isolated cron run sessions while preserving base cron sessions.
  *
- * Must run outside the cron service `locked()` section because this acquires
- * the session-store file lock; reversing that order can deadlock timer ticks.
+ * Run outside the cron service `locked()` section: cleanup acquires session
+ * lifecycle and writer ownership, so nesting the queues can deadlock timer ticks.
  */
 export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
   agentId: string;
-  /** Resolved path to sessions.json — required. */
+  /** Resolved session-store target, interpreted by the SQLite accessor. */
   sessionStorePath: string;
+  isAgentAvailable?: (agentId: string) => boolean;
   nowMs?: number;
   log: Logger;
-  /** Override for testing — skips the min-interval throttle. */
-  force?: boolean;
 }): Promise<ReaperResult> {
   const retentionMs = resolveRetentionMs(params.cronConfig);
   if (retentionMs === null) {
@@ -110,8 +120,8 @@ export async function sweepCronRunSessions(params: {
   const lastSweepAtMs = lastSweepAtMsByTarget.get(targetKey) ?? 0;
 
   // Timer ticks can be frequent; throttle per agent/store target to avoid
-  // repeated session-store I/O while preserving a force path for tests.
-  if (!params.force && now >= lastSweepAtMs && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
+  // repeated session-store I/O.
+  if (now >= lastSweepAtMs && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
     return { swept: false, pruned: 0 };
   }
 
@@ -122,13 +132,31 @@ export async function sweepCronRunSessions(params: {
   let pruned = 0;
   let transcriptCleanupError: unknown;
   try {
+    if (params.isAgentAvailable?.(params.agentId) === false) {
+      params.log.debug({ agentId: params.agentId }, "cron-reaper: skipped unavailable agent");
+      return { swept: false, pruned: 0 };
+    }
     const cutoff = now - retentionMs;
     const requestedOwner = normalizeAgentId(params.agentId);
     let pendingMediaSessionKeys: Set<string> | undefined;
     const removals: SessionEntryLifecycleRemoval[] = [];
     // The accessor keeps agentId logical for admission checks and resolves a shared
     // store's physical database owner internally through its SQLite scope.
-    for (const { sessionKey, entry } of listSessionEntriesCore({
+    //
+    // Use the read-only listing here, not listSessionEntriesCore. The reaper only
+    // reads rows to decide removals; the writable open runs a synchronous
+    // `PRAGMA integrity_check` plus foreign-key check on every open, and this sweep
+    // fires per agent id every MIN_SWEEP_INTERVAL_MS, so on a large fleet it re-checks
+    // every agent database on the main thread and stalls the event loop (see #142476).
+    // The read-only open skips that gate. It also stays off the writable open's
+    // handle-cache path, which evicts an LRU handle and releases its lease through a
+    // write transaction on the shared state database, serialized on the state
+    // coordinator: a warm cache does not make this sweep cheap either, because the
+    // eviction cost is paid per open whether or not the file is reopened.
+    // The default "full" projection still returns owned entries that are safe to hold
+    // across the await below, and the actual pruning write
+    // (applySessionEntryLifecycleMutation) keeps its own integrity gate.
+    for (const { sessionKey, entry } of listSessionEntriesReadOnly({
       agentId: params.agentId,
       storePath,
     })) {
@@ -150,6 +178,14 @@ export async function sweepCronRunSessions(params: {
         if (pendingMediaSessionKeys.has(sessionKey)) {
           continue;
         }
+      }
+      // Skip known-busy rows so one active generation cannot abort idle sibling cleanup.
+      // The shared deletion guard still closes the race between selection and commit.
+      if (
+        entry.sessionId &&
+        isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, entry.sessionId])
+      ) {
+        continue;
       }
       removals.push({
         sessionKey,

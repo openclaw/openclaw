@@ -19,12 +19,14 @@ It is a hosted extraction/search service that supports bot circumvention and cac
 
 ## Install plugin
 
-Install the official plugin, then restart Gateway:
+Install the official plugin:
 
 ```bash
 openclaw plugins install @openclaw/firecrawl-plugin
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Keyless access and API keys
 
@@ -76,6 +78,12 @@ Notes:
 - `baseUrl` defaults to hosted Firecrawl at `https://api.firecrawl.dev`. Self-hosted overrides are allowed only for private/internal endpoints; HTTP is accepted only for those private targets.
 - `FIRECRAWL_BASE_URL` is the shared env fallback for Firecrawl search and scrape base URLs.
 - Firecrawl search requests default to a 30-second timeout; `firecrawl_search`'s `timeoutSeconds` parameter overrides it per call.
+
+Both Firecrawl `web_search` providers and `firecrawl_search` use
+`tools.web.search.cacheTtlMinutes` for OpenClaw's local result cache (default: 15
+minutes). Set it to `0` to bypass cache reads and writes. A shorter TTL limits
+reuse of existing entries; a longer TTL does not extend their original expiry.
+This setting does not change Firecrawl's upstream scrape caching.
 
 ## Configure Firecrawl web_fetch fallback
 

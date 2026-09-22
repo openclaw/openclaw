@@ -11,6 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { isAgentPlanProgressToolName } from "../session-cards/progress-card-channel-summary.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplayActionSpec = {
@@ -61,54 +62,6 @@ export function defaultTitle(name: string): string {
   return parts.join(" ");
 }
 
-function normalizeVerb(value?: string): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.replace(/_/g, " ");
-}
-
-function resolveActionArg(args: unknown): string | undefined {
-  if (!args || typeof args !== "object") {
-    return undefined;
-  }
-  const actionRaw = (args as Record<string, unknown>).action;
-  if (typeof actionRaw !== "string") {
-    return undefined;
-  }
-  const action = normalizeOptionalString(actionRaw);
-  return action || undefined;
-}
-
-/** Resolve display verb/detail from tool args and optional display metadata. */
-export function resolveToolVerbAndDetailForArgs(params: {
-  toolKey: string;
-  args?: unknown;
-  meta?: string;
-  spec?: ToolDisplaySpec;
-  fallbackDetailKeys?: string[];
-  detailMode: "first" | "summary";
-  toolDetailMode?: ToolDetailMode;
-  detailCoerce?: CoerceDisplayValueOptions;
-  detailMaxEntries?: number;
-  detailFormatKey?: (raw: string) => string;
-}): { verb?: string; detail?: string } {
-  return resolveToolVerbAndDetail({
-    toolKey: params.toolKey,
-    args: params.args,
-    meta: params.meta,
-    action: resolveActionArg(params.args),
-    spec: params.spec,
-    fallbackDetailKeys: params.fallbackDetailKeys,
-    detailMode: params.detailMode,
-    toolDetailMode: params.toolDetailMode,
-    detailCoerce: params.detailCoerce,
-    detailMaxEntries: params.detailMaxEntries,
-    detailFormatKey: params.detailFormatKey,
-  });
-}
-
 function coerceDisplayValue(
   value: unknown,
   opts: CoerceDisplayValueOptions = {},
@@ -121,7 +74,7 @@ function coerceDisplayValue(
     if (!trimmed) {
       return undefined;
     }
-    const rawLine = normalizeOptionalString(trimmed.split(/\r?\n/)[0]) ?? "";
+    const rawLine = normalizeOptionalString(trimmed.split(/\r?\n/, 1)[0]) ?? "";
     if (!rawLine) {
       return undefined;
     }
@@ -148,22 +101,18 @@ function coerceDisplayValue(
   }
   if (Array.isArray(value)) {
     const values: string[] = [];
-    let displayValueCount = 0;
     for (const item of value) {
       const display = coerceDisplayValue(item, opts);
       if (!display) {
         continue;
       }
-      displayValueCount += 1;
-      if (values.length < 3) {
-        values.push(display);
+      // The fourth visible value determines the ellipsis; later items cannot affect the preview.
+      if (values.length === 3) {
+        return `${values.join(", ")}…`;
       }
+      values.push(display);
     }
-    if (displayValueCount === 0) {
-      return undefined;
-    }
-    const preview = values.join(", ");
-    return displayValueCount > 3 ? `${preview}…` : preview;
+    return values.length > 0 ? values.join(", ") : undefined;
   }
   return undefined;
 }
@@ -650,16 +599,6 @@ function resolveWebFetchDetail(args: unknown): string | undefined {
   return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
 
-function resolveActionSpec(
-  spec: ToolDisplaySpec | undefined,
-  action: string | undefined,
-): ToolDisplayActionSpec | undefined {
-  if (!spec || !action) {
-    return undefined;
-  }
-  return spec.actions?.[action] ?? undefined;
-}
-
 function resolveDetailFromKeys(
   args: unknown,
   keys: string[],
@@ -707,10 +646,6 @@ function resolveDetailFromKeys(
     seen.add(token);
     unique.push(entry);
   }
-  if (unique.length === 0) {
-    return undefined;
-  }
-
   const maxEntries = opts.maxEntries ?? 8;
   const parts: string[] = [];
   for (let index = 0; index < unique.length && index < maxEntries; index += 1) {
@@ -719,14 +654,14 @@ function resolveDetailFromKeys(
       parts.push(`${entry.label} ${entry.value}`);
     }
   }
-  return parts.join(" · ");
+  return parts.join(", ");
 }
 
-function resolveToolVerbAndDetail(params: {
+/** Resolve display verb/detail from tool args and optional display metadata. */
+export function resolveToolVerbAndDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
   meta?: string;
-  action?: string;
   spec?: ToolDisplaySpec;
   fallbackDetailKeys?: string[];
   detailMode: "first" | "summary";
@@ -735,77 +670,65 @@ function resolveToolVerbAndDetail(params: {
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
 }): { verb?: string; detail?: string } {
-  const actionSpec = resolveActionSpec(params.spec, params.action);
+  // Card arguments belong to the card renderer; generic summaries must not expose them.
+  if (isAgentPlanProgressToolName(params.toolKey)) {
+    return {};
+  }
+  // Keep the existing read order when caller-owned options expose accessors.
+  const { toolKey, args, meta } = params;
+  const action = normalizeOptionalString(asRecord(params.args)?.action);
+  const {
+    spec,
+    fallbackDetailKeys,
+    detailMode,
+    toolDetailMode,
+    detailCoerce,
+    detailMaxEntries,
+    detailFormatKey,
+  } = params;
+  const actionSpec = spec && action ? (spec.actions?.[action] ?? undefined) : undefined;
   const fallbackVerb =
-    params.toolKey === "web_search"
+    toolKey === "web_search"
       ? "search"
-      : params.toolKey === "web_fetch"
+      : toolKey === "web_fetch"
         ? "fetch"
-        : params.toolKey.replace(/_/g, " ").replace(/\./g, " ");
-  const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
+        : toolKey.replace(/_/g, " ").replace(/\./g, " ");
+  const verb = normalizeOptionalString(actionSpec?.label ?? action ?? fallbackVerb)?.replace(
+    /_/g,
+    " ",
+  );
 
   let detail: string | undefined;
-  if (params.toolKey === "exec" || params.toolKey === "bash") {
-    detail = resolveExecDetail(params.args, { detailMode: params.toolDetailMode });
+  if (toolKey === "exec" || toolKey === "bash" || toolKey === "shell") {
+    detail = resolveExecDetail(args, { detailMode: toolDetailMode });
   }
-  if (!detail && params.toolKey === "read") {
-    detail = resolveReadDetail(params.args);
+  if (!detail && toolKey === "read") {
+    detail = resolveReadDetail(args);
   }
-  if (
-    !detail &&
-    (params.toolKey === "write" || params.toolKey === "edit" || params.toolKey === "attach")
-  ) {
-    detail = resolveWriteDetail(params.toolKey, params.args);
+  if (!detail && (toolKey === "write" || toolKey === "edit" || toolKey === "attach")) {
+    detail = resolveWriteDetail(toolKey, args);
   }
-  if (!detail && params.toolKey === "web_search") {
-    detail = resolveWebSearchDetail(params.args);
+  if (!detail && toolKey === "web_search") {
+    detail = resolveWebSearchDetail(args);
   }
-  if (!detail && params.toolKey === "web_fetch") {
-    detail = resolveWebFetchDetail(params.args);
+  if (!detail && toolKey === "web_fetch") {
+    detail = resolveWebFetchDetail(args);
   }
-  if (!detail && params.toolKey === "tool_search_code") {
-    detail = resolveToolSearchCodeDetail(params.args);
+  if (!detail && toolKey === "tool_search_code") {
+    detail = resolveToolSearchCodeDetail(args);
   }
 
-  const detailKeys =
-    actionSpec?.detailKeys ?? params.spec?.detailKeys ?? params.fallbackDetailKeys ?? [];
+  const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? fallbackDetailKeys ?? [];
   if (!detail && detailKeys.length > 0) {
-    detail = resolveDetailFromKeys(params.args, detailKeys, {
-      mode: params.detailMode,
-      coerce: params.detailCoerce,
-      maxEntries: params.detailMaxEntries,
-      formatKey: params.detailFormatKey,
+    detail = resolveDetailFromKeys(args, detailKeys, {
+      mode: detailMode,
+      coerce: detailCoerce,
+      maxEntries: detailMaxEntries,
+      formatKey: detailFormatKey,
     });
   }
-  if (!detail && params.meta) {
-    detail = params.meta;
+  if (!detail && meta) {
+    detail = meta;
   }
   return { verb, detail };
 }
-
-/** Normalize final detail text before attaching it to a tool display line. */
-export function formatToolDetailText(
-  detail: string | undefined,
-  opts: { prefixWithWith?: boolean } = {},
-): string | undefined {
-  if (!detail) {
-    return undefined;
-  }
-  const normalized = detail.includes(" · ")
-    ? (() => {
-        const parts: string[] = [];
-        for (const part of detail.split(" · ")) {
-          const trimmed = part.trim();
-          if (trimmed) {
-            parts.push(trimmed);
-          }
-        }
-        return parts.join(", ");
-      })()
-    : detail;
-  if (!normalized) {
-    return undefined;
-  }
-  return opts.prefixWithWith ? `with ${normalized}` : normalized;
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

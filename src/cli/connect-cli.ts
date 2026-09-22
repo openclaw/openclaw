@@ -14,6 +14,7 @@ import { isLoopbackHost } from "../gateway/net.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { loadNodeHostConfig, type NodeHostGatewayConfig } from "../node-host/config.js";
 import {
   nodeHostCloudflareAccessConfigFromEnv,
@@ -27,6 +28,7 @@ import { isDevicePairingJoinCode } from "../pairing/join-code.js";
 import { decodePairingSetupCode, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatHelpExamples } from "./help-format.js";
+import { addNodeCommandOptions } from "./node-cli/command-options.js";
 import { runNodeDaemonInstall } from "./node-cli/daemon.js";
 import { resolveNodePairGatewayPayload } from "./node-cli/gateway-options.js";
 
@@ -36,11 +38,14 @@ type ConnectCommandOptions = {
   sessionHost?: boolean;
   targetFile?: string;
   displayName?: string;
+  commands?: string[];
+  allCommands?: boolean;
 };
 
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 
 const MAX_JOIN_PAYLOAD_BYTES = 24 * 1024;
+const MAX_TARGET_FILE_BYTES = 64 * 1024;
 const JOIN_FETCH_TIMEOUT_MS = 15_000;
 
 function parseJoinTarget(target: string): URL | null {
@@ -147,19 +152,33 @@ async function resolveConnectTarget(
   if (target) {
     return target;
   }
-  const path = targetFile?.trim();
-  if (!path) {
+  const filePath = targetFile?.trim();
+  if (!filePath) {
     throw new Error("Connect target is required.");
   }
+  let buffer: Buffer;
   try {
-    const value = (await fs.readFile(path, "utf8")).trim();
-    if (!value) {
-      throw new Error("Connect target file is empty.");
-    }
-    return value;
-  } finally {
-    await fs.rm(path, { force: true });
+    // The original fs.readFile behavior followed symlinks in the target path.
+    // Resolve intentional links before the regular-file safety check so
+    // symlinked secret-mount or one-shot target files keep working.
+    const resolvedFilePath = await fs.realpath(filePath);
+    ({ buffer } = await readRegularFile({
+      filePath: resolvedFilePath,
+      maxBytes: MAX_TARGET_FILE_BYTES,
+    }));
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not read --target-file ${filePath} (max ${MAX_TARGET_FILE_BYTES} bytes): ${cause}`,
+      { cause: error },
+    );
   }
+  const value = buffer.toString("utf8").trim();
+  if (!value) {
+    throw new Error("Connect target file is empty.");
+  }
+  await fs.rm(filePath, { force: true });
+  return value;
 }
 
 async function runConnectCommand(
@@ -222,7 +241,10 @@ async function runConnectCommand(
     // replays setup after the one-shot bootstrap credential has been consumed.
     preferGatewayBootstrapToken: opts.ephemeral !== true,
     ...(forceWorkerRuns ? { forceWorkerRuns: true } : {}),
+    ...(opts.ephemeral === true ? { ephemeral: true } : {}),
     displayName: opts.displayName,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
   };
 
   if (!opts.service) {
@@ -247,13 +269,18 @@ async function runConnectCommand(
       },
     });
   }
-  await runNodeDaemonInstall({ displayName: opts.displayName, force: true });
+  await runNodeDaemonInstall({
+    displayName: opts.displayName,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
+    force: true,
+  });
 }
 
 export function registerConnectCli(program: Command): void {
-  program
-    .command("connect")
-    .description("Connect this machine to an OpenClaw Gateway as a node")
+  addNodeCommandOptions(
+    program.command("connect").description("Connect this machine to an OpenClaw Gateway as a node"),
+  )
     .argument("[target]", "oc-pair URL, setup code, or HTTPS Gateway join URL")
     .option("--service", "Install and run the node host as an OS service", false)
     .option("--ephemeral", "Run as an environment-managed disposable session host", false)

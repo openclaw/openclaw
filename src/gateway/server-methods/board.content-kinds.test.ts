@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import { readBoardRegistered } from "../../boards/board-store.test-support.js";
 import { createPluginBoardWidgetContentKindRegistrar } from "../../plugins/board-widget-content-kinds.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -8,7 +9,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { resolveAuthorizedBoardWidgetView } from "../board-widget-view.js";
+import { withAuthorizedBoardWidgetView } from "../board-widget-view.js";
 import { createBoardHarness } from "./board.test-support.js";
 
 function registeredWidgetRegistry() {
@@ -93,7 +94,9 @@ describe("board registered widget content kinds", () => {
           },
         ],
       });
-      expect(store.readWidgetRegistered("session", "status")).toMatchObject({
+      expect(
+        await readBoardRegistered(store, { sessionKey: "session", agentId: "main" }, "status"),
+      ).toMatchObject({
         source: "diagram:second",
         pluginKind: "diagram:diagram",
         revision: 2,
@@ -112,12 +115,16 @@ describe("board registered widget content kinds", () => {
         frameUrl: expect.stringContaining("/__openclaw__/board/"),
         sandboxUrl: expect.stringContaining("/mcp-app-sandbox"),
       });
-      const authorized = resolveAuthorizedBoardWidgetView(store, widget.viewTicket!, {
-        gatewayContext: context,
-      });
-      expect(authorized.document.html).toContain("<main>diagram:second</main>");
-      expect(authorized.document.html).toContain(
-        "https://gateway.test/__openclaw__/cap/diagram-token/__openclaw__/diagram/app.js",
+      await withAuthorizedBoardWidgetView(
+        store,
+        widget.viewTicket!,
+        (authorized) => {
+          expect(authorized.document.html).toContain("<main>diagram:second</main>");
+          expect(authorized.document.html).toContain(
+            "https://gateway.test/__openclaw__/cap/diagram-token/__openclaw__/diagram/app.js",
+          );
+        },
+        { gatewayContext: context },
       );
       expect(composeDocument).toHaveBeenCalledOnce();
     } finally {
@@ -195,7 +202,7 @@ describe("board registered widget content kinds", () => {
       }
       const widget = (snapshot as BoardSnapshot).widgets[0]!;
 
-      resolveAuthorizedBoardWidgetView(store, widget.viewTicket!, {
+      await withAuthorizedBoardWidgetView(store, widget.viewTicket!, () => {}, {
         gatewayContext: context,
       });
 

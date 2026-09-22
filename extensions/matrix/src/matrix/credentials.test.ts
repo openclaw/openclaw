@@ -2,11 +2,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasAnyMatrixAuth } from "../../auth-presence.js";
+import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
-import { openMatrixCredentialsStore } from "./credentials-read.js";
+import { loadMatrixCredentialsAsync, openMatrixCredentialsStore } from "./credentials-read.js";
 import {
   clearMatrixCredentials,
   credentialsMatchConfig,
@@ -37,8 +40,10 @@ describe("matrix credentials storage", () => {
     installMatrixTestRuntime({ stateDir });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
@@ -61,6 +66,9 @@ describe("matrix credentials storage", () => {
       accessToken: "secret-token",
       deviceId: "DEVICE123",
     });
+    await expect(loadMatrixCredentialsAsync({}, "ops")).resolves.toEqual(
+      loadMatrixCredentials({}, "ops"),
+    );
     expect(loadMatrixCredentials({}, "default")).toBeNull();
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
     expect(fs.existsSync(path.join(stateDir, "credentials", "matrix"))).toBe(false);
@@ -145,37 +153,62 @@ describe("matrix credentials storage", () => {
     });
   });
 
-  it("does not let delayed background writes undo credential revocation", async () => {
-    await saveMatrixCredentials(
-      {
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accessToken: "secret-token",
-      },
-      {},
-      "default",
-    );
-    clearMatrixCredentials({}, "default");
-
-    await expect(
-      saveBackfilledMatrixDeviceId(
+  it.each(["before", "during comparison"])(
+    "does not let delayed background writes undo credential revocation %s",
+    async (timing) => {
+      await saveMatrixCredentials(
         {
           homeserver: "https://matrix.example.org",
           userId: "@bot:example.org",
           accessToken: "secret-token",
-          deviceId: "STALE",
         },
         {},
         "default",
-      ),
-    ).resolves.toBe("skipped");
-    await touchMatrixCredentials({}, "default");
+      );
+      if (timing === "before") {
+        clearMatrixCredentials({}, "default");
+      } else {
+        const runtime = getMatrixRuntime();
+        const openStore = runtime.state.openKeyedStore.bind(runtime.state);
+        let revoked = false;
+        vi.spyOn(runtime.state, "openKeyedStore").mockImplementation(
+          <T>(options: OpenKeyedStoreOptions) => {
+            const store = openStore<T>(options);
+            if (store.compareAndApply) {
+              const compare = store.compareAndApply.bind(store);
+              store.compareAndApply = async (...args) => {
+                if (!revoked) {
+                  revoked = true;
+                  clearMatrixCredentials({}, "default");
+                }
+                return await compare(...args);
+              };
+            }
+            return store;
+          },
+        );
+      }
 
-    expect(loadMatrixCredentials({}, "default")).toBeNull();
-    expect(openMatrixCredentialsStore({}).lookup("account:default")).toMatchObject({
-      kind: "revoked",
-    });
-  });
+      await expect(
+        saveBackfilledMatrixDeviceId(
+          {
+            homeserver: "https://matrix.example.org",
+            userId: "@bot:example.org",
+            accessToken: "secret-token",
+            deviceId: "STALE",
+          },
+          {},
+          "default",
+        ),
+      ).resolves.toBe("skipped");
+      await touchMatrixCredentials({}, "default");
+
+      expect(loadMatrixCredentials({}, "default")).toBeNull();
+      expect(openMatrixCredentialsStore({}).lookup("account:default")).toMatchObject({
+        kind: "revoked",
+      });
+    },
+  );
 
   it("does not read or remove legacy credential files at runtime", () => {
     const legacyPath = path.join(stateDir, "credentials", "matrix", "credentials.json");

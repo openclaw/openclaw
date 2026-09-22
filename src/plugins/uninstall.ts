@@ -1,11 +1,10 @@
-// Removes installed plugins and updates plugin index records.
-import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readOpenClawManagedNpmRootOverrides } from "../infra/npm-managed-root.js";
+import { pathMayExistSync } from "../infra/path-existence.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -28,7 +27,10 @@ import {
   removePluginInstallOwnerFromConfig,
   removePluginRuntimePolicyFromConfig,
 } from "./uninstall-package-config.js";
-import { resolvePluginPackageUninstallPlan } from "./uninstall-package-plan.js";
+import {
+  prepareConfigForDisabledPluginSet,
+  resolvePluginPackageUninstallPlan,
+} from "./uninstall-package-plan.js";
 
 export { resolveUninstallChannelConfigKeys } from "./uninstall-config.js";
 
@@ -36,8 +38,8 @@ type UninstallActions = PluginConfigUninstallActions & {
   directory: boolean;
 };
 
-export const UNINSTALL_ACTION_LABELS = {
-  entry: "config entry",
+const UNINSTALL_ACTION_LABELS = {
+  entry: "plugin settings",
   install: "install record",
   allowlist: "allowlist entry",
   denylist: "denylist entry",
@@ -60,19 +62,31 @@ const UNINSTALL_ACTION_ORDER = [
   "directory",
 ] as const satisfies ReadonlyArray<keyof UninstallActions>;
 
-export function formatUninstallActionLabels(actions: UninstallActions): string[] {
-  return UNINSTALL_ACTION_ORDER.flatMap((key) =>
-    actions[key] ? [UNINSTALL_ACTION_LABELS[key]] : [],
-  );
+export function formatUninstallActionLabels(
+  actions: UninstallActions,
+  preview?: { channelConfigKeys: readonly string[] },
+): string[] {
+  return UNINSTALL_ACTION_ORDER.flatMap((key) => {
+    if (!actions[key]) {
+      return [];
+    }
+    if (preview) {
+      if (key === "memorySlot" || key === "contextEngineSlot") {
+        const slot = key === "memorySlot" ? "memory" : "contextEngine";
+        return [`${UNINSTALL_ACTION_LABELS[key]} (will reset to "${defaultSlotIdForKey(slot)}")`];
+      }
+      if (key === "channelConfig") {
+        return preview.channelConfigKeys.map(
+          (id) => `${UNINSTALL_ACTION_LABELS.channelConfig} (channels.${id})`,
+        );
+      }
+    }
+    return [UNINSTALL_ACTION_LABELS[key]];
+  });
 }
 
 function hasUninstallAction(actions: PluginConfigUninstallActions): boolean {
   return Object.values(actions).some(Boolean);
-}
-
-export function formatUninstallSlotResetPreview(slotKey: "memory" | "contextEngine"): string {
-  const actionKey = slotKey === "memory" ? "memorySlot" : "contextEngineSlot";
-  return `${UNINSTALL_ACTION_LABELS[actionKey]} (will reset to "${defaultSlotIdForKey(slotKey)}")`;
 }
 
 export type PluginUninstallDirectoryRemoval = {
@@ -388,6 +402,12 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
     configActions[key] ||= ownerRemoval.actions[key];
   }
 
+  if (hasInstall && runtimePluginIds.length > 0) {
+    // Preserve explicit uninstall intent so remaining provider/model references do not
+    // make startup repair treat the now-missing package as required.
+    newConfig = prepareConfigForDisabledPluginSet(newConfig, runtimePluginIds);
+  }
+
   if (!hasEntry && !hasInstall && !hasUninstallAction(configActions)) {
     return { ok: false, error: `Plugin not found: ${pluginId}` };
   }
@@ -453,12 +473,7 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
 }
 
 export function pluginUninstallTargetExists(target: string): boolean {
-  try {
-    lstatSync(target);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
+  return pathMayExistSync(target);
 }
 
 function isOwnedNpmRemoval(removal: PluginUninstallDirectoryRemoval): boolean {
@@ -516,6 +531,7 @@ function isOwnedNpmRemoval(removal: PluginUninstallDirectoryRemoval): boolean {
 
 export async function applyPluginUninstallDirectoryRemoval(
   removal: PluginUninstallDirectoryRemoval | null,
+  beforePersistentApply?: () => void,
 ): Promise<{ directoryRemoved: boolean; warnings: string[] }> {
   if (!removal) {
     return { directoryRemoved: false, warnings: [] };
@@ -523,6 +539,22 @@ export async function applyPluginUninstallDirectoryRemoval(
 
   const existed = pluginUninstallTargetExists(removal.target);
   const warnings: string[] = [];
+  let rethrowAuthorityFailure: (() => never) | undefined;
+  const assertPersistentApply = () => {
+    try {
+      beforePersistentApply?.();
+    } catch (error) {
+      rethrowAuthorityFailure = () => {
+        throw error;
+      };
+      throw error;
+    }
+  };
+  const warn = (message: string, error: unknown) => {
+    // Legacy filesystem cleanup is best effort; lost approval is a terminal owner failure.
+    rethrowAuthorityFailure?.();
+    warnings.push(`${message}: ${formatErrorMessage(error)}`);
+  };
   if (!existed && removal.cleanup?.kind !== "npm") {
     return { directoryRemoved: false, warnings };
   }
@@ -548,6 +580,7 @@ export async function applyPluginUninstallDirectoryRemoval(
     return { directoryRemoved: false, warnings: [ownershipWarning] };
   }
   if (removal.cleanup?.kind === "npm" && npmCleanupManifestExists && usesLegacySharedNpmRoot) {
+    assertPersistentApply();
     const uninstall = await runCommandWithTimeout(
       [
         "npm",
@@ -585,13 +618,15 @@ export async function applyPluginUninstallDirectoryRemoval(
         npmRoot: removal.cleanup.npmRoot,
         packageName: removal.cleanup.packageName,
         managedOverrides,
+        beforePersistentApply: assertPersistentApply,
       });
       if (warning) {
         warnings.push(warning);
       }
     } catch (error) {
-      warnings.push(
-        `Failed to sync managed peer dependencies after uninstalling ${removal.cleanup.packageName}: ${formatErrorMessage(error)}`,
+      warn(
+        `Failed to sync managed peer dependencies after uninstalling ${removal.cleanup.packageName}`,
+        error,
       );
     }
     try {
@@ -600,31 +635,21 @@ export async function applyPluginUninstallDirectoryRemoval(
         logger: {
           warn: (message) => warnings.push(message),
         },
+        beforePersistentApply: assertPersistentApply,
       });
     } catch (error) {
-      warnings.push(
-        `Failed to repair managed npm peer links after uninstalling ${removal.cleanup.packageName}: ${formatErrorMessage(error)}`,
+      warn(
+        `Failed to repair managed npm peer links after uninstalling ${removal.cleanup.packageName}`,
+        error,
       );
     }
   }
   if (!isOwnedNpmRemoval(removal) && pluginUninstallTargetExists(removal.target)) {
     return { directoryRemoved: false, warnings: [...warnings, ownershipWarning] };
   }
+  assertPersistentApply();
   try {
     await fs.rm(removal.target, { recursive: true, force: true });
-    if (removal.cleanup?.kind === "git") {
-      try {
-        await fs.rmdir(removal.cleanup.parentDir);
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "ENOENT" && code !== "ENOTEMPTY") {
-          warnings.push(
-            `Failed to remove empty git plugin install parent ${removal.cleanup.parentDir}: ${formatErrorMessage(error)}`,
-          );
-        }
-      }
-    }
-    return { directoryRemoved: existed, warnings };
   } catch (error) {
     return {
       directoryRemoved: false,
@@ -634,4 +659,19 @@ export async function applyPluginUninstallDirectoryRemoval(
       ],
     };
   }
+  if (removal.cleanup?.kind === "git") {
+    assertPersistentApply();
+    try {
+      await fs.rmdir(removal.cleanup.parentDir);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTEMPTY") {
+        warn(
+          `Failed to remove empty git plugin install parent ${removal.cleanup.parentDir}`,
+          error,
+        );
+      }
+    }
+  }
+  return { directoryRemoved: existed, warnings };
 }

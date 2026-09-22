@@ -41,11 +41,16 @@ function rewriteRejectedReplayInSessionManager(
   if (!rewriteResult.changed) {
     return { repaired: false, repairedCount: 0, reason: rewriteResult.reason };
   }
-  if (params.sessionFile) {
+  const target = params.sessionManager.getSessionTarget();
+  if (target || params.sessionFile) {
     emitSessionTranscriptUpdate({
-      sessionFile: params.sessionFile,
-      sessionKey: params.sessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+      ...(target
+        ? { target }
+        : {
+            sessionKey: params.sessionKey,
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+          }),
     });
   }
   log.warn(

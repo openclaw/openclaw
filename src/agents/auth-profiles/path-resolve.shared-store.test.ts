@@ -2,10 +2,11 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { writeConfigMachineState } from "../../state/config-machine-state.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnv } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resolveAuthStatePathForDisplay, resolveAuthStorePathForDisplay } from "./paths.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -36,8 +37,11 @@ describe("shared auth store path resolution", () => {
     vi.resetModules();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
     closeOpenClawStateDatabaseForTest();
   });
 
@@ -70,6 +74,22 @@ describe("shared auth store path resolution", () => {
       });
       expect(existsSync(expectedPath)).toBe(true);
     });
+  });
+
+  it("reloads ownership after an explicit out-of-process auth mutation", async () => {
+    const env = makeStateEnv();
+    const {
+      reloadSharedAuthStoreOwnership,
+      resolveSharedAuthStoreOwnership,
+      resolveSharedAuthStorePath,
+    } = await import("./path-resolve.js");
+
+    expect(resolveSharedAuthStoreOwnership(env)).toEqual({ location: "legacy-main" });
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
+    expect(resolveSharedAuthStoreOwnership(env)).toEqual({ location: "legacy-main" });
+
+    expect(reloadSharedAuthStoreOwnership(env)).toEqual({ location: "state-db" });
+    expect(resolveSharedAuthStorePath(env)).toBe(resolveOpenClawStateSqlitePath(env));
   });
 
   it("resolves the relocated store to the canonical shared state database", async () => {

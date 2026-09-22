@@ -6,7 +6,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { validateNodePresenceActivityPayload } from "../../packages/gateway-protocol/src/index.js";
+import { Value } from "typebox/value";
+import {
+  validateNodeHostStatsPayload,
+  validateNodePresenceActivityPayload,
+} from "../../packages/gateway-protocol/src/index.js";
+import { DesktopAvailabilitySchema } from "../../packages/gateway-protocol/src/schema/environments.js";
 import { resolveSessionAgentId as defaultResolveSessionAgentId } from "../agents/agent-scope.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { normalizeChannelId as defaultNormalizeChannelId } from "../channels/plugins/index.js";
@@ -43,6 +48,7 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../process/gatewa
 import { normalizeMainKey as defaultNormalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
+import { NODE_HOST_STATS_EVENT } from "../shared/node-host-stats.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   NODE_PRESENCE_ACTIVITY_EVENT,
@@ -155,7 +161,7 @@ function dispatchNodeAgentCommand(
       return;
     }
     await dependencies.agentCommandFromIngress(input, dependencies.defaultRuntime, ctx.deps);
-  }).catch((err: unknown) => {
+  }, "node-events:agent-turn").catch((err: unknown) => {
     ctx.logGateway.warn(`agent failed node=${nodeId}: ${dependencies.formatForLog(err)}`);
   });
 }
@@ -344,7 +350,7 @@ function dispatchReservedVoiceAgentCommand(params: {
       return;
     }
     await admission.work;
-  }).catch((err: unknown) => {
+  }, "node-events:voice-turn").catch((err: unknown) => {
     params.reservation.reject();
     params.ctx.logGateway.warn(
       `agent failed node=${params.nodeId}: ${params.dependencies.formatForLog(err)}`,
@@ -402,27 +408,12 @@ function pruneBoundedTimestampMap(
   pruneMapToMaxSize(map, params.maxEntries);
 }
 
-function compactExecEventOutput(raw: string) {
+function compactNodeEventText(raw: string, maxChars: number) {
   const normalized = raw.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= MAX_EXEC_EVENT_OUTPUT_CHARS) {
+  if (normalized.length <= maxChars) {
     return normalized;
   }
-  const safe = Math.max(1, MAX_EXEC_EVENT_OUTPUT_CHARS - 1);
-  return `${sliceUtf16Safe(normalized, 0, safe)}…`;
-}
-
-function compactNotificationEventText(raw: string) {
-  const normalized = raw.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= MAX_NOTIFICATION_EVENT_TEXT_CHARS) {
-    return normalized;
-  }
-  const safe = Math.max(1, MAX_NOTIFICATION_EVENT_TEXT_CHARS - 1);
+  const safe = Math.max(1, maxChars - 1);
   return `${sliceUtf16Safe(normalized, 0, safe)}…`;
 }
 
@@ -483,7 +474,7 @@ function queueSessionStoreTouch(params: {
       now: params.now,
       dependencies: params.dependencies,
     });
-  }).catch((err: unknown) => {
+  }, "node-events:voice-persist").catch((err: unknown) => {
     params.ctx.logGateway.warn(
       "voice session-store update failed: " + params.dependencies.formatForLog(err),
     );
@@ -631,6 +622,26 @@ export const handleNodeEvent = async (
     return pairingChangedResult(evt.event);
   }
   switch (evt.event) {
+    case "node.desktop.availability": {
+      const availability = parsePayloadObject(evt.payloadJSON);
+      if (!Value.Check(DesktopAvailabilitySchema, availability)) {
+        return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
+      }
+      const updated = ctx.updateNodeDesktopAvailability?.({
+        nodeId,
+        connId: opts?.connId,
+        availability,
+      });
+      if (updated === null || updated === undefined) {
+        return { ok: true, event: evt.event, handled: false, reason: "stale_connection" };
+      }
+      return {
+        ok: true,
+        event: evt.event,
+        handled: true,
+        reason: updated ? "updated" : "unchanged",
+      };
+    }
     case "voice.transcript": {
       const obj = parsePayloadObject(evt.payloadJSON);
       if (!obj) {
@@ -918,7 +929,7 @@ export const handleNodeEvent = async (
             to: deliveryTo,
             text: receiptText,
           });
-        }).catch((err: unknown) => {
+        }, "node-events:delivery").catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });
       } else if (wantsReceipt) {
@@ -996,8 +1007,14 @@ export const handleNodeEvent = async (
       }
       const packageNameRaw = normalizeOptionalString(obj.packageName);
       const packageName = packageNameRaw ?? null;
-      const title = compactNotificationEventText(normalizeOptionalString(obj.title) ?? "");
-      const text = compactNotificationEventText(normalizeOptionalString(obj.text) ?? "");
+      const title = compactNodeEventText(
+        normalizeOptionalString(obj.title) ?? "",
+        MAX_NOTIFICATION_EVENT_TEXT_CHARS,
+      );
+      const text = compactNodeEventText(
+        normalizeOptionalString(obj.text) ?? "",
+        MAX_NOTIFICATION_EVENT_TEXT_CHARS,
+      );
 
       let summary = `Notification ${change} (node=${nodeId} key=${key}`;
       if (packageName) {
@@ -1119,7 +1136,7 @@ export const handleNodeEvent = async (
         }
       } else if (evt.event === "exec.finished") {
         const exitLabel = timedOut ? "timeout" : `code ${exitCode ?? "?"}`;
-        const compactOutput = compactExecEventOutput(output);
+        const compactOutput = compactNodeEventText(output, MAX_EXEC_EVENT_OUTPUT_CHARS);
         const shouldNotify = timedOut || exitCode !== 0 || compactOutput.length > 0;
         if (!shouldNotify) {
           return undefined;
@@ -1227,6 +1244,18 @@ export const handleNodeEvent = async (
         ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
       }
       return undefined;
+    }
+    case NODE_HOST_STATS_EVENT: {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj || !validateNodeHostStatsPayload(obj)) {
+        return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
+      }
+      const hostStats = ctx.updateNodeHostStats?.({ nodeId, connId: opts?.connId, stats: obj });
+      if (!hostStats) {
+        return { ok: true, event: evt.event, handled: false, reason: "stale_connection" };
+      }
+      ctx.broadcast("node.hostStats", { nodeId, hostStats }, { dropIfSlow: true });
+      return { ok: true, event: evt.event, handled: true, reason: "updated" };
     }
     case NODE_PRESENCE_ACTIVITY_EVENT: {
       const obj = parsePayloadObject(evt.payloadJSON);

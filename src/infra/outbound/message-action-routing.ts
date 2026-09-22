@@ -5,6 +5,7 @@ import {
 import { readToolStringParam } from "../../agents/tools/common.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   prepareExternalMessageActionTargetForResolution,
   shouldDeferExternalMessageActionTargetResolution,
@@ -341,6 +342,8 @@ type PreparedMessageRoute = {
   accountId?: string | null;
   dryRun: boolean;
   defersExternalTargetResolution: boolean;
+  assertReadAuthorityCurrent?: () => void;
+  assertTargetAuthorityCurrent?: () => void;
 };
 
 export async function prepareMessageRoute(params: {
@@ -381,7 +384,7 @@ export async function prepareMessageRoute(params: {
     action,
     args: actionParams,
     toolContext: input.toolContext,
-    targetAliasSpec: channelPlugin?.actions?.messageActionTargetAliases?.[action],
+    targetAliasSpec: channelPlugin?.actions?.messageActionTargetAliases?.[action] ?? null,
     // Trusted direct operators retain opaque resource-id workflows. Native conversation
     // aliases still normalize above and remain subject to the shared cross-context policy.
     allowResourceOnly: input.conversationReadOrigin === "direct-operator",
@@ -396,6 +399,19 @@ export async function prepareMessageRoute(params: {
       agentId,
     });
   }
+  const delegatesActionToGateway =
+    Boolean(input.gateway) &&
+    channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
+  // Resolve once for locally owned sends so formatting and delivery share an
+  // identity. Remote calls must retain omitted input for the Gateway to resolve.
+  if (
+    !accountId &&
+    action === "send" &&
+    !delegatesActionToGateway &&
+    (channelPlugin.outbound?.deliveryMode !== "gateway" || input.gatewayOwnedDelivery === true)
+  ) {
+    accountId = resolveChannelDefaultAccountId({ plugin: channelPlugin, cfg });
+  }
   if (accountId) {
     actionParams.accountId = accountId;
   }
@@ -408,9 +424,6 @@ export async function prepareMessageRoute(params: {
     cfg,
     agentId,
   });
-  const delegatesActionToGateway =
-    Boolean(input.gateway) &&
-    channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
   const defersExternalTargetResolution =
     delegatesActionToGateway &&
     !dryRun &&
@@ -423,24 +436,41 @@ export async function prepareMessageRoute(params: {
       conversationReadOrigin: normalizeConversationReadInvocationOrigin(
         input.conversationReadOrigin,
       ),
+      messageActionAuthorization: input.messageActionAuthorization,
     });
+  let assertReadAuthorityCurrent: (() => void) | undefined;
+  let assertTargetAuthorityCurrent: (() => void) | undefined;
   if (!delegatesActionToGateway || dryRun) {
     const authorization = input.messageActionAuthorization;
-    actionParams = prepareExternalMessageActionTargetForResolution({
+    const preparedRead = prepareExternalMessageActionTargetForResolution({
       channel,
       action,
       cfg,
       params: actionParams,
       accountId: accountId ?? undefined,
+      agentId,
+      sessionKey: input.sessionKey,
+      sessionId: input.sessionId,
       requesterAccountId:
         authorization !== undefined
           ? authorization.requesterAccountId
           : (input.requesterAccountId ?? undefined),
+      requesterSenderId:
+        authorization !== undefined
+          ? authorization.requesterSenderId
+          : (input.requesterSenderId ?? undefined),
+      senderIsOwner: input.senderIsOwner,
       conversationReadOrigin: normalizeConversationReadInvocationOrigin(
         input.conversationReadOrigin,
       ),
       toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
+      messageActionAuthorization: authorization,
+      assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
     });
+    actionParams = preparedRead.params;
+    accountId = preparedRead.accountId ?? accountId;
+    assertReadAuthorityCurrent = preparedRead.assertReadAuthorityCurrent;
+    assertTargetAuthorityCurrent = preparedRead.assertTargetAuthorityCurrent;
   }
 
   return {
@@ -450,6 +480,8 @@ export async function prepareMessageRoute(params: {
     accountId,
     dryRun,
     defersExternalTargetResolution,
+    assertReadAuthorityCurrent,
+    assertTargetAuthorityCurrent,
   };
 }
 

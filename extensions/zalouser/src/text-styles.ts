@@ -25,7 +25,7 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
   };
   const sourceIR = parseSharedIR(source);
   const protectedSource = protectInlineSyntaxOutsideCode(source, sourceIR, registry);
-  const ir = parseSharedIR(protectedSource);
+  const ir = protectedSource === source ? sourceIR : parseSharedIR(protectedSource);
   stripUnsupportedHeadingStyles(ir, sourceIR, source);
   const attributed = renderMarkdownWithAttributedRanges(ir, { styleMap: ZALOUSER_STYLE_MAP });
   const projected = projectLocalTokens(attributed, registry);

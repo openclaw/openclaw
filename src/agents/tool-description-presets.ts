@@ -1,3 +1,6 @@
+const SECRET_EGRESS_USAGE_PROMPT =
+  "Gateway-host commands: use auto-injected opaque env sentinel under stored name. No secret templates; never override/print that variable. Native shell/sandbox/node: no protected injection. First command snapshots store for run; late saves need next turn.";
+
 // Compact built-in summaries shown in tool inventories and model-facing tool
 // descriptions when a longer contextual description is assembled elsewhere.
 export const EXEC_TOOL_DISPLAY_SUMMARY = "Run shell now.";
@@ -7,6 +10,8 @@ export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filter
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
 export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Run same-Gateway session/agent.";
+export const SESSIONS_SEND_RESULT_GUIDANCE =
+  'Accepted results report target admission as `targetDisposition: "queued"` or `"steered"`; `delivery.status` is only later announcement state, and neither proves target completion.';
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY =
   "Spawn hidden subagent (ephemeral) or visible work session (durable).";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
@@ -16,7 +21,7 @@ export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answe
 export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
 export const SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY =
-  "Manage reusable-skill proposals; inspect can select one stored artifact and returns complete content only when it fits the model budget.";
+  "Author reusable skills under the available tool's publication and review policy. Read one complete artifact when it fits the model budget.";
 
 export function describeAgentsListTool(sessionsSpawnAvailable: boolean): string {
   return sessionsSpawnAvailable
@@ -66,8 +71,9 @@ export function describeSessionLinkRule(base: string): string {
 /** Describes the sessions_list tool for model-facing instructions. */
 export function describeSessionsListTool(options?: SessionLinkDescriptionOptions): string {
   return [
-    "List visible sessions and sidebar categories; filter kind/label/agentId/search/activity/archive.",
-    "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles.",
+    "List visible session metadata and groups; filter ownerId/creatorId, projectId/workspaceDir, group/pinned, kind/agent/activity/archive. relationship=owned|created|involving selects the authenticated requesting user's sessions, not the agent's owner.",
+    "Metadata-only by default. limit defaults to 100; larger requests stay valid but limitApplied never exceeds 200. count is this page, not an inventory total. Continue with nextOffset and identical filters while hasMore; truncationReason names a scan/byte budget. Pages are live: deduplicate by agentId/key/sessionId or restart for a fresh inventory. archived=all includes active and archived rows.",
+    "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. enrichmentOmitted means previews exceeded the byte budget; read history separately.",
     "Use before history/send target selection.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
@@ -77,7 +83,8 @@ export function describeSessionsListTool(options?: SessionLinkDescriptionOptions
 export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "Read sanitized visible-session history.",
-    "Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
+    "Before reply/debug/resume. Use messageId (optionally sessionId) for anchored history; offset is ignored when messageId is set. Without messageId, use offset for plain pagination. limit bounds either mode. Include tool messages with includeTools.",
+    "pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
@@ -85,7 +92,7 @@ export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOpti
 /** Describes the sessions_search tool for model-facing instructions. */
 export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptions): string {
   return [
-    "Search your own past sessions for matching user and assistant text.",
+    "Search visible past sessions for matching user and assistant text.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
@@ -95,55 +102,60 @@ export function describeSessionsSendTool(): string {
   return [
     "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
     "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
+    SESSIONS_SEND_RESULT_GUIDANCE,
+    "mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work; mode:followup starts or queues a later turn without steering. mode:resume continues your paused native child task; returns runId/taskRunId, with completion from the task owner, not inline. Resume rejects watch:true and positive timeoutSeconds. Omit mode for existing automatic routing.",
     'Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status "no_reply" is terminal, so do not wait for an announcement.',
     "watch:true: notice arrives when others later change target session.",
   ].join(" ");
 }
 
+export function describeSubagentSpawnContext(threadAvailable: boolean): string {
+  return [
+    'Native: explicit context="isolated" starts clean; context="fork" copies requester transcript and requires the same agent.',
+    threadAvailable
+      ? "Omitted context follows configured threadBindings.defaultSpawnContext policy (fork by default) with thread=true; without a thread it is isolated."
+      : "Omitted context is isolated.",
+  ].join(" ");
+}
+
+export const SESSIONS_SPAWN_COLLECTOR_GUIDANCE =
+  "Default to ordinary spawn for one or a few children. Reserve `collect=true` (swarm) for large parallel fan-out (several similar children, about five or more). Collectors send no completion notification and cannot be steered; explicitly collect their results; structured result per `outputSchema`; `groupId` groups a batch.";
+
 /** Describes the sessions_spawn tool for model-facing instructions. */
 export function describeSessionsSpawnTool(options?: {
   acpAvailable?: boolean;
   threadAvailable?: boolean;
+  subagentThreadAvailable?: boolean;
   swarmEnabled?: boolean;
   sessionToolsVisibility?: SessionVisibilityScope;
   spawnRestricted?: boolean;
 }): string {
   // Callers that resolve the effective visibility get it rendered as fact;
-  // without it the copy must keep the "default" hedge instead of asserting tree.
+  // without it the copy must keep the "default" hedge instead of asserting the effective scope.
   const visibilityLine = options?.sessionToolsVisibility
     ? `Session listing/addressing obeys \`tools.sessions.visibility\` (${options.sessionToolsVisibility}: ${describeSessionVisibilityScope(options.sessionToolsVisibility, { spawnRestricted: options.spawnRestricted })}).`
-    : `Session listing/addressing obeys \`tools.sessions.visibility\` (\`tree\` default: ${describeSessionVisibilityScope("tree")}).`;
+    : `Session listing/addressing obeys \`tools.sessions.visibility\` (\`all\` default: ${describeSessionVisibilityScope("all")}).`;
   const runtimeDescription =
     options?.acpAvailable === false
-      ? 'Spawn clean child; default `runtime="subagent"`.'
-      : 'Spawn clean child; default `runtime="subagent"`; ACP needs explicit `runtime="acp"`.';
-  const sessionCompletionGuidance =
-    options?.acpAvailable === false
-      ? "After spawn, do non-overlap work. Run result returns; session output stays thread."
-      : 'After spawn, do non-overlap work. Run result returns; session output stays thread unless ACP `streamTo="parent"`.';
-  const completionGuidance = options?.threadAvailable
-    ? sessionCompletionGuidance
-    : "After spawn, do non-overlap work while run result returns.";
+      ? 'Spawn child session; default `runtime="subagent"`.'
+      : 'Spawn child session; default `runtime="subagent"`; ACP needs explicit `runtime="acp"`.';
   return [
     runtimeDescription,
     options?.threadAvailable
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
       : '`mode="run"` one-shot background.',
     "`agentId` targets a configured agent; `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require.",
-    '`visible=true`: durable visible session. Default for coding, multi-step work, or results user may revisit/steer/keep — not only when a thread is requested. Shows in web UI sidebar; works without UI: completion announces back, progress checkable. `category` explicitly groups it; omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (no `mode="run"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
+    "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task; omit `visible` or set it false, and report results through the parent.",
+    '`visible=true`: durable visible session. Use only when the user requests a separate session or needs to revisit and steer the work independently. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
     visibilityLine,
-    ...(options?.swarmEnabled
-      ? [
-          "`collect=true` (swarm): parallel fan-out collector children; structured result per `outputSchema`; `groupId` groups a batch.",
-        ]
-      : []),
-    "Inherits parent workspace. Native task arrives as first `[Subagent Task]`.",
+    ...(options?.swarmEnabled ? [SESSIONS_SPAWN_COLLECTOR_GUIDANCE] : []),
+    "Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message.",
     ...(options?.acpAvailable === false
       ? []
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
-    'Native transcript needed: `context="fork"`; else omit/isolated.',
-    "Hidden child: research, parallel/batch reads, throwaway side tasks. Coding, PRs, long builds, anything worth keeping: `visible=true`. No spawn for quick lookup/single read.",
-    completionGuidance,
+    describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
+    "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read.",
+    "After spawn, do non-overlap work; follow the receipt's completion mode.",
   ].join(" ");
 }
 
@@ -172,11 +184,10 @@ export function describeAskUserTool(): string {
 /** Describes the secrets tool and the store semantics the model cannot observe. */
 export function describeSecretsTool(): string {
   return [
-    "Obtain and manage credentials you never see: `request` asks the human to type a value into a trusted prompt that stores it directly, `list` returns entry metadata, and `delete` removes an entry.",
-    "A requested value is never readable back by any action; use `request` when you need a credential you do not have instead of asking for one in conversation, and never repeat a credential a human pasted into chat.",
-    "`request` blocks until the human answers, so ask only for a credential the current task actually needs.",
-    "Only protected secrets may be requested, and they reach a service through config references or, where the egress proxy is enabled, substitution into outbound requests; plain environment values are set by the operator in Settings or the CLI, never requested here.",
-    "List every hostname that will receive the value in `allowedHosts`: a secret with no allowed hosts can never be substituted, so the request silently produces an unusable credential.",
-    '`reason` is shown to the human deciding whether to provide the value. Stored entries are referenced elsewhere as {source:"store", id:NAME}; if the result is no_answer, continue with best judgment.',
+    "Protected credentials: `list` metadata first; `request` missing task-needed name + reason via human masked entry; `delete` removes an entry.",
+    "Request waits for human; value goes straight to shared store, never model/chat. Use the returned store SecretRef for supported config fields.",
+    "Gateway egress only: enabled proxy + exact allowedHosts required; no hosts blocks egress, not config refs. No plaintext fallback.",
+    SECRET_EGRESS_USAGE_PROMPT,
+    "Operator-set env entries are readable and managed separately from this protected store. no_answer means no credential was supplied.",
   ].join(" ");
 }

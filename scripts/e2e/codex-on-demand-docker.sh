@@ -1,18 +1,35 @@
 #!/usr/bin/env bash
-# Installs a prepared OpenClaw npm tarball in Docker, runs OpenAI onboarding,
-# and verifies the Codex plugin plus @openai/codex dependency are downloaded on demand.
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
+# Installs OpenClaw and Codex from npm artifacts with explicit capability consent,
+# then verifies OpenAI onboarding, managed dependencies, and doctor in Docker.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+
+TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
+CODEX_ASSERTIONS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/codex-on-demand/assertions.mjs \
+  "$ROOT_DIR/scripts/e2e/lib/codex-on-demand/assertions.mjs")"
+CODEX_DOCTOR_CHECKS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/codex-on-demand/doctor-checks.mjs \
+  "$ROOT_DIR/scripts/e2e/lib/codex-on-demand/doctor-checks.mjs" \
+  "")"
+CODEX_DOCTOR_CHECKS_ENABLED=0
+if [ -n "$CODEX_DOCTOR_CHECKS" ]; then
+  CODEX_DOCTOR_CHECKS_ENABLED=1
+fi
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-on-demand-e2e" OPENCLAW_CODEX_ON_DEMAND_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_CODEX_ON_DEMAND_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_CODEX_ON_DEMAND_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
-OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
 AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
 run_log=""
 
@@ -20,11 +37,6 @@ run_log=""
 # Keep the package install budget above the shared default so slow npm hosts reach
 # the Codex assertions instead of failing as a silent package-install timeout.
 export OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-1200s}"
-
-if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-  openclaw_prepublish_plugin_registry_configure_docker_args \
-    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
-fi
 
 cleanup() {
   if [ -n "${PACKAGE_TGZ:-}" ]; then
@@ -65,19 +77,28 @@ if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] &&
     OPENCLAW_DOCKER_ALL_LOG_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" \
     OPENCLAW_DOCKER_ALL_TIMINGS=0 \
     node "$ROOT_DIR/scripts/test-docker-all.mjs" --prepare-plugin-registry >/dev/null
-  openclaw_prepublish_plugin_registry_configure_docker_args \
-    "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
+  export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
 fi
 
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 run_log="$(docker_e2e_run_log codex-on-demand)"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 codex-on-demand empty)"
+CODEX_CONTRACT_MOUNT_ARGS=(
+  -v "$CODEX_ASSERTIONS:/app/scripts/e2e/lib/codex-on-demand/assertions.mjs:ro"
+)
+if [ -n "$CODEX_DOCTOR_CHECKS" ]; then
+  CODEX_CONTRACT_MOUNT_ARGS+=(
+    -v "$CODEX_DOCTOR_CHECKS:/app/scripts/e2e/lib/codex-on-demand/doctor-checks.mjs:ro"
+  )
+fi
 
 echo "Running Codex on-demand Docker E2E..."
 if ! docker_e2e_run_with_harness \
+  -v "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}/extensions/codex/package.json:/tmp/openclaw-candidate-codex-package.json:ro" \
+  "${CODEX_CONTRACT_MOUNT_ARGS[@]}" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e "OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED=$CODEX_DOCTOR_CHECKS_ENABLED" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
-  "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -euo pipefail
@@ -98,6 +119,7 @@ dump_debug_logs() {
   echo "Codex on-demand scenario failed with exit code $status" >&2
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
+    /tmp/openclaw-codex-plugin-install.log \
     /tmp/openclaw-codex-registry/server.log \
     /tmp/openclaw-onboard.json \
     /tmp/openclaw-plugins-list.json \
@@ -128,7 +150,17 @@ openclaw_e2e_assert_dep_absent "@openai/codex" "$HOME/.openclaw" "$NPM_CONFIG_PR
 
 configure_plugin_registry
 
-echo "Running non-interactive OpenAI onboarding; Codex should install on demand..."
+# Non-interactive onboarding cannot grant capabilities. Use the shared fixture
+# consent flow and the exact companion when testing an unpublished candidate.
+codex_install_args=("@openclaw/codex")
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  codex_install_args=("npm:@openclaw/codex@${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}" --pin)
+fi
+echo "Installing Codex on demand with explicit capability consent..."
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install "${codex_install_args[@]}" \
+  >/tmp/openclaw-codex-plugin-install.log 2>&1
+
+echo "Running non-interactive OpenAI onboarding with the accepted Codex plugin..."
 openclaw onboard --non-interactive --accept-risk \
   --mode local \
   --auth-choice openai-api-key \
@@ -143,6 +175,9 @@ openclaw onboard --non-interactive --accept-risk \
 openclaw plugins list --json >/tmp/openclaw-plugins-list.json
 openclaw plugins inspect codex --runtime --json >/tmp/openclaw-codex-inspect.json
 node scripts/e2e/lib/codex-on-demand/assertions.mjs
+if [ "$OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED" = "1" ]; then
+  node scripts/e2e/lib/codex-on-demand/doctor-checks.mjs
+fi
 
 echo "Codex on-demand Docker E2E passed"
 EOF
@@ -150,4 +185,5 @@ EOF
   exit 1
 fi
 
+docker_e2e_print_log "$run_log"
 echo "Codex on-demand Docker E2E passed"

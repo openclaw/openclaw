@@ -309,8 +309,8 @@ export async function installDownloadSpec(params: {
     const stagingDir = path.join(path.dirname(tempArchivePath), "extracted");
     try {
       await fs.promises.mkdir(stagingDir, { mode: 0o700 });
-      const { extractArchive } = await loadExtractModule();
-      const extractResult = await extractArchive({
+      const { extractSkillDownloadArchive } = await loadExtractModule();
+      const extractResult = await extractSkillDownloadArchive({
         archivePath: tempArchivePath,
         archiveType,
         targetDir: stagingDir,

@@ -51,27 +51,28 @@ describe("status.command-sections", () => {
     ).toBe("2 · no workspaces bootstrapping · sessions 0");
   });
 
-  it("shows when heartbeat is waiting for a delivery route", () => {
-    expect(
-      buildStatusHeartbeatValue({
-        summary: {
-          heartbeat: {
-            defaultAgentId: "main",
-            agents: [
-              {
-                agentId: "main",
-                enabled: true,
-                every: "30m",
-                everyMs: 1_800_000,
-                waitingForRoute: true,
-              },
-            ],
-          },
+  it("shows valid configuration examples when heartbeat is waiting for a delivery route", () => {
+    const value = buildStatusHeartbeatValue({
+      summary: {
+        heartbeat: {
+          defaultAgentId: "main",
+          agents: [
+            {
+              agentId: "main",
+              enabled: true,
+              every: "30m",
+              everyMs: 1_800_000,
+              waitingForRoute: true,
+            },
+          ],
         },
-      }),
-    ).toBe(
-      "30m (main; waiting for delivery route — set commands.ownerAllowFrom or channel allowFrom, or heartbeat.target)",
-    );
+      },
+    });
+
+    expect(value).toContain("30m (main; waiting for delivery route");
+    expect(value).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
+    expect(value).toContain('heartbeat.target="telegram"');
+    expect(value).toContain('heartbeat.to="123456789"');
   });
 
   it("formats security audit lines with finding caps and follow-up commands", () => {
@@ -227,7 +228,7 @@ describe("status.command-sections", () => {
       "  Session selected: deepseek/deepseek-v4-flash",
       "  Reason: session override",
       "  Clear with: /model default",
-      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-strictness",
     ]);
   });
 
@@ -263,7 +264,7 @@ describe("status.command-sections", () => {
       "  Session selected: ollama/qwen3.6-blue:35b-a3b",
       "  Reason: fallback selected",
       "  Action: check provider availability or retry with /model",
-      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-strictness",
     ]);
   });
 
@@ -318,6 +319,11 @@ describe("status.command-sections", () => {
       account: { configured: false },
       status: "muted(OFF)",
       detail: "not configured",
+    },
+    {
+      account: { enabled: false, lastError: "previous start failed" },
+      status: "muted(OFF)",
+      detail: "disabled (previous start failed)",
     },
   ])("classifies the real channel health detail $detail", ({ account, status, detail }) => {
     const health: HealthSummary = {
@@ -388,6 +394,50 @@ describe("status.command-sections", () => {
       Item: "Plugin calendar",
       Status: "warn(WARN)",
       Detail: "failed - service scheduler: address already in use; run openclaw doctor",
+    });
+  });
+
+  it("shows blocked ingress even when the channel connection is healthy", () => {
+    const rows = buildStatusHealthRows({
+      health: {
+        ok: true,
+        ts: 0,
+        durationMs: 42,
+        heartbeatSeconds: 60,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        deliveryQueues: {
+          failed: [],
+          ingressPressure: [
+            {
+              channelId: "telegram",
+              accountId: "ops",
+              laneCount: 1,
+              pendingCount: 2,
+              claimedCount: 0,
+              blockedCount: 1,
+              oldestReceivedAt: Date.now(),
+            },
+          ],
+        },
+      },
+      formatHealthChannelLines: () => ["Telegram: healthy"],
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toContainEqual({ Item: "Telegram", Status: "ok(OK)", Detail: "healthy" });
+    expect(rows).toContainEqual({
+      Item: "Delivery queue",
+      Status: "warn(WARN)",
+      Detail: expect.stringContaining(
+        "inbound telegram/ops: 1 pressured lane, 2 pending, 0 claimed, 1 blocked",
+      ),
     });
   });
 

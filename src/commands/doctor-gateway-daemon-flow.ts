@@ -1,6 +1,10 @@
 /** Doctor gateway daemon repair flow for service install, bootstrap, restart, and port hints. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import {
+  DEFAULT_RESTART_HEALTH_DELAY_MS,
+  DEFAULT_RESTART_HEALTH_TIMEOUT_MS,
+} from "../cli/daemon-cli/restart-health.constants.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,6 +29,7 @@ import {
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { classifySystemdUnavailableDetail } from "../daemon/systemd-unavailable.js";
 import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../gateway/net.js";
+import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { formatPortDiagnostics, isExpectedGatewayListeners } from "../infra/ports-format.js";
 import { inspectPortConnections, inspectPortUsage } from "../infra/ports-inspect.js";
@@ -53,8 +58,56 @@ import {
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
+import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import { healthCommandNonExiting } from "./health.js";
+
+function isTransientGatewayUnreachableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\bECONNREFUSED\b|couldn't connect|connection refused/i.test(message);
+}
+
+async function waitForGatewayHealthAfterRestart(runtime: RuntimeEnv): Promise<void> {
+  const startedAt = performance.now();
+  const deadline = startedAt + DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
+  let nextProgressAt = startedAt + 5_000;
+  let lastError: unknown;
+  while (true) {
+    const remainingMs = deadline - performance.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    try {
+      await healthCommandNonExiting(
+        { json: false, timeoutMs: Math.min(10_000, remainingMs) },
+        runtime,
+      );
+      return;
+    } catch (err) {
+      lastError = err;
+      if (err instanceof ExitError || !isTransientGatewayUnreachableError(err)) {
+        throw err;
+      }
+    }
+    const now = performance.now();
+    if (now >= deadline) {
+      break;
+    }
+    if (now >= nextProgressAt) {
+      note(
+        `Gateway is still starting (${Math.round((now - startedAt) / 1000)} s elapsed). The host may be slow; waiting for restart readiness.`,
+        "Gateway",
+      );
+      nextProgressAt = now + 5_000;
+    }
+    await sleep(Math.min(DEFAULT_RESTART_HEALTH_DELAY_MS, deadline - now));
+  }
+  const detail = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(
+    `Gateway not reachable after restart; Doctor waited ${Math.round((performance.now() - startedAt) / 1000)} s.\n${detail}\nRun ${formatCliCommand("openclaw gateway status --deep")} to diagnose.`,
+    { cause: lastError },
+  );
+}
 
 type LaunchAgentBootstrapDoctorOutcome =
   | { status: "skipped" }
@@ -70,6 +123,14 @@ function noteGatewayRuntime(
   const summary = formatGatewayRuntimeSummary(serviceRuntime);
   const hints = buildGatewayRuntimeHints(serviceRuntime, { platform: process.platform, env });
   const lines = summary ? [`Runtime: ${summary}`, ...hints] : hints;
+  const sqliteLibrary = ensureSqliteLibrarySelected();
+  if (sqliteLibrary.source !== "runtime") {
+    lines.push(
+      `SQLite (doctor process): ${sqliteLibrary.path} (${sqliteLibrary.version}, extension loading enabled)`,
+    );
+  } else if (sqliteLibrary.ignoredOverride) {
+    lines.push(`SQLite (doctor process): ${sqliteLibrary.ignoredOverride}; override ignored`);
+  }
   if (lines.length > 0) {
     note(lines.join("\n"), "Gateway");
   }
@@ -163,7 +224,7 @@ async function maybeReportEstablishedGatewayClients(
   deep: boolean,
   port?: number,
 ): Promise<void> {
-  if (!deep || cfg.gateway?.mode === "remote") {
+  if (!deep) {
     return;
   }
   const targetPort = port ?? resolveGatewayPort(cfg, process.env);
@@ -224,18 +285,18 @@ export async function maybeRepairGatewayDaemon(params: {
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
     return;
   }
+  // A remote health failure says nothing about the local service, even when
+  // the remote URL is loopback (for example, an SSH tunnel).
+  if (params.cfg.gateway?.mode === "remote") {
+    return;
+  }
   if (params.healthOk) {
     await maybeReportEstablishedGatewayClients(params.cfg, params.options.deep ?? false);
     return;
   }
-  if (params.healthSkipped && params.cfg.gateway?.mode === "remote") {
-    return;
-  }
 
   if (!(await shouldManageGatewayService())) {
-    if (params.cfg.gateway?.mode !== "remote") {
-      await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
-    }
+    await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
     note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
     return;
   }
@@ -252,8 +313,7 @@ export async function maybeRepairGatewayDaemon(params: {
       return null;
     }
   };
-  const isLocalDarwinGateway =
-    process.platform === "darwin" && params.cfg.gateway?.mode !== "remote";
+  const isLocalDarwinGateway = process.platform === "darwin";
   const serviceState = await readGatewayServiceState(service, { env: process.env });
   if (serviceState.loadState.status === "unknown") {
     await noteGatewayServiceInspectionFailure(serviceState.loadState);
@@ -319,13 +379,11 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
 
-  if (params.cfg.gateway?.mode !== "remote") {
-    const conflict = await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
-    if (!conflict && loaded && serviceRuntime?.status === "running") {
-      const lastError = await readLastGatewayErrorLine(process.env);
-      if (lastError) {
-        note(`Last gateway error: ${lastError}`, "Gateway");
-      }
+  const conflict = await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
+  if (!conflict && loaded && serviceRuntime?.status === "running") {
+    const lastError = await readLastGatewayErrorLine(process.env);
+    if (lastError) {
+      note(`Last gateway error: ${lastError}`, "Gateway");
     }
   }
 
@@ -333,7 +391,6 @@ export async function maybeRepairGatewayDaemon(params: {
     if (
       isLocalDarwinGateway &&
       (serviceRuntime?.missingGuiSession ||
-        serviceRuntime?.missingSupervision ||
         serviceRuntime?.cachedLabel ||
         serviceRuntime?.systemLaunchDaemon)
     ) {
@@ -341,82 +398,84 @@ export async function maybeRepairGatewayDaemon(params: {
       return;
     }
     note("Gateway service not installed.", "Gateway");
-    if (params.cfg.gateway?.mode !== "remote") {
-      if (process.platform === "linux") {
-        const systemGatewayServices = await findSystemGatewayServices();
-        if (systemGatewayServices.length > 0) {
-          note(renderBlockingSystemGatewayServices(systemGatewayServices), "Gateway");
-          return;
-        }
-      }
-      if (serviceRepairExternal) {
-        note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+    if (process.platform === "linux") {
+      const systemGatewayServices = await findSystemGatewayServices();
+      if (systemGatewayServices.length > 0) {
+        note(renderBlockingSystemGatewayServices(systemGatewayServices), "Gateway");
         return;
       }
-      const install = await confirmDoctorServiceRepair(
-        params.prompter,
-        {
-          message: "Install gateway service now?",
-          initialValue: true,
-          requiresInteractiveConfirmation: true,
-        },
-        serviceRepairPolicy,
+    }
+    if (serviceRepairExternal) {
+      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+      return;
+    }
+    const install = await confirmDoctorServiceRepair(
+      params.prompter,
+      {
+        message: "Install gateway service now?",
+        initialValue: true,
+        requiresInteractiveConfirmation: true,
+      },
+      serviceRepairPolicy,
+    );
+    if (!install) {
+      note(
+        `Run ${formatCliCommand("openclaw gateway install")} when you want to install the gateway service.`,
+        "Gateway",
       );
-      if (!install) {
+    }
+    if (install) {
+      const selection = await resolveGatewaySetupRuntime({
+        env: process.env,
+        existingCommand: serviceState.command,
+        selectRuntime: () =>
+          params.prompter.select<GatewayDaemonRuntime>(
+            {
+              message: "Gateway service runtime",
+              options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
+              initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+            },
+            DEFAULT_GATEWAY_DAEMON_RUNTIME,
+          ),
+      });
+      const tokenResolution = await resolveGatewayInstallToken({
+        config: params.cfg,
+        env: process.env,
+      });
+      for (const warning of tokenResolution.warnings) {
+        note(warning, "Gateway");
+      }
+      if (tokenResolution.unavailableReason) {
         note(
-          `Run ${formatCliCommand("openclaw gateway install")} when you want to install the gateway service.`,
+          [
+            "Gateway service install aborted.",
+            tokenResolution.unavailableReason,
+            "Fix gateway auth config/token input and rerun doctor.",
+          ].join("\n"),
           "Gateway",
         );
+        return;
       }
-      if (install) {
-        const daemonRuntime = await params.prompter.select<GatewayDaemonRuntime>(
-          {
-            message: "Gateway service runtime",
-            options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
-            initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
-          },
-          DEFAULT_GATEWAY_DAEMON_RUNTIME,
-        );
-        const tokenResolution = await resolveGatewayInstallToken({
-          config: params.cfg,
+      const port = resolveGatewayPort(params.cfg, process.env);
+      const plan = await buildGatewayInstallPlan({
+        env: selection.env,
+        port,
+        runtime: selection.runtime,
+        pinnedRuntimePath: selection.pinnedRuntimePath,
+        existingCommand: serviceState.command,
+        warn: (message, title) => note(message, title),
+        config: params.cfg,
+      });
+      try {
+        await service.install({
           env: process.env,
+          stdout: process.stdout,
+          ...plan,
+          runtimePinUpdate: selection.runtimePinUpdate,
         });
-        for (const warning of tokenResolution.warnings) {
-          note(warning, "Gateway");
-        }
-        if (tokenResolution.unavailableReason) {
-          note(
-            [
-              "Gateway service install aborted.",
-              tokenResolution.unavailableReason,
-              "Fix gateway auth config/token input and rerun doctor.",
-            ].join("\n"),
-            "Gateway",
-          );
-          return;
-        }
-        const port = resolveGatewayPort(params.cfg, process.env);
-        const { programArguments, workingDirectory, environment, environmentValueSources } =
-          await buildGatewayInstallPlan({
-            env: process.env,
-            port,
-            runtime: daemonRuntime,
-            warn: (message, title) => note(message, title),
-            config: params.cfg,
-          });
-        try {
-          await service.install({
-            env: process.env,
-            stdout: process.stdout,
-            programArguments,
-            workingDirectory,
-            environment,
-            environmentValueSources,
-          });
-        } catch (err) {
-          note(`Gateway service install failed: ${String(err)}`, "Gateway");
-          note(gatewayInstallErrorHint(), "Gateway");
-        }
+      } catch (err) {
+        note(`Gateway service install failed: ${String(err)}`, "Gateway");
+        note(gatewayInstallErrorHint(), "Gateway");
       }
     }
     return;
@@ -507,9 +566,8 @@ export async function maybeRepairGatewayDaemon(params: {
         note(restartStatus.message, "Gateway");
         return;
       }
-      await sleep(1500);
       try {
-        await healthCommandNonExiting({ json: false, timeoutMs: 10_000 }, params.runtime);
+        await waitForGatewayHealthAfterRestart(params.runtime);
       } catch (err) {
         // A trapped ExitError means healthCommand already printed its own
         // reachable-gateway diagnostic; re-formatting it would only add noise.

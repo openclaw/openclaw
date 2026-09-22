@@ -11,8 +11,10 @@ const buildCommit = "1234567890abcdef1234567890abcdef12345678";
 
 type LauncherVersionFixtureOptions = {
   buildCommit?: string;
+  buildVersion?: string;
   checkout?: "directory" | "linked";
   packageCommit?: string;
+  pendingLifecycle?: "complete" | "fail";
 };
 
 async function makeLauncherVersionFixture(
@@ -28,6 +30,18 @@ async function makeLauncherVersionFixture(
     path.resolve(process.cwd(), "node-version.mjs"),
     path.join(fixtureRoot, "node-version.mjs"),
   );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-sqlite.mjs"),
+    path.join(fixtureRoot, "node-sqlite.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-runtime-update.mjs"),
+    path.join(fixtureRoot, "node-runtime-update.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-runtime-recovery.mjs"),
+    path.join(fixtureRoot, "node-runtime-recovery.mjs"),
+  );
   await fs.mkdir(path.join(fixtureRoot, "dist"), { recursive: true });
   await fs.writeFile(
     path.join(fixtureRoot, "package.json"),
@@ -41,11 +55,24 @@ async function makeLauncherVersionFixture(
     path.join(fixtureRoot, "dist", "entry.js"),
     "throw new Error('version fast path must not load the runtime entry');\n",
   );
+  if (options.pendingLifecycle) {
+    await fs.writeFile(path.join(fixtureRoot, ".openclaw-lifecycle-pending"), "pending\n");
+    await fs.mkdir(path.join(fixtureRoot, "dist", "infra"), { recursive: true });
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "infra", "package-lifecycle.js"),
+      options.pendingLifecycle === "fail"
+        ? 'export async function completePendingPackageLifecycle() { throw new Error("fixture postinstall failed"); }\n'
+        : 'import fs from "node:fs/promises"; export async function completePendingPackageLifecycle({ packageRoot }) { await fs.rm(new URL(".openclaw-lifecycle-pending", `file://${packageRoot}/`)); }\n',
+    );
+  }
 
   if (options.buildCommit) {
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "build-info.json"),
-      JSON.stringify({ version: packageVersion, commit: options.buildCommit }),
+      JSON.stringify({
+        version: options.buildVersion ?? packageVersion,
+        commit: options.buildCommit,
+      }),
     );
   }
 
@@ -121,6 +148,21 @@ describe("openclaw launcher version provenance", () => {
     },
   );
 
+  it("reports the built version when the source package version moved ahead", async () => {
+    const fixtureRoot = await makeLauncherVersionFixture(fixtureRoots, {
+      buildCommit,
+      buildVersion: "2026.8.1",
+    });
+
+    // The launcher answers bare --version before the runtime entry loads, so a
+    // checkout that pulled without rebuilding must not report the unbuilt version.
+    const result = runLauncherVersion(fixtureRoot);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(`OpenClaw 2026.8.1 (${buildCommit.slice(0, 7)})\n`);
+    expect(result.stderr).toBe("");
+  });
+
   it.each(["--version", "-V", "-v"])(
     "reports the packaged build for the %s fast path without importing the runtime",
     async (flag) => {
@@ -133,6 +175,38 @@ describe("openclaw launcher version provenance", () => {
       expect(result.stderr).toBe("");
     },
   );
+
+  it("completes a pending package lifecycle before the version fast path", async () => {
+    const fixtureRoot = await makeLauncherVersionFixture(fixtureRoots, {
+      buildCommit,
+      pendingLifecycle: "complete",
+    });
+
+    const result = runLauncherVersion(fixtureRoot);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(`OpenClaw ${packageVersion} (${buildCommit.slice(0, 7)})\n`);
+    await expect(
+      fs.access(path.join(fixtureRoot, ".openclaw-lifecycle-pending")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it("fails closed before reporting a version when package lifecycle completion fails", async () => {
+    const fixtureRoot = await makeLauncherVersionFixture(fixtureRoots, {
+      buildCommit,
+      pendingLifecycle: "fail",
+    });
+
+    const result = runLauncherVersion(fixtureRoot);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("package lifecycle is incomplete");
+    expect(result.stderr).toContain("fixture postinstall failed");
+    await expect(
+      fs.readFile(path.join(fixtureRoot, ".openclaw-lifecycle-pending"), "utf8"),
+    ).resolves.toBe("pending\n");
+  });
 
   it.each([
     {

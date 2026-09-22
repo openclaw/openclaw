@@ -1,62 +1,117 @@
-// Rotates config backup files while preserving recent recovery points.
+// Config publication stages candidates before consuming recovery history.
+import type fs from "node:fs";
 import path from "node:path";
+import { isRootFileMissingFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { tempFile } from "../infra/fs-safe-advanced.js";
+import { replaceFileAtomicSync } from "../infra/replace-file.js";
 
 const CONFIG_BACKUP_COUNT = 5;
 
-interface BackupRotationFs {
-  unlink: (path: string) => Promise<void>;
-  rename: (from: string, to: string) => Promise<void>;
-  chmod?: (path: string, mode: number) => Promise<void>;
-}
-
-interface BackupMaintenanceFs extends BackupRotationFs {
-  copyFile: (from: string, to: string) => Promise<void>;
-}
-
-/**
- * Advances the config `.bak` ring before a new primary backup is copied in.
- *
- * Missing slots are ignored so interrupted writes or first-run configs do not
- * block the next config write.
- */
-async function rotateConfigBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
-  if (CONFIG_BACKUP_COUNT <= 1) {
-    return;
+/** Prepare backup bytes without blocking unrelated Gateway requests. */
+export async function prepareConfigFileWrite(params: {
+  configPath: string;
+  content: string;
+  previousRaw: string | null;
+  fsModule: typeof fs;
+  assertCurrent?: () => void;
+  destinationHardlinks?: "reject";
+  durable?: boolean;
+}) {
+  const { configPath, fsModule, assertCurrent } = params;
+  assertCurrent?.();
+  let backup: Awaited<ReturnType<typeof tempFile>> | undefined;
+  try {
+    if (params.previousRaw !== null) {
+      backup = await tempFile({
+        rootDir: path.dirname(configPath),
+        prefix: "openclaw-config-backup",
+        fileName: "original",
+      });
+      assertCurrent?.();
+      await using handle = await fsModule.promises.open(backup.path, "wx", 0o600);
+      assertCurrent?.();
+      await handle.writeFile(params.previousRaw, "utf8");
+      assertCurrent?.();
+      if (params.durable) {
+        await handle.sync();
+        assertCurrent?.();
+      }
+    }
+  } catch {
+    await backup?.[Symbol.asyncDispose]();
+    backup = undefined;
+    // Backup creation remains best effort; failed preparation never consumes history.
+    assertCurrent?.();
   }
-  const backupBase = `${configPath}.bak`;
-  const maxIndex = CONFIG_BACKUP_COUNT - 1;
-  await ioFs.unlink(`${backupBase}.${maxIndex}`).catch(() => {
-    // best-effort
-  });
-  for (let index = maxIndex - 1; index >= 1; index -= 1) {
-    await ioFs.rename(`${backupBase}.${index}`, `${backupBase}.${index + 1}`).catch(() => {
-      // best-effort
-    });
-  }
-  await ioFs.rename(backupBase, `${backupBase}.1`).catch(() => {
-    // best-effort
-  });
-}
-
-/**
- * Sets owner-only permissions on every backup slot when chmod exists.
- *
- * Backups are copied on mixed filesystems, so copy mode preservation is not a
- * portable security guarantee.
- */
-async function hardenBackupPermissions(configPath: string, ioFs: BackupRotationFs): Promise<void> {
-  if (!ioFs.chmod) {
-    return;
-  }
-  const backupBase = `${configPath}.bak`;
-  await ioFs.chmod(backupBase, 0o600).catch(() => {
-    // best-effort
-  });
-  for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
-    await ioFs.chmod(`${backupBase}.${i}`, 0o600).catch(() => {
-      // best-effort
-    });
-  }
+  return {
+    publish() {
+      return replaceFileAtomicSync({
+        filePath: configPath,
+        content: params.content,
+        dirMode: 0o700,
+        mode: 0o600,
+        copyFallbackOnPermissionError: true,
+        destinationHardlinks: params.destinationHardlinks,
+        syncTempFile: params.durable,
+        syncParentDir: params.durable,
+        fileSystem: fsModule,
+        beforeRename: () => {
+          if (!backup) {
+            return;
+          }
+          const openBackupArtifact = (absolutePath: string) => {
+            const opened = openRootFileSync({
+              absolutePath,
+              rootPath: path.dirname(configPath),
+              boundaryLabel: "config backup directory",
+              ioFs: fsModule,
+            });
+            return {
+              ...opened,
+              [Symbol.dispose]() {
+                if (opened.ok) {
+                  fsModule.closeSync(opened.fd);
+                }
+              },
+            };
+          };
+          const mutateBackupArtifact = (from: string, to?: string) => {
+            assertCurrent?.();
+            try {
+              using destination = to ? openBackupArtifact(to) : undefined;
+              if (destination && !destination.ok && !isRootFileMissingFailure(destination)) {
+                return;
+              }
+              using source = openBackupArtifact(from);
+              if (!source.ok) {
+                return;
+              }
+              assertCurrent?.();
+              if (to) {
+                fsModule.fchmodSync(source.fd, 0o600);
+                assertCurrent?.();
+                fsModule.renameSync(source.path, to);
+              } else {
+                fsModule.unlinkSync(source.path);
+              }
+            } catch {
+              assertCurrent?.();
+            }
+          };
+          const base = `${configPath}.bak`;
+          mutateBackupArtifact(`${base}.${CONFIG_BACKUP_COUNT - 1}`);
+          for (let index = CONFIG_BACKUP_COUNT - 2; index >= 0; index--) {
+            const from = index === 0 ? base : `${base}.${index}`;
+            mutateBackupArtifact(from, `${base}.${index + 1}`);
+          }
+          mutateBackupArtifact(backup.path, base);
+        },
+      });
+    },
+    async [Symbol.asyncDispose]() {
+      await backup?.[Symbol.asyncDispose]();
+    },
+  };
 }
 
 interface PreUpdateSnapshotFs {
@@ -102,16 +157,4 @@ export async function createPreUpdateConfigSnapshot(params: {
     // Best-effort: let the update continue, but allow its later snapshot pass to retry.
     preUpdateConfigSnapshotsWritten.delete(snapshotKey);
   }
-}
-
-/** Runs rotation, primary copy, and permission hardening. */
-export async function maintainConfigBackups(
-  configPath: string,
-  ioFs: BackupMaintenanceFs,
-): Promise<void> {
-  await rotateConfigBackups(configPath, ioFs);
-  await ioFs.copyFile(configPath, `${configPath}.bak`).catch(() => {
-    // best-effort
-  });
-  await hardenBackupPermissions(configPath, ioFs);
 }

@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getUserProfileDisplay } from "../state/user-profiles.js";
+import { getUserProfileDisplay } from "../state/user-profile-list.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 
 export type CurrentUserProfileDisplay =
@@ -26,7 +26,7 @@ export function resolveCurrentUserProfileDisplay(senderId: string): CurrentUserP
       hasUploadedAvatar: profile.hasAvatar,
     };
   } catch {
-    // Durable ids can also be channel sender ids; only profile ids resolve here.
+    // A missing or deleted profile remains unresolved; raw senders never reach this lookup.
     return { kind: "unresolved" };
   }
 }

@@ -1,7 +1,12 @@
-/** Read-only Gateway config tool for regular agents. */
+/** Gateway config reads and owner-requested self-updates. */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
+import {
+  DEFAULT_UPDATE_TIMEOUT_MS,
+  summarizeUpdateRunResponse,
+} from "../../gateway/update-run-summary.js";
 import { parseConfigPathArrayIndex } from "../../shared/path-array-index.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
@@ -11,8 +16,10 @@ import {
   textResult,
   ToolInputError,
 } from "./common.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
+import { callInProcessGatewayTool, getInProcessGatewayToolContext } from "./in-process-gateway.js";
 
 // Keep complete JSON below the smallest default tool-result presentation budget.
 const MAX_GATEWAY_CONFIG_GET_TEXT_CHARS = 12_000;
@@ -97,11 +104,14 @@ function isConfigSchemaPathNotFoundError(error: unknown): boolean {
   );
 }
 
-const GATEWAY_ACTIONS = ["config.get", "config.schema.lookup"] as const;
+const GATEWAY_ACTIONS = ["config.get", "config.schema.lookup", "update.run"] as const;
 
 const GatewayToolSchema = Type.Object({
   action: stringEnum(GATEWAY_ACTIONS),
   ...gatewayCallOptionSchemaProperties(),
+  note: Type.Optional(
+    Type.String({ description: "Short human note for the post-update restart notice." }),
+  ),
   path: Type.Optional(
     Type.String({
       description: "Required for config.schema.lookup; optional for config.get.",
@@ -109,20 +119,80 @@ const GatewayToolSchema = Type.Object({
   ),
 });
 
-export function createGatewayTool(): AnyAgentTool {
+const GatewayUpdateToolSchema = Type.Object({
+  action: stringEnum(["update.run"]),
+  note: GatewayToolSchema.properties.note,
+});
+
+export function createGatewayTool(options?: {
+  allowConfigReads?: boolean;
+  senderIsOwner?: boolean;
+  requesterSenderId?: string | null;
+}): AnyAgentTool {
+  const allowConfigReads = options?.allowConfigReads !== false;
   return {
     label: "Gateway",
     name: "gateway",
-    description: "Read gateway config + schema. Writes/restart unavailable; ask human.",
-    parameters: GatewayToolSchema,
+    description: allowConfigReads
+      ? "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell."
+      : "Update OpenClaw with update.run, only on an explicit owner request. Restart and completion notice are automatic. Never via shell.",
+    parameters: allowConfigReads ? GatewayToolSchema : GatewayUpdateToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
+      if (action === "update.run") {
+        const caller = getGatewayToolCallerIdentity();
+        if (options?.senderIsOwner !== true) {
+          const hint = formatCommandOwnerHint({
+            channel: caller?.turnSourceChannel,
+            id: options?.requesterSenderId,
+          });
+          return jsonResult({
+            ok: false,
+            code: "owner_required",
+            message: `Only the OpenClaw owner can start an update from chat. ${hint}`,
+          });
+        }
+        // Routing comes from the admitted caller, never model-authored destinations or credentials.
+        const deliveryContext = caller
+          ? {
+              channel: caller.turnSourceChannel,
+              to: caller.turnSourceTo,
+              accountId: caller.turnSourceAccountId,
+              threadId: caller.turnSourceThreadId,
+            }
+          : undefined;
+        const result = await callInProcessGatewayTool(
+          "update.run",
+          {
+            requester: {
+              channel: caller?.turnSourceChannel,
+              accountId: caller?.turnSourceAccountId,
+              senderId: options?.requesterSenderId ?? undefined,
+            },
+            sessionKey: caller?.sessionKey,
+            deliveryContext,
+            note: readToolStringParam(params, "note"),
+          },
+          {
+            // An explicit binding prevents the standalone client's remote fallback.
+            resolveGatewayContext: getInProcessGatewayToolContext,
+            timeoutMs: DEFAULT_UPDATE_TIMEOUT_MS,
+            signal,
+          },
+        );
+        return jsonResult(summarizeUpdateRunResponse(result));
+      }
+      if (!allowConfigReads) {
+        throw new ToolInputError(`Action not available: ${action}`);
+      }
       const gatewayOpts = readGatewayCallOptions(params);
+      const callConfigGateway = (method: string, requestParams: Record<string, unknown>) =>
+        callGatewayTool(method, gatewayOpts, requestParams, { signal });
 
       if (action === "config.get") {
         const path = readToolStringParam(params, "path");
-        const snapshot = await callGatewayTool("config.get", gatewayOpts, {}, { signal });
+        const snapshot = await callConfigGateway("config.get", {});
         const result = selectGatewayConfigGetResult(snapshot, path);
         return createGatewayConfigGetToolResult(result);
       }
@@ -132,12 +202,7 @@ export function createGatewayTool(): AnyAgentTool {
           label: "path",
         });
         try {
-          const result = await callGatewayTool(
-            "config.schema.lookup",
-            gatewayOpts,
-            { path },
-            { signal },
-          );
+          const result = await callConfigGateway("config.schema.lookup", { path });
           return jsonResult({ ok: true, result });
         } catch (error) {
           if (isConfigSchemaPathNotFoundError(error)) {

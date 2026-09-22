@@ -9,7 +9,7 @@ import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capab
 
 type AgentHarnessHostTestAttempt = Omit<
   EmbeddedRunAttemptParams,
-  "admittedRunContext" | "hostCapabilities"
+  "admittedRunContext" | "hostCapabilities" | "disableToolSearch" | "sessionReadScopeKey"
 >;
 
 /** Builds the production admitted-run host boundary for plugin integration tests. */
@@ -70,11 +70,15 @@ export {
 } from "../plugins/hook-runner-global.js";
 export { addTestHook } from "../plugins/hooks.test-helpers.js";
 export { createPluginRecord } from "../plugins/status.test-helpers.js";
+export { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+export { useProviderCatalogMetadata } from "./test-helpers/provider-catalog.js";
 export {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "../plugins/web-provider-public-artifacts.explicit.js";
 export {
+  createPluginRegistryOwner,
+  disposePluginRegistryInstances,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
@@ -90,7 +94,6 @@ export { onTrustedInternalDiagnosticEvent } from "../infra/diagnostic-events.js"
 export {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
-  resolveProviderWizardOptions,
   setProviderWizardProvidersResolverForTest,
 } from "../plugins/provider-wizard.js";
 export { resolveProviderPluginChoice } from "../plugins/provider-auth-choice.runtime.js";
@@ -115,12 +118,7 @@ export {
   requireRegisteredProvider,
   type RegisteredProviderCollections,
 } from "../test-utils/plugin-registration.js";
-export {
-  createNonExitingRuntimeEnv,
-  createNonExitingTypedRuntimeEnv,
-  createRuntimeEnv,
-  createTypedRuntimeEnv,
-} from "../test-utils/plugin-runtime-env.js";
+export { createNonExitingRuntimeEnv, createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 export {
   createPluginSetupWizardAdapter,
   createPluginSetupWizardConfigure,
@@ -134,13 +132,15 @@ export {
   runSetupWizardConfigure,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
-  selectFirstWizardOption,
   type WizardPrompter,
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 export { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
 export async function loadWebFetchToolFactoryForTest() {
   return (await import("../agents/tools/web-fetch.js")).createWebFetchTool;
+}
+export async function loadUserTurnTranscriptRecorderFactoryForTest() {
+  return (await import("../sessions/user-turn-transcript.js")).createUserTurnTranscriptRecorder;
 }
 export { buildPluginApi } from "../plugins/api-builder.js";
 export {

@@ -33,7 +33,9 @@ import {
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import { getLoadedPwAiModule } from "../pw-ai-module.js";
 import { finalizeRoleSnapshot, type RoleRefMap } from "../pw-role-snapshot.js";
+import type { BrowserObservedState } from "../pw-session-contracts.js";
 import type { AnnotationItem } from "../screenshot-annotate.js";
 import { scaleAnnotations } from "../screenshot-annotate.js";
 import {
@@ -70,7 +72,7 @@ import {
 } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
-import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
+import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, runProfileRouteOperation, toBoolean, toStringOrEmpty } from "./utils.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
@@ -90,7 +92,7 @@ async function collectChromeMcpSnapshotUrls(
     fn: `() => {
       const seen = new Set();
       const out = [];
-      for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
+      for (const anchor of document.querySelectorAll("a[href]")) {
         const href = anchor.href || "";
         if (!href || seen.has(href)) continue;
         const text = (anchor.innerText || anchor.textContent || anchor.getAttribute("aria-label") || "")
@@ -204,47 +206,43 @@ async function renderChromeMcpLabels(
   return { labels, skipped };
 }
 
-async function saveNormalizedScreenshotResponse(params: {
-  res: BrowserResponse;
+type ScreenshotCapture = {
   buffer: Buffer;
-  type: "png" | "jpeg";
-  targetId: string;
-  url: string;
-  labels?: boolean;
-  labelsCount?: number;
-  labelsSkipped?: number;
+  labels?: number;
+  skipped?: number;
   truncated?: boolean;
   annotations?: AnnotationItem[];
-}) {
-  // Measure original dimensions BEFORE normalization so we can rescale
-  // annotation coordinates if the response pipeline shrinks the image
-  // (longest-side or byte-budget cap). Annotation boxes are in the captured
-  // image's pixel space, so they would otherwise drift from the saved media.
-  const originalMeta = params.annotations?.length
-    ? ((await getImageMetadata(params.buffer)) ?? undefined)
-    : undefined;
-  const normalized = await normalizeBrowserScreenshot(params.buffer, {
+};
+
+async function saveBrowserMedia(buffer: Buffer, contentType: string, maxBytes: number) {
+  await ensureMediaDir();
+  const saved = await saveMediaBuffer(buffer, contentType, "browser", maxBytes);
+  return path.resolve(saved.path);
+}
+
+async function saveBrowserScreenshot(capture: ScreenshotCapture, type: "png" | "jpeg") {
+  const normalized = await normalizeBrowserScreenshot(capture.buffer, {
     maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
     maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   });
   const annotations = await rescaleAnnotationsForNormalization({
-    annotations: params.annotations,
-    originalMeta,
-    normalizedBuffer: normalized.buffer,
+    annotations: capture.annotations,
+    originalBuffer: capture.buffer,
+    normalized,
   });
-  await saveBrowserMediaResponse({
-    res: params.res,
-    buffer: normalized.buffer,
-    contentType: normalized.contentType ?? `image/${params.type}`,
-    maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-    targetId: params.targetId,
-    url: params.url,
-    labels: params.labels,
-    labelsCount: params.labelsCount,
-    labelsSkipped: params.labelsSkipped,
-    truncated: params.truncated,
-    annotations,
-  });
+  const imagePath = await saveBrowserMedia(
+    normalized.buffer,
+    normalized.contentType ?? `image/${type}`,
+    DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+  );
+  return {
+    imagePath,
+    imageType: normalized.contentType?.includes("jpeg") ? "jpeg" : type,
+    ...(typeof capture.labels === "number" ? { labels: true, labelsCount: capture.labels } : {}),
+    ...(typeof capture.skipped === "number" ? { labelsSkipped: capture.skipped } : {}),
+    ...(capture.truncated ? { truncated: true } : {}),
+    ...(annotations?.length ? { annotations } : {}),
+  };
 }
 
 /**
@@ -256,17 +254,18 @@ async function saveNormalizedScreenshotResponse(params: {
  */
 async function rescaleAnnotationsForNormalization(params: {
   annotations?: AnnotationItem[];
-  originalMeta?: { width?: number; height?: number };
-  normalizedBuffer: Buffer;
+  originalBuffer: Buffer;
+  normalized: Awaited<ReturnType<typeof normalizeBrowserScreenshot>>;
 }): Promise<AnnotationItem[] | undefined> {
   if (!params.annotations || params.annotations.length === 0) {
     return params.annotations;
   }
-  const orig = params.originalMeta;
-  if (!orig?.width || !orig?.height) {
+  const orig = params.normalized.sourceDimensions;
+  // The normalizer already owns the source dimensions; identical bytes cannot rescale boxes.
+  if (params.originalBuffer === params.normalized.buffer || !orig?.width || !orig?.height) {
     return params.annotations;
   }
-  const next = await getImageMetadata(params.normalizedBuffer);
+  const next = await getImageMetadata(params.normalized.buffer);
   if (!next?.width || !next?.height) {
     return params.annotations;
   }
@@ -274,61 +273,6 @@ async function rescaleAnnotationsForNormalization(params: {
     return params.annotations;
   }
   return scaleAnnotations(params.annotations, next.width / orig.width, next.height / orig.height);
-}
-
-async function saveBrowserMediaResponse(params: {
-  res: BrowserResponse;
-  buffer: Buffer;
-  contentType: string;
-  maxBytes: number;
-  targetId: string;
-  url: string;
-  labels?: boolean;
-  labelsCount?: number;
-  labelsSkipped?: number;
-  truncated?: boolean;
-  annotations?: AnnotationItem[];
-}) {
-  await ensureMediaDir();
-  const saved = await saveMediaBuffer(
-    params.buffer,
-    params.contentType,
-    "browser",
-    params.maxBytes,
-  );
-  params.res.json({
-    ok: true,
-    path: path.resolve(saved.path),
-    targetId: params.targetId,
-    url: params.url,
-    ...(params.labels ? { labels: true } : {}),
-    ...(typeof params.labelsCount === "number" ? { labelsCount: params.labelsCount } : {}),
-    ...(typeof params.labelsSkipped === "number" ? { labelsSkipped: params.labelsSkipped } : {}),
-    ...(params.truncated ? { truncated: true } : {}),
-    ...(params.annotations && params.annotations.length > 0
-      ? { annotations: params.annotations }
-      : {}),
-  });
-}
-
-function hasObservableBrowserState(state: unknown): boolean {
-  if (!state || typeof state !== "object") {
-    return false;
-  }
-  const dialogs = (state as { dialogs?: { pending?: unknown[]; recent?: unknown[] } }).dialogs;
-  return Boolean(dialogs?.pending?.length || dialogs?.recent?.length);
-}
-
-function hasPendingDialogs(state: unknown): boolean {
-  if (!state || typeof state !== "object") {
-    return false;
-  }
-  const dialogs = (state as { dialogs?: { pending?: unknown[] } }).dialogs;
-  return Boolean(dialogs?.pending?.length);
-}
-
-function browserStateResponseFields(state: unknown): { browserState?: unknown } {
-  return hasObservableBrowserState(state) ? { browserState: state } : {};
 }
 
 /** Register snapshot, screenshot, and navigation endpoints. */
@@ -358,7 +302,7 @@ export function registerBrowserAgentSnapshotRoutes(
       res,
       ctx,
       targetId,
-      run: async ({ profileCtx, tab, cdpUrl, signal }) => {
+      run: async ({ profileCtx, tab, cdpUrl, signal, assertCurrent }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
           await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
@@ -377,25 +321,35 @@ export function registerBrowserAgentSnapshotRoutes(
         if (!pw) {
           return;
         }
-        const resolveRelayTarget = captureBrowserOperationTarget({
+        const resolveRelayTarget = await captureBrowserOperationTarget({
           ctx,
           profileName: profileCtx.profile.name,
           targetId: tab.targetId,
         });
-        const result = await pw.navigateViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          url,
-          timeoutMs,
-          ...(resolveRelayTarget ? { resolveOperationTarget: resolveRelayTarget } : {}),
-          ...browserNavigationPolicyForProfile(ctx, profileCtx),
-        });
-        const currentTargetId = resolveOperationTargetOutcome({
-          actedOnTargetId: tab.targetId,
-          operationTargetId: result.targetId,
-          resolveRelayTarget,
-        });
-        res.json({ ok: true, ...result, targetId: currentTargetId });
+        try {
+          const result = await pw.navigateViaPlaywright({
+            cdpUrl,
+            targetId: tab.targetId,
+            url,
+            timeoutMs,
+            ...(assertCurrent ? { assertCurrent } : {}),
+            ...(resolveRelayTarget
+              ? {
+                  resolveOperationTarget: resolveRelayTarget,
+                  relayReference: resolveRelayTarget.reference,
+                }
+              : {}),
+            ...browserNavigationPolicyForProfile(ctx, profileCtx),
+          });
+          const currentTargetId = await resolveOperationTargetOutcome({
+            actedOnTargetId: tab.targetId,
+            operationTargetId: result.targetId,
+            resolveRelayTarget,
+          });
+          res.json({ ok: true, ...result, targetId: currentTargetId });
+        } finally {
+          await resolveRelayTarget?.release();
+        }
       },
     });
   });
@@ -423,11 +377,14 @@ export function registerBrowserAgentSnapshotRoutes(
           cdpUrl,
           targetId: tab.targetId,
         });
-        await saveBrowserMediaResponse({
-          res,
-          buffer: pdf.buffer,
-          contentType: "application/pdf",
-          maxBytes: pdf.buffer.byteLength,
+        const pdfPath = await saveBrowserMedia(
+          pdf.buffer,
+          "application/pdf",
+          pdf.buffer.byteLength,
+        );
+        res.json({
+          ok: true,
+          path: pdfPath,
           targetId: tab.targetId,
           url: tab.url,
         });
@@ -465,6 +422,14 @@ export function registerBrowserAgentSnapshotRoutes(
       targetId,
       enforceCurrentUrlAllowed: true,
       run: async ({ profileCtx, tab, cdpUrl, signal }) => {
+        const jsonScreenshot = async (capture: ScreenshotCapture) => {
+          const {
+            imagePath,
+            imageType: _imageType,
+            ...details
+          } = await saveBrowserScreenshot(capture, type);
+          res.json({ ok: true, path: imagePath, targetId: tab.targetId, url: tab.url, ...details });
+        };
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           const operation: ChromeMcpSnapshotOperation = {
             profileName: profileCtx.profile.name,
@@ -483,59 +448,41 @@ export function registerBrowserAgentSnapshotRoutes(
           if (element) {
             return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
           }
+          let labelResult: { labels: number; skipped: number } | undefined;
+          let truncated: boolean | undefined;
           if (labels) {
             const built = ref
               ? undefined
               : buildChromeMcpRouteSnapshot({
                   root: await takeChromeMcpSnapshot(operation),
                 });
-            const labelResult = await renderChromeMcpLabels({
+            labelResult = await renderChromeMcpLabels({
               ...operation,
               refs: ref ? [ref] : Object.keys(built?.refs ?? {}),
               clipToRef: Boolean(ref),
             });
-            try {
-              const buffer = await takeChromeMcpScreenshot({
-                ...operation,
-                uid: ref,
-                fullPage,
-                format: type,
-              });
-              await saveNormalizedScreenshotResponse({
-                res,
-                buffer,
-                type,
-                targetId: tab.targetId,
-                url: tab.url,
-                labels: true,
-                labelsCount: labelResult.labels,
-                labelsSkipped: labelResult.skipped,
-                truncated: built?.truncated,
-              });
-            } finally {
+            truncated = built?.truncated;
+          }
+          try {
+            const buffer = await takeChromeMcpScreenshot({
+              ...operation,
+              uid: ref,
+              fullPage,
+              format: type,
+            });
+            await jsonScreenshot({ buffer, ...labelResult, truncated });
+          } finally {
+            if (labels) {
               await clearChromeMcpOverlay(operation);
             }
-            return;
           }
-          const buffer = await takeChromeMcpScreenshot({
-            ...operation,
-            uid: ref,
-            fullPage,
-            format: type,
-          });
-          await saveNormalizedScreenshotResponse({
-            res,
-            buffer,
-            type,
-            targetId: tab.targetId,
-            url: tab.url,
-          });
           return;
         }
 
-        let buffer: Buffer;
+        let capture: ScreenshotCapture;
         const shouldUsePlaywright =
           labels ||
+          getLoadedPwAiModule()?.hasCachedPlaywrightBrowserConnection(cdpUrl) ||
           shouldUsePlaywrightForScreenshot({
             profile: profileCtx.profile,
             wsUrl: tab.wsUrl,
@@ -553,7 +500,7 @@ export function registerBrowserAgentSnapshotRoutes(
               targetId: tab.targetId,
               ssrfPolicy: ctx.state().resolved.ssrfPolicy,
             });
-            const labeled = await pw.screenshotWithLabelsViaPlaywright({
+            capture = await pw.screenshotWithLabelsViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
               refs: snap.refs,
@@ -562,49 +509,38 @@ export function registerBrowserAgentSnapshotRoutes(
               fullPage,
               ref,
               element,
+              signal,
             });
-            await saveNormalizedScreenshotResponse({
-              res,
-              buffer: labeled.buffer,
-              type,
+          } else {
+            capture = await pw.takeScreenshotViaPlaywright({
+              cdpUrl,
               targetId: tab.targetId,
-              url: tab.url,
-              labels: true,
-              labelsCount: labeled.labels,
-              labelsSkipped: labeled.skipped,
-              annotations: labeled.annotations,
+              ref,
+              element,
+              fullPage,
+              type,
+              timeoutMs,
+              signal,
             });
-            return;
           }
-          const snap = await pw.takeScreenshotViaPlaywright({
-            cdpUrl,
-            targetId: tab.targetId,
-            ref,
-            element,
-            fullPage,
-            type,
-            timeoutMs,
-          });
-          buffer = snap.buffer;
         } else {
-          buffer = await captureScreenshot({
-            wsUrl: tab.wsUrl ?? "",
-            ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
-            fullPage,
-            format: type,
-            quality: type === "jpeg" ? 85 : undefined,
-            timeoutMs,
-            headless: ctx.state().profiles.get(profileCtx.profile.name)?.running?.headless,
-          });
+          const profileRuntime = ctx.state().profiles.get(profileCtx.profile.name);
+          capture = {
+            buffer: await captureScreenshot({
+              wsUrl: tab.wsUrl ?? "",
+              ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
+              fullPage,
+              format: type,
+              quality: type === "jpeg" ? 85 : undefined,
+              timeoutMs,
+              headless:
+                profileRuntime?.running?.headless ??
+                (await profileRuntime?.externalBrowserMode?.headless),
+            }),
+          };
         }
 
-        await saveNormalizedScreenshotResponse({
-          res,
-          buffer,
-          type,
-          targetId: tab.targetId,
-          url: tab.url,
-        });
+        await jsonScreenshot(capture);
       },
     });
   });
@@ -634,6 +570,7 @@ export function registerBrowserAgentSnapshotRoutes(
       await runProfileRouteOperation({
         profileCtx,
         signal: req.signal,
+        assertCurrent: req.assertCurrent,
         run: async (signal) => {
           const tab = await profileCtx.ensureTabAvailable(targetId || undefined, {
             allowPlaywrightFallback: hasPlaywright,
@@ -647,6 +584,15 @@ export function registerBrowserAgentSnapshotRoutes(
               ...ssrfPolicyOpts,
             });
           }
+          await req.assertCurrent?.(profileCtx.profile);
+          const jsonSnapshot = (snapshot: Record<string, unknown>) =>
+            res.json({
+              ok: true,
+              format: plan.format,
+              targetId: tab.targetId,
+              url: tab.url,
+              ...snapshot,
+            });
           const deltaFamily: SnapshotDeltaFamily | undefined =
             plan.format === "ai"
               ? {
@@ -707,16 +653,8 @@ export function registerBrowserAgentSnapshotRoutes(
             };
             const snapshot = await takeChromeMcpSnapshot(operation);
             if (plan.format === "aria") {
-              const flattened = flattenChromeMcpRouteSnapshot(snapshot, plan.limit);
-              return res.json({
-                ok: true,
-                format: "aria",
-                targetId: tab.targetId,
-                url: tab.url,
-                ...flattened,
-              });
+              return jsonSnapshot(flattenChromeMcpRouteSnapshot(snapshot, plan.limit));
             }
-            const deltaState = createDeltaState();
             const built = buildChromeMcpRouteSnapshot({
               root: snapshot,
               options: {
@@ -737,7 +675,6 @@ export function registerBrowserAgentSnapshotRoutes(
             const finalizedBase = finalizeRoleSnapshot({
               ...builtWithUrls,
               maxChars: plan.resolvedMaxChars,
-              delta: deltaState.delta,
             });
             const finalized =
               built.truncated && !finalizedBase.truncated
@@ -750,50 +687,21 @@ export function registerBrowserAgentSnapshotRoutes(
                 refs,
               });
               try {
-                const labeled = await takeChromeMcpScreenshot({
+                const buffer = await takeChromeMcpScreenshot({
                   ...operation,
                   format: "png",
                 });
-                const normalized = await normalizeBrowserScreenshot(labeled, {
-                  maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-                  maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-                });
-                await ensureMediaDir();
-                const saved = await saveMediaBuffer(
-                  normalized.buffer,
-                  normalized.contentType ?? "image/png",
-                  "browser",
-                  DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-                );
-                deltaState.record(finalized.refs);
-                return res.json({
-                  ok: true,
-                  format: "ai",
-                  targetId: tab.targetId,
-                  url: tab.url,
-                  labels: true,
-                  labelsCount: labelResult.labels,
-                  labelsSkipped: labelResult.skipped,
-                  imagePath: path.resolve(saved.path),
-                  imageType: normalized.contentType?.includes("jpeg") ? "jpeg" : "png",
-                  ...finalized,
-                });
+                const image = await saveBrowserScreenshot({ buffer, ...labelResult }, "png");
+                return jsonSnapshot({ ...image, ...finalized });
               } finally {
                 await clearChromeMcpOverlay(operation);
               }
             }
-            deltaState.record(finalized.refs);
-            return res.json({
-              ok: true,
-              format: "ai",
-              targetId: tab.targetId,
-              url: tab.url,
-              ...finalized,
-            });
+            return jsonSnapshot(finalized);
           }
           const readPlaywrightDocumentIdentity =
             pwModule?.getMainFrameDocumentIdentityViaPlaywright;
-          let observedBrowserState: unknown;
+          let observedBrowserState: BrowserObservedState | undefined;
           if (pwModule) {
             observedBrowserState = await pwModule
               .getObservedBrowserStateViaPlaywright({
@@ -803,14 +711,16 @@ export function registerBrowserAgentSnapshotRoutes(
               })
               .catch(() => undefined);
           }
-          if (hasPendingDialogs(observedBrowserState)) {
-            return res.json({
-              ok: true,
-              format: plan.format,
-              targetId: tab.targetId,
-              url: tab.url,
+          const browserStateFields =
+            observedBrowserState &&
+            (observedBrowserState.dialogs.pending.length ||
+              observedBrowserState.dialogs.recent.length)
+              ? { browserState: observedBrowserState }
+              : {};
+          if (observedBrowserState?.dialogs.pending.length) {
+            return jsonSnapshot({
               blockedByDialog: true,
-              ...browserStateResponseFields(observedBrowserState),
+              ...browserStateFields,
               ...(plan.format === "aria" ? { nodes: [] } : { snapshot: "", refs: {} }),
             });
           }
@@ -865,17 +775,20 @@ export function registerBrowserAgentSnapshotRoutes(
               delta: deltaState.delta,
             };
 
-            const cdpRoleSnapshot = async () => {
-              if (!tab.wsUrl) {
+            const cdpRoleWsUrl =
+              plan.refsMode !== "aria" && !plan.selectorValue && !plan.frameSelectorValue
+                ? tab.wsUrl
+                : null;
+            let usedCdpRoleSnapshot = false;
+            const cdpRoleSnapshot = async (recurseIframes = true) => {
+              if (!cdpRoleWsUrl) {
                 return null;
               }
-              if (plan.selectorValue || plan.frameSelectorValue) {
-                return null;
-              }
-              return await snapshotRoleViaCdp({
-                wsUrl: tab.wsUrl,
+              const snapshot = await snapshotRoleViaCdp({
+                wsUrl: cdpRoleWsUrl,
                 ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
                 urls: plan.urls,
+                recurseIframes,
                 timeoutMs: plan.timeoutMs,
                 maxChars: plan.resolvedMaxChars,
                 options: {
@@ -885,21 +798,21 @@ export function registerBrowserAgentSnapshotRoutes(
                 },
                 delta: deltaState.delta,
               });
+              usedCdpRoleSnapshot = true;
+              return snapshot;
             };
 
-            const pw = await getPwAiModule();
+            const pw = pwModule;
+            const cdpFirstPw = pw && plan.wantsRoleSnapshot && cdpRoleWsUrl ? pw : null;
             const snap = plan.wantsRoleSnapshot
-              ? pw
-                ? await pw
-                    .snapshotRoleViaPlaywright(roleSnapshotArgs)
-                    .catch(async (err: unknown) => {
-                      const fallback = await cdpRoleSnapshot();
-                      if (fallback) {
-                        return fallback;
-                      }
-                      throw err;
-                    })
-                : await cdpRoleSnapshot()
+              ? cdpFirstPw
+                ? await cdpRoleSnapshot(false).catch(async () => {
+                    signal.throwIfAborted();
+                    return await cdpFirstPw.snapshotRoleViaPlaywright(roleSnapshotArgs);
+                  })
+                : pw
+                  ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
+                  : await cdpRoleSnapshot()
               : pw
                 ? await pw.snapshotAiViaPlaywright({
                     cdpUrl: profileCtx.profile.cdpUrl,
@@ -917,6 +830,18 @@ export function registerBrowserAgentSnapshotRoutes(
               await requirePwAi(res, "ai snapshot");
               return;
             }
+            if (usedCdpRoleSnapshot && pw && "refs" in snap) {
+              await assertDocumentIdentityUnchanged();
+              await pw.storeSnapshotRefsViaPlaywright({
+                cdpUrl: profileCtx.profile.cdpUrl,
+                targetId: tab.targetId,
+                refs: snap.refs,
+                ...(initialDocumentIdentity
+                  ? { expectedDocumentIdentity: initialDocumentIdentity }
+                  : {}),
+              });
+            }
+            let image: Awaited<ReturnType<typeof saveBrowserScreenshot>> | undefined;
             if (plan.labels) {
               if (!pw) {
                 return jsonError(res, 501, "Snapshot labels require Playwright.");
@@ -927,55 +852,16 @@ export function registerBrowserAgentSnapshotRoutes(
                 refs: "refs" in snap ? snap.refs : {},
                 type: "png",
                 timeoutMs: plan.timeoutMs,
+                signal,
               });
-              const originalMeta = labeled.annotations.length
-                ? ((await getImageMetadata(labeled.buffer)) ?? undefined)
-                : undefined;
-              const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
-                maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-                maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-              });
-              const scaledAnnotations = await rescaleAnnotationsForNormalization({
-                annotations: labeled.annotations,
-                originalMeta,
-                normalizedBuffer: normalized.buffer,
-              });
-              await ensureMediaDir();
-              const saved = await saveMediaBuffer(
-                normalized.buffer,
-                normalized.contentType ?? "image/png",
-                "browser",
-                DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-              );
-              const imageType = normalized.contentType?.includes("jpeg") ? "jpeg" : "png";
-              await assertDocumentIdentityUnchanged();
-              deltaState.record(snap.refs ?? {});
-              return res.json({
-                ok: true,
-                format: plan.format,
-                targetId: tab.targetId,
-                url: tab.url,
-                ...browserStateResponseFields(observedBrowserState),
-                labels: true,
-                labelsCount: labeled.labels,
-                labelsSkipped: labeled.skipped,
-                ...(scaledAnnotations && scaledAnnotations.length > 0
-                  ? { annotations: scaledAnnotations }
-                  : {}),
-                imagePath: path.resolve(saved.path),
-                imageType,
-                ...snap,
-              });
+              image = await saveBrowserScreenshot(labeled, "png");
             }
 
             await assertDocumentIdentityUnchanged();
             deltaState.record(snap.refs ?? {});
-            return res.json({
-              ok: true,
-              format: plan.format,
-              targetId: tab.targetId,
-              url: tab.url,
-              ...browserStateResponseFields(observedBrowserState),
+            return jsonSnapshot({
+              ...browserStateFields,
+              ...image,
               ...snap,
             });
           }
@@ -984,47 +870,34 @@ export function registerBrowserAgentSnapshotRoutes(
             profile: profileCtx.profile,
             wsUrl: tab.wsUrl,
           });
-          const snap = usePlaywrightAriaSnapshot
-            ? (() => {
-                // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
-                // Also covers cases where wsUrl is missing/unusable.
-                return requirePwAi(res, "aria snapshot").then(async (pw) => {
-                  if (!pw) {
-                    return null;
-                  }
-                  return await pw.snapshotAriaViaPlaywright({
-                    cdpUrl: profileCtx.profile.cdpUrl,
-                    targetId: tab.targetId,
-                    limit: plan.limit,
-                    timeoutMs: plan.timeoutMs,
-                    ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-                  });
-                });
-              })()
-            : snapshotAria({
-                wsUrl: tab.wsUrl ?? "",
-                ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
-                limit: plan.limit,
-                timeoutMs: plan.timeoutMs,
-              });
-
-          const resolved = await Promise.resolve(snap);
-          if (!resolved) {
-            return;
-          }
-          if (!usePlaywrightAriaSnapshot) {
-            await pwModule?.storeAriaSnapshotRefsViaPlaywright?.({
+          let resolved: Awaited<ReturnType<typeof snapshotAria>>;
+          if (usePlaywrightAriaSnapshot) {
+            const pw = await requirePwAi(res, "aria snapshot");
+            if (!pw) {
+              return;
+            }
+            resolved = await pw.snapshotAriaViaPlaywright({
+              cdpUrl: profileCtx.profile.cdpUrl,
+              targetId: tab.targetId,
+              limit: plan.limit,
+              timeoutMs: plan.timeoutMs,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+            });
+          } else {
+            resolved = await snapshotAria({
+              wsUrl: tab.wsUrl ?? "",
+              ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
+              limit: plan.limit,
+              timeoutMs: plan.timeoutMs,
+            });
+            await pwModule?.storeSnapshotRefsViaPlaywright?.({
               cdpUrl: profileCtx.profile.cdpUrl,
               targetId: tab.targetId,
               nodes: resolved.nodes,
             });
           }
-          return res.json({
-            ok: true,
-            format: plan.format,
-            targetId: tab.targetId,
-            url: tab.url,
-            ...browserStateResponseFields(observedBrowserState),
+          return jsonSnapshot({
+            ...browserStateFields,
             ...resolved,
           });
         },

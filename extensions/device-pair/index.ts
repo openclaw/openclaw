@@ -49,7 +49,7 @@ type ResolveUrlResult = {
 };
 
 type ResolveAuthLabelResult = {
-  label?: "token" | "password";
+  label?: "token" | "password" | "trusted-proxy";
   error?: string;
 };
 
@@ -373,6 +373,10 @@ function resolveAuthLabel(cfg: OpenClawPluginApi["config"]): ResolveAuthLabelRes
   }
   if (password) {
     return { label: "password" };
+  }
+  // Issuer authorization and bootstrap grants stay separate from ingress auth.
+  if (mode === "trusted-proxy") {
+    return { label: "trusted-proxy" };
   }
   return { error: "Gateway auth is not configured (no token or password)." };
 }

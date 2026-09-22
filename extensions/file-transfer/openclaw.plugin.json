@@ -1,5 +1,6 @@
 {
   "id": "file-transfer",
+  "categories": ["documents-files"],
   "activation": {
     "onStartup": true
   },
@@ -19,6 +20,20 @@
   "contracts": {
     "tools": ["file_fetch", "dir_list", "dir_fetch", "file_write"]
   },
+  "configGroups": [
+    {
+      "id": "standing-approvals",
+      "title": "Standing approvals",
+      "order": 10,
+      "properties": ["policyVersion", "literalGrants", "pendingReapprovals"]
+    },
+    {
+      "id": "node-file-policies",
+      "title": "Node file policies",
+      "order": 20,
+      "properties": ["nodes"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

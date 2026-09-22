@@ -7,6 +7,13 @@ const maybeMigrateLegacyStorageMock = vi.hoisted(() => vi.fn(async () => undefin
 const resolveMatrixStoragePathsMock = vi.hoisted(() => vi.fn());
 const writeStorageMetaMock = vi.hoisted(() => vi.fn());
 const MatrixClientMock = vi.hoisted(() => vi.fn());
+const stateRuntimeMock = vi.hoisted(() => ({
+  resolveStateDir: vi.fn(),
+}));
+
+vi.mock("../../runtime.js", () => ({
+  getMatrixRuntime: () => ({ state: stateRuntimeMock }),
+}));
 
 vi.mock("./logging.js", () => ({
   ensureMatrixSdkLoggingConfigured: ensureMatrixSdkLoggingConfiguredMock,
@@ -83,6 +90,7 @@ describe("createMatrixClient", () => {
       autoBootstrapCrypto: undefined,
       ssrfPolicy: undefined,
       dispatcherPolicy: undefined,
+      stateRuntime: stateRuntimeMock,
     });
   });
 
@@ -109,6 +117,7 @@ describe("createMatrixClient", () => {
       autoBootstrapCrypto: undefined,
       ssrfPolicy: { allowPrivateNetwork: true },
       dispatcherPolicy: undefined,
+      stateRuntime: stateRuntimeMock,
     });
   });
 
@@ -137,6 +146,7 @@ describe("createMatrixClient", () => {
       autoBootstrapCrypto: undefined,
       ssrfPolicy: explicitPolicy,
       dispatcherPolicy: undefined,
+      stateRuntime: stateRuntimeMock,
     });
   });
 
@@ -162,6 +172,7 @@ describe("createMatrixClient", () => {
       autoBootstrapCrypto: undefined,
       ssrfPolicy: undefined,
       dispatcherPolicy: undefined,
+      stateRuntime: stateRuntimeMock,
     });
   });
 
@@ -189,6 +200,7 @@ describe("createMatrixClient", () => {
       autoBootstrapCrypto: undefined,
       ssrfPolicy: undefined,
       dispatcherPolicy: undefined,
+      stateRuntime: stateRuntimeMock,
     });
   });
 });

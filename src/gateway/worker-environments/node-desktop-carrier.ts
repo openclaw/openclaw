@@ -5,6 +5,7 @@ import {
 } from "../../infra/node-commands.js";
 import type { WorkerDesktopApp, WorkerDesktopEndpoint } from "../../plugins/types.js";
 import type { NodeDesktopStreamBroker } from "../desktop/node-stream-broker.js";
+import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
 import {
   DesktopSessionStaleOwnerError,
   type DesktopSessionRegistry,
@@ -13,22 +14,20 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import {
+  isWorkerNodeCarrierBindingCurrent,
+  snapshotWorkerNodeCarrierBinding,
+  type WorkerNodeCarrierBinding,
+  type WorkerNodeCarrierRuntime,
+} from "./node-carrier-binding.js";
+import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import type { WorkerDesktopObserveResult } from "./service-contract.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 
 const APP_LAUNCH_TIMEOUT_MS = 30_000;
 
-type NodeDesktopBinding = {
-  environmentId: string;
-  leaseId: string;
-  nodeDeviceId: string;
-  ownerEpoch: number;
+type NodeDesktopBinding = WorkerNodeCarrierBinding & {
   desktop: WorkerDesktopEndpoint;
-};
-
-type NodeDesktopRuntime = {
-  transport: NodeWorkerSupervisorTransport;
-  streamBroker: NodeDesktopStreamBroker;
 };
 
 type ActiveNodeDesktopStream = {
@@ -46,9 +45,7 @@ type ActiveNodeDesktopStream = {
 type ActiveNodeDesktopLaunch = {
   binding: NodeDesktopBinding;
   app: WorkerDesktopApp;
-  token: object;
   controller: AbortController;
-  invocation?: ReturnType<NodeWorkerSupervisorTransport["invoke"]>;
   operation: Promise<void>;
 };
 
@@ -58,23 +55,12 @@ type WorkerNodeDesktopCarrierOptions = {
 };
 
 function snapshotNodeDesktopBinding(record: WorkerEnvironmentRecord): NodeDesktopBinding {
-  if (
-    (record.state !== "ready" && record.state !== "idle" && record.state !== "attached") ||
-    record.destroyRequestedAtMs !== null ||
-    !record.leaseId ||
-    !record.nodeDeviceId ||
-    record.sshEndpoint !== null ||
-    !record.desktop
-  ) {
-    throw new Error("Worker environment node desktop owner is not active");
+  const message = "Worker environment node desktop owner is not active";
+  const binding = snapshotWorkerNodeCarrierBinding(record, message);
+  if (!record.desktop) {
+    throw new Error(message);
   }
-  return {
-    environmentId: record.environmentId,
-    leaseId: record.leaseId,
-    nodeDeviceId: record.nodeDeviceId,
-    ownerEpoch: record.ownerEpoch,
-    desktop: structuredClone(record.desktop),
-  };
+  return { ...binding, desktop: structuredClone(record.desktop) };
 }
 
 function isBindingCurrent(
@@ -84,12 +70,7 @@ function isBindingCurrent(
   const current = store.get(binding.environmentId);
   return Boolean(
     current &&
-    (current.state === "ready" || current.state === "idle" || current.state === "attached") &&
-    current.destroyRequestedAtMs === null &&
-    current.leaseId === binding.leaseId &&
-    current.nodeDeviceId === binding.nodeDeviceId &&
-    current.sshEndpoint === null &&
-    current.ownerEpoch === binding.ownerEpoch &&
+    isWorkerNodeCarrierBindingCurrent(current, binding) &&
     current.desktop !== null &&
     isDeepStrictEqual(current.desktop, binding.desktop),
   );
@@ -130,45 +111,16 @@ function launchKey(binding: NodeDesktopBinding, app: WorkerDesktopApp): string {
   return `${binding.environmentId}\0${app.id}`;
 }
 
-function signalError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new Error("Worker environment node desktop operation aborted");
-}
-
-function raceWithSignal<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) {
-    return Promise.reject(signalError(signal));
-  }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      reject(signalError(signal));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    void operation.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error instanceof Error ? error : new Error("Node desktop operation failed"));
-      },
-    );
-  });
-}
-
 /** Carries one durable worker environment's desktop over its private node connection. */
 export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrierOptions) {
-  let runtime: NodeDesktopRuntime | undefined;
+  let runtime: WorkerNodeCarrierRuntime | undefined;
   const claimedEpochs = new Map<string, number>();
   const activeStreams = new Set<ActiveNodeDesktopStream>();
   const activeLaunches = new Map<string, ActiveNodeDesktopLaunch>();
 
   const bindingIsCurrent = (
     binding: NodeDesktopBinding,
-    capturedRuntime: NodeDesktopRuntime,
+    capturedRuntime: WorkerNodeCarrierRuntime,
     node: NodeWorkerSupervisorNodeProof,
   ): boolean =>
     // A broker ticket proves the node connection only. The durable environment row remains
@@ -179,13 +131,19 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
 
   const findCurrentNode = async (
     binding: NodeDesktopBinding,
-    capturedRuntime: NodeDesktopRuntime,
+    capturedRuntime: WorkerNodeCarrierRuntime,
     signal: AbortSignal,
   ): Promise<NodeWorkerSupervisorNodeProof> => {
     signal.throwIfAborted();
-    const nodes = await raceWithSignal(capturedRuntime.transport.listCurrentNodes(), signal);
+    const node = await raceNodeWorkerOperation(
+      capturedRuntime.transport.getCurrentNode(binding.nodeDeviceId),
+      signal,
+      {
+        aborted: "Worker environment node desktop operation aborted",
+        failed: "Node desktop operation failed",
+      },
+    );
     signal.throwIfAborted();
-    const node = nodes.find((candidate) => candidate.nodeId === binding.nodeDeviceId);
     if (!node || !bindingIsCurrent(binding, capturedRuntime, node)) {
       throw new Error("Worker environment node desktop connection is not current");
     }
@@ -265,6 +223,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
   const observe = async (request: {
     record: WorkerEnvironmentRecord;
     control: boolean;
+    requester?: DesktopObserveRequester;
   }): Promise<WorkerDesktopObserveResult> => {
     const binding = snapshotNodeDesktopBinding(request.record);
     const active: ActiveNodeDesktopStream = {
@@ -273,11 +232,21 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
       reservationTransferred: false,
       stopped: false,
     };
+    const signal = request.requester?.signal
+      ? AbortSignal.any([active.controller.signal, request.requester.signal])
+      : active.controller.signal;
+    const assertRequesterCurrent = () => {
+      signal.throwIfAborted();
+      if (request.requester?.isCurrent() === false) {
+        throw new Error("Desktop observer connection is no longer current");
+      }
+    };
+    assertRequesterCurrent();
     // Publish ownership before discovery can yield so drain/destroy can abort this attempt.
     activeStreams.add(active);
     try {
       await claimOwner(binding);
-      active.controller.signal.throwIfAborted();
+      assertRequesterCurrent();
       await options.desktopRegistry.activate({
         sourceKey: binding.environmentId,
         ownerEpoch: binding.ownerEpoch,
@@ -285,12 +254,13 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
           await stopOwnedOperations(binding.environmentId, binding.ownerEpoch);
         },
       });
-      active.controller.signal.throwIfAborted();
+      assertRequesterCurrent();
       const capturedRuntime = runtime;
       if (!capturedRuntime) {
         throw new Error("Worker environment node desktop runtime is unavailable");
       }
-      const node = await findCurrentNode(binding, capturedRuntime, active.controller.signal);
+      const node = await findCurrentNode(binding, capturedRuntime, signal);
+      assertRequesterCurrent();
       active.reservation = options.desktopRegistry.reserveObserver(
         binding.environmentId,
         binding.ownerEpoch,
@@ -315,8 +285,11 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
             : {}),
         },
         timeoutMs: 0,
-        signal: active.controller.signal,
-        isDispatchAuthorized: () => bindingIsCurrent(binding, capturedRuntime, node),
+        signal,
+        isDispatchAuthorized: () =>
+          !signal.aborted &&
+          request.requester?.isCurrent() !== false &&
+          bindingIsCurrent(binding, capturedRuntime, node),
       });
       // A successful stream invoke returns only after the outbound splice closes. Before
       // attachment, any invoke result is therefore a terminal startup failure.
@@ -326,6 +299,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
       void invocationFinished.catch(() => undefined);
       const attached = await Promise.race([active.ticket.attached, invocationFinished]);
       active.stream = attached.stream;
+      assertRequesterCurrent();
       if (!bindingIsCurrent(binding, capturedRuntime, node)) {
         throw new Error("Worker environment node desktop owner changed before attachment");
       }
@@ -334,6 +308,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
       }
       const { DESKTOP_OBSERVE_PATH, mintDesktopObserverToken } =
         await import("../desktop/observe-bridge.js");
+      assertRequesterCurrent();
       if (!bindingIsCurrent(binding, capturedRuntime, node)) {
         throw new Error("Worker environment node desktop owner changed before publication");
       }
@@ -352,7 +327,9 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
         sourceKey: binding.environmentId,
         ownerEpoch: binding.ownerEpoch,
         control: request.control,
+        requester: request.requester,
         attachment,
+        onAbandon: () => stopStream(active),
         preauth: {
           auth: "vnc-password",
           credentials: { password: attached.vncPassword },
@@ -361,7 +338,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
       });
       active.unclaimedTimer = setTimeout(
         () => {
-          if (options.desktopRegistry.hasPendingStream(attachment)) {
+          if (options.desktopRegistry.hasPendingStream(binding.environmentId, attachment)) {
             void stopStream(active);
           }
         },
@@ -394,19 +371,15 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
     }
     const app = structuredClone(advertisedApp);
     const key = launchKey(binding, app);
-    const current = activeLaunches.get(key);
-    if (current?.binding.ownerEpoch === binding.ownerEpoch && isDeepStrictEqual(current.app, app)) {
-      return current.operation;
+    const previous = activeLaunches.get(key);
+    if (
+      previous?.binding.ownerEpoch === binding.ownerEpoch &&
+      isDeepStrictEqual(previous.app, app)
+    ) {
+      return previous.operation;
     }
-    const previous = current;
-    const token = {};
     const controller = new AbortController();
-    let start!: () => void;
-    const startGate = new Promise<void>((resolve) => {
-      start = resolve;
-    });
-    const operation = (async () => {
-      await startGate;
+    const operation = Promise.resolve().then(async () => {
       await claimOwner(binding);
       if (previous) {
         previous.controller.abort(
@@ -420,11 +393,10 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
         throw new Error("Worker environment node desktop runtime is unavailable");
       }
       const node = await findCurrentNode(binding, capturedRuntime, controller.signal);
-      const active = activeLaunches.get(key);
-      if (active?.token !== token) {
+      if (activeLaunches.get(key) !== entry) {
         throw new Error("Worker environment node desktop launch owner was replaced");
       }
-      active.invocation = capturedRuntime.transport.invoke({
+      const result = await capturedRuntime.transport.invoke({
         node,
         command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
         params: app,
@@ -432,22 +404,19 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
         signal: controller.signal,
         isDispatchAuthorized: () => bindingIsCurrent(binding, capturedRuntime, node),
       });
-      const result = await active.invocation;
       requireLaunchReady(result);
       if (!bindingIsCurrent(binding, capturedRuntime, node)) {
         throw new Error("Worker environment node desktop launch owner changed");
       }
-    })();
+    });
     const entry: ActiveNodeDesktopLaunch = {
       binding,
       app,
-      token,
       controller,
       operation,
     };
     // Stateful launch is visible to teardown before node discovery or dispatch begins.
     activeLaunches.set(key, entry);
-    start();
     void operation
       .finally(() => {
         if (activeLaunches.get(key) === entry) {
@@ -472,7 +441,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
   };
 
   return {
-    bindRuntime(next: NodeDesktopRuntime): void {
+    bindRuntime(next: WorkerNodeCarrierRuntime): void {
       runtime = next;
     },
     launchApp,

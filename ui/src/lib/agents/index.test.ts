@@ -1,5 +1,6 @@
 // Control UI tests cover agents behavior.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import {
@@ -15,16 +16,6 @@ import type { AgentsState } from "./index.ts";
 type AgentsConfigCapability = Parameters<typeof setDefaultAgent>[0];
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: { client: GatewayBrowserClient | null; phase: ApplicationGatewayPhase } = {
@@ -154,6 +145,12 @@ describe("createAgentCapability lifecycle", () => {
     await expect(agents.ensureList()).resolves.toEqual(first);
     expect(request).toHaveBeenCalledTimes(1);
 
+    const notify = vi.fn();
+    const unsubscribe = agents.subscribe(notify);
+    harness.publish(true);
+    harness.publish(true);
+    expect(notify).not.toHaveBeenCalled();
+
     const refresh = agents.refreshList();
     const sharedRefresh = agents.ensureList();
     expect(request).toHaveBeenCalledTimes(2);
@@ -167,6 +164,8 @@ describe("createAgentCapability lifecycle", () => {
     harness.publish(true);
     await expect(agents.ensureList()).resolves.toEqual(reconnected);
     expect(request).toHaveBeenCalledTimes(3);
+    expect(notify).toHaveBeenCalledTimes(6);
+    unsubscribe();
     agents.dispose();
   });
 

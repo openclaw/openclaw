@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   operatorMcpOAuthIdentity,
   requesterMcpOAuthIdentity,
@@ -33,11 +34,17 @@ async function readBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-async function startOAuthFixture(port: number) {
-  const issuer = `http://127.0.0.1:${port}`;
+async function startOAuthFixture() {
+  let issuer = "";
   let codeChallenge: string | undefined;
   let tokenRedirectUri: string | undefined;
   let tokenVerifier: string | undefined;
+  const mcpRequests: Array<{
+    contentLength: string | undefined;
+    transferEncoding: string | undefined;
+    authorization: string | undefined;
+    body: string;
+  }> = [];
   const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
     const url = new URL(request.url ?? "/", issuer);
     if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
@@ -87,6 +94,18 @@ async function startOAuthFixture(port: number) {
     }
     if (url.pathname === "/token" && request.method === "POST") {
       const form = new URLSearchParams(await readBody(request));
+      if (form.get("grant_type") === "refresh_token") {
+        if (form.get("refresh_token") !== "fixture-refresh-token") {
+          sendJson(response, { error: "invalid_grant" }, 400);
+          return;
+        }
+        sendJson(response, {
+          access_token: "fixture-refreshed-access-token",
+          token_type: "Bearer",
+          expires_in: 3600,
+        });
+        return;
+      }
       tokenRedirectUri = form.get("redirect_uri") ?? undefined;
       tokenVerifier = form.get("code_verifier") ?? undefined;
       const challenge = tokenVerifier
@@ -104,6 +123,62 @@ async function startOAuthFixture(port: number) {
       });
       return;
     }
+    if (url.pathname === "/mcp" && request.method === "POST") {
+      const body = await readBody(request);
+      mcpRequests.push({
+        contentLength: request.headers["content-length"],
+        transferEncoding: request.headers["transfer-encoding"],
+        authorization: request.headers.authorization,
+        body,
+      });
+      if (request.headers["content-length"] === undefined) {
+        response.writeHead(411, { "Content-Type": "text/plain" });
+        response.end("Content-Length required");
+        return;
+      }
+      if (mcpRequests.length === 1) {
+        response.writeHead(401, {
+          "Content-Type": "text/plain",
+          "WWW-Authenticate": 'Bearer scope="docs.read"',
+        });
+        response.end("expired token");
+        return;
+      }
+      const message = JSON.parse(body) as { id?: number; method?: string };
+      if (message.method === "initialize") {
+        sendJson(response, {
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            protocolVersion: "2025-06-18",
+            capabilities: { tools: {} },
+            serverInfo: { name: "fixture", version: "1.0.0" },
+          },
+        });
+        return;
+      }
+      if (message.method === "notifications/initialized") {
+        response.writeHead(202, { "Content-Length": "0" });
+        response.end();
+        return;
+      }
+      if (message.method === "tools/list") {
+        sendJson(response, {
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            tools: [
+              {
+                name: "read_page",
+                description: "Read one page.",
+                inputSchema: { type: "object", properties: {} },
+              },
+            ],
+          },
+        });
+        return;
+      }
+    }
     response.writeHead(404).end();
   };
   const server = createServer((request, response) => {
@@ -113,15 +188,23 @@ async function startOAuthFixture(port: number) {
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", resolve);
+    server.listen(0, "127.0.0.1", resolve);
   });
+  const close = () =>
+    new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    await close();
+    throw new Error("OAuth fixture did not bind a TCP address");
+  }
+  issuer = `http://127.0.0.1:${address.port}`;
   return {
     issuer,
-    close: () =>
-      new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      }),
+    close,
     exchange: () => ({ tokenRedirectUri, tokenVerifier }),
+    mcpRequests: () => mcpRequests,
   };
 }
 
@@ -237,17 +320,23 @@ describe("mcp login OAuth integration", () => {
     });
   });
 
-  it("captures the browser callback, persists tokens, and closes the port", async () => {
+  it("logs in and probes an OAuth MCP server through the CLI", async () => {
     await withTempHome(`openclaw-mcp-login-${randomUUID()}-`, async () => {
-      const oauthPort = await getFreePort();
-      const callbackPort = await getFreePort();
-      const fixture = await startOAuthFixture(oauthPort);
-      const redirectUrl = `http://127.0.0.1:${callbackPort}/oauth/callback`;
-      const logs: string[] = [];
-      vi.spyOn(defaultRuntime, "log").mockImplementation((line) => logs.push(String(line)));
-      const program = new Command().exitOverride();
-      registerMcpCli(program);
+      const fixture = await startOAuthFixture();
       try {
+        const callbackPort = await getFreePort();
+        const redirectUrl = `http://127.0.0.1:${callbackPort}/oauth/callback`;
+        const logs: string[] = [];
+        const authorizationUrl = createDeferred<string>();
+        vi.spyOn(defaultRuntime, "log").mockImplementation((line) => {
+          const text = String(line);
+          logs.push(text);
+          if (text.startsWith(`${fixture.issuer}/authorize`)) {
+            authorizationUrl.resolve(text);
+          }
+        });
+        const program = new Command().exitOverride();
+        registerMcpCli(program);
         await program.parseAsync(
           [
             "mcp",
@@ -264,18 +353,19 @@ describe("mcp login OAuth integration", () => {
         );
         logs.length = 0;
 
-        const login = program.parseAsync(["mcp", "login", "fixture"], { from: "user" });
-        await vi.waitFor(() => {
-          expect(logs.some((line) => line.includes("Waiting for the browser"))).toBe(true);
+        // Drive the browser from the published URL, not a polling deadline that
+        // can abandon login while discovery still owns the temporary state.
+        const browser = authorizationUrl.promise.then(async (url) => {
+          const response = await fetch(url);
+          return { status: response.status, body: await response.text() };
         });
-        const authorizationUrl = logs.find((line) =>
-          line.startsWith(`${fixture.issuer}/authorize`),
-        );
-        expect(authorizationUrl).toBeDefined();
-        const browserResponse = await fetch(authorizationUrl!);
+        const [browserResponse] = await Promise.all([
+          browser,
+          program.parseAsync(["mcp", "login", "fixture"], { from: "user" }),
+        ]);
+        expect(logs.some((line) => line.includes("Waiting for the browser"))).toBe(true);
         expect(browserResponse.status).toBe(200);
-        await expect(browserResponse.text()).resolves.toContain("Authorization received");
-        await login;
+        expect(browserResponse.body).toContain("Authorization received");
 
         await expect(
           readMcpOAuthCredentialsStatus(
@@ -289,9 +379,33 @@ describe("mcp login OAuth integration", () => {
           tokenVerifier: expect.any(String),
         });
         expect(logs).toContain('MCP OAuth credentials saved for "fixture".');
-        await vi.waitFor(async () => {
-          await expect(fetch(redirectUrl)).rejects.toThrow();
-        });
+
+        logs.length = 0;
+        await program.parseAsync(["mcp", "probe", "fixture"], { from: "user" });
+        expect(logs).toContain("- fixture: 1 tools, Codex approval auto");
+        expect(fixture.mcpRequests().map((request) => JSON.parse(request.body).method)).toEqual([
+          "initialize",
+          "initialize",
+          "notifications/initialized",
+          "tools/list",
+        ]);
+        expect(fixture.mcpRequests()[0]?.body).toBe(fixture.mcpRequests()[1]?.body);
+        for (const request of fixture.mcpRequests()) {
+          expect(request.contentLength).toBe(String(Buffer.byteLength(request.body)));
+          expect(request.transferEncoding).toBeUndefined();
+        }
+        expect(fixture.mcpRequests()[0]?.authorization).toBe("Bearer fixture-access-token");
+        expect(
+          fixture
+            .mcpRequests()
+            .slice(1)
+            .map((request) => request.authorization),
+        ).toEqual([
+          "Bearer fixture-refreshed-access-token",
+          "Bearer fixture-refreshed-access-token",
+          "Bearer fixture-refreshed-access-token",
+        ]);
+        await expect(fetch(redirectUrl)).rejects.toThrow();
       } finally {
         await fixture.close();
       }

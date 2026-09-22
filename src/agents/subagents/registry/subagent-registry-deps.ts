@@ -3,7 +3,8 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../../../context-engine/registry.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
-import { callGateway } from "../../../gateway/call.js";
+import type { callGateway } from "../../../gateway/call.js";
+import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, type AgentEventPayload } from "../../../infra/agent-events.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../../../shared/lazy-promise.js";
@@ -70,7 +71,7 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
 }
 
 const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
-  callGateway,
+  callGateway: (request) => bindGatewayLifecycleRequest()(request),
   captureSubagentCompletionReply: async (sessionKey, options) =>
     (await loadSubagentAnnounceModule()).captureSubagentCompletionReply(sessionKey, options),
   cleanupBrowserSessionsForLifecycleEnd: async (params) =>

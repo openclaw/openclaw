@@ -25,16 +25,13 @@ import {
   chromeMcpProfileOptionsFromParams,
   normalizeChromeMcpOptions,
 } from "./chrome-mcp-options.js";
-import { forgetCachedChromeMcpSessionIfCurrent } from "./chrome-mcp-pending.js";
-import { closeTrackedChromeMcpSession } from "./chrome-mcp-process.js";
 import {
   extractStructuredPages,
   extractToolErrorMessage,
   formatChromeMcpToolErrorMessage,
   shouldReconnectForToolError,
 } from "./chrome-mcp-result.js";
-import { leaseSession } from "./chrome-mcp-session.js";
-import { chromeMcpSessions as sessions } from "./chrome-mcp-state.js";
+import { getChromeMcpSessionOwner } from "./chrome-mcp-session.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
 
@@ -257,12 +254,8 @@ export async function callTool(
     result = await rawCall;
   } catch (err) {
     // Transport/connection error, timeout, or abort: tear down the cached session.
-    if (!lease.temporary) {
-      const current = sessions.get(lease.cacheKey);
-      if (current?.transport === lease.session.transport) {
-        sessions.delete(lease.cacheKey);
-        await closeTrackedChromeMcpSession(lease.cacheKey, lease.session);
-      }
+    if (!lease.temporary && lease.owner.isCurrent(lease.session)) {
+      await lease.owner.close(lease.session);
     }
     if (signal?.aborted) {
       throw toErrorObject(signal.reason ?? err, "Non-Error abort reason");
@@ -280,12 +273,8 @@ export async function callTool(
   if (result.isError) {
     const message = extractToolErrorMessage(result, name);
     if (shouldReconnectForToolError(name, message)) {
-      if (!lease.temporary) {
-        const current = sessions.get(lease.cacheKey);
-        if (current?.transport === lease.session.transport) {
-          sessions.delete(lease.cacheKey);
-          await closeTrackedChromeMcpSession(lease.cacheKey, lease.session);
-        }
+      if (!lease.temporary && lease.owner.isCurrent(lease.session)) {
+        await lease.owner.close(lease.session);
       }
       throw new ChromeMcpReconnectRequiredError(message);
     }
@@ -335,27 +324,24 @@ export async function withChromeMcpLease<T>(
   ) => Promise<T>,
 ): Promise<T> {
   const normalizedProfileOptions = normalizeChromeMcpOptions(profileOptions);
-  const lease = await leaseSession(profileName, normalizedProfileOptions, options);
+  options.signal?.throwIfAborted();
+  const lease = await getChromeMcpSessionOwner(profileName, normalizedProfileOptions).lease(
+    options,
+  );
   try {
     return await withChromeMcpOperationLock(lease.session, options, async () => {
-      if (!lease.temporary) {
-        const current = sessions.get(lease.cacheKey);
-        if (
-          current?.transport !== lease.session.transport ||
-          lease.session.transport.pid === null
-        ) {
-          forgetCachedChromeMcpSessionIfCurrent(lease.cacheKey, lease.session);
-          throw new BrowserProfileUnavailableError(
-            `Chrome MCP session for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}" changed before the operation could start. Run the browser command again to reconnect.`,
-          );
-        }
+      if (
+        !lease.temporary &&
+        (!lease.owner.isCurrent(lease.session) || lease.session.transport.pid === null)
+      ) {
+        throw new BrowserProfileUnavailableError(
+          `Chrome MCP session for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}" changed before the operation could start. Run the browser command again to reconnect.`,
+        );
       }
       return await operation(lease, normalizedProfileOptions);
     });
   } finally {
-    if (lease.temporary) {
-      await closeTrackedChromeMcpSession(lease.cacheKey, lease.session);
-    }
+    await lease.release();
   }
 }
 

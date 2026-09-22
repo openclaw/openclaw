@@ -3,6 +3,11 @@ import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-ca
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
+  captureProviderCatalogExpiries,
+  recordLiveCatalogExpiry,
+  withProviderCatalogExpiry,
+} from "../plugins/provider-catalog-expiry.js";
+import {
   applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,
   clearLiveCatalogCacheForTests,
@@ -94,6 +99,49 @@ describe("provider-catalog-shared live catalog cache", () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
+  it.each([undefined, 64_000])(
+    "retains slow successful catalogs without extending absolute expiry %s",
+    async (absoluteExpiry) => {
+      let now = 1_000;
+      const pending = createDeferred<string>();
+      const load = vi.fn(() => pending.promise);
+      const read = () =>
+        captureProviderCatalogExpiries(() =>
+          withProviderCatalogExpiry(
+            async () => {
+              if (absoluteExpiry !== undefined) {
+                recordLiveCatalogExpiry(absoluteExpiry);
+              }
+              return getCachedLiveCatalogValue({
+                keyParts: ["slow-provider", absoluteExpiry],
+                load,
+                now: () => now,
+              });
+            },
+            () => ["fixture"],
+          ),
+        );
+
+      const first = read();
+      now = 63_600;
+      pending.resolve("usable");
+      const completed = await first;
+      expect(completed.value).toBe("usable");
+      const expectedExpiry = absoluteExpiry ?? 93_600;
+      expect(completed.providerExpiries.get("fixture")).toBe(expectedExpiry);
+
+      now = 63_800;
+      const cached = await read();
+      expect(cached.value).toBe("usable");
+      expect(cached.providerExpiries.get("fixture")).toBe(expectedExpiry);
+      expect(load).toHaveBeenCalledOnce();
+
+      now = 93_600;
+      await read();
+      expect(load).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it.each(["resolve", "reject", "throw"] as const)(
     "bypasses a warm cache without modifying it when the uncached loader will %s",
     async (outcome) => {
@@ -119,7 +167,7 @@ describe("provider-catalog-shared live catalog cache", () => {
     },
   );
 
-  it.each(["reject", "predicate-false", "predicate-throw", "same-promise"] as const)(
+  it.each(["resolve", "reject", "predicate-false", "predicate-throw", "same-promise"] as const)(
     "preserves a replacement cache entry after expired work finishes with %s",
     async (outcome) => {
       let now = 1_000;
@@ -135,7 +183,7 @@ describe("provider-catalog-shared live catalog cache", () => {
           if (outcome === "predicate-throw") {
             throw error;
           }
-          return false;
+          return outcome === "resolve";
         },
       });
       now = 1_101;
@@ -368,6 +416,7 @@ describe("provider-catalog-shared configured catalog entries", () => {
 
 describe("provider-catalog-shared manifest provider configs", () => {
   it("converts manifest model catalog rows into provider config rows", () => {
+    const contextWindows = [{ id: "128k", label: "128K", contextWindow: 128000 }];
     const catalog: ModelCatalogProvider = {
       baseUrl: "https://api.example.test/v1",
       api: "openai-completions",
@@ -381,6 +430,8 @@ describe("provider-catalog-shared manifest provider configs", () => {
           reasoning: true,
           contextWindow: 128_000,
           contextTokens: 64_000,
+          contextWindows,
+          contextWindowDefault: "128k",
           maxTokens: 8192,
           thinkingLevelMap: { off: null, minimal: "low", max: "max" },
           mediaInput: {
@@ -433,6 +484,8 @@ describe("provider-catalog-shared manifest provider configs", () => {
           },
           contextWindow: 128_000,
           contextTokens: 64_000,
+          contextWindows,
+          contextWindowDefault: "128k",
           maxTokens: 8192,
           thinkingLevelMap: { off: null, minimal: "low", max: "max" },
           mediaInput: {

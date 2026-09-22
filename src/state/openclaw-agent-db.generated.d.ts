@@ -232,6 +232,10 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface SessionCanonicalValidationPending {
+  session_key: string;
+}
+
 export interface SessionConversations {
   conversation_id: string;
   first_seen_at: number;
@@ -239,6 +243,26 @@ export interface SessionConversations {
   role: Generated<string>;
   route_context_json: string | null;
   session_id: string;
+}
+
+export interface SessionGoalOperations {
+  expires_at: number;
+  operation_id: string;
+  request_fingerprint: string;
+  result_json: string;
+  session_id: string;
+  session_key: string;
+}
+
+export interface SessionInputCompletions {
+  completed_at: number;
+  idempotency_key: string;
+  outcome_json: string;
+  request_hash: string;
+  run_id: string;
+  session_id: string;
+  session_key: string;
+  succeeded: number;
 }
 
 export interface SessionKeyContract {
@@ -273,6 +297,7 @@ export interface SessionNodes {
   last_activity_at: number | null;
   last_interaction_at: number | null;
   last_read_at: number | null;
+  legacy_acp_migration_json: string | null;
   owner_actor_id: string | null;
   owner_actor_type: string | null;
   owner_assigned_at: number | null;
@@ -289,12 +314,26 @@ export interface SessionNodes {
 
 export interface SessionParticipants {
   actor_id: string;
-  actor_source: string | null;
-  actor_type: string;
-  contribution_count: number | null;
-  first_prompted_at: number;
-  last_prompted_at: number;
+  contribution_count: number;
+  first_prompted_at: number | null;
+  identity_namespace: string;
+  last_prompted_at: number | null;
   session_key: string;
+}
+
+export interface SessionPendingInputs {
+  accepted_at: number;
+  consumed_event_id: string | null;
+  idempotency_key: string;
+  input_id: string;
+  lifecycle_generation: string;
+  message_json: string;
+  request_hash: string;
+  run_id: string;
+  seq: Generated<number>;
+  session_id: string;
+  session_key: string;
+  state: string;
 }
 
 export interface SessionProgressCards {
@@ -321,6 +360,7 @@ export interface SessionSuggestions {
 
 export interface SessionTranscriptActiveEvents {
   active_position: number;
+  context_eligible: number | null;
   event_seq: number;
   message_position: number | null;
   session_id: string;
@@ -340,6 +380,20 @@ export interface SessionTranscriptArchives {
   reason: string;
   session_id: string;
   session_key: string;
+}
+
+export interface SessionTranscriptColdArchives {
+  archive_blob: Uint8Array | null;
+  archive_bytes: number;
+  archive_name: string;
+  archive_sha256: string;
+  archived_at: number;
+  event_count: number;
+  generation: string;
+  last_seq: number;
+  raw_bytes: number;
+  session_id: string;
+  storage: string;
 }
 
 export interface SessionTranscriptFts {
@@ -516,15 +570,20 @@ export interface DB {
   memory_session_tombstones: MemorySessionTombstones;
   message_tool_run_outcomes: MessageToolRunOutcomes;
   schema_meta: SchemaMeta;
+  session_canonical_validation_pending: SessionCanonicalValidationPending;
   session_conversations: SessionConversations;
+  session_goal_operations: SessionGoalOperations;
+  session_input_completions: SessionInputCompletions;
   session_key_contract: SessionKeyContract;
   session_members: SessionMembers;
   session_nodes: SessionNodes;
   session_participants: SessionParticipants;
+  session_pending_inputs: SessionPendingInputs;
   session_progress_cards: SessionProgressCards;
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
   session_transcript_archives: SessionTranscriptArchives;
+  session_transcript_cold_archives: SessionTranscriptColdArchives;
   session_transcript_fts: SessionTranscriptFts;
   session_transcript_fts_config: SessionTranscriptFtsConfig;
   session_transcript_fts_content: SessionTranscriptFtsContent;

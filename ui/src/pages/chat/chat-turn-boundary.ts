@@ -1,6 +1,10 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatItem, MessageGroup, NormalizedMessage } from "../../lib/chat/chat-types.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+  resolveMessageRole,
+} from "../../lib/chat/message-normalizer.ts";
 
 export function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
   if (!asRecord(message)) {
@@ -16,8 +20,19 @@ export function safeNormalizeMessage(message: unknown): NormalizedMessage | null
 export function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
   return group.messages.some(({ message }) => {
     const provenance = asRecord(asRecord(message)?.provenance);
-    return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+    return (
+      (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
+      (provenance?.kind === "internal_system" &&
+        provenance.sourceTool === "cron" &&
+        Boolean(provenance.jobId && provenance.runId && provenance.sourceSessionKey))
+    );
   });
+}
+
+// Display attribution also accepts projected source metadata; turn ownership
+// above requires the original forwarded-input provenance.
+export function hasForwardedSource(group: MessageGroup): boolean {
+  return Boolean(group.senderSession) || assistantGroupIsForwardedBoundary(group);
 }
 
 function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
@@ -30,8 +45,7 @@ export function chatItemStartsUserTurn(item: ChatItem | MessageGroup): boolean {
     return item.startsTurn === true;
   }
   if (item.kind === "message") {
-    const normalized = safeNormalizeMessage(item.message);
-    return normalized ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" : false;
+    return normalizeRoleForGrouping(resolveMessageRole(item.message)).toLowerCase() === "user";
   }
   if (item.kind !== "group") {
     return false;

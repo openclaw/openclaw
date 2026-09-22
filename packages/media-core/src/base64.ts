@@ -2,14 +2,15 @@
 export function estimateBase64DecodedBytes(base64: string): number {
   // Avoid `trim()`/`replace()` here: they allocate a second (potentially huge) string.
   // We only need a conservative decoded-size estimate to enforce budgets before Buffer.from(..., "base64").
-  let effectiveLen = 0;
-  for (let i = 0; i < base64.length; i += 1) {
-    const code = base64.charCodeAt(i);
-    // Treat ASCII control + space as whitespace; base64 decoders commonly ignore these.
-    if (code <= 0x20) {
-      continue;
+  let effectiveLen = base64.length;
+  // oxlint-disable-next-line eslint/no-control-regex -- Preserve the estimator's ASCII control and space handling.
+  const firstWhitespace = base64.search(/[\x00-\x20]/);
+  if (firstWhitespace !== -1) {
+    for (let i = firstWhitespace; i < base64.length; i += 1) {
+      if (base64.charCodeAt(i) <= 0x20) {
+        effectiveLen -= 1;
+      }
     }
-    effectiveLen += 1;
   }
 
   if (effectiveLen === 0) {
@@ -45,6 +46,34 @@ function isBase64DataChar(code: number): boolean {
     code === 0x2b ||
     code === 0x2f
   );
+}
+
+/**
+ * Validates padded, whitespace-free base64 without normalizing it or decoding bytes.
+ * Keep attachment alphabet/padding semantics; canonicalizeBase64 additionally checks pad bits.
+ */
+export function isValidBase64(value: string): boolean {
+  if (value.length === 0 || value.length % 4 !== 0) {
+    return false;
+  }
+
+  let padding = 0;
+  let sawPadding = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code === 0x3d) {
+      padding += 1;
+      if (padding > 2) {
+        return false;
+      }
+      sawPadding = true;
+      continue;
+    }
+    if (sawPadding || !isBase64DataChar(code)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function base64DataValue(code: number): number {

@@ -4,10 +4,13 @@ import path from "node:path";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions, MsgContext, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
+import {
+  runTelegramChannelInboundEventWithHarness,
+  type TelegramTestMiddleware,
+} from "./bot.test-helpers.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
 type AnyAsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
@@ -29,12 +32,7 @@ type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
   ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
 >;
 type DispatchReplyHarnessParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
-type ReplyPayloadLike = {
-  text?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  replyToId?: string;
-};
+type ReplyPayloadLike = ReplyPayload;
 type ReplySpyResult = ReplyPayloadLike | ReplyPayloadLike[] | undefined;
 type ReplySpy = (ctx: MsgContext, opts?: GetReplyOptions) => Promise<ReplySpyResult>;
 
@@ -254,12 +252,9 @@ function resolveDefaultModelForAgentForTest(params: { cfg: OpenClawConfig }): {
   };
 }
 
-function createModelsProviderDataFromConfig(cfg: OpenClawConfig): {
-  byProvider: Map<string, Set<string>>;
-  providers: string[];
-  resolvedDefault: { provider: string; model: string };
-  modelNames: Map<string, string>;
-} {
+function createModelsProviderDataFromConfig(
+  cfg: OpenClawConfig,
+): Awaited<ReturnType<TelegramBotDeps["buildModelsProviderData"]>> {
   const byProvider = new Map<string, Set<string>>();
   const add = (providerRaw: string | undefined, modelRaw: string | undefined) => {
     const provider = normalizeLowercaseStringOrEmptyForTest(providerRaw);
@@ -281,7 +276,15 @@ function createModelsProviderDataFromConfig(cfg: OpenClawConfig): {
   }
 
   const providers = [...byProvider.keys()].toSorted();
-  return { byProvider, providers, resolvedDefault, modelNames: new Map<string, string>() };
+  return {
+    byProvider,
+    providers,
+    resolvedDefault,
+    modelNames: new Map<string, string>(),
+    modelCatalog: [...byProvider].flatMap(([provider, models]) =>
+      [...models].map((id) => ({ provider, id, name: id, reasoning: false })),
+    ),
+  };
 }
 
 const systemEventsHoisted = vi.hoisted(() => ({
@@ -334,7 +337,7 @@ const grammySpies = vi.hoisted(() => ({
   stopSpy: vi.fn(),
   commandSpy: vi.fn(),
   botCtorSpy: vi.fn(
-    (_: string, __?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => undefined,
+    (_token: string, __?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => undefined,
   ),
   answerCallbackQuerySpy: vi.fn(async () => undefined) as AnyAsyncMock,
   sendChatActionSpy: vi.fn(),
@@ -473,7 +476,21 @@ const telegramBotRuntimeForTest = {
     use = grammySpies.middlewareUseSpy;
     on = grammySpies.onSpy;
     stop = grammySpies.stopSpy;
-    command = grammySpies.commandSpy;
+    command = (name: string, handler: TelegramTestMiddleware) =>
+      grammySpies.commandSpy(
+        name,
+        async (ctx: Record<string, unknown>, next?: () => Promise<void>) =>
+          await handler(
+            ctx,
+            next ??
+              (async () =>
+                await getOnHandler("message")({
+                  me: { id: 9876543210, username: "openclaw_bot" },
+                  getFile: async () => ({}),
+                  ...ctx,
+                })),
+          ),
+      );
     catch = vi.fn();
     constructor(
       public token: string,

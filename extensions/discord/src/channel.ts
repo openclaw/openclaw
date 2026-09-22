@@ -12,7 +12,12 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import {
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -70,7 +75,11 @@ import {
   setThreadBindingMaxAgeBySessionKey,
 } from "./monitor/thread-bindings.session-updates.js";
 import { withAbortTimeout } from "./monitor/timeouts.js";
-import { looksLikeDiscordTargetId, normalizeDiscordMessagingTarget } from "./normalize.js";
+import {
+  looksLikeDiscordTargetId,
+  matchesDiscordToolContextTarget,
+  normalizeDiscordMessagingTarget,
+} from "./normalize.js";
 import { discordOutbound } from "./outbound-adapter.js";
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
 import type { DiscordProbe } from "./probe.js";
@@ -429,7 +438,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         bindingStore: "adapter",
         defaultTopLevelPlacement,
         createManager: async ({ cfg, accountId }) =>
-          (await loadDiscordThreadBindingsManagerModule()).createThreadBindingManager({
+          (await loadDiscordThreadBindingsManagerModule()).createThreadBindingManagerAsync({
             cfg,
             accountId: accountId ?? undefined,
             persist: false,
@@ -615,11 +624,16 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           });
           return { ...audit, unresolvedChannels };
         },
-        resolveAccountSnapshot: ({ account, runtime, probe, audit }) => {
+        resolveAccountSnapshot: ({ account, cfg, runtime, probe, audit }) => {
           const configured =
             resolveConfiguredFromCredentialStatuses(account) ?? Boolean(account.token?.trim());
           const app = runtime?.application ?? (probe as { application?: unknown })?.application;
           const bot = runtime?.bot ?? (probe as { bot?: unknown })?.bot;
+          const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+            providerConfigPresent: cfg.channels?.discord !== undefined,
+            groupPolicy: account.config.groupPolicy,
+            defaultGroupPolicy: resolveDefaultGroupPolicy(cfg),
+          });
           return {
             accountId: account.accountId,
             name: account.name,
@@ -635,12 +649,15 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
               application: app ?? undefined,
               bot: bot ?? undefined,
               audit,
+              groupPolicy,
+              guildsConfigured: Object.keys(account.config.guilds ?? {}).length,
             },
           };
         },
       }),
       gateway: {
         startAccount: async (ctx) => {
+          const readConfig = createRuntimeConfigReader(ctx.cfg);
           const account = ctx.account;
           if (account.tokenStatus === "configured_unavailable") {
             throw new Error(
@@ -681,6 +698,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             token,
             accountId: account.accountId,
             config: ctx.cfg,
+            readConfig,
             runtime: ctx.runtime,
             channelRuntime: ctx.channelRuntime,
             abortSignal: ctx.abortSignal,
@@ -709,6 +727,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
     },
     security: discordSecurityAdapter,
     threading: {
+      matchesToolContextTarget: matchesDiscordToolContextTarget,
       scopedAccountReplyToMode: {
         resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
         resolveReplyToMode: (account) => account.config.replyToMode,
@@ -716,6 +735,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       buildToolContext: ({ context, hasRepliedRef }) => {
         const currentMessagingTarget = normalizeOptionalString(context.To);
+        const nativeChannelId = normalizeOptionalString(context.NativeChannelId);
         const currentChatType =
           context.ChatType === "direct" ||
           context.ChatType === "group" ||
@@ -723,8 +743,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             ? context.ChatType
             : undefined;
         return {
-          currentChannelId:
-            normalizeOptionalString(context.NativeChannelId) ?? currentMessagingTarget,
+          currentChannelId: nativeChannelId
+            ? normalizeDiscordMessagingTarget(nativeChannelId)
+            : currentMessagingTarget,
           currentChatType,
           currentMessagingTarget,
           currentMessageId: context.CurrentMessageId,

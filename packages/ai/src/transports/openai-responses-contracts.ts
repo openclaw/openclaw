@@ -2,7 +2,7 @@ import {
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
   type Api,
   type ProviderReplayState,
-} from "@openclaw/llm-core";
+} from "@openclaw/llm-core/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   FunctionTool,
@@ -17,6 +17,8 @@ import type {
   OpenAIApiReasoningEffort,
   OpenAIReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
+import type { OpenAIRequestReasoningEffort } from "../providers/openai-request-reasoning.js";
+import type { OpenAIResponsesCompactedWindow } from "./openai-responses-compaction-window.js";
 
 export const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 export const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -88,6 +90,17 @@ function readWebSocketServerError(value: unknown) {
   };
 }
 
+// A continuation reference the server refuses to honor: the response expired or never
+// existed (`previous_response_not_found`), or the organization cannot reference stored
+// responses at all (Zero Data Retention rejects the `previous_response_id` parameter).
+// Both reject before any output is accepted, so the turn resends full history instead.
+export function isPreviousResponseRejection(error: { code?: unknown; param?: unknown }): boolean {
+  return (
+    error.code === "previous_response_not_found" ||
+    (error.code === "unsupported_parameter" && error.param === "previous_response_id")
+  );
+}
+
 export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
   if (!isRecord(cause)) {
     return undefined;
@@ -102,7 +115,7 @@ export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
     return undefined;
   }
   const ErrorClass =
-    details.code === "previous_response_not_found" ||
+    isPreviousResponseRejection(details) ||
     details.code === "websocket_connection_limit_reached" ||
     details.code === "invalid_encrypted_content" ||
     details.code === "thinking_signature_invalid"
@@ -127,8 +140,9 @@ export type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> 
   id?: string;
   [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
 };
-export type OpenAIResponsesCompactionReplayState = ProviderReplayState &
-  (
+export type OpenAIResponsesCompactionReplayState = ProviderReplayState & {
+  compactedWindow?: OpenAIResponsesCompactedWindow;
+} & (
     | { type: typeof OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE; baseUrlHash: string }
     | {
         type: typeof OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE;
@@ -138,7 +152,7 @@ export type OpenAIResponsesCompactionReplayState = ProviderReplayState &
   );
 
 export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
-  reasoning?: OpenAIReasoningEffort;
+  reasoning?: OpenAIRequestReasoningEffort;
   reasoningEffort?: OpenAIReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   replayResponsesItemIds?: boolean;
@@ -192,6 +206,7 @@ export type OpenAIResponsesRequestParams = {
   instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
+  prompt_cache_options?: { ttl: "30m" };
   metadata?: Record<string, string>;
   previous_response_id?: string;
   store?: boolean;
@@ -200,7 +215,8 @@ export type OpenAIResponsesRequestParams = {
   top_p?: number;
   text?: ResponseCreateParamsStreaming["text"];
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
-  tools?: FunctionTool[];
+  tools?: Array<FunctionTool & { async?: boolean }>;
+  multi_agent?: { enabled?: boolean };
   tool_choice?: ResponseCreateParamsStreaming["tool_choice"];
   reasoning?:
     | { effort: OpenAIApiReasoningEffort }

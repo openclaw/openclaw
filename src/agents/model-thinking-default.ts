@@ -1,42 +1,20 @@
-/**
- * Resolves default thinking levels for provider/model pairs. It combines
- * explicit per-model config, global defaults, catalog metadata, and model
- * family fallbacks.
- */
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
-import {
-  resolveConfiguredThinkingDefaultCore,
-  resolveThinkingDefaultCore,
+import { resolveThinkingDefaultCore } from "./model-thinking-default-core.js";
+export {
+  resolveConfiguredThinkingDefaultCore as resolveConfiguredThinkingDefault,
+  resolveThinkingDefaultCore as resolveThinkingDefault,
+  resolveThinkingSelectionCore as resolveThinkingSelection,
 } from "./model-thinking-default-core.js";
 
-/** Resolves configured thinking without consulting model capability metadata. */
-export function resolveConfiguredThinkingDefault(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-}): ThinkLevel | undefined {
-  return resolveConfiguredThinkingDefaultCore(params);
-}
-
-/** Resolves the default thinking level for a provider/model pair. */
-export function resolveThinkingDefault(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-  catalog?: ModelCatalogEntry[];
-  agentRuntime?: string | null;
-}): ThinkLevel {
-  return resolveThinkingDefaultCore(params);
-}
-
 /** Resolves thinking default after loading runtime catalog only when needed. */
-export async function resolveThinkingDefaultWithRuntimeCatalog(params: {
+export async function resolveThinkingDefaultWithRuntimeCatalogCore(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
+  agentId?: string;
   loadRuntimeCatalog: () => Promise<ModelCatalogEntry[]>;
   agentRuntime?: string | null;
 }): Promise<ThinkLevel> {
@@ -56,8 +34,9 @@ export async function resolveThinkingDefaultWithRuntimeCatalog(params: {
     runtimeSelectedEntry || configuredCatalog.length === 0
       ? (runtimeCatalog ?? configuredCatalog)
       : configuredCatalog;
-  return resolveThinkingDefault({
+  return resolveThinkingDefaultCore({
     cfg: params.cfg,
+    agentId: params.agentId,
     provider: params.provider,
     model: params.model,
     catalog,

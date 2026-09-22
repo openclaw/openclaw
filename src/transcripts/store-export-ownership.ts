@@ -16,6 +16,10 @@ import {
   transcriptSessionExportKey,
   transcriptSessionSelector,
 } from "./store-artifacts.js";
+import {
+  parseTranscriptExportManifest,
+  parseTranscriptPendingExports,
+} from "./store-export-state.js";
 import { meetingTranscriptDb, type MeetingTranscriptSessionRow } from "./store-sqlite.js";
 
 type ExportOwnershipParams = {
@@ -34,8 +38,8 @@ async function transcriptArtifactsMatchOwner(
   artifacts: Array<{ entry: { name: string }; canonicalName: string }>,
   owner: Pick<MeetingTranscriptSessionRow, "export_manifest_json" | "export_pending_json">,
 ): Promise<boolean> {
-  const manifest = JSON.parse(owner.export_manifest_json) as Record<string, string>;
-  const pending = new Set(JSON.parse(owner.export_pending_json) as string[]);
+  const manifest = parseTranscriptExportManifest(owner.export_manifest_json);
+  const pending = parseTranscriptPendingExports(owner.export_pending_json);
   // Pending, altered, or symlinked artifacts must never establish aliased ownership.
   for (const { entry, canonicalName } of artifacts) {
     const artifactPath = path.join(sessionDir, entry.name);
@@ -99,7 +103,7 @@ export async function assertTranscriptExportPathAvailable(
   }
   if (!ownerSelector) {
     const pendingOwners = collisions.filter((row) =>
-      (JSON.parse(row.export_pending_json) as string[]).includes("metadata.json"),
+      parseTranscriptPendingExports(row.export_pending_json).has("metadata.json"),
     );
     if (pendingOwners.length === 1) {
       ownerSelector = pendingOwners[0]?.selector;

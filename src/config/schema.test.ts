@@ -3,7 +3,6 @@ import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-ur
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchemaCore, lookupConfigSchema } from "./schema.js";
-import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { validateConfigObjectRaw } from "./validation.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
@@ -28,7 +27,8 @@ describe("config schema", () => {
           description: "Outbound voice calls",
           configUiHints: {
             provider: { label: "Provider" },
-            "twilio.authToken": { label: "Auth Token", sensitive: true },
+            "twilio.authToken": { label: "Original Token", sensitive: true },
+            " .twilio.authToken ": { label: "Auth Token", help: "Twilio credential" },
           },
         },
       ],
@@ -59,12 +59,17 @@ describe("config schema", () => {
       channels: [
         {
           id: "matrix",
-          label: "Matrix",
+          label: " Matrix ",
+          description: " Matrix channel help ",
           configSchema: {
             type: "object",
             properties: {
               accessToken: { type: "string" },
             },
+          },
+          configUiHints: {
+            accessToken: { label: "Original Token", sensitive: true },
+            " .accessToken ": { label: "Access Token", help: "Matrix credential" },
           },
         },
       ],
@@ -113,6 +118,12 @@ describe("config schema", () => {
     expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
+    for (const path of [
+      "agents.defaults.models.*.codeMode",
+      "agents.entries.*.models.*.codeMode",
+    ]) {
+      expect(res.uiHints[path]).toMatchObject({ label: "Code Mode", placeholder: "Default" });
+    }
     expect(res.uiHints["security.installPolicy.exec.env.*"]?.sensitive).toBe(true);
     const groupPolicyLabel = res.uiHints["channels.defaults.groupPolicy"]?.label;
     expect(groupPolicyLabel).toBeTypeOf("string");
@@ -159,9 +170,7 @@ describe("config schema", () => {
     }
     expect(res.uiHints["channels.sms.authToken"]?.presentation).toBeUndefined();
     expect(res.uiHints["channels.signal.configPath"]?.presentation).toBeUndefined();
-    expect(res.uiHints["proxy.tls.caFile"]?.tags).toEqual(
-      expect.arrayContaining(["security", "network", "storage"]),
-    );
+    expect(res.uiHints["proxy.tls.caFile"]?.tags).toBeUndefined();
     expect(res.version).toBeTypeOf("string");
     expect(res.version.trim().length).toBeGreaterThan(0);
     expect(res.generatedAt).toBeTypeOf("string");
@@ -596,10 +605,11 @@ describe("config schema", () => {
 
     expect(res.uiHints["plugins.entries.voice-call"]?.label).toBe("Voice Call");
     expect(res.uiHints["plugins.entries.voice-call.config"]?.label).toBe("Voice Call Config");
-    expect(res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]?.label).toBe(
-      "Auth Token",
-    );
-    expect(res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]?.sensitive).toBe(true);
+    expect(res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]).toMatchObject({
+      label: "Auth Token",
+      help: "Twilio credential",
+      sensitive: true,
+    });
   });
 
   it("does not re-mark existing non-sensitive token-like fields", () => {
@@ -647,7 +657,12 @@ describe("config schema", () => {
     expect(progressPropsFor("slack")).toHaveProperty("commentary");
     expect(progressPropsFor("telegram")).toHaveProperty("commentary");
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
-    expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
+    expect(res.uiHints["channels.matrix"]?.help).toBe("Matrix channel help");
+    expect(res.uiHints["channels.matrix.accessToken"]).toMatchObject({
+      label: "Access Token",
+      help: "Matrix credential",
+      sensitive: true,
+    });
     expect(res.uiHints["channels.matrix.streaming.progress.label"]?.label).toBe(
       "Matrix Progress Label",
     );
@@ -796,32 +811,40 @@ describe("config schema", () => {
     expect(second).toBe(first);
   });
 
-  it("derives tags for security, network, storage, tools, and performance paths", () => {
-    const tagged = applyDerivedTags({
-      "gateway.auth.token": {},
-      "proxy.tls.caFile": {},
-      "tools.web.fetch.timeoutSeconds": {},
+  it("keeps merged plugin schema fragments independent of manifest metadata", () => {
+    const value = { type: "string" };
+    const result = buildConfigSchemaCore({
+      plugins: [
+        {
+          id: "independent-schema",
+          configSchema: { type: "object", properties: { value } },
+        },
+      ],
     });
-    expect(tagged["gateway.auth.token"]?.tags).toEqual(
-      expect.arrayContaining(["security", "auth"]),
-    );
-    expect(tagged["proxy.tls.caFile"]?.tags).toEqual(
-      expect.arrayContaining(["security", "network", "storage"]),
-    );
-    expect(tagged["tools.web.fetch.timeoutSeconds"]?.tags).toEqual(
-      expect.arrayContaining(["tools", "performance"]),
-    );
+    value.type = "number";
+    expect(
+      lookupConfigSchema(result, "plugins.entries.independent-schema.config.value")?.schema.type,
+    ).toBe("string");
   });
 
-  it("only derives the advanced tag from an explicit advanced hint", () => {
-    const tagged = applyDerivedTags({
-      "update.channel": { advanced: false },
-      "update.auto.enabled": { advanced: false },
-      "update.auto.interval": { advanced: true },
-    });
-    expect(tagged["update.channel"]?.tags).toEqual([]);
-    expect(tagged["update.auto.enabled"]?.tags).toEqual([]);
-    expect(tagged["update.auto.interval"]?.tags).toEqual(["performance", "advanced"]);
+  it("refreshes sensitive hints when only a plugin's SecretInput paths change", () => {
+    const plugin = {
+      id: "secret-path-cache",
+      configSchema: { type: "object", additionalProperties: true },
+    };
+    const build = (path: string) =>
+      buildConfigSchemaCore({ plugins: [{ ...plugin, configSecretInputPaths: [path] }] });
+    const first = build("routes.*.credential");
+    const second = build("routes.*.replacement");
+    expect(
+      first.uiHints["plugins.entries.secret-path-cache.config.routes.*.credential"]?.sensitive,
+    ).toBe(true);
+    expect(
+      second.uiHints["plugins.entries.secret-path-cache.config.routes.*.replacement"]?.sensitive,
+    ).toBe(true);
+    expect(
+      second.uiHints["plugins.entries.secret-path-cache.config.routes.*.credential"],
+    ).toBeUndefined();
   });
 
   it("rejects removed Firecrawl config from the core web fetch schema", () => {
@@ -958,10 +981,14 @@ describe("config schema", () => {
           model: {
             primary: "openrouter/anthropic/claude-sonnet-4-6",
           },
+          thinking: "low",
+          fastMode: true,
           timeoutMs: 15_000,
         },
       },
     });
+    expect(tools?.exec?.reviewer?.thinking).toBe("low");
+    expect(tools?.exec?.reviewer?.fastMode).toBe(true);
     expect(tools?.exec?.reviewer?.model).toEqual({
       primary: "openrouter/anthropic/claude-sonnet-4-6",
     });
@@ -975,6 +1002,8 @@ describe("config schema", () => {
               exec: {
                 reviewer: {
                   model: "openai/gpt-5.5",
+                  thinking: "high",
+                  fastMode: false,
                 },
               },
             },
@@ -983,35 +1012,52 @@ describe("config schema", () => {
       },
     });
     expect(config.agents?.entries?.main?.tools?.exec?.reviewer?.model).toBe("openai/gpt-5.5");
+    expect(config.agents?.entries?.main?.tools?.exec?.reviewer?.thinking).toBe("high");
+    expect(config.agents?.entries?.main?.tools?.exec?.reviewer?.fastMode).toBe(false);
+    expect(ToolsSchema.safeParse({ exec: { reviewer: { fastMode: "priority" } } }).success).toBe(
+      false,
+    );
+    expect(ToolsSchema.safeParse({ exec: { reviewer: { thinking: "turbo" } } }).success).toBe(
+      false,
+    );
   });
 
-  it("rejects mixed normalized and legacy exec policy config", () => {
-    expect(
-      ToolsSchema.safeParse({
-        exec: {
-          mode: "auto",
-          ask: "always",
-        },
-      }).success,
-    ).toBe(false);
-
-    expect(
-      OpenClawSchema.safeParse({
-        agents: {
-          list: [
-            {
-              id: "main",
-              tools: {
-                exec: {
-                  mode: "full",
-                  security: "deny",
-                },
-              },
-            },
-          ],
-        },
-      }).success,
-    ).toBe(false);
+  it.each([
+    { policy: { security: "full", ask: "off" }, hint: 'Replace security/ask with mode="full"' },
+    {
+      policy: { security: "allowlist", ask: "on-miss" },
+      hint: 'Replace security/ask with mode="ask"',
+    },
+    { policy: { security: "full", ask: "on-miss" }, hint: "no exact mode equivalent" },
+    { policy: { security: "allowlist", ask: "always" }, hint: "no exact mode equivalent" },
+    { policy: { security: "deny" }, hint: "legacy policy is incomplete" },
+    { policy: { ask: "off" }, hint: "legacy policy is incomplete" },
+  ])("rejects mixed exec policy with accurate repair guidance: $policy", ({ policy, hint }) => {
+    for (const scope of ["root", "agent"]) {
+      const exec = { mode: "auto", ...policy };
+      const result = OpenClawSchema.safeParse(
+        scope === "root"
+          ? { tools: { exec } }
+          : { agents: { entries: { worker: { tools: { exec } } } } },
+      );
+      expect(result.success).toBe(false);
+      expect(result.error?.issues).toEqual([
+        expect.objectContaining({
+          path:
+            scope === "root"
+              ? ["tools", "exec", "mode"]
+              : ["agents", "entries", "worker", "tools", "exec", "mode"],
+          message: expect.stringContaining(hint),
+        }),
+      ]);
+      const message = result.error?.issues[0]?.message;
+      expect(message).toContain("same exec object");
+      expect(message).toContain("deploy script, template, or patch at this scope");
+      expect(message).toContain('run "openclaw doctor --fix"');
+      if (!hint.startsWith("Replace")) {
+        expect(message).not.toContain("the equivalent of");
+      }
+    }
   });
 
   it("accepts the update_plan tool switch in the runtime zod schema", () => {
@@ -1135,6 +1181,13 @@ describe("config schema", () => {
     expect(ToolsSchema.safeParse({ codeMode: { enabled: "always" } }).success).toBe(false);
   });
 
+  it.each([undefined, {}, { maxConcurrent: 3 }, false, { enabled: false }])(
+    "preserves authored Swarm config %j without materializing defaults",
+    (swarm) => {
+      expect(ToolsSchema.parse(swarm === undefined ? {} : { swarm })?.swarm).toEqual(swarm);
+    },
+  );
+
   it("accepts strict Swarm config in the runtime zod schema", () => {
     expect(ToolsSchema.parse({ swarm: true })?.swarm).toBe(true);
     expect(
@@ -1178,6 +1231,7 @@ describe("config schema", () => {
           ssrfPolicy: {
             dangerouslyAllowPrivateNetwork: true,
             allowedHostnames: ["127.0.0.1"],
+            blockedHostnames: ["tracker.example.com", "*.ads.example.com"],
             allowRfc2544BenchmarkRange: true,
             allowIpv6UniqueLocalRange: true,
           },
@@ -1188,6 +1242,7 @@ describe("config schema", () => {
     expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
       allowedHostnames: ["127.0.0.1"],
+      blockedHostnames: ["tracker.example.com", "*.ads.example.com"],
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
     });
@@ -1251,6 +1306,17 @@ describe("config schema", () => {
     expect(baseSchema.uiHints["gateway.reload.mode"]?.advanced).toBe(true);
     expect(baseSchema.uiHints["agents.defaults.workspace"]?.advanced).toBe(false);
     expect(baseSchema.uiHints["agents.defaults.compaction.timeoutSeconds"]?.advanced).toBe(true);
+    for (const path of [
+      "tools.swarm",
+      "tools.swarm.enabled",
+      "tools.swarm.maxConcurrent",
+      "tools.loopDetection.enabled",
+      "gateway.cliAgents.enabled",
+      "logging.audit.messages",
+    ]) {
+      expect(baseSchema.uiHints[path]?.advanced, path).toBe(false);
+    }
+    expect(baseSchema.uiHints["agents.defaults.experimental.localModelLean"]?.advanced).toBe(true);
   });
 
   it("preserves explicit common hints on numeric leaves while defaulting tuning advanced", () => {
@@ -1275,6 +1341,150 @@ describe("config schema", () => {
     expect(hints["custom.visibleCount"]?.advanced).toBe(false);
     expect(hints["custom.tuningMs"]?.advanced).toBe(true);
   });
+
+  it.each([
+    [
+      "leading wildcard specificity",
+      [
+        ["custom.*.*", false],
+        ["*.item.value", true],
+      ],
+      "custom.item.value",
+      true,
+    ],
+    [
+      "earlier leading wildcard",
+      [
+        ["*.item.value", true],
+        ["custom.item.*", false],
+      ],
+      "custom.item.value",
+      true,
+    ],
+    [
+      "earlier rooted wildcard",
+      [
+        ["custom.item.*", false],
+        ["*.item.value", true],
+      ],
+      "custom.item.value",
+      false,
+    ],
+    [
+      "exact before wildcard",
+      [
+        ["custom.item.*", true],
+        ["custom.item.value", false],
+      ],
+      "custom.item.value",
+      false,
+    ],
+    [
+      "last exact alias",
+      [
+        ["custom..item.value", true],
+        ["custom.item.value", false],
+      ],
+      "custom.item.value",
+      false,
+    ],
+    [
+      "first array alias",
+      [
+        ["custom.items[]", true],
+        ["custom.items.*", false],
+      ],
+      "custom.items.*",
+      true,
+    ],
+    [
+      "first wildcard alias",
+      [
+        ["custom.items.*", false],
+        ["custom.items[]", true],
+      ],
+      "custom.items.*",
+      false,
+    ],
+  ] as const)("preserves tier precedence for %s", (_name, entries, target, expected) => {
+    const hints = applyResolvedConfigTierHints(
+      {
+        type: "object",
+        properties: {
+          custom: {
+            type: "object",
+            properties: {
+              item: { type: "object", properties: { value: { type: "string" } } },
+              items: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
+      Object.fromEntries(entries.map(([key, advanced]) => [key, { advanced }])),
+    );
+    expect(hints[target]?.advanced).toBe(expected);
+  });
+
+  it.each(["anyOf", "oneOf", "allOf"])(
+    "resolves numeric %s branches before inheriting child tiers",
+    (composition) => {
+      const branches = [
+        { type: "object", properties: { child: { type: "string" } } },
+        { type: "integer" },
+      ];
+      for (const variants of [branches, branches.toReversed()]) {
+        const hints = applyResolvedConfigTierHints(
+          {
+            type: "object",
+            properties: {
+              custom: {
+                type: "object",
+                properties: { choice: { [composition]: variants } },
+              },
+            },
+          },
+          { custom: { advanced: false } },
+        );
+        expect(hints["custom.choice"]?.advanced).toBe(true);
+        expect(hints["custom.choice.child"]?.advanced).toBe(true);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "ranks generated numeric wildcards with authored tiers (explicit common=%s)",
+    (explicitCommon) => {
+      const hints = applyResolvedConfigTierHints(
+        {
+          type: "object",
+          properties: {
+            custom: {
+              type: "object",
+              properties: {
+                group: {
+                  type: "object",
+                  properties: {
+                    item: {
+                      type: "object",
+                      properties: { value: { type: "string" } },
+                      additionalProperties: { type: "integer" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        {
+          custom: { advanced: false },
+          "custom.*.*.value": { advanced: false },
+          ...(explicitCommon ? { "custom.group.item.value": { advanced: false } } : {}),
+        },
+      );
+      expect(hints["custom.group.item.*"]?.advanced).toBe(true);
+      expect(hints["custom.group.item.value"]?.advanced).toBe(!explicitCommon);
+    },
+  );
 
   it("looks up root config schema children without returning the full schema tree", () => {
     const lookup = lookupConfigSchema(baseSchema, ".");

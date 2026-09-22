@@ -4,19 +4,20 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
-import { withEnv } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { createSyntheticSourceInfo } from "./skill-contract.js";
-import { loadMergedWorkspaceSkills } from "./workspace-skill-loader.js";
+import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
-const buildWorkspaceSkillsPrompt = (
+const buildWorkspaceSkillsPrompt = async (
   workspaceDir: string,
   opts?: Parameters<typeof buildSkillSnapshot>[1],
-): string => buildSkillSnapshot(workspaceDir, opts).prompt;
+): Promise<string> => (await buildSkillSnapshot(workspaceDir, opts)).prompt;
 
 vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
@@ -111,17 +112,54 @@ describe("buildWorkspaceSkillsPrompt", () => {
       body: "# Workspace\n",
     });
 
-    const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
-      buildWorkspaceSkillsPrompt(workspaceDir, {
-        managedSkillsDir: managedDir,
-        bundledSkillsDir: bundledDir,
-      }),
+    const prompt = await withEnvAsync(
+      { HOME: workspaceDir, PATH: "" },
+      async () =>
+        await buildWorkspaceSkillsPrompt(workspaceDir, {
+          managedSkillsDir: managedDir,
+          bundledSkillsDir: bundledDir,
+        }),
     );
 
     expect(prompt).toContain("Workspace version");
     expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
     expect(prompt).not.toContain("Managed version");
     expect(prompt).not.toContain("Bundled version");
+  });
+
+  it("loads Workshop skills below managed and above bundled", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workshop-precedence");
+    const managedDir = path.join(workspaceDir, ".managed");
+    const config = {
+      agents: { entries: { main: { agentDir: path.join(workspaceDir, ".agent") } } },
+    };
+    const workshopDir = resolveWorkshopSkillsDir(config, "main");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    for (const [root, name, description] of [
+      [managedDir, "managed-wins", "Managed version"],
+      [workshopDir, "managed-wins", "Workshop version below managed"],
+      [workshopDir, "workshop-wins", "Workshop version"],
+      [bundledDir, "workshop-wins", "Bundled version below Workshop"],
+    ] as const) {
+      await writeSkill({ dir: path.join(root, name), name, description });
+    }
+
+    const entries = loadWorkspaceSkills(workspaceDir, {
+      config,
+      agentId: "main",
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+      pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
+    });
+
+    expect(entries.find((entry) => entry.skill.name === "managed-wins")?.skill).toMatchObject({
+      source: "openclaw-managed",
+      description: "Managed version",
+    });
+    expect(entries.find((entry) => entry.skill.name === "workshop-wins")?.skill).toMatchObject({
+      source: "openclaw-workshop",
+      description: "Workshop version",
+    });
   });
 
   it("keeps extraDirs below bundled precedence and reports the collision", async () => {
@@ -142,12 +180,14 @@ describe("buildWorkspaceSkillsPrompt", () => {
     });
     const warn = captureWarningLogger();
 
-    const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
-      buildWorkspaceSkillsPrompt(workspaceDir, {
-        bundledSkillsDir: bundledDir,
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
-        config: { skills: { load: { extraDirs: [extraDir] } } },
-      }),
+    const prompt = await withEnvAsync(
+      { HOME: workspaceDir, PATH: "" },
+      async () =>
+        await buildWorkspaceSkillsPrompt(workspaceDir, {
+          bundledSkillsDir: bundledDir,
+          managedSkillsDir: path.join(workspaceDir, ".managed"),
+          config: { skills: { load: { extraDirs: [extraDir] } } },
+        }),
     );
     const warningText = warn.mock.calls.flat().map(String).join("\n");
 
@@ -177,12 +217,12 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
     const loadOptions = {
       agentWorkspaceDir,
-      executionSkillsDir: path.join(executionWorkspaceDir, "skills"),
+      executionWorkspaceDir,
       managedSkillsDir: path.join(agentWorkspaceDir, ".managed"),
       bundledSkillsDir: "",
       pluginSkillsDir: path.join(agentWorkspaceDir, ".plugin-skills"),
     };
-    const entries = loadMergedWorkspaceSkills(loadOptions);
+    const entries = loadWorkspaceSkills(agentWorkspaceDir, loadOptions);
     const warning = JSON.parse(String(warn.mock.calls[0]?.[0])) as Record<string, unknown>;
 
     expect(entries.find((entry) => entry.skill.name === "demo-skill")?.skill.description).toBe(
@@ -195,11 +235,11 @@ describe("buildWorkspaceSkillsPrompt", () => {
       loserPath: executionSkillFile,
     });
 
-    loadMergedWorkspaceSkills(loadOptions);
+    loadWorkspaceSkills(agentWorkspaceDir, loadOptions);
     expect(warn).toHaveBeenCalledOnce();
 
     bumpSkillsSnapshotVersion({ workspaceDir: agentWorkspaceDir, reason: "watch" });
-    loadMergedWorkspaceSkills(loadOptions);
+    loadWorkspaceSkills(agentWorkspaceDir, loadOptions);
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
@@ -212,17 +252,15 @@ describe("buildWorkspaceSkillsPrompt", () => {
       name: "demo-skill",
       description: "Workspace version",
     });
-    const executionSkillsDir = path.join(executionWorkspaceDir, "skills");
     await fs.symlink(
       workspaceSkillsDir,
-      executionSkillsDir,
+      path.join(executionWorkspaceDir, "skills"),
       process.platform === "win32" ? "junction" : "dir",
     );
     const warn = captureWarningLogger();
 
-    const entries = loadMergedWorkspaceSkills({
-      agentWorkspaceDir,
-      executionSkillsDir,
+    const entries = loadWorkspaceSkills(agentWorkspaceDir, {
+      executionWorkspaceDir,
       managedSkillsDir: path.join(agentWorkspaceDir, ".managed"),
       bundledSkillsDir: "",
       pluginSkillsDir: path.join(agentWorkspaceDir, ".plugin-skills"),
@@ -262,19 +300,21 @@ describe("buildWorkspaceSkillsPrompt", () => {
     ];
 
     const managedSkillsDir = path.join(workspaceDir, ".managed");
-    const defaultPrompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
-      buildWorkspaceSkillsPrompt(workspaceDir, {
-        entries,
-        managedSkillsDir,
-        eligibility: {
-          remote: {
-            platforms: ["linux"],
-            hasBin: () => false,
-            hasAnyBin: () => false,
-            note: "",
+    const defaultPrompt = await withEnvAsync(
+      { HOME: workspaceDir, PATH: "" },
+      async () =>
+        await buildWorkspaceSkillsPrompt(workspaceDir, {
+          entries,
+          managedSkillsDir,
+          eligibility: {
+            remote: {
+              platforms: ["linux"],
+              hasBin: () => false,
+              hasAnyBin: () => false,
+              note: "",
+            },
           },
-        },
-      }),
+        }),
     );
     expect(defaultPrompt).toContain("always-skill");
     expect(defaultPrompt).toContain("config-skill");
@@ -282,23 +322,25 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(defaultPrompt).not.toContain("anybin-skill");
     expect(defaultPrompt).not.toContain("env-skill");
 
-    const gatedPrompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
-      buildWorkspaceSkillsPrompt(workspaceDir, {
-        entries,
-        managedSkillsDir,
-        config: {
-          browser: { enabled: false },
-          skills: { entries: { "env-skill": { apiKey: "ok" } } }, // pragma: allowlist secret
-        },
-        eligibility: {
-          remote: {
-            platforms: ["linux"],
-            hasBin: (bin: string) => bin === "fakebin",
-            hasAnyBin: (bins: string[]) => bins.includes("fakebin"),
-            note: "",
+    const gatedPrompt = await withEnvAsync(
+      { HOME: workspaceDir, PATH: "" },
+      async () =>
+        await buildWorkspaceSkillsPrompt(workspaceDir, {
+          entries,
+          managedSkillsDir,
+          config: {
+            browser: { enabled: false },
+            skills: { entries: { "env-skill": { apiKey: "ok" } } }, // pragma: allowlist secret
           },
-        },
-      }),
+          eligibility: {
+            remote: {
+              platforms: ["linux"],
+              hasBin: (bin: string) => bin === "fakebin",
+              hasAnyBin: (bins: string[]) => bins.includes("fakebin"),
+              note: "",
+            },
+          },
+        }),
     );
     expect(gatedPrompt).toContain("bin-skill");
     expect(gatedPrompt).toContain("anybin-skill");
@@ -308,36 +350,40 @@ describe("buildWorkspaceSkillsPrompt", () => {
   });
   it("uses skillKey for config lookups", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
-      buildWorkspaceSkillsPrompt(workspaceDir, {
-        entries: [
-          createSkillEntry({
-            name: "alias-skill",
-            description: "Uses skillKey",
-            metadata: { skillKey: "alias" },
-          }),
-        ],
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
-        config: { skills: { entries: { alias: { enabled: false } } } },
-      }),
+    const prompt = await withEnvAsync(
+      { HOME: workspaceDir, PATH: "" },
+      async () =>
+        await buildWorkspaceSkillsPrompt(workspaceDir, {
+          entries: [
+            createSkillEntry({
+              name: "alias-skill",
+              description: "Uses skillKey",
+              metadata: { skillKey: "alias" },
+            }),
+          ],
+          managedSkillsDir: path.join(workspaceDir, ".managed"),
+          config: { skills: { entries: { alias: { enabled: false } } } },
+        }),
     );
     expect(prompt).not.toContain("alias-skill");
   });
 
   it("uses the canonical skillKey for session overrides while filtering agents by skill name", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
-      buildWorkspaceSkillsPrompt(workspaceDir, {
-        entries: [
-          createSkillEntry({
-            name: "alias-skill",
-            metadata: { skillKey: "canonical-alias" },
-          }),
-        ],
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
-        skillFilter: ["alias-skill"],
-        skillOverrides: { "canonical-alias": false },
-      }),
+    const prompt = await withEnvAsync(
+      { HOME: workspaceDir, PATH: "" },
+      async () =>
+        await buildWorkspaceSkillsPrompt(workspaceDir, {
+          entries: [
+            createSkillEntry({
+              name: "alias-skill",
+              metadata: { skillKey: "canonical-alias" },
+            }),
+          ],
+          managedSkillsDir: path.join(workspaceDir, ".managed"),
+          skillFilter: ["alias-skill"],
+          skillOverrides: { "canonical-alias": false },
+        }),
     );
 
     expect(prompt).not.toContain("alias-skill");

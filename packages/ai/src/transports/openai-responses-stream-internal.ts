@@ -1,3 +1,4 @@
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseOutputItem } from "openai/resources/responses/responses.js";
 import {
@@ -20,6 +21,7 @@ import {
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { createCompactionTracker } from "./openai-responses-compaction-replay.js";
 import { OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY } from "./openai-responses-contracts.js";
 import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-responses-debug.js";
@@ -45,7 +47,7 @@ import type {
   ResponsesStreamOptions,
   ResponsesStreamOutputMessage,
 } from "./openai-responses-stream-types-internal.js";
-import { transportAbortError } from "./transport-stream-shared.js";
+import { IncompleteToolCallError, transportAbortError } from "./transport-stream-shared.js";
 
 export type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
 
@@ -68,10 +70,13 @@ export async function processResponsesStream<TApi extends Api>(
     ResponsesStreamOutputMessage,
     StreamingToolCallState
   >;
+  type ThinkingOutputSlot = Extract<ResponsesOutputSlot, { type: "thinking" }>;
+  type TextOutputSlot = Extract<ResponsesOutputSlot, { type: "text" }>;
   const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
   const outputSlots = createResponsesOutputSlotTracker<ResponsesOutputSlot>();
   const outputs = createResponsesOutputTracker();
   let terminalResponse: CompletedResponse | null | undefined;
+  let incompleteToolCall: CompletedToolCall | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
   const compactionTracker = createCompactionTracker(output, model, options);
@@ -177,6 +182,28 @@ export async function processResponsesStream<TApi extends Api>(
       }
     }
   };
+  const appendThinkingDelta = (slot: ThinkingOutputSlot, delta: string): void => {
+    appendAssistantThinking(slot.block, delta);
+    stream.push({
+      type: "thinking_delta",
+      contentIndex: slot.contentIndex,
+      delta,
+      partial: output,
+    });
+  };
+  const projectTextDelta = (slot: TextOutputSlot, delta: string): void => {
+    if (slot.pendingText !== null) {
+      appendResponsesPendingTextDelta(slot, delta, materializeDeferredTextSlot);
+    } else if (slot.block && slot.contentIndex !== undefined) {
+      slot.block.text += delta;
+      // llm-core makes text_delta.partial optional to avoid retaining a full snapshot per token.
+      stream.push({
+        type: "text_delta",
+        contentIndex: slot.contentIndex,
+        delta,
+      });
+    }
+  };
   const terminal = createResponsesTerminalController({
     output,
     stream,
@@ -217,7 +244,12 @@ export async function processResponsesStream<TApi extends Api>(
         }
       }
     }
-    terminal.emitToolCallCompletion(identity, finalOutputIndex, streamingToolCall, validated);
+    terminal.emitToolCallCompletion(identity, finalOutputIndex, streamingToolCall, {
+      ...validated,
+      ...(options?.asyncToolExecution && isRecord(item) && item.async === true
+        ? { async: true as const }
+        : {}),
+    });
   };
   const prepareTerminalToolCalls = (items: ResponseOutputItem[]) => {
     const prepared = new Map<number, () => void>();
@@ -290,6 +322,24 @@ export async function processResponsesStream<TApi extends Api>(
       // provider progress; keep the idle watchdog alive without exposing them,
       // matching the completions and anthropic transports.
       notifyLlmRequestActivity(options?.signal);
+      if (
+        event.type === "response.output_item.done" &&
+        event.item.type === "function_call" &&
+        event.item.status === "incomplete"
+      ) {
+        incompleteToolCall ??= event.item;
+      }
+      // An incomplete call closes output admission; only drain terminal facts.
+      // Later async tool completions must not authorize side effects.
+      if (
+        incompleteToolCall &&
+        event.type !== "response.completed" &&
+        event.type !== "response.incomplete" &&
+        event.type !== "response.failed" &&
+        event.type !== "error"
+      ) {
+        continue;
+      }
       if (event.type === "response.created") {
         output.responseId = event.response.id;
       } else if (event.type === "response.output_item.added") {
@@ -316,6 +366,7 @@ export async function processResponsesStream<TApi extends Api>(
             block: toolCallBlock,
             contentIndex,
             argumentStreamReliable: true,
+            argumentsStreamed: false,
             previewSchedule: createToolArgumentPreviewSchedule(),
             ...readResponsesToolCallItemIdentity(item),
           };
@@ -344,14 +395,8 @@ export async function processResponsesStream<TApi extends Api>(
         if (!lastPart) {
           continue;
         }
-        slot.block.thinking += event.delta;
         lastPart.text += event.delta;
-        stream.push({
-          type: "thinking_delta",
-          contentIndex: slot.contentIndex,
-          delta: event.delta,
-          partial: output,
-        });
+        appendThinkingDelta(slot, event.delta);
       } else if (event.type === "response.reasoning_summary_part.done") {
         const slot = outputSlots.resolve(event, "thinking");
         if (!slot) {
@@ -362,26 +407,14 @@ export async function processResponsesStream<TApi extends Api>(
         if (!lastPart) {
           continue;
         }
-        slot.block.thinking += "\n\n";
         lastPart.text += "\n\n";
-        stream.push({
-          type: "thinking_delta",
-          contentIndex: slot.contentIndex,
-          delta: "\n\n",
-          partial: output,
-        });
+        appendThinkingDelta(slot, "\n\n");
       } else if (event.type === "response.reasoning_text.delta") {
         const slot = outputSlots.resolve(event, "thinking");
         if (!slot) {
           continue;
         }
-        slot.block.thinking += event.delta;
-        stream.push({
-          type: "thinking_delta",
-          contentIndex: slot.contentIndex,
-          delta: event.delta,
-          partial: output,
-        });
+        appendThinkingDelta(slot, event.delta);
       } else if (event.type === "response.content_part.added") {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -407,17 +440,7 @@ export async function processResponsesStream<TApi extends Api>(
           slot.item.content.push(lastPart);
         }
         lastPart.text += event.delta;
-        if (slot.pendingText !== null) {
-          appendResponsesPendingTextDelta(slot, event.delta, materializeDeferredTextSlot);
-        } else if (slot.block && slot.contentIndex !== undefined) {
-          slot.block.text += event.delta;
-          // llm-core deliberately makes text_delta.partial optional to avoid a full snapshot per token.
-          stream.push({
-            type: "text_delta",
-            contentIndex: slot.contentIndex,
-            delta: event.delta,
-          });
-        }
+        projectTextDelta(slot, event.delta);
       } else if (isAzureResponsesTextDeltaEvent(event)) {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -430,16 +453,7 @@ export async function processResponsesStream<TApi extends Api>(
           slot.item.content.push(lastPart);
         }
         lastPart.text += event.delta;
-        if (slot.pendingText !== null) {
-          appendResponsesPendingTextDelta(slot, event.delta, materializeDeferredTextSlot);
-        } else if (slot.block && slot.contentIndex !== undefined) {
-          slot.block.text += event.delta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: slot.contentIndex,
-            delta: event.delta,
-          });
-        }
+        projectTextDelta(slot, event.delta);
       } else if (event.type === "response.refusal.delta") {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -452,20 +466,12 @@ export async function processResponsesStream<TApi extends Api>(
           slot.item.content.push(lastPart);
         }
         lastPart.refusal += event.delta;
-        if (slot.pendingText !== null) {
-          appendResponsesPendingTextDelta(slot, event.delta, materializeDeferredTextSlot);
-        } else if (slot.block && slot.contentIndex !== undefined) {
-          slot.block.text += event.delta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: slot.contentIndex,
-            delta: event.delta,
-          });
-        }
+        projectTextDelta(slot, event.delta);
       } else if (event.type === "response.function_call_arguments.delta") {
         const toolCall = streamingToolCalls.resolve(event);
         if (toolCall) {
           toolCall.block.partialJson += event.delta;
+          toolCall.argumentsStreamed = true;
           // Preview refresh is geometric; the done event and terminal finalize
           // re-parse the full buffer authoritatively either way.
           if (toolCall.previewSchedule(toolCall.block.partialJson.length)) {
@@ -493,6 +499,7 @@ export async function processResponsesStream<TApi extends Api>(
             toolCall.block.partialJson = doneArguments;
             toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
             toolCall.argumentStreamReliable = true;
+            toolCall.argumentsStreamed = true;
           }
 
           if (doneArguments?.startsWith(previousPartialJson)) {
@@ -650,18 +657,46 @@ export async function processResponsesStream<TApi extends Api>(
           ) {
             continue;
           }
+          // The output_item.done snapshot can carry stale partial arguments that
+          // disagree with the streamed buffer. Prefer the streamed buffer only
+          // when it was populated by routed argument deltas or a done event
+          // (not just the opening added snapshot), is reliable (not marked
+          // unreliable by an unrouteable delta), and parses as complete JSON;
+          // otherwise fall back to the done snapshot.
+          const streamedArguments = streamingToolCall?.block.partialJson || "";
+          const preferredArguments =
+            streamingToolCall?.argumentStreamReliable &&
+            streamingToolCall?.argumentsStreamed &&
+            streamedArguments.length > 0 &&
+            completedArguments !== undefined &&
+            streamedArguments !== completedArguments &&
+            parseJsonObjectPreservingUnsafeIntegers(streamedArguments) !== null
+              ? streamedArguments
+              : completedArguments || streamedArguments;
           const validated = resolveCompletedResponsesToolCall(item, {
             name: streamingToolCall?.block.name,
-            arguments: completedArguments || streamingToolCall?.block.partialJson || "",
+            arguments: preferredArguments,
           });
 
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
-        if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
-          throw new Error("Responses stream completed with unresolved tool calls");
-        }
+        // Preserve reported accounting before rejecting unfinished tool calls.
         terminal.finalizeResponse(event.response, event.type);
+        if (incompleteToolCall) {
+          if (output.errorMessage) {
+            throw new Error(output.errorMessage);
+          }
+          resolveCompletedResponsesToolCall(incompleteToolCall);
+        }
+        if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
+          if (output.errorMessage) {
+            throw new Error(output.errorMessage);
+          }
+          throw new IncompleteToolCallError(
+            "Responses stream completed with unresolved tool calls",
+          );
+        }
         if (event.type === "response.completed" || output.stopReason === "length") {
           const items = event.response.output ?? [];
           const completeToolCall =

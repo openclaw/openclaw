@@ -1,6 +1,8 @@
+import type { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 // Voice Call plugin module implements context behavior.
 import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
+import type { VoiceCallStateRuntime } from "../runtime-state.js";
 import type { CallId, CallRecord } from "../types.js";
 
 export type CallEndResult = { success: boolean; error?: string };
@@ -25,14 +27,20 @@ type CallManagerRuntimeDeps = {
   config: VoiceCallConfig;
   coreSession?: VoiceCallCoreSessionConfig;
   storePath: string;
+  stateRuntime?: VoiceCallStateRuntime["state"];
   webhookUrl: string | null;
 };
 
 type CallManagerTransientState = {
+  mutationQueue: KeyedAsyncQueue;
+  pendingCallAdmissions: Set<CallId>;
+  trackCallWork: (work: Promise<unknown>) => void;
+  isStopping: () => boolean;
   activeTurnCalls: Set<CallId>;
   endCallOperations: Map<CallId, Promise<CallEndResult>>;
   transcriptWaiters: Map<CallId, TranscriptWaiter>;
   maxDurationTimers: Map<CallId, NodeJS.Timeout>;
+  notifyHangupTimers: Map<CallId, NodeJS.Timeout>;
   initialMessageInFlight: Set<CallId>;
 };
 
@@ -46,6 +54,7 @@ export type StreamSessionIssuer = (request: {
 
 type CallManagerHooks = {
   onCallAnswered?: (call: CallRecord) => void;
+  onCallerSpeech?: (call: CallRecord) => void;
   streamSessionIssuer?: StreamSessionIssuer;
 };
 

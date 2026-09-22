@@ -10,10 +10,13 @@ export {
   emitAcpLifecycleStart,
   emitAcpPromptSubmitted,
   emitAcpRuntimeEvent,
+  resolveAcpLifecycleEndFields,
+  runAgentAttempt,
+  sessionTranscriptHasContent,
+} from "./attempt-execution.js";
+export type { AcpToolLifecycleTracker } from "./attempt-execution.js";
+export {
   persistAcpTurnTranscript,
   persistCliTurnTranscript,
   resolveCliTranscriptReplyText,
-  runAgentAttempt,
-  sessionFileHasContent,
-} from "./attempt-execution.js";
-export type { AcpToolLifecycleTracker } from "./attempt-execution.js";
+} from "./transcript-persistence.js";

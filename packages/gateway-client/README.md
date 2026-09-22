@@ -25,13 +25,57 @@ separate from the Gateway's current wire protocol number reported in `hello-ok`.
 
 ## Install
 
+Use the verified stable release with exact pins:
+
 ```bash
-npm install @openclaw/gateway-client @openclaw/gateway-protocol
+npm install --save-exact @openclaw/gateway-client@2026.8.1 @openclaw/gateway-protocol@2026.8.1
 ```
 
-Node consumers use the `ws` transport included as a runtime dependency. Browser
-consumers provide their platform WebSocket through the browser-safe protocol
-client surface.
+See the canonical [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
+for package/wire-version rules and recovery from reserved `0.0.0` artifacts.
+Test it with the Gateway version you deploy; the root `openclaw` CLI has its own
+package versions and dist-tags.
+
+This release declares Node.js `>=22.19.0`. Node consumers use the `ws` transport
+included as a runtime dependency. Browser consumers provide their platform
+WebSocket through the browser-safe protocol client surface.
+
+For device-authenticated Node connections, supply `deviceIdentity` (or
+`hostDeps.loadOrCreateDeviceIdentity`) and the `hostDeps.signDevicePayload` and
+`hostDeps.publicKeyRawBase64UrlFromPem` callbacks. The host also owns device-token
+storage through `GatewayClientHostDeps`; the package does not load OpenClaw's
+local identity or credentials automatically.
+
+Token storage callbacks may return their existing synchronous result or a
+`Promise`. The client waits for token loading before sending `connect`, and for
+issued-token persistence before calling `onHelloOk`. An accepted hello creates a
+persistence obligation that survives disconnect or stop; bootstrap credentials
+retire after that persistence succeeds. Readiness still belongs to the current
+connection. `stop()` requests shutdown synchronously; `stopAndWait()` also waits
+for accepted token operations to settle, even when transport closure times out.
+A reconnect waits for earlier token operations before reading the token again.
+
+Accepted asynchronous persistence failures reach `onConnectError` even after the
+connection retires. If that callback is absent or throws, `stopAndWait()` rejects
+with the first undelivered persistence error after draining accepted work. A later
+connection can still load credentials; a reported failure does not poison its
+storage queue. Synchronous callback exceptions retain their existing connect-error
+behavior.
+
+Hosts should honor the optional `expectedToken` storage condition. A string
+compares the existing row before writing or clearing; `null` on a store means
+insert only when no row exists. Omission preserves unconditional storage behavior.
+This prevents an older receipt or cleanup from replacing another client's newer
+token. Close cleanup waits for pending persistence and, if its result is uncertain,
+conditionally clears only the sampled and received tokens. Cleanup before any token
+observation retains its existing unconditional behavior. An observed empty cache
+does not permit unconditional cleanup.
+
+When storage callbacks receive `signal` or `assertCurrent`, check them immediately
+before admission and before committing a write. These callbacks stay local to the
+host; do not send them to a worker. Loads use the current connection lifetime;
+cleanup uses the client lifetime. Accepted hello persistence is independent of
+transport lifetime and retains the host's normal storage admission checks.
 
 ## Entry points
 
@@ -80,9 +124,16 @@ The client waits for the Gateway's `connect.challenge` event before sending its
 does not fall back to a pre-challenge handshake. `onHelloOk` fires only after the
 Gateway accepts a compatible connection, so requests should wait for that callback.
 
-For remote connections, use `wss://`. Plaintext `ws://` is allowed by default
-only for loopback addresses. Authentication material and Gateway traffic must
-not cross an untrusted network without transport security.
+This loopback example uses the default `gateway-client` / `backend` identity.
+It is not a device-pairing example. UI clients should declare their actual `mode`
+and supply the device-auth host callbacks described above; see
+[device identity and pairing](https://docs.openclaw.ai/gateway/protocol#device-identity-and-pairing).
+
+For remote connections, prefer `wss://`. The Node client also accepts plaintext
+`ws://` by default for loopback, private/link-local/CGNAT IP addresses, and
+`.local` or `.ts.net` hostnames. This allowlist does not provide encryption:
+authentication material and Gateway traffic must not cross an untrusted network
+without transport security.
 
 ## Browser clients
 
@@ -104,6 +155,10 @@ The host is responsible for:
 The shared protocol client still owns frame parsing, request correlation,
 challenge ordering, timeout cleanup, sequence-gap detection, and reconnect
 scheduling.
+
+Both the Node and browser entries export `isGatewayProtocolResponseError(error)`.
+It recognizes correlated Gateway response errors; constructed errors and local
+transport timeouts return `false`. Both entries use the same implementation.
 
 ## Defaults and reconnect behavior
 

@@ -13,16 +13,16 @@ export function renderSidebarSessionSectionHeader(params: {
   const draggable = params.draggable !== false && !params.disabledReason;
   return html`
     <div
-      class="sidebar-recent-sessions__head ${draggable
-        ? "sidebar-recent-sessions__head--draggable"
-        : ""}"
+      class="sidebar-recent-sessions__head ${
+        draggable ? "sidebar-recent-sessions__head--draggable" : ""
+      }"
       draggable=${draggable ? "true" : "false"}
       title=${params.disabledReason ?? nothing}
       @mousedown=${(event: MouseEvent) => {
         const header = event.currentTarget as HTMLElement;
         header.toggleAttribute(
           "data-section-drag-blocked",
-          Boolean((event.target as HTMLElement).closest("button")),
+          Boolean((event.target as HTMLElement).closest("button, a")),
         );
       }}
       @mouseup=${(event: MouseEvent) => {
@@ -34,11 +34,11 @@ export function renderSidebarSessionSectionHeader(params: {
           return;
         }
         const header = event.currentTarget as HTMLElement;
-        const startedFromButton =
-          Boolean((event.target as HTMLElement).closest("button")) ||
+        const startedFromControl =
+          Boolean((event.target as HTMLElement).closest("button, a")) ||
           header.hasAttribute("data-section-drag-blocked");
         header.removeAttribute("data-section-drag-blocked");
-        if (startedFromButton) {
+        if (startedFromControl) {
           event.preventDefault();
           return;
         }

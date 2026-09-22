@@ -7,7 +7,6 @@ export {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
-  getSessionDisplaySubagentRunByChildSessionKey,
   getSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,

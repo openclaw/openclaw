@@ -1,4 +1,4 @@
-// Msteams tests cover graph upload plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
@@ -23,12 +23,16 @@ function requireFetchCall(fetchFn: ReturnType<typeof vi.fn>, index = 0): FetchCa
   return call;
 }
 
-function expectGraphUploadFetch(fetchFn: ReturnType<typeof vi.fn>, expectedUrl: string): void {
+function expectGraphUploadFetch(
+  fetchFn: ReturnType<typeof vi.fn>,
+  expectedUrl: string,
+  contentType = "application/octet-stream",
+): void {
   const [url, init] = requireFetchCall(fetchFn);
   expect(url).toBe(expectedUrl);
   expect(init?.method).toBe("PUT");
   expect(init?.headers?.Authorization).toBe("Bearer graph-token");
-  expect(init?.headers?.["Content-Type"]).toBe("application/octet-stream");
+  expect(init?.headers?.["Content-Type"]).toBe(contentType);
   expect(init?.headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
 }
 
@@ -39,13 +43,6 @@ function bodyOnlyErrorResponse(body: string, status = 500): Response {
     headers: new Headers(),
     body: new Response(body).body,
   } as unknown as Response;
-}
-
-function jsonResponse(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
 }
 
 type GraphRoute = {
@@ -67,7 +64,9 @@ function fixedGraphRoute(includes: string, value: unknown, status = 200): GraphR
   return {
     includes,
     respond: () =>
-      typeof value === "string" ? new Response(value, { status }) : jsonResponse(value, status),
+      typeof value === "string"
+        ? new Response(value, { status })
+        : Response.json(value, { status }),
   };
 }
 
@@ -165,7 +164,7 @@ function createDelayedUploadFetch(value: unknown, delayMs: number): ReturnType<t
     }
     return await new Promise<Response>((resolve, reject) => {
       signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
-      setTimeout(() => resolve(jsonResponse(value)), delayMs);
+      setTimeout(() => resolve(Response.json(value)), delayMs);
     });
   });
 }
@@ -186,7 +185,7 @@ async function uploadToSharePoint(params: UploadToSharePointParams = {}) {
   const fetchFn: typeof fetch = async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (url.endsWith("/createLink")) {
-      return jsonResponse({ link: { webUrl: "https://example.com/share" } });
+      return Response.json({ link: { webUrl: "https://example.com/share" } });
     }
     return await uploadFetch(input, init);
   };
@@ -224,33 +223,52 @@ describe("graph upload helpers", () => {
     expect(requireMSTeamsSharePointSiteId(" site-123 ")).toBe("site-123");
   });
 
-  it("uploads to SharePoint with the site drive path", async () => {
-    const fetchFn = vi.fn(async () =>
-      jsonResponse({ id: "item-2", webUrl: "https://example.com/2", name: "b.txt" }),
-    );
+  it.each([undefined, "application/pdf"])(
+    "uploads to SharePoint with the site drive path and MIME %s",
+    async (contentType) => {
+      const backing = Buffer.from([0xfe, 0xfd, 1, 2, 3, 0xfc]);
+      const buffer = backing.subarray(2, 5);
+      const expectedBytes = Buffer.from([0, 0x80, 0xff]);
+      const { promise: tokenReady, resolve: finishToken } = createDeferred<string>();
+      const delayedTokenProvider = { getAccessToken: vi.fn(async () => await tokenReady) };
+      const fetchFn = vi.fn<typeof fetch>(async (_url, init) => {
+        backing.fill(0);
+        expect(Buffer.from(await new Response(init?.body).arrayBuffer())).toEqual(expectedBytes);
+        return Response.json({ id: "item-2", webUrl: "https://example.com/2", name: "b.txt" });
+      });
 
-    const result = await uploadToSharePoint({
-      filename: "b.txt",
-      fetchFn: withFetchPreconnect(fetchFn),
-    });
+      const upload = uploadToSharePoint({
+        buffer,
+        contentType,
+        filename: "b.txt",
+        tokenProvider: delayedTokenProvider,
+        fetchFn: withFetchPreconnect(fetchFn),
+      });
+      await vi.waitFor(() => expect(delayedTokenProvider.getAccessToken).toHaveBeenCalledOnce());
+      expect(fetchFn).not.toHaveBeenCalled();
+      expectedBytes.copy(buffer);
+      finishToken("graph-token");
+      const result = await upload;
 
-    expectGraphUploadFetch(
-      fetchFn,
-      "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/b.txt:/content?@microsoft.graph.conflictBehavior=rename",
-    );
-    expect(result).toEqual({
-      id: "item-2",
-      webUrl: "https://example.com/2",
-      name: "b.txt",
-    });
-  });
+      expectGraphUploadFetch(
+        fetchFn,
+        "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/b.txt:/content?@microsoft.graph.conflictBehavior=rename",
+        contentType,
+      );
+      expect(result).toEqual({
+        id: "item-2",
+        webUrl: "https://example.com/2",
+        name: "b.txt",
+      });
+    },
+  );
 
   it("uploads with conflictBehavior=rename and surfaces the name SharePoint assigns", async () => {
     // Regression: openclaw-runtime image assets reuse names (image-1.png). Graph's default
     // replace overwrote the prior file and Teams (caching cards by driveItem URL) showed the
     // stale image; rename mints a distinct item, so callers use the returned name, not the request.
     const fetchFn = vi.fn(async () =>
-      jsonResponse({ id: "item-9", webUrl: "https://example.com/9", name: "image-1 1.png" }),
+      Response.json({ id: "item-9", webUrl: "https://example.com/9", name: "image-1 1.png" }),
     );
 
     const result = await uploadToSharePoint({
@@ -267,7 +285,7 @@ describe("graph upload helpers", () => {
   });
 
   it("rejects upload responses missing required fields", async () => {
-    const fetchFn = vi.fn(async () => jsonResponse({ id: "item-3" }));
+    const fetchFn = vi.fn(async () => Response.json({ id: "item-3" }));
 
     await expect(
       uploadToSharePoint({

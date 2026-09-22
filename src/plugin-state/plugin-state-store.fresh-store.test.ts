@@ -1,10 +1,8 @@
 // Fresh-store reads remain empty after checkpoint bootstrap; missing canonical tables stay errors.
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  OPENCLAW_STATE_SCHEMA_VERSION,
-  withOpenClawStateStartupMigrationCheckpointDatabase,
-} from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -21,7 +19,7 @@ afterEach(() => {
 
 async function expectPluginStateReadFailure(
   promise: Promise<unknown>,
-  expected: { operation: "entries" | "lookup"; path: string },
+  expected: { operation: "entries" | "lookup" | "count"; path: string },
 ): Promise<void> {
   let storeError: unknown;
   try {
@@ -52,9 +50,11 @@ describe("plugin state fresh-store reads", () => {
         });
 
         await expect(store.lookup("k")).resolves.toBeUndefined();
+        await expect(store.lookupMany(["k"])).resolves.toEqual([{ ok: true, value: undefined }]);
         await expect(store.entries()).resolves.toEqual([]);
+        await expect(store.count()).resolves.toBe(0);
         expect(
-          pluginStateEntriesInKeyRange({
+          await pluginStateEntriesInKeyRange({
             pluginId: "discord",
             namespace: "read-only-table-missing",
             keyStartInclusive: "a",
@@ -104,6 +104,10 @@ describe("plugin state fresh-store reads", () => {
         });
         await expectPluginStateReadFailure(store.entries(), {
           operation: "entries",
+          path: databasePath,
+        });
+        await expectPluginStateReadFailure(store.count(), {
+          operation: "count",
           path: databasePath,
         });
       },

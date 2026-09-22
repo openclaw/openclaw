@@ -5,7 +5,7 @@ import {
   readReactionParams,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
-import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
+import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 
 export async function handleDiscordReactionMessagingAction(ctx: DiscordMessagingActionContext) {

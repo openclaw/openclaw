@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   applyTaskEvent,
+  coalesceTaskEvent,
+  type CoalescedTaskEvent,
   mergeTaskLists,
   newestTaskSnapshot,
   normalizeTasksCancelResult,
@@ -8,6 +10,7 @@ import {
   normalizeTasksListResult,
   normalizeTasksRecoveryResult,
   partitionTasks,
+  replayTaskEvents,
   sortTasks,
 } from "./data.ts";
 import type { TaskSummary } from "./task-summary.ts";
@@ -39,9 +42,66 @@ describe("tasks page data", () => {
       task({ id: "queued", status: "queued", updatedAt: 999 }),
       ...terminals,
     ]);
-    expect(result.active.map((entry) => entry.id)).toEqual(["running", "queued"]);
+    expect(result.active.map((entry) => entry.id)).toEqual(["queued", "running"]);
     expect(result.recent).toHaveLength(50);
     expect(result.recent[0]?.id).toBe("terminal-54");
+  });
+
+  it("keeps active tasks in creation order while their activity changes", () => {
+    const oldest = task({
+      id: "oldest",
+      status: "running",
+      createdAt: 100,
+      startedAt: 110,
+      updatedAt: 500,
+    });
+    const middle = task({
+      id: "middle",
+      status: "running",
+      createdAt: 200,
+      startedAt: 410,
+      updatedAt: 600,
+    });
+    const newest = task({
+      id: "newest",
+      status: "running",
+      createdAt: 300,
+      startedAt: 310,
+      updatedAt: 700,
+    });
+
+    expect(partitionTasks([middle, newest, oldest]).active.map((entry) => entry.id)).toEqual([
+      "oldest",
+      "middle",
+      "newest",
+    ]);
+    expect(
+      partitionTasks([{ ...oldest, updatedAt: 800 }, middle, newest]).active.map(
+        (entry) => entry.id,
+      ),
+    ).toEqual(["oldest", "middle", "newest"]);
+  });
+
+  it("orders terminal tasks by completion time instead of later activity", () => {
+    const finishedFirst = task({
+      id: "finished-first",
+      status: "completed",
+      createdAt: 100,
+      endedAt: 400,
+      updatedAt: 900,
+    });
+    const finishedLast = task({
+      id: "finished-last",
+      status: "completed",
+      createdAt: 200,
+      endedAt: 500,
+      updatedAt: 600,
+    });
+
+    expect(partitionTasks([finishedFirst, finishedLast]).recent.map((entry) => entry.id)).toEqual([
+      "finished-last",
+      "finished-first",
+    ]);
   });
 
   it("merges task lists by id while preserving newer running snapshots", () => {
@@ -485,4 +545,90 @@ describe("tasks page data", () => {
       refetch: false,
     });
   });
+});
+
+describe("coalesced task event replay", () => {
+  const upsert = (overrides: Partial<TaskSummary>) => ({
+    action: "upserted" as const,
+    task: task({ id: "shared", status: "running", ...overrides }),
+  });
+  const remove = (taskId = "shared") => ({ action: "deleted" as const, taskId });
+
+  it.each([
+    {
+      name: "newer and stale snapshots",
+      events: [upsert({ updatedAt: 100 }), upsert({ updatedAt: 300 }), upsert({ updatedAt: 200 })],
+    },
+    {
+      name: "equal-time lifecycle and tool progress",
+      events: [
+        upsert({ status: "queued", updatedAt: 200, toolUseCount: 1 }),
+        upsert({ updatedAt: 200, toolUseCount: 5 }),
+        upsert({ status: "queued", updatedAt: 200, toolUseCount: 9 }),
+        upsert({ updatedAt: 200, toolUseCount: 2 }),
+        upsert({ updatedAt: 200, toolUseCount: 6 }),
+      ],
+    },
+    {
+      name: "terminal corrections and stale active progress",
+      events: [
+        upsert({ updatedAt: 200 }),
+        upsert({ status: "completed", updatedAt: 200, terminalSummary: "Done" }),
+        upsert({ status: "failed", updatedAt: 200, terminalSummary: "Corrected failure" }),
+        upsert({ updatedAt: 200, toolUseCount: 8 }),
+        upsert({ status: "cancelled", updatedAt: 200, terminalSummary: "Final correction" }),
+      ],
+    },
+    {
+      name: "deletion followed by a lower-timestamp recreation",
+      events: [
+        upsert({ updatedAt: 300, title: "Old incarnation" }),
+        remove(),
+        upsert({ updatedAt: 100, title: "Recreated task" }),
+        upsert({ updatedAt: 110, title: "Recreated task progress" }),
+      ],
+    },
+    {
+      name: "repeated final deletion",
+      events: [upsert({ updatedAt: 100 }), upsert({ updatedAt: 200 }), remove(), remove()],
+    },
+    {
+      name: "interleaved independent task identities",
+      events: [
+        upsert({ updatedAt: 100 }),
+        upsert({ id: "other", updatedAt: 200 }),
+        remove(),
+        upsert({ id: "other", updatedAt: 150 }),
+        upsert({ updatedAt: 100 }),
+        remove("other"),
+      ],
+    },
+  ])(
+    "matches sequential replay for $name against empty, stale, and newer snapshots",
+    ({ events }) => {
+      const seeds: TaskSummary[][] = [
+        [],
+        ...(["queued", "running", "completed"] as const).flatMap((status) =>
+          [100, 200, 300].map((updatedAt) => [
+            task({ id: "shared", status, updatedAt, toolUseCount: 4, prompt: "Retained detail" }),
+            task({ id: "untouched", status: "running", updatedAt: 200 }),
+          ]),
+        ),
+      ];
+      for (const seed of seeds) {
+        const pending = new Map<string, CoalescedTaskEvent>();
+        let sequential = seed;
+        for (const event of events) {
+          sequential = applyTaskEvent(sequential, event).tasks;
+          coalesceTaskEvent(pending, event);
+          expect(replayTaskEvents(seed, pending)).toEqual(sequential);
+        }
+        expect(pending.size).toBe(
+          new Set(
+            events.map((event) => (event.action === "deleted" ? event.taskId : event.task.id)),
+          ).size,
+        );
+      }
+    },
+  );
 });

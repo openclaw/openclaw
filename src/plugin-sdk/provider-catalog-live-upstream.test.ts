@@ -92,6 +92,27 @@ describe("shared upstream provider metadata catalogs", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("contextualizes malformed upstream JSON while retaining its parser cause", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuard: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response("{invalid json"),
+      finalUrl: "https://models.opencode.ai/api.json",
+      release,
+    }));
+
+    const error = await getCachedUpstreamProviderCatalog({
+      endpoint: "https://models.opencode.ai/api.json",
+      providerId: "opencode",
+      fetchGuard,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toMatchObject({
+      message: "upstream-provider-catalog: malformed JSON response",
+      cause: expect.any(SyntaxError) as unknown,
+    });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["modern tiers", { tiers: [UPSTREAM_CONTEXT_TIER] }, true],
     ["legacy tier", { context_over_200k: UPSTREAM_TIER_COST }, true],
@@ -125,7 +146,7 @@ describe("shared upstream provider metadata catalogs", () => {
               name: "Frontier Model",
               reasoning: true,
               tool_call: true,
-              reasoning_options: [{ type: "effort", values: ["low", "high", "high", null] }],
+              reasoning_options: [{ type: "effort", values: ["low", "high", "high", false] }],
               modalities: { input: ["text", "image", "video"] },
               provider: { npm: "@ai-sdk/openai" },
               limit: { context: 1_000_000, input: 900_000, output: 128_000 },
@@ -185,6 +206,47 @@ describe("shared upstream provider metadata catalogs", () => {
       });
     },
   );
+
+  it.each([
+    { name: "omitted", options: undefined, efforts: undefined },
+    { name: "empty", options: [], efforts: [] },
+    {
+      name: "native null effort",
+      options: [{ type: "effort", values: [null, "high", null, "VendorExact"] }],
+      efforts: ["none", "high", "VendorExact"],
+    },
+  ])("preserves $name upstream reasoning controls", ({ options, efforts }) => {
+    for (const npm of ["@ai-sdk/openai-compatible", "@ai-sdk/openai"]) {
+      const provider: UpstreamProviderCatalog = {
+        id: "fixture-provider",
+        api: "https://models.example.test/v1",
+        npm,
+        models: {},
+      };
+      const model = projectUpstreamProviderCatalogModel({
+        providerId: provider.id,
+        provider,
+        model: {
+          id: "reasoning-fixture",
+          reasoning: true,
+          limit: { context: 128_000, output: 8192 },
+          ...(options === undefined ? {} : { reasoning_options: options }),
+        },
+      });
+
+      expect(model?.reasoning).toBe(true);
+      if (efforts === undefined) {
+        expect(model?.compat).not.toHaveProperty("supportsReasoningEffort");
+        expect(model?.compat).not.toHaveProperty("supportedReasoningEfforts");
+      } else {
+        expect(model?.compat).toMatchObject({
+          supportsReasoningEffort: efforts.length > 0,
+          supportedReasoningEfforts: efforts,
+        });
+      }
+      expect(model).not.toHaveProperty("thinkingLevelMap");
+    }
+  });
 
   it.each([
     ["@ai-sdk/openai-compatible", "openai-completions", "https://opencode.ai/zen/v1"],

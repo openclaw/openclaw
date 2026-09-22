@@ -1,6 +1,7 @@
 // Gateway RPC runtime tests cover CLI gateway RPC calls and runtime error handling.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import { addGatewayClientOptions } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
@@ -61,6 +62,36 @@ describe("callGatewayFromCliRuntime", () => {
     callGatewayMock.mockClear().mockResolvedValue({ ok: true });
   });
 
+  it.each(["sessions.send", "sessions.steer", "chat.send"])(
+    "keeps subagent shell %s calls out of ordinary user input",
+    async (method) => {
+      await withEnvAsync({ OPENCLAW_SUBAGENT_EXEC: "1" }, async () => {
+        await expect(
+          callGatewayFromCliRuntime(method, {}, { key: "agent:main:main", message: "Done" }),
+        ).rejects.toThrow("task completion path");
+      });
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves operator messaging and subagent read-only CLI calls", async () => {
+    await withEnvAsync({ OPENCLAW_SUBAGENT_EXEC: undefined }, async () => {
+      await callGatewayFromCliRuntime("sessions.send", {}, { key: "agent:main:main" });
+    });
+    await withEnvAsync({ OPENCLAW_SUBAGENT_EXEC: "1" }, async () => {
+      await callGatewayFromCliRuntime("sessions.history", {}, { key: "agent:main:main" });
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ method: "sessions.send" }),
+    );
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ method: "sessions.history" }),
+    );
+  });
+
   it("uses the 30s Gateway RPC default timeout when --timeout is omitted", async () => {
     await callGatewayFromCliRuntime("cron.status", {});
 
@@ -84,7 +115,7 @@ describe("callGatewayFromCliRuntime", () => {
     const config = { gateway: { mode: "local" as const } };
     await callGatewayFromCliRuntime(
       "node.list",
-      { config, localPortOverride: 19_083 },
+      { config, localPortOverride: 19_083, expectUrl: "ws://127.0.0.1:19083" },
       {},
       {
         timeoutMs: null,
@@ -99,6 +130,7 @@ describe("callGatewayFromCliRuntime", () => {
       expect.objectContaining({
         config,
         localPortOverride: 19_083,
+        expectUrl: "ws://127.0.0.1:19083",
         timeoutMs: null,
         scopes: ["operator.read", "operator.pairing"],
         useStoredDeviceAuth: true,
@@ -116,16 +148,21 @@ describe("callGatewayFromCliRuntime", () => {
     );
   });
 
-  it("rejects combining --url and --port before opening a Gateway connection", async () => {
-    await expect(
-      callGatewayFromCliRuntime("cron.status", {
-        url: "ws://127.0.0.1:19083",
-        port: "19083",
-      }),
-    ).rejects.toThrow("Use either --url or --port, not both.");
+  it.each([
+    { opts: { port: "" }, error: "--port must be an integer between 1 and 65535." },
+    { opts: { port: " \t " }, error: "--port must be an integer between 1 and 65535." },
+    {
+      opts: { url: "ws://127.0.0.1:19083", port: "19083" },
+      error: "Use either --url or --port, not both.",
+    },
+  ])(
+    "rejects invalid target $opts before opening a Gateway connection",
+    async ({ opts, error }) => {
+      await expect(callGatewayFromCliRuntime("cron.status", opts)).rejects.toThrow(error);
 
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { name: "token", auth: { token: "test-gateway-token" } },
@@ -180,7 +217,9 @@ describe("callGatewayFromCliRuntime", () => {
   });
 
   it("passes strict integer timeouts to the gateway call", async () => {
-    await callGatewayFromCliRuntime("cron.status", { timeout: "15000" });
+    await callGatewayFromCliRuntime("cron.status", { timeout: "15000" }, undefined, {
+      defaultTimeoutMs: 10 * 60_000,
+    });
 
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({

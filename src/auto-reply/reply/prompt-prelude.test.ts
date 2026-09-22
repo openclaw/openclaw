@@ -59,6 +59,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toBe("what changed?");
     expect(envelope.currentInboundContext).toEqual({
       text: "Current message:\nchat_id=C123",
+      fragments: [{ kind: "conversation-data", text: "Current message:\nchat_id=C123" }],
       promptJoiner: " ",
     });
   });
@@ -151,6 +152,8 @@ describe("buildReplyPromptEnvelope", () => {
       startupAction: "new",
       inboundEventKind: "room_event",
       sourceReplyDeliveryMode: "message_tool_only",
+      threadContextNote: "Thread note",
+      systemEventBlocks: ["System event"],
     });
 
     // The active room-event prompt is the attributed transcript row itself, so
@@ -175,6 +178,8 @@ describe("buildReplyPromptEnvelope", () => {
           "#35675 User ->#35674: Are you fr fr",
         ].join("\n"),
         "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
+        "Thread note",
+        "System event",
       ].join("\n\n"),
     );
     // Each room-event fact appears exactly once per request: kind lives in the
@@ -192,7 +197,15 @@ describe("buildReplyPromptEnvelope", () => {
           "```",
         ].join("\n"),
         "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
+        "Thread note",
+        "System event",
       ].join("\n\n"),
+    );
+    expect(envelope.currentInboundContext?.fragments).toEqual(
+      expect.arrayContaining([
+        { kind: "conversation-data", text: "Thread note" },
+        { kind: "conversation-data", text: "System event" },
+      ]),
     );
     expect(envelope.currentInboundContext?.resumableText).not.toContain(
       "Conversation context (chronological, selected for current message):",
@@ -265,6 +278,150 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.queuedBody).not.toContain("[Chat history]");
   });
 
+  it("keeps completed audio transcripts in room-event bodies", () => {
+    const transcript = "turn left at the next light";
+    const agentText = `[Audio]\nTranscript:\n${transcript}`;
+    const transportEnvelope = "[Discord channel #ambient]\n[media attached: voice-message.ogg]";
+    const ctx = finalizeInboundContext({
+      Body: transportEnvelope,
+      BodyForAgent: agentText,
+      RawBody: transportEnvelope,
+      CommandBody: transportEnvelope,
+      Transcript: transcript,
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: transcript,
+          provider: "groq",
+        },
+      ],
+      Provider: "discord",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+      MessageSid: "2003",
+      SenderName: "Alice",
+    });
+    const sessionCtx = finalizeInboundContext({ ...ctx });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx,
+      sessionCtx,
+      baseBody: sessionCtx.agentText,
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.queuedBody).toBe(`#2003 Alice: ${agentText}`);
+    expect(envelope.transcriptCommandBody).toBe(envelope.queuedBody);
+    expect(envelope.queuedBody).not.toContain(transportEnvelope);
+  });
+
+  it("does not infer room-event transcript ownership from matching text", () => {
+    const ctx = finalizeInboundContext({
+      Body: "typed message",
+      BodyForAgent: "look at the book",
+      CommandBody: "typed message",
+      Transcript: "ok",
+      Provider: "discord",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+      MessageSid: "2004",
+      SenderName: "Alice",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx,
+      sessionCtx: finalizeInboundContext({ ...ctx }),
+      baseBody: ctx.agentText,
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.queuedBody).toBe("#2004 Alice: typed message");
+  });
+
+  it("does not borrow audio provenance from a different room-event projection", () => {
+    const ctx = finalizeInboundContext({
+      Body: "current typed message",
+      BodyForAgent: "current agent text",
+      CommandBody: "current typed message",
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "previous transcript",
+          provider: "groq",
+        },
+      ],
+      Provider: "discord",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+      MessageSid: "2005",
+      SenderName: "Alice",
+    });
+    const sessionCtx = finalizeInboundContext({
+      ...ctx,
+      BodyForAgent: "unrelated session projection",
+      agentText: "unrelated session projection",
+      MediaUnderstanding: undefined,
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx,
+      sessionCtx,
+      baseBody: sessionCtx.agentText,
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.queuedBody).toBe("#2005 Alice: current typed message");
+  });
+
+  it("requires an exact canonical audio body match", () => {
+    const agentText = "[Audio]\nTranscript:\nok";
+    const ctx = finalizeInboundContext({
+      Body: "typed message",
+      BodyForAgent: agentText,
+      CommandBody: "typed message",
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "ok",
+          provider: "groq",
+        },
+      ],
+      Provider: "discord",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+      MessageSid: "2006",
+      SenderName: "Alice",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx,
+      sessionCtx: finalizeInboundContext({ ...ctx }),
+      baseBody: ` ${agentText}`,
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.queuedBody).toBe("#2006 Alice: typed message");
+  });
+
   it("keeps media-only notes in ordinary user request transcripts", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "",
@@ -314,6 +471,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.prefixedCommandBody).toBe(body);
     expect(envelope.queuedBody).toBe(body);
     expect(envelope.transcriptCommandBody).toBe(body);
+    expect(envelope.inboundMediaIndexes).toEqual([]);
     expect(envelope.media).toEqual([
       {
         path: "/tmp/tlon.png",
@@ -323,6 +481,54 @@ describe("buildReplyPromptEnvelope", () => {
         transcribed: false,
         messageId: undefined,
       },
+    ]);
+  });
+
+  it("keeps sparse inbound positions separate from appended preprojected media", () => {
+    const sharedPath = "/tmp/shared.png";
+    const sessionCtx = finalizeInboundContext({
+      Body: "inspect these",
+      media: [
+        {},
+        { path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true },
+        { path: sharedPath, contentType: "image/png" },
+        { path: sharedPath, contentType: "image/png" },
+      ],
+    });
+    const params = {
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "inspect these",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new" as const,
+      media: [{ path: "/tmp/preprojected.pdf", contentType: "application/pdf" }],
+    };
+    const first = buildReplyPromptEnvelope(params);
+    const rebuilt = buildReplyPromptEnvelope({
+      ...params,
+      ctx: { ...sessionCtx, media: [...(sessionCtx.media ?? []), { path: "/tmp/later.png" }] },
+      systemEventBlocks: ["context changed"],
+    });
+
+    expect(first.inboundMediaIndexes).toEqual([2, 3]);
+    expect(first.media?.map((fact) => fact.path)).toEqual([
+      sharedPath,
+      sharedPath,
+      "/tmp/preprojected.pdf",
+    ]);
+    expect(rebuilt.inboundMediaIndexes).toEqual([2, 3, 4]);
+    expect(first.prefixedCommandBody).toBe(
+      `[media attached: 2 files]\n[media attached 1/2: ${sharedPath} (image/png)]\n[media attached 2/2: ${sharedPath} (image/png)]\ninspect these`,
+    );
+    expect(first.queuedBody).toBe(first.prefixedCommandBody);
+    expect(first.transcriptCommandBody).toBe(first.prefixedCommandBody);
+    expect(sessionCtx.media?.map((fact) => fact.path)).toEqual([
+      undefined,
+      "/tmp/voice.ogg",
+      sharedPath,
+      sharedPath,
     ]);
   });
 

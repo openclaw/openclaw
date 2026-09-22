@@ -100,7 +100,9 @@ export function registerSendAssetsAndRetriesTests(deps: SendAssetsAndRetriesDeps
         image: "data:image/png;base64,aW1n",
         roles: ["r1"],
       });
-      expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/party.png", 256 * 1024);
+      expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/party.png", {
+        maxBytes: 256 * 1024,
+      });
     });
   });
 
@@ -131,7 +133,9 @@ export function registerSendAssetsAndRetriesTests(deps: SendAssetsAndRetriesDeps
       expect(files).toHaveLength(1);
       expect(files[0]?.name).toBe("asset.png");
       expect(files[0]?.contentType).toBe("image/png");
-      expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/wave.png", 512 * 1024);
+      expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/wave.png", {
+        maxBytes: 512 * 1024,
+      });
     });
   });
 
@@ -445,7 +449,7 @@ export function registerSendAssetsAndRetriesTests(deps: SendAssetsAndRetriesDeps
 
       putMock.mockRejectedValueOnce(rateLimitError).mockResolvedValueOnce(undefined);
 
-      const res = await reactMessageDiscord("chan1", "msg1", "ok", {
+      const res = await reactMessageDiscord("chan1", "1", "ok", {
         cfg: discordTestConfig,
         rest,
         token: "t",

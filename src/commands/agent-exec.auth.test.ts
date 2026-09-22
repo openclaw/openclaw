@@ -18,16 +18,12 @@ import {
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { agentExecCommand } from "./agent-exec.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createRuntime() {
-  return { runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv };
-}
 
 function successResult() {
   return {
@@ -58,7 +54,7 @@ describe("agent exec stored auth", () => {
     process.env.CODEX_HOME = codexHome;
     process.env.OPENAI_API_KEY = "test-openai-key";
     process.env.DATABASE_URL = "postgres://test.invalid/database";
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let profileIds: string[] = [];
     let runtimeProfileIds: string[] = [];
     let hostExecApiKey: string | undefined;
@@ -166,7 +162,7 @@ describe("agent exec stored auth", () => {
             );
           }
           setRuntimeAuthProfileStoreSnapshot(sharedStore, state.agentDir());
-          const { runtime } = createRuntime();
+          const runtime = createTestRuntime();
           let resolvedKey: string | undefined;
           const result = await agentExecCommand("inspect", {}, runtime, {
             runAgent: async () => {
@@ -230,7 +226,7 @@ describe("agent exec stored auth", () => {
     await withOpenClawTestState({ scenario: "minimal", layout: "split" }, async (state) => {
       writeConfigMachineState("auth.sharedStore", { location: "state-db" });
       writePersistedAuthProfileStoreRaw({ version: 1, profiles: "invalid" });
-      const { runtime } = createRuntime();
+      const runtime = createTestRuntime();
       const runAgent = vi.fn(async () => successResult());
       const result = await agentExecCommand("inspect", {}, runtime, { runAgent });
       expect(result.envelope.error?.message).toContain(
@@ -261,7 +257,7 @@ describe("agent exec stored auth", () => {
       },
       customAgentDir,
     );
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let scopedProfileIds: string[] = [];
 
     await agentExecCommand("inspect", { config: seedPath }, runtime, {
@@ -291,7 +287,7 @@ describe("agent exec stored auth", () => {
       },
       normalAgentDir,
     );
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let persistedCredential: unknown;
     let ownerAgentDir: string | undefined;
     try {
@@ -335,7 +331,7 @@ describe("agent exec stored auth", () => {
       },
       normalAgentDir,
     );
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let profileIds: string[] = [];
     try {
       await agentExecCommand("inspect", { authEnvOnly: false }, runtime, {

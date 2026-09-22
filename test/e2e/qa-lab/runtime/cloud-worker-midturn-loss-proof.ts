@@ -4,14 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { stringifyNonErrorCause, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   createQaBusState,
   createQaChannelTransport,
   QA_EVIDENCE_FILENAME,
   startQaBusServer,
-  startQaGatewayChild,
+  createQaGatewayChild,
   type QaEvidenceSummaryJson,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -19,6 +21,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../../../../src/infra/node-commands.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   BASELINE_PROMPT,
   BASELINE_REPLY,
@@ -47,7 +50,7 @@ const SESSION_KEY = "agent:qa:qa-channel:direct:cloud-midturn-loss";
 const SENDER_ID = "cloud-midturn-loss";
 
 type ProducerOptions = { artifactBase: string; repoRoot: string };
-type Gateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type Gateway = QaGatewayChild;
 type GatewayEvent = { event: string; payload?: unknown };
 type GatewayRunResult = { runId?: string; status?: string; summary?: string };
 type ChatHistory = { messages?: unknown[] };
@@ -121,7 +124,8 @@ async function connectOperator(
 }
 
 function messageRole(message: unknown): string {
-  return String(requireRecord(message, "history message").role ?? "");
+  const role = requireRecord(message, "history message").role;
+  return typeof role === "string" ? role : "";
 }
 
 function messageText(message: unknown): string {
@@ -277,6 +281,7 @@ async function runProof(options: ProducerOptions) {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cloud-midturn-loss-"));
   let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
   let provider: Awaited<ReturnType<typeof startMidturnProvider>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
   let gateway: Gateway | undefined;
   let operator: GatewayClient | undefined;
   let workerNode: PairedNodeWorkerHost | undefined;
@@ -289,7 +294,7 @@ async function runProof(options: ProducerOptions) {
     provider = await startMidturnProvider();
     published = await createPublishedWireWorkspace(fixtureRoot);
     const transport = createQaChannelTransport(state);
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${provider.baseUrl}/v1`,
@@ -404,9 +409,9 @@ async function runProof(options: ProducerOptions) {
     );
     const chatError = await waitForChatError(events, runId);
     const failedPlacement = await waitForFailedPlacement(gateway);
-    const terminalReason = String(failedPlacement.terminalReason ?? "");
-    if (!terminalReason || terminalReason.length > 1_024) {
-      throw new Error(`placement terminal reason was missing or unbounded: ${terminalReason}`);
+    const terminalReason = failedPlacement.terminalReason;
+    if (typeof terminalReason !== "string" || !terminalReason || terminalReason.length > 1_024) {
+      throw new Error("placement terminal reason was missing, invalid, or unbounded");
     }
     const historyAfterFailure = await readHistory(operator);
     const countsAfterFailure = markerCounts(historyAfterFailure);
@@ -517,7 +522,9 @@ async function runProof(options: ProducerOptions) {
       },
       turnFailure: {
         agentWaitStatus: waitResult.status,
-        chatError: String(chatError.errorMessage ?? chatError.error ?? "worker turn failed"),
+        chatError: stringifyNonErrorCause(
+          chatError.errorMessage ?? chatError.error ?? "worker turn failed",
+        ),
         terminalReason,
         terminalReasonLength: terminalReason.length,
       },
@@ -548,7 +555,7 @@ async function runProof(options: ProducerOptions) {
     const cleanup = await Promise.allSettled([
       operator?.stopAndWait({ timeoutMs: 1_000 }) ?? Promise.resolve(),
       workerNode?.stop() ?? Promise.resolve(),
-      gateway?.stop() ?? Promise.resolve(),
+      stopQaGatewayFixture(gatewayOwner),
       published ? closeWireServer(published.server) : Promise.resolve(),
       provider?.stop() ?? Promise.resolve(),
       bus?.stop() ?? Promise.resolve(),
@@ -566,7 +573,7 @@ async function runProof(options: ProducerOptions) {
     }
   }
   if (proofError) {
-    throw proofError;
+    throw toErrorObject(proofError, "Cloud worker mid-turn loss proof failed");
   }
   if (!verdict) {
     throw new Error("cloud worker mid-turn loss proof produced no verdict");
@@ -591,7 +598,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
         "src/gateway/worker-environments/transcript-commit.ts",
         "src/gateway/worker-environments/worker-turn-launcher.ts",
         "src/gateway/worker-environments/placement-disk-space.ts",
-        "src/gateway/server-methods/sessions-list-cache.ts",
+        "src/gateway/session-row-projection.ts",
       ],
     },
   });

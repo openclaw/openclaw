@@ -19,7 +19,7 @@ vi.mock("../session-utils.js", () => ({
 }));
 
 vi.mock("../../projects/project-registry.js", () => ({
-  listProjectRegistry: () => [],
+  listProjectRegistry: async () => [],
   ProjectCheckoutError: class ProjectCheckoutError extends Error {},
   registerProjectRegistry: vi.fn(),
   removeProjectRegistry: vi.fn(),
@@ -148,13 +148,13 @@ describe("projects.list observed projects", () => {
         sessionId: "visible",
         updatedAt: 200,
         visibility: "shared",
-        createdActor: { type: "human", id: "owner@example.com" },
+        createdActor: { type: "human", source: "profile", id: "owner@example.com" },
       },
       "agent:main:private": {
         sessionId: "private",
         updatedAt: 300,
         visibility: "draft",
-        createdActor: { type: "human", id: "owner@example.com" },
+        createdActor: { type: "human", source: "profile", id: "owner@example.com" },
       },
     };
     const worktree = (name: string, ownerId: string, lastActiveAt: number) => ({

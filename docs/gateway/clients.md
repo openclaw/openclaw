@@ -5,6 +5,7 @@ read_when:
   - Implementing Gateway reconnect, history, approvals, or device pairing
   - Updating a third-party client for a new Gateway wire version
 title: "Building a Gateway client"
+doc-schema-version: 1
 ---
 
 Use the published Gateway packages to build operator dashboards, WebChat clients,
@@ -13,34 +14,43 @@ the wire contract: authentication, capabilities, reconnect recovery, history,
 subscriptions, and version upgrades.
 
 For frame shapes, the handshake, errors, and the complete method surface, read the
-[Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol).
+[Gateway protocol specification](/gateway/protocol).
 
 ## Install the packages
 
+Install the verified stable release, `2026.8.1`, with exact version pins:
+
 ```bash
-npm install @openclaw/gateway-client @openclaw/gateway-protocol
+npm install --save-exact @openclaw/gateway-client@2026.8.1 @openclaw/gateway-protocol@2026.8.1
 ```
 
-<Note>
-These packages ship with OpenClaw release trains. During the initial rollout, npm
-may return `E404` until the first package-bearing OpenClaw release is published;
-install them only after the registry pages below resolve.
-</Note>
+If an existing lockfile still pins either package to the reserved `0.0.0`
+artifact, rerun the command above to replace it. Those reserved artifacts have no
+runnable entrypoint or TypeScript declarations.
+
+Package versions follow the OpenClaw release train and are separate from the wire
+protocol version. The `2026.8.1` packages export wire version `4`; that does not
+guarantee compatibility with every Gateway release. The root `openclaw` CLI has
+its own package versions and dist-tags. Pin and test the client and Gateway
+versions together, and check the [wire-version rules](/gateway/clients#track-protocol-versions)
+before upgrading. The `2026.8.1` client pins protocol package `2026.8.1` exactly.
 
 - [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
   provides schemas, runtime validators, TypeScript types, client identity and
   capability registries, structured error readers, and protocol version constants.
   Its npm tarball also includes the generated
-  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@beta/protocol.schema.json)
-  machine-readable contract.
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@2026.8.1/protocol.schema.json)
+  machine-readable contract. Download it as a file; it is not an exported package
+  import subpath.
 - [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
   is the reference connection implementation. Import the package root for the Node
   client and `@openclaw/gateway-client/browser` for the browser-safe protocol,
   device-auth, and reconnect helpers.
 
-The Node entry owns its WebSocket transport. A browser host supplies a WebSocket
-adapter plus persistent storage and signing callbacks for the device identity and
-device token.
+These package releases declare Node.js `>=22.19.0`. The Node entry includes the `ws`
+transport; device identity, signing, and device-token storage remain host-owned
+through `GatewayClientHostDeps`. A browser host supplies a WebSocket adapter plus
+persistent storage and signing callbacks for the device identity and device token.
 
 ## Choose scopes and pair the device
 
@@ -56,7 +66,7 @@ A full interactive chat client that also renders approval prompts should request
 Add `operator.questions` only if the client handles interactive questions,
 `operator.pairing` only if it manages paired devices or nodes, and
 `operator.admin` only for administrative operations such as `config.patch`.
-The [operator scopes reference](https://docs.openclaw.ai/gateway/operator-scopes)
+The [operator scopes reference](/gateway/operator-scopes)
 defines the complete method and approval-time rules.
 
 Do not create a per-client bearer token by hand-editing `openclaw.json`. Configure
@@ -80,7 +90,7 @@ pairing mint the client token:
 
 Scope or role upgrades create a new pending pairing request. Token rotation cannot
 expand the approved pairing contract. See the
-[Devices CLI](https://docs.openclaw.ai/cli/devices) for approval, rotation, and
+[Devices CLI](/cli/devices) for approval, rotation, and
 revocation commands.
 
 ## Advertise client capabilities
@@ -95,8 +105,8 @@ import { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-protocol/client-info";
 const caps = [GATEWAY_CLIENT_CAPS.TOOL_EVENTS];
 ```
 
-The current registry contains `approvals`, `exec-approvals`, `inline-widgets`,
-`run-tool-bindings`, `session-scoped-events`, `plugin-approvals`,
+The current registry contains `agent-kind`, `approvals`, `exec-approvals`,
+`inline-widgets`, `plugin-approvals`, `run-tool-bindings`, `session-scoped-events`,
 `task-suggestions`, `terminal-offset-seq`, `tool-events`, `ui-commands`, and
 `usage-refreshing`.
 Advertise only capabilities the client actually implements.
@@ -260,17 +270,18 @@ applies only when `offset` is zero or omitted. The Gateway derives the viewer
 identity from the authenticated connection, not a client-supplied identity.
 The shared page's pagination metadata is unchanged, so use `nextOffset`, not the
 number of returned rows, when loading another page, and merge rows by session
-key. See [Session list bootstrap](/gateway/protocol#session-list-bootstrap).
+key. See [Session list bootstrap](/gateway/protocol/rpc-methods#session-list-bootstrap).
 
-Merge subsequent `sessions.changed` events by `sessionKey`. Session change
-payloads can carry live `inputTokens`, `outputTokens`, `totalTokens`,
-`totalTokensFresh`, `contextTokens`, `estimatedCostUsd`, response-usage settings,
-and active-run state.
+Merge subsequent keyed `sessions.changed` events from their nested `session`
+row, using agent, session key, and session ID together to avoid applying an old
+lifecycle to its replacement. Snapshots are presented for the receiving
+connection and carry current row metadata, usage, and active-run state.
 
-Some change notifications are only invalidation signals. If an event omits the
-row fields your view needs, refresh `sessions.list`. Do not poll `usage.cost` or
-`sessions.usage` to keep a live session list current; reserve those methods for
-on-demand aggregate or detailed reports.
+Apply snapshots to existing roster members locally. Refresh `sessions.list`
+when a row is missing or the notification is a broad, keyless invalidation.
+Delete events retain the removed session ID and do not carry a replacement row.
+Do not poll `usage.cost` or `sessions.usage` to keep a live session list current;
+reserve those methods for on-demand aggregate or detailed reports.
 
 ## Backfill exec approvals
 
@@ -297,7 +308,7 @@ before each upgrade.
 
 ## Related
 
-- [Gateway protocol](https://docs.openclaw.ai/gateway/protocol)
-- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
-- [Gateway RPC reference](https://docs.openclaw.ai/reference/rpc)
-- [Gateway integrations for external apps](https://docs.openclaw.ai/gateway/external-apps)
+- [Gateway protocol](/gateway/protocol)
+- [Embedding OpenClaw](/gateway/embedding)
+- [Gateway RPC reference](/reference/rpc)
+- [Gateway integrations for external apps](/gateway/external-apps)

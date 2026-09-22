@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type InboundDebounceFlush = { admission: Promise<void>; completion: Promise<void> };
 
+let useRealDebouncer = false;
+const realDebouncers: Array<{ drain: () => Promise<void> }> = [];
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
 const onFlushCallbacks: Array<
@@ -30,6 +32,7 @@ const dispatchPreparedSlackMessageMock = vi.fn(async (_prepared: unknown) => {})
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
+const { createSlackRuntimeContextReader } = await import("./runtime-policy.js");
 const { createSlackMessageHandler } = await import("./message-handler.js");
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
@@ -38,13 +41,15 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   );
   return {
     ...actual,
-    createChannelInboundDebouncer: (params: {
-      onFlush: (
-        entries: Array<Record<string, unknown>>,
-        createFlush: typeof createTestInboundDebounceFlush,
-      ) => InboundDebounceFlush;
-    }) => {
+    createChannelInboundDebouncer: (
+      params: Parameters<typeof actual.createChannelInboundDebouncer<Record<string, unknown>>>[0],
+    ) => {
       onFlushCallbacks.push(params.onFlush);
+      if (useRealDebouncer) {
+        const result = actual.createChannelInboundDebouncer(params);
+        realDebouncers.push(result.debouncer);
+        return result;
+      }
       return {
         debounceMs: 10,
         debouncer: {
@@ -85,7 +90,8 @@ function createContext(overrides?: {
     channelType: string | null | undefined,
   ) => void;
 }) {
-  return {
+  const ctx = {
+    installationIdentity: { kind: "degraded", reason: "auth_test_failed" },
     cfg: overrides?.cfg ?? {},
     accountId: "default",
     app: {
@@ -97,21 +103,26 @@ function createContext(overrides?: {
       channelType: string | null | undefined,
     ) => overrides?.rememberSlackChannelType?.(channel, channelType),
   } as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
+  ctx.readRuntimeContext = createSlackRuntimeContextReader(ctx, "synthetic-lookup");
+  return ctx;
 }
 
 function createHandlerWithTracker(overrides?: {
+  cfg?: OpenClawConfig;
+  abortSignal?: AbortSignal;
   rememberSlackChannelType?: (
     channel: string | null | undefined,
     channelType: string | null | undefined,
   ) => void;
 }) {
   const trackEvent = vi.fn();
+  const ctx = createContext(overrides);
   const handler = createSlackMessageHandler({
-    ctx: createContext(overrides),
-    account: { accountId: "default" } as Parameters<typeof createSlackMessageHandler>[0]["account"],
+    ctx,
+    abortSignal: overrides?.abortSignal,
     trackEvent,
   });
-  return { handler, trackEvent };
+  return { handler, trackEvent, ctx };
 }
 
 async function handleDirectMessage(
@@ -130,6 +141,8 @@ async function handleDirectMessage(
 
 describe("createSlackMessageHandler", () => {
   beforeEach(() => {
+    useRealDebouncer = false;
+    realDebouncers.length = 0;
     clearRuntimeConfigSnapshot();
     enqueueMock.mockClear();
     flushKeyMock.mockClear();
@@ -148,12 +161,10 @@ describe("createSlackMessageHandler", () => {
     const updatedConfig: OpenClawConfig = {
       agents: { defaults: { thinkingDefault: "ultra", fastModeDefault: true } },
     };
+    setRuntimeConfigSnapshot(startupConfig, startupConfig);
     const context = createContext({ cfg: startupConfig });
     const handler = createSlackMessageHandler({
       ctx: context,
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
 
     setRuntimeConfigSnapshot(updatedConfig, updatedConfig);
@@ -178,19 +189,20 @@ describe("createSlackMessageHandler", () => {
     expect(context.cfg).toBe(startupConfig);
   });
 
-  it("keeps cached runtime contexts synchronized with mutable monitor state", async () => {
+  it("shares recovered identity while keeping resolved policy snapshots immutable", async () => {
     const startupConfig: OpenClawConfig = { agents: { defaults: { thinkingDefault: "max" } } };
-    const runtimeConfig: OpenClawConfig = { agents: { defaults: { thinkingDefault: "ultra" } } };
+    const runtimeConfig: OpenClawConfig = {
+      agents: { defaults: { thinkingDefault: "ultra" } },
+      channels: { slack: { channels: { C_OLD: { enabled: true } } } },
+    };
     const initialChannels = { C_OLD: { enabled: true } };
     const resolvedChannels = { C_RESOLVED: { enabled: true } };
+    setRuntimeConfigSnapshot(startupConfig, startupConfig);
     const context = createContext({ cfg: startupConfig });
     context.botUserId = "U_STALE";
     context.channelsConfig = initialChannels;
     const handler = createSlackMessageHandler({
       ctx: context,
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
     setRuntimeConfigSnapshot(runtimeConfig, runtimeConfig);
 
@@ -226,7 +238,7 @@ describe("createSlackMessageHandler", () => {
     expect(reusedRuntimeContext).toMatchObject({
       cfg: runtimeConfig,
       botUserId: "U_RECOVERED",
-      channelsConfig: resolvedChannels,
+      channelsConfig: initialChannels,
     });
     expect(context.cfg).toBe(startupConfig);
   });
@@ -257,9 +269,6 @@ describe("createSlackMessageHandler", () => {
     const context = createContext({ cfg: explicitConfig });
     const handler = createSlackMessageHandler({
       ctx: context,
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
 
     setRuntimeConfigSnapshot({ agents: { defaults: { thinkingDefault: "high" } } });
@@ -276,7 +285,9 @@ describe("createSlackMessageHandler", () => {
     const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
     await runOnFlush([entry]);
 
-    expect(prepareSlackMessageMock).toHaveBeenCalledWith(expect.objectContaining({ ctx: context }));
+    expect(prepareSlackMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ctx: expect.objectContaining({ cfg: explicitConfig }) }),
+    );
     expect(context.cfg).toBe(explicitConfig);
   });
 
@@ -294,9 +305,6 @@ describe("createSlackMessageHandler", () => {
     const context = createContext({ cfg: structuredClone(startupSourceConfig) });
     const handler = createSlackMessageHandler({
       ctx: context,
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
 
     setRuntimeConfigSnapshot(updatedRuntimeConfig, updatedRuntimeConfig);
@@ -325,12 +333,10 @@ describe("createSlackMessageHandler", () => {
     const startupConfig: OpenClawConfig = { agents: { defaults: { thinkingDefault: "max" } } };
     const firstConfig: OpenClawConfig = { agents: { defaults: { thinkingDefault: "high" } } };
     const secondConfig: OpenClawConfig = { agents: { defaults: { thinkingDefault: "ultra" } } };
+    setRuntimeConfigSnapshot(startupConfig, startupConfig);
     const context = createContext({ cfg: startupConfig });
     const handler = createSlackMessageHandler({
       ctx: context,
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
     });
     let releaseFirstPreparation!: () => void;
     const firstPreparation = new Promise<void>((resolve) => {
@@ -387,9 +393,6 @@ describe("createSlackMessageHandler", () => {
     const trackEvent = vi.fn();
     const handler = createSlackMessageHandler({
       ctx: createContext(),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
       trackEvent,
     });
 
@@ -492,10 +495,7 @@ describe("createSlackMessageHandler", () => {
 
   it("flushes pending top-level buffered keys before immediate non-debounce follow-ups", async () => {
     const handler = createSlackMessageHandler({
-      ctx: createContext(),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
+      ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),
     });
 
     await handler(
@@ -526,10 +526,7 @@ describe("createSlackMessageHandler", () => {
 
   it("flushes buffered text before a table-bearing message", async () => {
     const handler = createSlackMessageHandler({
-      ctx: createContext(),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
+      ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),
     });
 
     await handler(
@@ -568,10 +565,7 @@ describe("createSlackMessageHandler", () => {
 
   it("retires a buffered key when replay filtering drops every entry", async () => {
     const handler = createSlackMessageHandler({
-      ctx: createContext(),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
+      ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),
     });
     const bufferedMessage = {
       type: "message" as const,
@@ -911,7 +905,7 @@ describe("createSlackMessageHandler", () => {
     await Promise.all([handledFailure, flushFailure]);
   });
 
-  it("retries native session initialization conflicts", async () => {
+  it("retains the admitted batch config across native session conflict retries", async () => {
     dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
       new Error("Slack dispatch failed", {
         cause: new Error(
@@ -919,7 +913,9 @@ describe("createSlackMessageHandler", () => {
         ),
       }),
     );
-    const { handler } = createHandlerWithTracker();
+    const cfg: OpenClawConfig = { messages: { ackReactionScope: "off" } };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const { handler } = createHandlerWithTracker({ cfg });
     await handler(
       {
         type: "message",
@@ -932,19 +928,105 @@ describe("createSlackMessageHandler", () => {
     );
 
     const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    enqueueMock.mockImplementation(async (retry) => runOnFlush([retry as Record<string, unknown>]));
     vi.useFakeTimers();
     try {
-      await expect(runOnFlush([entry])).rejects.toThrow("Slack dispatch failed");
+      const flush = runOnFlush([entry]).then(
+        () => "completed",
+        () => "failed",
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      const next: OpenClawConfig = { messages: { ackReactionScope: "all" } };
+      setRuntimeConfigSnapshot(next, next);
       await vi.advanceTimersByTimeAsync(1000);
-
-      expect(enqueueMock).toHaveBeenCalledTimes(2);
-      expect(enqueueMock.mock.calls[1]?.[0]).toMatchObject({
-        opts: {
-          retryAttempt: 1,
-        },
-      });
-      expect(enqueueMock.mock.calls[1]?.[0]).not.toHaveProperty("opts.dispatchCompletion");
+      expect(
+        prepareSlackMessageMock.mock.calls.map(
+          ([params]) => params?.ctx.cfg.messages?.ackReactionScope,
+        ),
+      ).toEqual(["off", "off"]);
+      expect(await flush).toBe("completed");
+      expect(enqueueMock).toHaveBeenCalledTimes(1);
     } finally {
+      vi.useRealTimers();
+      enqueueMock.mockImplementation(async () => {});
+    }
+  });
+
+  it("keeps later same-key messages behind a retry with the original policy", async () => {
+    useRealDebouncer = true;
+    const cfg: OpenClawConfig = { messages: { ackReactionScope: "off" } };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const abort = new AbortController();
+    const { handler } = createHandlerWithTracker({ cfg, abortSignal: abort.signal });
+    dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
+      new Error("reply session initialization conflicted for agent:main:main"),
+    );
+    const message: Parameters<typeof handler>[0] = {
+      type: "message",
+      channel: "D1",
+      user: "U1",
+      ts: "123.001",
+      text: "first",
+    };
+    vi.useFakeTimers();
+    try {
+      const first = handler(message, { source: "message" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
+      const next: OpenClawConfig = { messages: { ackReactionScope: "all" } };
+      setRuntimeConfigSnapshot(next, next);
+      const second = handler({ ...message, ts: "123.002", text: "second" }, { source: "message" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      await Promise.all([first, second]);
+      expect(
+        prepareSlackMessageMock.mock.calls.map(
+          ([params]) => params?.ctx.cfg.messages?.ackReactionScope,
+        ),
+      ).toEqual(["off", "off", "all"]);
+    } finally {
+      abort.abort();
+      await Promise.all(realDebouncers.map((debouncer) => debouncer.drain()));
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["stop", "exhaust"] as const)("settles native retry ownership on %s", async (outcome) => {
+    useRealDebouncer = true;
+    const abort = new AbortController();
+    const { handler, ctx } = createHandlerWithTracker({ abortSignal: abort.signal });
+    const onError = vi.fn();
+    ctx.runtime.error = onError;
+    for (let attempt = 0; attempt < (outcome === "stop" ? 1 : 4); attempt += 1) {
+      dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
+        new Error("reply session initialization conflicted for agent:main:main"),
+      );
+    }
+    vi.useFakeTimers();
+    try {
+      const handled = handler(
+        { type: "message", channel: "D1", user: "U1", ts: "123.003", text: "retry" },
+        { source: "message" },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
+      if (outcome === "stop") {
+        abort.abort(new Error("monitor stopped"));
+      }
+      await vi.advanceTimersByTimeAsync(3000);
+      await handled;
+      await Promise.all(realDebouncers.map((debouncer) => debouncer.drain()));
+      expect(prepareSlackMessageMock).toHaveBeenCalledTimes(outcome === "stop" ? 1 : 4);
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          outcome === "stop" ? "aborted" : "reply session initialization conflicted",
+        ),
+      );
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      abort.abort();
+      await Promise.all(realDebouncers.map((debouncer) => debouncer.drain()));
       vi.useRealTimers();
     }
   });

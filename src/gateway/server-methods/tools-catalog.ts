@@ -15,10 +15,9 @@ import { summarizeToolDescriptionText } from "../../agents/tool-description-summ
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { buildPluginToolMetadataKey, getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
-  buildPluginToolMetadataKey,
   ensureStandalonePluginToolRegistryLoaded,
-  getPluginToolMeta,
   resolvePluginTools,
 } from "../../plugins/tools.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
@@ -29,6 +28,7 @@ type ToolCatalogEntry = {
   id: string;
   label: string;
   description: string;
+  fullDescription?: string;
   source: "core" | "plugin";
   pluginId?: string;
   optional?: boolean;
@@ -133,6 +133,9 @@ function buildPluginGroups(params: {
           (typeof tool.description === "string" ? tool.description : undefined),
         displaySummary: tool.displaySummary,
       }),
+      fullDescription:
+        ownedMetadata?.description ??
+        (typeof tool.description === "string" ? tool.description : undefined),
       source: "plugin",
       pluginId,
       optional: meta?.optional,
@@ -171,6 +174,7 @@ function buildPluginGroups(params: {
           summarizeToolDescriptionText({
             rawDescription: ownedMetadata?.description,
           }) || `Plugin tool from ${entry.pluginName ?? entry.pluginId}`,
+        fullDescription: ownedMetadata?.description,
         source: "plugin",
         pluginId: entry.pluginId,
         optional: entry.optional,

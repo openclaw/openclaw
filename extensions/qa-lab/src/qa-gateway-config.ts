@@ -24,7 +24,8 @@ export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://localhost:43124",
 ]);
 
-export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["acpx", "memory-core"]);
+// External runtimes such as ACPX must be selected by the fixture that needs them.
+export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["memory-core"]);
 export const QA_CODEX_OPENAI_CATALOG_BASE_URL = "https://api.openai.com/v1";
 const QA_LAB_PLUGIN_ID = "qa-lab";
 const QA_DIRECT_FRONTIER_PLUGIN_IDS = new Set<string>(QA_FRONTIER_PROVIDER_IDS);
@@ -52,6 +53,7 @@ export function buildQaGatewayConfig(params: {
   gatewayToken: string;
   providerBaseUrl?: string;
   workspaceDir: string;
+  stampCurrentVersion?: boolean;
   controlUiRoot?: string;
   controlUiAllowedOrigins?: string[];
   controlUiEnabled?: boolean;
@@ -130,17 +132,22 @@ export function buildQaGatewayConfig(params: {
   const pluginEntries = Object.fromEntries(
     selectedPluginIds.map((pluginId) => [
       pluginId,
-      params.forcedRuntime === "codex" && pluginId === "codex"
+      pluginId === "acpx"
         ? {
             enabled: true,
-            config: {
-              appServer: {
-                sandbox: "workspace-write",
-                ...(params.fastMode === true ? { serviceTier: "priority" } : {}),
-              },
-            },
+            config: { pluginToolsMcpBridge: true, openClawToolsMcpBridge: true },
           }
-        : { enabled: true },
+        : params.forcedRuntime === "codex" && pluginId === "codex"
+          ? {
+              enabled: true,
+              config: {
+                appServer: {
+                  sandbox: "workspace-write",
+                  ...(params.fastMode === true ? { serviceTier: "priority" } : {}),
+                },
+              },
+            }
+          : { enabled: true },
     ]),
   );
   const transportPluginEntries = Object.fromEntries(
@@ -206,8 +213,12 @@ export function buildQaGatewayConfig(params: {
       : {};
 
   return {
-    meta: {
-      lastTouchedVersion: OPENCLAW_VERSION,
+    ...(params.stampCurrentVersion === false
+      ? {}
+      : { meta: { lastTouchedVersion: OPENCLAW_VERSION } }),
+    // Keep daily rollover and pruning inside the owned QA workspace.
+    logging: {
+      file: `${params.workspaceDir}/logs/openclaw-YYYY-MM-DD.log`,
     },
     memory: {
       search: {
@@ -220,13 +231,6 @@ export function buildQaGatewayConfig(params: {
         memory: "memory-core",
       },
       entries: {
-        acpx: {
-          enabled: true,
-          config: {
-            pluginToolsMcpBridge: true,
-            openClawToolsMcpBridge: true,
-          },
-        },
         "memory-core": {
           enabled: true,
         },
@@ -253,6 +257,7 @@ export function buildQaGatewayConfig(params: {
           [primaryModel]: resolveModelEntry(primaryModel),
           [alternateModel]: resolveModelEntry(alternateModel),
         },
+        modelPolicy: { allow: uniqueStrings([primaryModel, alternateModel]) },
         subagents: {
           allowAgents: ["*"],
           maxConcurrent: 2,
@@ -285,6 +290,20 @@ export function buildQaGatewayConfig(params: {
       // environment defaults to a messaging-only profile.
       profile: "coding",
     },
+    ...(transportPluginIds.includes("qa-channel")
+      ? {
+          commands: {
+            // QA scenarios use distinct synthetic sender identities. Keep their
+            // ordinary command access aligned with the open qa-channel fixture
+            // while reserving owner-only commands for the restart operator.
+            allowFrom: { "qa-channel": ["*"] },
+            // Restart notices are re-authorized after the plugin registry has
+            // been torn down. Retain both sender and routable target forms so
+            // the fallback owner check remains exact across that boundary.
+            ownerAllowFrom: ["qa-channel:qa-operator", "qa-channel:dm:qa-operator"],
+          },
+        }
+      : {}),
     ...(gatewayModels
       ? {
           models: {

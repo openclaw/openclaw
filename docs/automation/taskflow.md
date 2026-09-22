@@ -22,21 +22,30 @@ Task Flow is the orchestration layer above [background tasks](/automation/tasks)
 
 ### Managed mode
 
-A managed flow has a controller: plugin code that creates the flow through the plugin runtime Task Flow API with a goal and a required controller id, then drives it explicitly.
+A managed flow has a controller: plugin code that creates the flow with a goal and controller id, then drives it explicitly. A flow can track inline work without any child task.
 
-- Each step runs as a background task created under the flow; the flow's owner key and requester origin carry over to child tasks.
-- The controller advances the flow between `running`, `waiting`, and terminal states, and stores arbitrary JSON step state on the flow record.
-- Every mutation passes the flow's expected revision. A stale write is rejected as a revision conflict instead of clobbering newer state.
-- Once cancellation is requested, new child tasks are refused, and the flow finalizes as `cancelled` when no child task remains active.
+- `createManaged` creates state, not an execution. `runTask` links an existing execution; it does not launch one.
+- The controller advances between running, waiting and terminal states, retaining bounded IDs, summaries and cursors in `stateJson`.
+- State transitions (`setWaiting`, `resume`, `finish`, `fail`, `requestCancel`) require the latest expected revision. Check every result, including `finish`. `runTask` and `cancel` have separate creation/cancellation results to check.
+- Cancellation intent refuses new child links. The flow finalizes as cancelled once its active children have settled.
 
-Example: a weekly report flow that (1) gathers data, (2) generates the report, and (3) delivers it, one background task per step:
+#### Launching and linking child tasks
 
-```
-Flow: weekly-report
-  Step 1: gather-data     → task created → succeeded
-  Step 2: generate-report → task created → succeeded
-  Step 3: deliver         → task created → running
-```
+Launch ACP/subagent work through its supported runtime **before** calling `runTask`. Linking requires the existing authoritative backing task, its canonical `runId` and child session key, the correct task runtime and the same owner session as the managed flow. A copied session key or invented run ID is not authority.
+
+For Gateway-backed plugin subagents, the public path is `api.runtime.subagent.run({ completionDelivery: "current-requester", ... })` inside a real requester-bound `before_dispatch` hook handling an authenticated inbound request. The host creates the canonical subagent task and mirrored flow. Ordinary plugin runs without this setting deliberately have `not_applicable` completion delivery and cannot supply that mirrored backing. Merely binding `managedFlows.fromToolContext(ctx)` does not grant requester launch authority.
+
+Use the returned identities and current owner-visible task facts, not invented status/timing. Prefer `await api.runtime.tasks.async.managedFlows.bindSession(...).runTask(...)`; its worker rereads current backing before linking and refuses a new active projection of completed work. A child can finish before linkage; `runTask` does not replay past terminal events. See the [SDK Tasks contract](/plugins/sdk-runtime) for launch, result handling, revision rules, and the deprecated synchronous contract.
+
+#### Run a managed Lobster workflow
+
+For operator/agent use, the optional [Lobster tool](/tools/lobster) can execute a workflow with `flowControllerId` and `flowGoal`. It creates a managed flow, records a real approval pause as waiting, and finishes or fails from the workflow outcome. The workflow steps are not detached child task records.
+
+The tool returns envelope fields plus `flow` and `mutation` at the top level of its details. Check `mutation.applied` and use `mutation.flow`, the post-mutation record, for the next `flowExpectedRevision`. After the user's decision, resume with the actual flow id/revision; omit the token and approval ID to recover the checkpoint saved in that flow. Explicit checkpoint credentials must match the saved approval. Check cancellation through `mutation.cancelled`. Report errors and rejected updates instead of treating workflow output as proof that flow state persisted.
+
+The bundled TaskFlow skill examples route synthetic inbox/PR batches and suspend for approval without contacting external services. A workflow approval is not an arbitrary Slack-reply listener: a real controller must register that listener, persist thread correlation and resume when the matching event arrives.
+
+The same skill includes subagent recipes for research/review fan-out, implementation with independent verification, and recovery from canonical task IDs. Optional [Workboard](/plugins/workboard#agent-tools) claims coordinate cooperating writers through its existing claim/heartbeat/release lifecycle. Claims apply to cards, not paths or shell processes; overlapping writers must agree on the same card or use isolated worktrees.
 
 ### Mirrored mode
 
@@ -62,7 +71,9 @@ with a blocked outcome.
 
 ## Durable state and revision tracking
 
-Flow records persist in the shared SQLite state database (`~/.openclaw/state/openclaw.sqlite`, `flow_runs` table) alongside task records, so progress survives gateway restarts. Each write bumps the flow's `revision`; concurrent writers that pass a stale expected revision get a conflict and must re-read. WAL growth is bounded by SQLite autocheckpointing plus periodic passive checkpoints, with truncate checkpoints on shutdown. The legacy `flows/registry.sqlite` sidecar from older installs is imported by `openclaw doctor`.
+Flow records persist in the shared SQLite state database (`~/.openclaw/state/openclaw.sqlite`, `flow_runs` table) alongside task records, so progress survives gateway restarts. Each write bumps the flow's `revision`; concurrent writers that pass a stale expected revision get a conflict and must re-read. WAL growth is bounded by SQLite autocheckpointing plus periodic passive checkpoints, with truncate checkpoints on shutdown. The shared database replaced the `flows/registry.sqlite` sidecar in `v2026.5.30-beta.1`, stable from `v2026.6.1`. If that sidecar is still present under the state root, `openclaw doctor` imports it into the shared database.
+
+Durability covers records, not a JavaScript call stack or automatic scheduling. After restart, the owning controller reloads the flow, checks cancellation and terminal state, reconciles any child outcome, and explicitly resumes from the latest revision. Waiting metadata alone does not register a timer or event listener. Use an automation or controller-owned event handler for wakeups; never blindly replay side effects after a revision conflict.
 
 Gateway maintenance retains finished flows for 7 days, then prunes them. This
 includes `blocked` flows with `endedAt`; resumable managed `blocked` flows are
@@ -175,3 +186,4 @@ Flows coordinate tasks, not replace them. A single flow may drive multiple backg
 - [CLI: tasks](/cli/tasks) - CLI command reference for `openclaw tasks flow`
 - [Automation Overview](/automation) - all automation mechanisms at a glance
 - [Automations](/automation/cron-jobs) - scheduled jobs that may feed into flows
+- [Goal](/tools/goal) - durable per-session objectives and the `/goal` controls

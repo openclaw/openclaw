@@ -3,16 +3,25 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
-import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-errors.js";
+import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
+import {
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  type MemorySearchDeadlineControl,
+} from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
+import {
+  createProviderHttpError,
+  readProviderJsonArrayFieldResponse,
+} from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
-} from "../agents/provider-local-service.js";
+} from "../agents/provider-local-service-target.js";
+import { redactProviderResponseErrorText } from "../agents/provider-request-header-redaction.js";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import type {
   EmbeddingInput,
   EmbeddingProvider,
@@ -188,6 +197,43 @@ function resolveRemoteApiKey(value: unknown): string | undefined {
   });
 }
 
+async function resolveConfiguredProviderApiKey(params: {
+  providerId: string;
+  options: EmbeddingProviderCreateOptions;
+  configuredProvider: ConfiguredEmbeddingProvider | undefined;
+}): Promise<string | undefined> {
+  const apiKey = resolveSecretString({
+    value: params.configuredProvider?.apiKey,
+    path: `${appendConfigPathSegment("models.providers", params.providerId)}.apiKey`,
+  });
+  if (!apiKey) {
+    return undefined;
+  }
+  const { resolveAgentDir, tryResolveAmbientOwnerAgentId } =
+    await import("../agents/agent-scope-config.js");
+  const agentId = tryResolveAmbientOwnerAgentId(params.options.config);
+  const agentDir =
+    params.options.agentDir?.trim() ||
+    (agentId ? resolveAgentDir(params.options.config, agentId) : undefined);
+  // Without an owned auth store, a configured string retains its literal meaning.
+  if (!agentDir) {
+    return apiKey;
+  }
+  const { resolveScopedAuthProfileStore, resolveProviderEntryApiKeyAuth } =
+    await import("../agents/model-auth-provider.js");
+  const authParams = {
+    provider: params.providerId,
+    modelApi: params.configuredProvider?.api,
+    cfg: params.options.config,
+    agentDir,
+  };
+  const store = resolveScopedAuthProfileStore(authParams);
+  // Only explicit profile bindings enter model auth. General discovery would
+  // replace literal/runtime-resolved keys with unrelated profile or env credentials.
+  const auth = await resolveProviderEntryApiKeyAuth({ ...authParams, store });
+  return auth ? auth.apiKey : apiKey;
+}
+
 function isOpenAICompatibleProviderConfig(
   id: string,
   provider: ConfiguredEmbeddingProvider,
@@ -247,28 +293,38 @@ function malformedEmbeddingResponse(): Error {
   return new Error("openai-compatible embeddings failed: malformed JSON response");
 }
 
-async function readEmbeddingErrorBodySnippet(response: Response): Promise<string | undefined> {
-  if (!response.body || response.bodyUsed) {
-    return undefined;
-  }
-  const prefix = await readResponseTextPrefix(response, EMBEDDING_ERROR_BODY_MAX_BYTES).catch(
-    () => undefined,
+async function createEmbeddingHttpError(
+  response: Response,
+  requestHeaders: HeadersInit,
+): Promise<Error> {
+  const prefix =
+    response.body && !response.bodyUsed
+      ? await readResponseTextPrefix(response, EMBEDDING_ERROR_BODY_MAX_BYTES).catch(
+          () => undefined,
+        )
+      : undefined;
+  const safeBody = prefix?.text
+    ? redactProviderResponseErrorText(prefix.text, requestHeaders, {
+        sourceTruncated: prefix.truncated,
+      })
+    : undefined;
+  const error = await createProviderHttpError(
+    new Response(safeBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+    "openai-compatible embeddings failed",
+    { requestHeaders },
   );
-  if (!prefix?.text) {
-    return undefined;
+  let snippet = safeBody;
+  if (snippet && snippet.length > EMBEDDING_ERROR_BODY_MAX_CHARS) {
+    snippet = `${truncateUtf16Safe(snippet, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
+  } else if (snippet && prefix?.truncated) {
+    snippet = `${snippet}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
   }
-  const { text, truncated } = prefix;
-  if (text.length > EMBEDDING_ERROR_BODY_MAX_CHARS) {
-    return `${truncateUtf16Safe(text, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
-  }
-  return truncated ? `${text}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}` : text;
-}
-
-async function createEmbeddingHttpError(response: Response): Promise<Error> {
-  const snippet = await readEmbeddingErrorBodySnippet(response);
-  return new Error(
-    `openai-compatible embeddings failed: HTTP ${response.status}${snippet ? `: ${snippet}` : ""}`,
-  );
+  error.message = `openai-compatible embeddings failed: HTTP ${response.status}${snippet ? `: ${snippet}` : ""}`;
+  return error;
 }
 
 async function postEmbeddingRequest(params: {
@@ -276,8 +332,9 @@ async function postEmbeddingRequest(params: {
   input: string[];
   signal?: AbortSignal;
   inputType?: EmbeddingProviderCallOptions["inputType"];
+  deadlineControl?: MemorySearchDeadlineControl;
 }): Promise<number[][]> {
-  const { client, input } = params;
+  const { client, input, deadlineControl } = params;
   const inputType = resolveRequestInputType(client, params.inputType);
   const body = {
     model: client.model,
@@ -287,10 +344,21 @@ async function postEmbeddingRequest(params: {
   };
   const localServiceLease =
     client.localServiceTarget && client.acquireLocalService
-      ? await client.acquireLocalService(client.localServiceTarget, params.signal)
+      ? await client.acquireLocalService(
+          {
+            ...client.localServiceTarget,
+            ...(deadlineControl
+              ? {
+                  onReadinessWait: (waiting: boolean) =>
+                    deadlineControl.report(waiting ? "pause" : "resume"),
+                }
+              : {}),
+          },
+          params.signal,
+        )
       : undefined;
   try {
-    const { response, release } = await fetchWithSsrFGuard({
+    return await withRemoteHttpResponse({
       url: client.endpointUrl,
       init: {
         method: "POST",
@@ -298,25 +366,23 @@ async function postEmbeddingRequest(params: {
         body: JSON.stringify(body),
       },
       signal: params.signal,
-      policy: client.ssrfPolicy,
+      ssrfPolicy: client.ssrfPolicy,
       auditContext: "embedding-provider:openai-compatible",
-    });
-    try {
-      if (!response.ok) {
-        throw await createEmbeddingHttpError(response);
-      }
-      return readEmbeddingVectors(
-        await readProviderJsonArrayFieldResponse(
-          response,
+      onResponse: async (response) => {
+        if (!response.ok) {
+          throw await createEmbeddingHttpError(response, client.headers);
+        }
+        return readEmbeddingVectors(
+          await readProviderJsonArrayFieldResponse(
+            response,
+            "openai-compatible embeddings failed",
+            "data",
+          ),
+          input.length,
           "openai-compatible embeddings failed",
-          "data",
-        ),
-        input.length,
-        "openai-compatible embeddings failed",
-      );
-    } finally {
-      await release();
-    }
+        );
+      },
+    });
   } finally {
     localServiceLease?.release();
   }
@@ -350,9 +416,10 @@ async function createOpenAICompatibleEmbeddingClient(
     remote: options.remote?.headers,
   });
   if (providerOwnsDestination && !headers.authorization) {
-    const providerApiKey = resolveSecretString({
-      value: configuredProvider?.apiKey,
-      path: `models.providers.${providerId}.apiKey`,
+    const providerApiKey = await resolveConfiguredProviderApiKey({
+      providerId,
+      options,
+      configuredProvider,
     });
     if (providerApiKey) {
       headers.authorization = `Bearer ${providerApiKey}`;
@@ -402,6 +469,7 @@ async function createOpenAICompatibleEmbeddingProvider(
       input: inputs.map(embeddingInputToText),
       signal: callOptions?.signal,
       inputType: callOptions?.inputType,
+      deadlineControl: callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL],
     });
   };
   return {

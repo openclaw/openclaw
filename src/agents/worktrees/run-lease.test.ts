@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { lockState, unlockWorktree } from "./git-lock.js";
+import * as registry from "./registry.js";
 import {
   admitWorktreeRunLeaseRow,
   getRegistryWorktree,
@@ -45,6 +46,7 @@ describe("worktree run lease", () => {
   const templateTempDirs = useAutoCleanupTempDirTracker(afterAll);
   const caseTempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
+      vi.restoreAllMocks();
       runLeaseTesting.resetForTest();
       closeOpenClawStateDatabaseForTest();
       cleanup();
@@ -125,6 +127,45 @@ describe("worktree run lease", () => {
     const lease = await acquireWorktreeRunLease(created.id, { env });
     await lease.release();
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+  });
+
+  it("excludes runs and publishers for the lifetime of an exclusive publication lease", async () => {
+    const created = await createSessionWorktree();
+    const running = await acquireWorktreeRunLease(created.id, { env });
+    await expect(acquireWorktreeRunLease(created.id, { env, exclusive: true })).rejects.toThrow(
+      "in use",
+    );
+    await running.release();
+    const publication = await acquireWorktreeRunLease(created.id, { env, exclusive: true });
+    await expect(acquireWorktreeRunLease(created.id, { env })).rejects.toThrow("in use");
+    await expect(acquireWorktreeRunLease(created.id, { env, exclusive: true })).rejects.toThrow(
+      "in use",
+    );
+    expect(() =>
+      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remove-during-publication" }),
+    ).toThrow();
+    await publication.release();
+    const nextRun = await acquireWorktreeRunLease(created.id, { env });
+    await nextRun.release();
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+  });
+
+  it("acquires a Git guard after a previous acquisition failed to read the registry", async () => {
+    const created = await createSessionWorktree();
+    const record = getRegistryWorktree(env, created.id)!;
+    vi.spyOn(registry, "getRegistryWorktree").mockImplementationOnce(() => {
+      throw new Error("simulated registry read failure");
+    });
+
+    await expect(acquireWorktreeRunLease(created.id, { env })).rejects.toThrow(
+      "simulated registry read failure",
+    );
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+    await lease.release();
+    expect(await lockState(record)).toEqual({ kind: "none" });
   });
 
   it("resolves the worktree id for a nested workspace path with no session binding", async () => {
@@ -287,27 +328,40 @@ describe("worktree run lease", () => {
     expect(await lockState(record)).toEqual({ kind: "none" });
   });
 
-  it("retains the git guard when unlock fails, releasing it on a lifecycle retry", async () => {
-    const created = await createSessionWorktree();
-    const lease = await acquireWorktreeRunLease(created.id, { env });
-    const record = getRegistryWorktree(env, created.id)!;
+  it.each(["unlock", "registry read"])(
+    "retains the Git guard when %s fails, releasing it on a lifecycle retry",
+    async (failure) => {
+      const created = await createSessionWorktree();
+      const lease = await acquireWorktreeRunLease(created.id, { env });
+      const record = getRegistryWorktree(env, created.id)!;
 
-    let failUnlock = true;
-    runLeaseTesting.setUnlockImplForTest(async (rec) => {
-      if (failUnlock) {
-        throw new Error("simulated git unlock failure");
+      let fail = true;
+      if (failure === "unlock") {
+        runLeaseTesting.setUnlockImplForTest(async (rec) => {
+          if (fail) {
+            throw new Error("simulated git unlock failure");
+          }
+          await unlockWorktree(rec);
+        });
+      } else {
+        const readWorktree = registry.getRegistryWorktree;
+        vi.spyOn(registry, "getRegistryWorktree").mockImplementation((...args) => {
+          if (fail) {
+            throw new Error("simulated registry read failure");
+          }
+          return readWorktree(...args);
+        });
       }
-      await unlockWorktree(rec);
-    });
 
-    await lease.release();
-    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
-    expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+      await lease.release();
+      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+      expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
 
-    failUnlock = false;
-    await runLeaseTesting.drainPendingCleanupsForTest();
-    expect(await lockState(record)).toEqual({ kind: "none" });
-  });
+      fail = false;
+      await runLeaseTesting.drainPendingCleanupsForTest();
+      expect(await lockState(record)).toEqual({ kind: "none" });
+    },
+  );
 
   it("does not let a failed cleanup unlock a newer holder generation", async () => {
     const created = await createSessionWorktree();

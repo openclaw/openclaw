@@ -3,17 +3,27 @@ import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  expectNoteContains,
+  expectNoteTitleNotCalled,
+  withPlatform,
+  expectNoteNotContains,
+} from "./setup.finalize.test-support.js";
 
 type DefaultModelAuthStatus = ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>;
 type DefaultModelCatalogFacts = ReturnType<
   typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
 >;
+
+const readPin = vi.hoisted(() => vi.fn());
+vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
 
 const runTui = vi.hoisted(() => vi.fn<(options: unknown) => Promise<void>>(async () => {}));
 const setupCleanupExitTimer = vi.hoisted(() => ({ unref: vi.fn() }));
@@ -65,7 +75,7 @@ const resolveDefaultModelAuthStatus = vi.hoisted(() =>
   })),
 );
 const resolveDefaultModelCatalogFacts = vi.hoisted(() =>
-  vi.fn<() => DefaultModelCatalogFacts>(() => ({ found: true })),
+  vi.fn<() => DefaultModelCatalogFacts>(() => ({})),
 );
 const loadModelCatalog = vi.hoisted(() =>
   vi.fn<(_params?: unknown) => Promise<unknown[]>>(async () => []),
@@ -86,11 +96,10 @@ const gatewayServiceRestart = vi.hoisted(() =>
 );
 const gatewayServiceUninstall = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
+const gatewayServiceReadCommand = vi.hoisted(() => vi.fn());
 const startGatewayService = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() =>
   vi.fn(async () => ({
-    token: undefined,
-    tokenRefConfigured: true,
     warnings: [],
   })),
 );
@@ -227,6 +236,7 @@ vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: vi.fn(() => ({
     label: "Mock Platform Service",
     isLoaded: gatewayServiceIsLoaded,
+    readCommand: gatewayServiceReadCommand,
     restart: gatewayServiceRestart,
     uninstall: gatewayServiceUninstall,
     install: gatewayServiceInstall,
@@ -392,46 +402,9 @@ function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex 
   return call[argIndex];
 }
 
-function expectNoteContains(
-  prompter: ReturnType<typeof buildWizardPrompter>,
-  expected: string,
-  title: string,
-): void {
-  const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.filter((call) => call[0].includes(expected) && call[1] === title)).not.toEqual([]);
-}
-
-function expectNoteTitleNotCalled(
-  prompter: ReturnType<typeof buildWizardPrompter>,
-  title: string,
-): void {
-  const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.filter((call) => call[1] === title)).toEqual([]);
-}
-
-function expectNoteNotContains(
-  prompter: ReturnType<typeof buildWizardPrompter>,
-  unexpected: string,
-): void {
-  const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.filter((call) => call[0].includes(unexpected))).toEqual([]);
-}
-
-async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
-  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-  Object.defineProperty(process, "platform", {
-    configurable: true,
-    value: platform,
-  });
-  try {
-    return await fn();
-  } finally {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-  }
-}
-
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
+    readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
     runTui.mockClear();
     setupCleanupExitTimer.unref.mockClear();
     scheduleProcessExitAfterTuiReturn.mockReset();
@@ -467,6 +440,8 @@ describe("finalizeSetupWizard", () => {
     gatewayServiceInstall.mockClear();
     gatewayServiceIsLoaded.mockReset();
     gatewayServiceIsLoaded.mockResolvedValue(false);
+    gatewayServiceReadCommand.mockReset();
+    gatewayServiceReadCommand.mockResolvedValue(null);
     startGatewayService.mockReset();
     gatewayServiceRestart.mockReset();
     gatewayServiceRestart.mockResolvedValue({ outcome: "completed" });
@@ -510,7 +485,7 @@ describe("finalizeSetupWizard", () => {
       hasAuth: true,
     });
     resolveDefaultModelCatalogFacts.mockReset();
-    resolveDefaultModelCatalogFacts.mockReturnValue({ found: true });
+    resolveDefaultModelCatalogFacts.mockReturnValue({});
     loadModelCatalog.mockReset();
     loadModelCatalog.mockResolvedValue([]);
   });
@@ -766,7 +741,7 @@ describe("finalizeSetupWizard", () => {
     );
   });
 
-  it("bounds the bootstrap hatch TUI run timeout", async () => {
+  it("seeds the bootstrap hatch message for a ready catalog with a bounded timeout", async () => {
     vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
     const select = vi.fn(async (params: { message: string }) => {
       if (params.message === "How do you want to hatch your agent?") {
@@ -789,6 +764,35 @@ describe("finalizeSetupWizard", () => {
     });
   });
 
+  it("finishes without a hatch message when the prepared catalog owner was replaced", async () => {
+    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+    loadModelCatalog.mockRejectedValueOnce(
+      new PreparedModelCatalogConfigReplacedError("/tmp/replaced-agent"),
+    );
+    const prompter = createLaterPrompter();
+
+    await expect(
+      finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter })),
+    ).resolves.toEqual({ launchedTui: true });
+
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: undefined,
+      }),
+    );
+    expect(resolveDefaultModelCatalogFacts).not.toHaveBeenCalled();
+    expect(resolveDefaultModelAuthStatus).not.toHaveBeenCalled();
+  });
+
+  it("propagates unrelated prepared catalog failures", async () => {
+    const error = new Error("catalog read failed");
+    loadModelCatalog.mockRejectedValueOnce(error);
+
+    await expect(finalizeSetupWizard(createFinalizeArgs("quickstart"))).rejects.toBe(error);
+
+    expect(runTui).not.toHaveBeenCalled();
+  });
+
   it("passes physical catalog routes into the bootstrap auth decision", async () => {
     vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
     const catalog = [
@@ -806,7 +810,7 @@ describe("finalizeSetupWizard", () => {
       { api: "openai-responses" as const, baseUrl: "https://api.openai.com/v1" },
     ];
     loadModelCatalog.mockResolvedValueOnce(catalog);
-    resolveDefaultModelCatalogFacts.mockReturnValueOnce({ found: true, observedRoutes });
+    resolveDefaultModelCatalogFacts.mockReturnValueOnce({ observedRoutes });
     const prompter = buildWizardPrompter({
       confirm: vi.fn(async () => false),
     });
@@ -1272,6 +1276,38 @@ describe("finalizeSetupWizard", () => {
     expectNoteContains(prompter, "service install exploded", "Gateway");
   });
 
+  it.each([
+    { systemdAvailable: true, supervisor: undefined },
+    { systemdAvailable: false, supervisor: undefined },
+    { systemdAvailable: true, supervisor: "external" },
+  ])(
+    "never enables lingering or installs services for explicit skips ($systemdAvailable, $supervisor)",
+    async ({ systemdAvailable, supervisor }) => {
+      await withPlatform("linux", async () => {
+        await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: supervisor }, async () => {
+          isSystemdUserServiceAvailable.mockResolvedValue(systemdAvailable);
+          const prompter = createLaterPrompter();
+
+          const result = await ensureGatewayServiceForOnboarding(
+            createFinalizeArgs("quickstart", { prompter }),
+          );
+
+          expect(result.gateway).toEqual({
+            status: "skipped",
+            reason: supervisor ? "external" : systemdAvailable ? "explicit" : "systemd-unavailable",
+          });
+          expect(readSystemdUserLingerStatus).not.toHaveBeenCalled();
+          expect(gatewayServiceIsLoaded).not.toHaveBeenCalled();
+          expect(gatewayServiceInstall).not.toHaveBeenCalled();
+          expect(gatewayServiceRestart).not.toHaveBeenCalled();
+          expect(startGatewayService).not.toHaveBeenCalled();
+          expect(prompter.confirm).not.toHaveBeenCalled();
+          expect(prompter.select).not.toHaveBeenCalled();
+        });
+      });
+    },
+  );
+
   it("recognizes external supervision before probing Linux systemd", async () => {
     await withPlatform("linux", async () => {
       await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
@@ -1528,8 +1564,6 @@ describe("finalizeSetupWizard", () => {
       });
       if (failure === "auth") {
         resolveGatewayInstallToken.mockImplementationOnce(async () => ({
-          token: undefined,
-          tokenRefConfigured: true,
           warnings: [],
           unavailableReason: "replacement auth unavailable",
         }));
@@ -1548,25 +1582,68 @@ describe("finalizeSetupWizard", () => {
     },
   );
 
-  it("passes the existing service intact to the reinstall owner", async () => {
-    let installed = true;
-    gatewayServiceIsLoaded.mockImplementation(async () => installed);
-    gatewayServiceUninstall.mockImplementationOnce(async () => {
-      installed = false;
-    });
-    gatewayServiceInstall.mockImplementationOnce(async () => {
-      expect(installed).toBe(true);
-    });
-    const prompter = buildWizardPrompter({ select: vi.fn(async () => "reinstall") as never });
+  it.each([undefined, "node", "bun"] as const)(
+    "passes installed pin intent to the reinstall owner (explicit=%s)",
+    async (daemonRuntime) => {
+      const pin = { runtime: "bun", path: "/opt/pinned/bun" };
+      const expected = { revision: "pin-version", stored: true, pin };
+      readPin.mockReturnValue(expected);
+      let installed = true;
+      gatewayServiceIsLoaded.mockImplementation(async () => installed);
+      gatewayServiceUninstall.mockImplementationOnce(async () => {
+        installed = false;
+      });
+      gatewayServiceInstall.mockImplementationOnce(async () => {
+        expect(installed).toBe(true);
+      });
+      const managedDefinition = {
+        programArguments: [
+          "/usr/bin/node",
+          "--max-old-space-size=24576",
+          "--require=/tmp/service-preload.js",
+          "/usr/local/bin/openclaw",
+          "gateway",
+        ],
+        environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
+      };
+      const existingCommand = {
+        programArguments: ["/operator/drop-in-wrapper", "gateway"],
+        environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
+        managedDefinition,
+        managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      };
+      gatewayServiceReadCommand.mockResolvedValue(existingCommand);
+      const prompter = buildWizardPrompter({ select: vi.fn(async () => "reinstall") as never });
 
-    const result = await ensureGatewayServiceForOnboarding(
-      createFinalizeArgs("quickstart", { opts: { installDaemon: true }, prompter }),
-    );
+      const result = await ensureGatewayServiceForOnboarding(
+        createFinalizeArgs("quickstart", {
+          opts: { installDaemon: true, daemonRuntime },
+          prompter,
+        }),
+      );
 
-    expect(result.gateway).toEqual({ status: "ready", action: "installed" });
-    expect(gatewayServiceInstall).toHaveBeenCalledOnce();
-    expect(gatewayServiceUninstall).not.toHaveBeenCalled();
-  });
+      expect(result.gateway).toEqual({ status: "ready", action: "installed" });
+      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          existingCommand,
+        }),
+      );
+      expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
+      expect(gatewayServiceInstall).toHaveBeenCalledOnce();
+      expect(gatewayServiceInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePinUpdate: { expected, pin: daemonRuntime ? undefined : pin },
+        }),
+      );
+      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: daemonRuntime ?? "bun",
+          pinnedRuntimePath: daemonRuntime ? undefined : pin.path,
+        }),
+      );
+      expect(gatewayServiceUninstall).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["skip", "restart"])("does not turn %s into an implicit reinstall", async (action) => {
     gatewayServiceIsLoaded.mockResolvedValueOnce(true).mockResolvedValue(false);
@@ -1580,6 +1657,7 @@ describe("finalizeSetupWizard", () => {
       status: "ready",
       action: action === "restart" ? "restarted" : "reused",
     });
+    expect(readPin).not.toHaveBeenCalled();
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
     expect(gatewayServiceUninstall).not.toHaveBeenCalled();
     expect(gatewayServiceRestart).toHaveBeenCalledTimes(action === "restart" ? 1 : 0);

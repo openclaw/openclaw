@@ -2,7 +2,10 @@
 import { Buffer } from "node:buffer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
-import { storeDeviceAuthToken, storeOriginDeviceToken } from "../infra/device-auth-store.js";
+import {
+  seedDeviceAuthToken,
+  seedOriginDeviceToken,
+} from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -72,7 +75,7 @@ class ProbeWebSocket {
   }
 }
 
-vi.mock("ws", () => ({ WebSocket: ProbeWebSocket }));
+vi.mock("../../packages/gateway-client/src/websocket.js", () => ({ WebSocket: ProbeWebSocket }));
 
 const { probeGateway } = await import("./probe.js");
 
@@ -153,13 +156,13 @@ describe("probeGateway device auth scope", () => {
     await withTempDir("openclaw-probe-origin-scope-", async (stateDir) => {
       const env = createEnv(stateDir);
       const identity = loadOrCreateDeviceIdentity({ env });
-      storeDeviceAuthToken({
+      seedDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "operator",
         token: "origin-a-legacy-token",
         env,
       });
-      storeOriginDeviceToken({
+      seedOriginDeviceToken({
         gatewayScope: gatewayOriginScope("wss://origin-a.example/rpc"),
         deviceId: identity.deviceId,
         role: "operator",
@@ -172,8 +175,7 @@ describe("probeGateway device auth scope", () => {
         env,
       });
 
-      expect(connect.params?.auth?.token).toBeUndefined();
-      expect(connect.params?.auth?.deviceToken).toBeUndefined();
+      expect(connect.params?.auth).toBeUndefined();
       expect(connect.params?.device).toBeUndefined();
     });
   });
@@ -182,7 +184,7 @@ describe("probeGateway device auth scope", () => {
     await withTempDir("openclaw-probe-local-scope-", async (stateDir) => {
       const env = createEnv(stateDir);
       const identity = loadOrCreateDeviceIdentity({ env });
-      storeDeviceAuthToken({
+      seedDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "operator",
         token: "local-device-token",
@@ -194,8 +196,7 @@ describe("probeGateway device auth scope", () => {
         env,
       });
 
-      expect(connect.params?.auth).toMatchObject({
-        token: "local-device-token",
+      expect(connect.params?.auth).toEqual({
         deviceToken: "local-device-token",
       });
       expect(connect.params?.device?.id).toBe(identity.deviceId);
@@ -206,7 +207,7 @@ describe("probeGateway device auth scope", () => {
     await withTempDir("openclaw-probe-explicit-scope-", async (stateDir) => {
       const env = createEnv(stateDir);
       const identity = loadOrCreateDeviceIdentity({ env });
-      storeDeviceAuthToken({
+      seedDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "operator",
         token: "legacy-device-token",
@@ -219,8 +220,7 @@ describe("probeGateway device auth scope", () => {
         env,
       });
 
-      expect(connect.params?.auth?.token).toBe("explicit-remote-token");
-      expect(connect.params?.auth?.deviceToken).toBeUndefined();
+      expect(connect.params?.auth).toEqual({ token: "explicit-remote-token" });
     });
   });
 
@@ -228,13 +228,13 @@ describe("probeGateway device auth scope", () => {
     await withTempDir("openclaw-probe-ssh-scope-", async (stateDir) => {
       const env = createEnv(stateDir);
       const identity = loadOrCreateDeviceIdentity({ env });
-      storeDeviceAuthToken({
+      seedDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "operator",
         token: "local-device-token",
         env,
       });
-      storeOriginDeviceToken({
+      seedOriginDeviceToken({
         gatewayScope: gatewayOriginScope("ws://127.0.0.1:18789"),
         deviceId: identity.deviceId,
         role: "operator",
@@ -248,8 +248,7 @@ describe("probeGateway device auth scope", () => {
         env,
       });
 
-      expect(connect.params?.auth?.token).toBeUndefined();
-      expect(connect.params?.auth?.deviceToken).toBeUndefined();
+      expect(connect.params?.auth).toBeUndefined();
       expect(connect.params?.device).toBeUndefined();
     });
   });
@@ -264,8 +263,7 @@ describe("probeGateway device auth scope", () => {
         env,
       });
 
-      expect(connect.params?.auth?.token).toBe("explicit-ssh-token");
-      expect(connect.params?.auth?.deviceToken).toBeUndefined();
+      expect(connect.params?.auth).toEqual({ token: "explicit-ssh-token" });
     });
   });
 });

@@ -43,12 +43,32 @@ export type CreateManagedWorktreeParams = {
   /** Derived default name; collisions receive a stable numeric suffix. */
   suggestedName?: string;
   baseRef?: string;
+  /** Repository-owned source cone lists; selection never requests dependency setup. */
+  profiles?: string[];
+  /** Verified immutable checkout point when baseRef retains the publication target. */
+  checkoutCommit?: string;
   ownerKind?: ManagedWorktreeOwnerKind;
   ownerId?: string;
   // Repository Git hooks are always disabled; only the setup script runs repo-local code.
   runSetupScript?: boolean;
+  signal?: AbortSignal;
+  onProgress?: (phase: "checkout" | "setup") => void;
   /** Synchronous caller-authority guard checked at allocation commit boundaries. */
   commitGuard?: () => void;
+};
+
+export type CreateEmptyManagedWorktreeParams = Omit<
+  CreateManagedWorktreeParams,
+  "repoRoot" | "baseRef" | "checkoutCommit" | "profiles"
+> & {
+  ownerKind: "session";
+  ownerId: string;
+};
+
+export type ManagedWorktreeCreationOutcome = {
+  record: ManagedWorktreeRecord;
+  /** This allocation created or restored the checkout instead of reusing a live one. */
+  materialized: boolean;
 };
 
 export type RemoveManagedWorktreeResult = {
@@ -69,6 +89,7 @@ export type ManagedWorktreeBranchesResult = {
   defaultBranch?: string;
   headBranch?: string;
   repositoryStatus?: ManagedWorktreeRepositoryStatus;
+  branchesUnavailable?: boolean;
 };
 
 export type ManagedWorktreeGcResult = {

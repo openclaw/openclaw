@@ -3,12 +3,14 @@ import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const RELEASE_CHECKS_PATH = ".github/workflows/openclaw-release-checks.yml";
 const WORKFLOW_PATH = ".github/workflows/openclaw-release-telegram-qa.yml";
 const HELPER = "scripts/release-telegram-qa.mjs";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 
 type WorkflowStep = {
   env?: Record<string, unknown>;
@@ -225,6 +227,13 @@ function runCandidateProvenance(
   params: {
     branchHeads?: string[];
     candidateVersion?: string;
+    messageHeadline?: string;
+    directPullRequest?: {
+      state?: string;
+      baseRepository?: string;
+      mergeCommitOid?: string;
+      mergedBy?: string;
+    };
     mergedPullRequests?: Array<{
       baseRefName?: string;
       baseRepository?: string;
@@ -261,6 +270,7 @@ function runCandidateProvenance(
       repository: {
         object: {
           oid: candidateSha,
+          messageHeadline: params.messageHeadline ?? "release fixture",
           signature:
             signature === "missing"
               ? null
@@ -303,6 +313,7 @@ function runCandidateProvenance(
     join(fakeBin, "gh"),
     `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "$*" == *"number="* ]]; then printf '%s\\n' "$FAKE_DIRECT_PR"; exit 0; fi
 if [[ "$*" == *"api graphql"* ]]; then printf '%s\\n' "$FAKE_METADATA"; exit 0; fi
 if [[ "$*" == *"/branches-where-head"* ]]; then printf '%s\\n' "$FAKE_BRANCH_HEADS"; exit 0; fi
 if [[ "$*" == *"/compare/"* ]]; then printf '%s\\n' "behind"; exit 0; fi
@@ -332,6 +343,22 @@ exit 64
       ...process.env,
       FAKE_BRANCH_HEADS: (params.branchHeads ?? ["release/2026.7.1"]).join("\n"),
       FAKE_METADATA: JSON.stringify(metadata),
+      FAKE_DIRECT_PR: JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: params.directPullRequest
+              ? {
+                  state: params.directPullRequest.state ?? "MERGED",
+                  baseRepository: {
+                    nameWithOwner: params.directPullRequest.baseRepository ?? "openclaw/openclaw",
+                  },
+                  mergeCommit: { oid: params.directPullRequest.mergeCommitOid ?? candidateSha },
+                  mergedBy: { login: params.directPullRequest.mergedBy ?? "release-maintainer" },
+                }
+              : null,
+          },
+        },
+      }),
       FAKE_PERMISSION: JSON.stringify({
         permission: params.permission === "admin" ? "admin" : "write",
         role_name: params.permission ?? "maintain",
@@ -364,7 +391,10 @@ describe("release Telegram QA workflow", () => {
       "timeout-minutes": 210,
     });
     expect(caller?.environment).toBeUndefined();
-    expect(caller?.["continue-on-error"]).toBeUndefined();
+    expect(caller?.outputs?.conclusion).toBe(
+      "${{ steps.dispatch.outputs.conclusion || steps.dispatch.outcome }}",
+    );
+    expect(caller?.["continue-on-error"]).toBe(true);
 
     const trusted = job("trusted_identity");
     expect(trusted).toMatchObject({
@@ -686,6 +716,55 @@ describe("release Telegram QA workflow", () => {
     ]);
   });
 
+  it("verifies an exact merged PR directly when commit associations are missing", () => {
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      for (const signature of ["web-flow", "missing"] as const) {
+        const result = runCandidateProvenance(provenanceBlock, {
+          candidateVersion: "2026.7.33",
+          targetContextRef: "extended-stable/2026.7.33",
+          signature,
+          messageHeadline: "fix(release): keep survivor sessions inside retention (#149710)",
+          directPullRequest: {},
+        });
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("Telegram candidate trust reason: release-branch-head");
+      }
+    }
+  });
+
+  it("never treats a commit's PR hint as release authorization", () => {
+    const cases = [
+      { label: "missing PR", directPullRequest: undefined },
+      { label: "open PR", directPullRequest: { state: "OPEN" } },
+      { label: "closed unmerged PR", directPullRequest: { state: "CLOSED" } },
+      { label: "foreign base repository", directPullRequest: { baseRepository: "fork/openclaw" } },
+      { label: "different merge SHA", directPullRequest: { mergeCommitOid: "b".repeat(40) } },
+      { label: "missing merger", directPullRequest: { mergedBy: "" } },
+      { label: "insufficient merger permission", permission: "write" as const },
+      { label: "invalid signature", signature: "invalid" as const },
+      { label: "open candidate head", openPr: true },
+      { label: "stale context branch", remoteSha: "b".repeat(40) },
+      { label: "wrong version", candidateVersion: "2026.8.33" },
+      { label: "no canonical PR suffix", messageHeadline: "claimed #149710 elsewhere" },
+      { label: "ambiguous existing associations", mergedPullRequests: [{}, {}] },
+    ];
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      for (const { label, ...params } of cases) {
+        const result = runCandidateProvenance(provenanceBlock, {
+          candidateVersion: "2026.7.33",
+          targetContextRef: "extended-stable/2026.7.33",
+          signature: "web-flow",
+          messageHeadline: "fixture (#149710)",
+          directPullRequest: {},
+          ...params,
+        });
+        expect(result.status, `${provenanceBlock.stepName}: ${label}: ${result.stderr}`).not.toBe(
+          0,
+        );
+      }
+    }
+  });
+
   it("keeps release provenance attribution fail-closed in both blocks", () => {
     for (const provenanceBlock of PROVENANCE_BLOCKS) {
       const cases = [
@@ -906,8 +985,10 @@ describe("release Telegram QA workflow", () => {
     const env = { ...process.env };
     delete env.OPENCLAW_QA_SUT_PREENTRY_STOP;
     expect(
-      spawnSync(process.execPath, ["--import", preloadPath, "-e", ""], { encoding: "utf8", env })
-        .status,
+      spawnSync(testNodeExecPath, ["--import", preloadPath, "-e", ""], {
+        encoding: "utf8",
+        env,
+      }).status,
     ).not.toBe(0);
   });
 
@@ -948,6 +1029,12 @@ describe("release Telegram QA workflow", () => {
     expect(createSut).toContain(
       '"$(stat -c \'%F:%a:%u:%g\' "$requested_config_path")" == "regular file:600:${SUT_UID}:${SUT_GID}"',
     );
+    expect(createSut).toContain('generation_dir="${RUNTIME_ROOT}/config-generations"');
+    expect(createSut).toContain('install -d -o root -g root -m 0700 "$generation_dir"');
+    expect(createSut).toContain('"regular file:600:0:0"');
+    expect(createSut).toContain('/usr/bin/setpriv --reuid="$SUT_UID" --regid="$SUT_GID"');
+    expect(createSut).toContain('export OPENCLAW_CONFIG_PATH="$projection_dir/openclaw.json"');
+    expect(createSut).toContain('"${OPENCLAW_STATE_DIR}/qa-runtime-config/openclaw.json") ;;');
   });
 
   it("does not defer Bash startup cleanup to the privileged launcher", () => {

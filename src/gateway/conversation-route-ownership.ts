@@ -10,6 +10,7 @@ import { listRouteBindings } from "../config/bindings.js";
 import { getConversationDeliveryOperation } from "../config/sessions/conversation-delivery-store.js";
 import {
   resolveConversation,
+  runConversationDatabaseWrite,
   type ConversationRecord,
   type ConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
@@ -326,29 +327,28 @@ export function assertConversationDeliveryAttemptAuthorized(params: {
   );
 }
 
-export function assertQueuedConversationDeliveryAttemptAuthorized(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  operationId: string;
-  storePath?: string;
-  routeFingerprint: string;
-}): void {
-  const scope = {
-    agentId: params.agentId,
-    ...(params.storePath ? { storePath: params.storePath } : {}),
-  };
-  const operation = getConversationDeliveryOperation(scope, params.operationId);
-  if (!operation) {
-    throw new PlatformMessageNotDispatchedError(
-      `Conversation delivery operation no longer exists: ${params.operationId}`,
-      { cause: undefined, retryable: false },
-    );
-  }
-  assertConversationDeliveryAttemptAuthorized({
-    config: params.config,
-    agentId: params.agentId,
-    conversationRef: operation.conversationRef,
-    expectedRouteFingerprint: params.routeFingerprint,
-    scope,
+export async function assertQueuedConversationDeliveryAttemptAuthorized(
+  params: {
+    readCurrentConfig: () => OpenClawConfig;
+    operationId: string;
+    routeFingerprint: string;
+  },
+  capturedScope: ConversationRegistryScope,
+): Promise<void> {
+  await runConversationDatabaseWrite(capturedScope, (writeScope) => {
+    const operation = getConversationDeliveryOperation(writeScope, params.operationId);
+    if (!operation) {
+      throw new PlatformMessageNotDispatchedError(
+        `Conversation delivery operation no longer exists: ${params.operationId}`,
+        { cause: undefined, retryable: false },
+      );
+    }
+    assertConversationDeliveryAttemptAuthorized({
+      config: params.readCurrentConfig(),
+      agentId: writeScope.agentId,
+      conversationRef: operation.conversationRef,
+      expectedRouteFingerprint: params.routeFingerprint,
+      scope: writeScope,
+    });
   });
 }

@@ -74,31 +74,6 @@ export function gatewayContext(
   } as unknown as ApplicationContext<RouteId>;
 }
 
-export function deferred(): {
-  promise: Promise<void>;
-  resolve: () => void;
-  reject: (error: Error) => void;
-} {
-  let resolve: () => void = () => undefined;
-  let reject: (error: Error) => void = () => undefined;
-  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
-export function deferredValue<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-} {
-  let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 export async function settleCells(view: OpenClawBoardView): Promise<OpenClawBoardWidgetCell[]> {
   // Cells appear during the view's own update, and a cell can schedule a further update
   // while completing, so both levels drain to Lit's settled state. Anything less lets a

@@ -21,12 +21,14 @@ type TextAliasSpec = {
 };
 
 type CommandRegistryLookup = {
-  commands: ChatCommandDefinition[];
   aliases: Map<string, TextAliasSpec>;
   detection: CommandDetection;
 };
 
 let cachedRegistryLookup: CommandRegistryLookup | undefined;
+
+// Commands whose free-text argument becomes agent input keep every line and its spacing.
+const ARGUMENT_PRESERVING_COMMAND_KEYS = new Set(["goal", "steer"]);
 
 const TARGETED_COMMAND_BODY_RE =
   /^\/([^\s@]+)@([A-Za-z0-9_]+)(?=$|\s|[.!?！？…,，。;；:：'"’”)\]}])([\s\S]*)$/u;
@@ -46,14 +48,13 @@ function appendMultilineTail(head: string, tail: string | undefined, spec?: Text
 }
 
 function getCommandRegistryLookup(): CommandRegistryLookup {
-  const commands = getChatCommands();
-  if (cachedRegistryLookup?.commands === commands) {
+  if (cachedRegistryLookup) {
     return cachedRegistryLookup;
   }
   const aliases = new Map<string, TextAliasSpec>();
   const exact = new Set<string>();
   const patterns: string[] = [];
-  for (const command of commands) {
+  for (const command of getChatCommands()) {
     // Canonicalize to the primary text alias, not `/${key}`. Some command keys are
     // internal identifiers while the public text command is a dedicated alias.
     const canonical = normalizeOptionalString(command.textAliases[0]) || `/${command.key}`;
@@ -76,7 +77,6 @@ function getCommandRegistryLookup(): CommandRegistryLookup {
     }
   }
   cachedRegistryLookup = {
-    commands,
     aliases,
     detection: {
       exact,
@@ -88,22 +88,32 @@ function getCommandRegistryLookup(): CommandRegistryLookup {
 
 /** Normalizes command text to canonical aliases, removing bot mentions when appropriate. */
 export function normalizeCommandBody(raw: string, options?: CommandNormalizeOptions): string {
-  const trimmed = raw.trim();
+  const trimmed = options?.preserveArguments ? raw.trimStart() : raw.trim();
   if (!trimmed.startsWith("/")) {
     return trimmed;
   }
 
-  const newline = trimmed.indexOf("\n");
+  const commandAlias = trimmed.match(/^\/[^\s@:]+/u)?.[0]?.toLowerCase();
+  const commandSpec = commandAlias
+    ? getCommandRegistryLookup().aliases.get(commandAlias)
+    : undefined;
+  const preserveArguments =
+    options?.preserveArguments ||
+    (commandSpec !== undefined && ARGUMENT_PRESERVING_COMMAND_KEYS.has(commandSpec.command.key));
+  const newline = preserveArguments ? -1 : trimmed.indexOf("\n");
   const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
   const multilineTail = newline === -1 ? undefined : trimmed.slice(newline + 1).trimStart();
 
   // `/cmd: value` is accepted as `/cmd value` because some channels insert colon syntax.
-  const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:(.*)$/);
+  const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:([\s\S]*)$/);
   const normalized = colonMatch
     ? (() => {
         const [, command, rest] = colonMatch;
-        const normalizedRest = expectDefined(rest, "commands registry normalize rest").trimStart();
-        return normalizedRest ? `/${command} ${normalizedRest}` : `/${command}`;
+        const commandRest = expectDefined(rest, "commands registry normalize rest");
+        const normalizedRest = preserveArguments ? commandRest : commandRest.trimStart();
+        return normalizedRest
+          ? `/${command}${/^\s/.test(normalizedRest) ? "" : " "}${normalizedRest}`
+          : `/${command}`;
       })()
     : singleLine;
 
@@ -140,9 +150,11 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     return commandBody;
   }
   const normalizedRest = rest?.trimStart();
-  const normalizedHead = normalizedRest
-    ? `${tokenSpec.canonical} ${normalizedRest}`
-    : tokenSpec.canonical;
+  const normalizedHead = preserveArguments
+    ? `${tokenSpec.canonical}${commandBody.slice(tokenKey.length)}`
+    : normalizedRest
+      ? `${tokenSpec.canonical} ${normalizedRest}`
+      : tokenSpec.canonical;
   return appendMultilineTail(normalizedHead, multilineTail, tokenSpec);
 }
 

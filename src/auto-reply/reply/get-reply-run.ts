@@ -35,13 +35,20 @@ export async function runPreparedReply(
 
   const { acquireAgentRunPreparedModelRuntime } =
     await import("../../agents/prepared-model-runtime.js");
-  const lease = await acquireAgentRunPreparedModelRuntime(
+  await using lease = await acquireAgentRunPreparedModelRuntime(
     {
       config: dispatchRuntime.config,
       agentId: dispatchRuntime.agentId,
       agentDir: dispatchRuntime.agentDir,
       allowGatewaySubagentBinding: true,
       workspaceDir: context.workspaceDir,
+      runtimePluginSelections: [
+        {
+          provider: params.provider,
+          modelId: params.model,
+          runtime: context.thinkingRuntime,
+        },
+      ],
     },
     {
       catalogMode: "static",
@@ -52,7 +59,7 @@ export async function runPreparedReply(
   let leaseActive = true;
   try {
     return await withPreparedModelRuntimePluginGenerationScope(
-      dispatchRuntime.pluginGeneration,
+      lease.pluginGeneration,
       () =>
         withPluginRuntimeGenerationScope(lease.snapshot, () =>
           executePreparedReplyContext(context),
@@ -61,6 +68,5 @@ export async function runPreparedReply(
     );
   } finally {
     leaseActive = false;
-    lease.release();
   }
 }

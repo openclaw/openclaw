@@ -15,6 +15,7 @@ import {
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
+  SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -32,7 +33,7 @@ import { sendMessageSignal, sendTypingSignal } from "./send.js";
 
 const log = createSubsystemLogger("signal/approvals");
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type SignalPendingDelivery = ApprovalReactionPendingContent;
 type PreparedSignalApprovalTarget = {
   to: string;
@@ -94,7 +95,7 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
   true,
   SignalFinalPayload
 >({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
     isConfigured: ({ context }) => Boolean(context),
     shouldHandle: ({ context }) => Boolean(context),
@@ -212,11 +213,11 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     },
   },
   interactions: {
-    bindPending: ({ entry, request, view, pendingPayload }) => {
+    bindPending: async ({ entry, request, view, pendingPayload }) => {
       if (!entry.reactionsActive) {
         return null;
       }
-      return registerSignalApprovalReactionTarget({
+      return (await registerSignalApprovalReactionTarget({
         accountId: entry.accountId,
         conversationKey: entry.conversationKey,
         messageId: entry.messageId,
@@ -235,19 +236,19 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         },
         routeAllowed: true,
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
-      })
+      }))
         ? true
         : null;
     },
-    unbindPending: ({ entry }) => {
-      unregisterSignalApprovalReactionTarget({
+    unbindPending: async ({ entry }) => {
+      await unregisterSignalApprovalReactionTarget({
         accountId: entry.accountId,
         conversationKey: entry.conversationKey,
         messageId: entry.messageId,
       });
     },
-    cancelDelivered: ({ entry }) => {
-      unregisterSignalApprovalReactionTarget({
+    cancelDelivered: async ({ entry }) => {
+      await unregisterSignalApprovalReactionTarget({
         accountId: entry.accountId,
         conversationKey: entry.conversationKey,
         messageId: entry.messageId,

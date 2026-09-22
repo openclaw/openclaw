@@ -8,12 +8,26 @@ type PluginCliBackendEntry = CliBackendPlugin & {
   builtWithOpenClawVersion?: string;
 };
 
+type PluginCliBackendMetadata = Pick<
+  PluginCliBackendEntry,
+  "id" | "modelProvider" | "subscriptionAuthDispatch" | "pluginId"
+>;
+
 /** Resolves CLI backends from the active runtime plugin registry. */
-export function resolveRuntimeCliBackends(): PluginCliBackendEntry[] {
+export function resolveRuntimeCliBackends(mode: "metadata"): PluginCliBackendMetadata[];
+export function resolveRuntimeCliBackends(): PluginCliBackendEntry[];
+export function resolveRuntimeCliBackends(mode?: "metadata"): PluginCliBackendMetadata[] {
   return (getActiveRuntimePluginRegistry()?.cliBackends ?? []).map((entry) =>
-    Object.assign({}, entry.backend, {
-      pluginId: entry.pluginId,
-      builtWithOpenClawVersion: entry.builtWithOpenClawVersion,
-    }),
+    mode === "metadata"
+      ? {
+          id: entry.backend.id,
+          modelProvider: entry.backend.modelProvider,
+          subscriptionAuthDispatch: entry.backend.subscriptionAuthDispatch,
+          pluginId: entry.pluginId,
+        }
+      : Object.assign({}, entry.backend, {
+          pluginId: entry.pluginId,
+          builtWithOpenClawVersion: entry.builtWithOpenClawVersion,
+        }),
   );
 }

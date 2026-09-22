@@ -4,14 +4,17 @@ import {
   invokeNativeHookRelay,
   nativeHookRelayTesting,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import * as relayRuntime from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import {
   createAdmittedHostCapabilityTestFixture,
   createMockPluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import { createCodexNativeHookRelay } from "./native-hook-relay.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
   createParams,
@@ -23,10 +26,136 @@ import {
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
+import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt native hook relay retention", () => {
+  beforeEach(() => {
+    // Retention owns this clock; cold preparation must not consume the execution budget.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  });
+
+  it.each([undefined, "callback cancelled"])(
+    "releases abandoned admission capacity while preserving duplicate waiters and retained children (reason: %s)",
+    async (abortReason) => {
+      const host = await createAdmittedHostCapabilityTestFixture({
+        runId: "admission-cancellation",
+      });
+      const source = new AbortController();
+      const admissionWaits = new Map<string, Promise<unknown>[]>();
+      const register = relayRuntime.registerNativeHookRelayForBundledRuntime;
+      vi.spyOn(relayRuntime, "registerNativeHookRelayForBundledRuntime").mockImplementation(
+        (params) => {
+          const retention = params.retention;
+          if (!retention?.awaitForegroundAdmission) {
+            throw new Error("fixture admission missing");
+          }
+          const admit = retention.awaitForegroundAdmission;
+          return register({
+            ...params,
+            retention: {
+              ...retention,
+              awaitForegroundAdmission: (child, signal) => {
+                const waiting = admit(child, signal);
+                void waiting.catch(() => undefined);
+                admissionWaits.set(child, [...(admissionWaits.get(child) ?? []), waiting]);
+                return waiting;
+              },
+            },
+          });
+        },
+      );
+      const relay = createCodexNativeHookRelay({
+        options: { enabled: true },
+        events: ["pre_tool_use"],
+        agentId: undefined,
+        sessionId: "admission-cancellation",
+        sessionKey: undefined,
+        config: {},
+        runId: "admission-cancellation",
+        attemptTimeoutMs: 30_000,
+        startupTimeoutMs: 1_000,
+        turnStartTimeoutMs: 1_000,
+        loopDetectionPreToolUseRelay: false,
+        signal: source.signal,
+        hostCapabilities: host.hostCapabilities,
+        onPreToolUseFailure: () => {},
+      });
+      if (!relay) {
+        throw new Error("fixture relay missing");
+      }
+      const pending: Promise<unknown>[] = [];
+      const invoke = (child: string, signal?: AbortSignal) => {
+        const invocation = invokeNativeHookRelay(
+          {
+            provider: "codex",
+            relayId: relay.relayId,
+            generation: relay.generation,
+            event: "pre_tool_use",
+            rawPayload: {
+              agent_id: child,
+              tool_name: "Bash",
+              tool_input: { command: "echo fixture" },
+            },
+          },
+          signal,
+        );
+        void invocation.catch(() => undefined);
+        pending.push(invocation);
+        return invocation;
+      };
+      let releaseChild: (() => void) | undefined;
+      try {
+        await relay.ready;
+        const firstAbort = new AbortController();
+        const duplicateAbort = new AbortController();
+        const first = invoke("pending-0", firstAbort.signal);
+        const duplicate = invoke("pending-0", duplicateAbort.signal);
+        for (let i = 1; i < 32; i++) {
+          void invoke(`pending-${i}`);
+        }
+        // The rejected 33rd distinct child proves all earlier waits reached admission.
+        await expect(invoke("over-capacity")).rejects.toThrow("capacity reached");
+        expect(admissionWaits.get("pending-0")).toHaveLength(2);
+        firstAbort.abort(abortReason);
+        await expect(first).rejects.toThrow(/abort/i);
+        await expect(admissionWaits.get("pending-0")![0]).rejects.toBeInstanceOf(Error);
+        await expect(invoke("still-over-capacity")).rejects.toThrow("capacity reached");
+        duplicateAbort.abort();
+        await expect(duplicate).rejects.toThrow(/abort/i);
+        await Promise.allSettled(admissionWaits.get("pending-0")!);
+        const replacement = invoke("replacement-child");
+        await expect(invoke("capacity-control")).rejects.toThrow("capacity reached");
+        releaseChild = relay.claimDirectChild("replacement-child");
+        await expect(replacement).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+        relay.authorizeRetentionAfterSuccessfulYield();
+        relay.unregister();
+        await expect(invoke("replacement-child")).resolves.toEqual({
+          stdout: "",
+          stderr: "",
+          exitCode: 0,
+        });
+        releaseChild();
+        releaseChild = undefined;
+        await expect(invoke("replacement-child")).rejects.toThrow(/not found|inactive/);
+        expect(
+          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relay.relayId),
+        ).toBeUndefined();
+      } finally {
+        releaseChild?.();
+        relay.unregister();
+        source.abort();
+        await Promise.allSettled(pending);
+        await relay.drain();
+        await nativeHookRelayUnregisterQueue.flush();
+        host.closeHost();
+        host.closeAdmission();
+      }
+    },
+  );
+
   it.each([
     {
       name: "Codex multi-agent V1",
@@ -74,13 +203,20 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       const deferredTurnStart = new Promise<undefined>((resolve) => {
         resolveTurnStart = resolve;
       });
+      const turnStarted = createDeferred<void>();
       const harness = createStartedThreadHarness(async (method) => {
         if (method === "turn/start") {
+          turnStarted.resolve();
           return await deferredTurnStart;
         }
         return undefined;
       });
       const params = createParams(sessionFile, workspaceDir);
+      await attachSqliteSessionTarget(
+        params,
+        path.join(tempDir, `${childThreadId}-sessions.json`),
+        `${childThreadId}-session`,
+      );
       params.disableTools = false;
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.onAgentEvent = vi.fn();
@@ -105,7 +241,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       });
       let relayId: string | undefined;
       try {
-        await harness.waitForMethod("turn/start");
+        await turnStarted.promise;
         if (bindBeforeClaim) {
           resolveTurnStart?.(undefined);
           await new Promise<void>((resolve) => {
@@ -259,6 +395,20 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         const result = await run;
         expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, promptError: null });
         expect(result.runtimeContinuationStarted).toBe(hasDeliveryScope ? true : undefined);
+        const continuationHistory = await readCodexMirroredSessionHistoryMessages(
+          params,
+          undefined,
+          "model-context",
+        );
+        expect(continuationHistory?.filter((message) => message.role === "custom")).toEqual([
+          expect.objectContaining({
+            customType: "openclaw.sessions_yield",
+            content:
+              "Waiting for child\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]",
+            display: false,
+            details: { source: "sessions_yield", message: "Waiting for child" },
+          }),
+        ]);
         const terminalLifecycleEvents = (params.onAgentEvent as ReturnType<typeof vi.fn>).mock.calls
           .map(([event]) => event as { stream?: string; data?: Record<string, unknown> })
           .filter(
@@ -338,7 +488,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           },
         } as CodexServerNotification;
         await harness.notify(childTerminal);
-        nativeHookRelayUnregisterQueue.flush();
+        await nativeHookRelayUnregisterQueue.flush();
         expect(
           nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
         ).toBeUndefined();
@@ -355,6 +505,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           }),
         ).rejects.toThrow(/not found|inactive/);
       } finally {
+        resolveTurnStart?.(undefined);
         fixture.closeHost();
         fixture.closeAdmission();
       }
@@ -365,8 +516,18 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     const childThreadId = "child-failed-parent";
     const sessionFile = path.join(tempDir, `${childThreadId}-session.jsonl`);
     const workspaceDir = path.join(tempDir, `${childThreadId}-workspace`);
-    const harness = createStartedThreadHarness();
+    const turnStarted = createDeferred<void>();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        turnStarted.resolve();
+      }
+    });
     const params = createParams(sessionFile, workspaceDir);
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, `${childThreadId}-sessions.json`),
+      `${childThreadId}-session`,
+    );
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
@@ -382,7 +543,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
     });
     try {
-      await harness.waitForMethod("turn/start");
+      await turnStarted.promise;
       const startRequest = harness.requests.find((request) => request.method === "thread/start");
       const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
       await harness.notify({
@@ -458,6 +619,12 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
 
       const result = await run;
       expect(readAttemptTerminal(result).promptError).toContain("parent failed after yielding");
+      const continuationHistory = await readCodexMirroredSessionHistoryMessages(
+        params,
+        undefined,
+        "model-context",
+      );
+      expect(continuationHistory?.filter((message) => message.role === "custom")).toEqual([]);
       expect(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
       ).toBeUndefined();

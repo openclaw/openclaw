@@ -158,12 +158,12 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
 // Delegated token storage / resolution
 // ---------------------------------------------------------------------------
 
-export function loadDelegatedTokens(): MSTeamsDelegatedTokens | undefined {
+export function loadDelegatedTokens(): Promise<MSTeamsDelegatedTokens | undefined> {
   return loadMSTeamsDelegatedTokens();
 }
 
-export function saveDelegatedTokens(tokens: MSTeamsDelegatedTokens): void {
-  saveMSTeamsDelegatedTokens(tokens);
+export function saveDelegatedTokens(tokens: MSTeamsDelegatedTokens): Promise<void> {
+  return saveMSTeamsDelegatedTokens(tokens);
 }
 
 export async function resolveDelegatedAccessToken(params: {
@@ -171,7 +171,7 @@ export async function resolveDelegatedAccessToken(params: {
   clientId: string;
   clientSecret: string;
 }): Promise<string | undefined> {
-  const tokens = loadDelegatedTokens();
+  const tokens = await loadDelegatedTokens();
   if (!tokens) {
     return undefined;
   }
@@ -190,7 +190,7 @@ export async function resolveDelegatedAccessToken(params: {
       refreshToken: tokens.refreshToken,
       scopes: tokens.scopes,
     });
-    saveDelegatedTokens(refreshed);
+    await saveDelegatedTokens(refreshed);
     return refreshed.accessToken;
   } catch {
     return undefined;

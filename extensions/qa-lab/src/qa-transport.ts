@@ -376,11 +376,12 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     timeoutMs?: number;
     pollIntervalMs?: number;
   }) => Promise<void>;
-  abstract buildAgentDelivery: (params: { target: string }) => {
+  abstract buildAgentDelivery: (params: { target: string; threadId?: string }) => {
     channel: string;
     to?: string;
     replyChannel: string;
     replyTo: string;
+    threadId?: string;
   };
   abstract handleAction: (params: {
     action: QaTransportActionName;
@@ -510,6 +511,7 @@ export function createQaStateBackedTransportAdapter(
       ? { createRuntimeEnvPatch: params.createRuntimeEnvPatch }
       : {}),
     ...(params.prepareFlow ? { prepareFlow: params.prepareFlow } : {}),
+    ...(params.captureArtifacts ? { captureArtifacts: params.captureArtifacts } : {}),
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
     ...(params.cleanupAfterGatewayStop
       ? { cleanupAfterGatewayStop: params.cleanupAfterGatewayStop }

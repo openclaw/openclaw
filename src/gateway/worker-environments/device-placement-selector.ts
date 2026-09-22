@@ -16,6 +16,8 @@ export async function selectDevicePlacementCandidates(params: {
   requirement: DevicePlacementRequirement | undefined;
   runtimeId: string;
   config: OpenClawConfig;
+  getPendingDispatchCount?: (deviceId: string) => number;
+  getAdmittedSessionCounts?: () => ReadonlyMap<string, number> | undefined;
 }): Promise<DevicePlacementSelection> {
   const { requirement } = params;
   if (!requirement) {
@@ -74,21 +76,37 @@ export async function selectDevicePlacementCandidates(params: {
         });
         return {
           deviceId,
+          totalSlots: eligibility.ok ? eligibility.node.workerHost.capacity.total : 0,
           availableSlots: eligibility.ok
-            ? eligibility.availableSlots
+            ? Math.max(
+                0,
+                eligibility.availableSlots - (params.getPendingDispatchCount?.(deviceId) ?? 0),
+              )
             : (node.workerSlots?.available ?? 0),
           eligibility,
         };
       }),
   );
+  const admittedSessions = requirement.consumesWorkerSlot
+    ? params.getAdmittedSessionCounts?.()
+    : undefined;
   const candidates = attempts
-    .filter((attempt) => attempt.eligibility.ok)
-    .map(({ deviceId, availableSlots }) => ({ deviceId, availableSlots }))
+    .filter(
+      (attempt) =>
+        attempt.eligibility.ok && (!requirement.consumesWorkerSlot || attempt.availableSlots > 0),
+    )
     .toSorted(
       (left, right) =>
+        // Admitted turns include work preparing its first physical launch. This is
+        // a placement preference, never another physical-capacity reservation.
+        (requirement.consumesWorkerSlot
+          ? (admittedSessions?.get(left.deviceId) ?? 0) * right.totalSlots -
+            (admittedSessions?.get(right.deviceId) ?? 0) * left.totalSlots
+          : 0) ||
         (requirement.consumesWorkerSlot ? right.availableSlots - left.availableSlots : 0) ||
         left.deviceId.localeCompare(right.deviceId),
-    );
+    )
+    .map(({ deviceId, availableSlots }) => ({ deviceId, availableSlots }));
 
   if (candidates.length > 0) {
     return { ok: true, candidates };

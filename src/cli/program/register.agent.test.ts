@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   agentCliCommandMock: vi.fn(),
   agentExecCommandMock: vi.fn(),
   agentsAddCommandMock: vi.fn(),
+  agentsTeamCreateCommandMock: vi.fn(),
   agentsBindingsCommandMock: vi.fn(),
   agentsBindCommandMock: vi.fn(),
   agentsDeleteCommandMock: vi.fn(),
@@ -48,6 +49,10 @@ vi.mock("../../commands/agents.commands.add.js", () => ({
   agentsAddCommand: mocks.agentsAddCommandMock,
 }));
 
+vi.mock("../../commands/agents.commands.team.js", () => ({
+  agentsTeamCreateCommand: mocks.agentsTeamCreateCommandMock,
+}));
+
 vi.mock("../../commands/agents.commands.bind.js", () => ({
   agentsBindingsCommand: mocks.agentsBindingsCommandMock,
   agentsBindCommand: mocks.agentsBindCommandMock,
@@ -70,7 +75,8 @@ vi.mock("../../global-state.js", () => ({
   setVerbose: mocks.setVerboseMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -213,7 +219,7 @@ describe("agent command registration", () => {
       "--cwd",
       "/tmp/project",
       "--model",
-      "openai/gpt-5.6-sol",
+      "openai/gpt-5.6-luna",
       "--code-mode",
       "code",
       "--local-model-lean",
@@ -229,7 +235,7 @@ describe("agent command registration", () => {
       "fix it",
       expect.objectContaining({
         cwd: "/tmp/project",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-5.6-luna",
         codeMode: "code",
         localModelLean: true,
         fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
@@ -265,12 +271,12 @@ describe("agent command registration", () => {
   });
 
   it("accepts parent options before the nested exec command", async () => {
-    await runCli(["agent", "--model", "openai/gpt-5.6-sol", "exec", "fix it", "--json"]);
+    await runCli(["agent", "--model", "openai/gpt-5.6-luna", "exec", "fix it", "--json"]);
 
     expect(agentCliCommandMock).not.toHaveBeenCalled();
     expect(agentExecCommandMock).toHaveBeenCalledWith(
       "fix it",
-      expect.objectContaining({ model: "openai/gpt-5.6-sol", json: true }),
+      expect.objectContaining({ model: "openai/gpt-5.6-luna", json: true }),
       runtime,
     );
   });
@@ -341,6 +347,56 @@ describe("agent command registration", () => {
     expect(flags).toEqual({ hasAutomationFlags: false });
   });
 
+  it("keeps role creation interactive unless automation flags are explicit", async () => {
+    await runCli(["agents", "add", "editor", "--role", "writer", "--json"]);
+    expect(agentsAddCommandMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        name: "editor",
+        role: "writer",
+        json: true,
+        nonInteractive: false,
+      }),
+      runtime,
+      { hasAutomationFlags: false },
+    );
+    await runCli(["agents", "add", "editor", "--role", "writer", "--non-interactive"]);
+    expect(agentsAddCommandMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ role: "writer", nonInteractive: true }),
+      runtime,
+      { hasAutomationFlags: true },
+    );
+  });
+
+  it("parses team creation and forwards explicit coordinator and workspace choices", async () => {
+    await runCli([
+      "agents",
+      "team",
+      "create",
+      "--preset",
+      "team",
+      "--coordinator",
+      "lead",
+      "--prefix",
+      "docs",
+      "--workspace-root",
+      "/tmp/team",
+      "--non-interactive",
+      "--json",
+    ]);
+    expect(mocks.agentsTeamCreateCommandMock).toHaveBeenCalledWith(
+      {
+        preset: "team",
+        coordinator: "lead",
+        prefix: "docs",
+        workspaceRoot: "/tmp/team",
+        nonInteractive: true,
+        json: true,
+      },
+      runtime,
+    );
+    expect(agentsListCommandMock).not.toHaveBeenCalled();
+  });
+
   it("runs agents list when root agents command is invoked", async () => {
     await runCli(["agents"]);
     expect(agentsListCommandMock).toHaveBeenCalledWith({}, runtime);
@@ -389,6 +445,15 @@ describe("agent command registration", () => {
       },
       runtime,
     );
+  });
+
+  it("documents set-identity --workspace as a locator", () => {
+    const program = new Command();
+    registerAgentsCommands(program);
+    const agents = program.commands.find((command) => command.name() === "agents");
+    const setIdentity = agents?.commands.find((command) => command.name() === "set-identity");
+    const help = setIdentity?.helpInformation() ?? "";
+    expect(help.replace(/\s+/g, " ")).toContain("does not change the stored workspace");
   });
 
   it("documents bind accountId resolution behavior in help text", () => {

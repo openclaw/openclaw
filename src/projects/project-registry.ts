@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
-import type { Selectable } from "kysely";
+import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { insideGitCheckout, runGit } from "../agents/worktrees/git.js";
-import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   executeSqliteQuerySync,
@@ -17,151 +15,31 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { withProjectCheckoutLifecycle } from "./project-checkout.js";
+import { registerResolvedProject } from "./project-registration.js";
 import {
-  type OpenClawStateLeaseContext,
-  withOpenClawStateLease,
-} from "../state/openclaw-state-lease.js";
+  ensureProjectRegistrySchema,
+  rowToProject,
+  type ProjectRegistryIdentity,
+  type ProjectRegistryRecord,
+} from "./project-registry.kernel.js";
 
-export type ProjectRegistryRecord = {
-  id: string;
-  displayName: string;
-  repoRoot: string;
-  originUrl?: string;
-  source: "workspace" | "registered" | "cloned";
-  agentId?: string;
-};
+export type { ProjectRegistryRecord } from "./project-registry.kernel.js";
+export {
+  ProjectCheckoutError,
+  resolveProjectCheckout,
+  resolveProjectDirectory,
+} from "./project-checkout.js";
 
 type ProjectsDatabase = Pick<OpenClawStateKyselyDatabase, "projects">;
-type ProjectRow = Selectable<OpenClawStateKyselyDatabase["projects"]>;
-
-const ensuredDatabases = new WeakSet<DatabaseSync>();
-const PROJECT_ID_MAX_LENGTH = 64;
-const PROJECT_CHECKOUT_LEASE_MS = 30_000;
-const PROJECT_CHECKOUT_WAIT_MS = 30_000;
-const PROJECTS_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS projects (
-  id TEXT NOT NULL PRIMARY KEY,
-  display_name TEXT NOT NULL,
-  repo_root TEXT NOT NULL,
-  origin_url TEXT,
-  source TEXT NOT NULL CHECK (source IN ('registered', 'cloned')),
-  created_at_ms INT NOT NULL,
-  updated_at_ms INT NOT NULL
-) STRICT;
-`;
-
-export class ProjectCheckoutError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ProjectCheckoutError";
-  }
-}
-
-function ensureProjectRegistrySchema(options: OpenClawStateDatabaseOptions = {}): void {
-  const database = openOpenClawStateDatabase(options);
-  if (ensuredDatabases.has(database.db)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; project rows use Kysely below.
-      db.exec(PROJECTS_SCHEMA_SQL);
-    },
-    options,
-    { operationLabel: "projects.registry.schema.ensure" },
-  );
-  ensuredDatabases.add(database.db);
-}
 
 function openProjectsDatabase(options: OpenClawStateDatabaseOptions = {}) {
   ensureProjectRegistrySchema(options);
   const state = openOpenClawStateDatabase(options);
   return { sqlite: state.db, kysely: getNodeSqliteKysely<ProjectsDatabase>(state.db) };
-}
-
-function rowToProject(row: ProjectRow): ProjectRegistryRecord {
-  return {
-    id: row.id,
-    displayName: row.display_name,
-    repoRoot: row.repo_root,
-    ...(row.origin_url ? { originUrl: row.origin_url } : {}),
-    source: row.source as "registered" | "cloned",
-  };
-}
-
-function insertProjectRegistry(
-  input: {
-    displayName: string;
-    repoRoot: string;
-    originUrl?: string;
-    source: "registered" | "cloned";
-  },
-  options: OpenClawStateDatabaseOptions,
-  lease: OpenClawStateLeaseContext,
-): ProjectRegistryRecord {
-  ensureProjectRegistrySchema(options);
-  return runOpenClawStateWriteTransaction(
-    ({ db: sqlite }) => {
-      lease.assertOwnedInTransaction(sqlite);
-      const db = getNodeSqliteKysely<ProjectsDatabase>(sqlite);
-      const sameRoot = executeSqliteQueryTakeFirstSync(
-        sqlite,
-        db.selectFrom("projects").selectAll().where("repo_root", "=", input.repoRoot),
-      );
-      if (sameRoot) {
-        return rowToProject(sameRoot);
-      }
-      if (input.source === "cloned" && input.originUrl) {
-        const duplicate = executeSqliteQueryTakeFirstSync(
-          sqlite,
-          db.selectFrom("projects").selectAll().where("origin_url", "=", input.originUrl),
-        );
-        if (duplicate) {
-          return rowToProject(duplicate);
-        }
-      }
-      const existing = new Set(
-        executeSqliteQuerySync(sqlite, db.selectFrom("projects").select("id")).rows.map(
-          (row) => row.id,
-        ),
-      );
-      const baseId = slugifyWorktreeTitle(input.displayName) ?? "project";
-      const id = allocateProjectId(baseId, existing);
-      const now = Date.now();
-      const row = {
-        id,
-        display_name: input.displayName,
-        repo_root: input.repoRoot,
-        origin_url: input.originUrl ?? null,
-        source: input.source,
-        created_at_ms: now,
-        updated_at_ms: now,
-      };
-      executeSqliteQuerySync(sqlite, db.insertInto("projects").values(row));
-      return rowToProject(row);
-    },
-    options,
-    { operationLabel: "projects.registry.insert" },
-  );
-}
-
-export async function withProjectCheckoutLifecycle<T>(
-  repoRoot: string,
-  options: OpenClawStateDatabaseOptions,
-  run: (lease: OpenClawStateLeaseContext) => Promise<T>,
-): Promise<T> {
-  return await withOpenClawStateLease(
-    {
-      scope: "projects.checkout",
-      key: repoRoot,
-      database: { scope: "shared", options },
-      leaseMs: PROJECT_CHECKOUT_LEASE_MS,
-      waitMs: PROJECT_CHECKOUT_WAIT_MS,
-      leaseLabel: "project checkout lease",
-      operationLabel: "projects.checkout.lease",
-    },
-    run,
-  );
 }
 
 function workspaceProject(cfg: OpenClawConfig, agentId: string): ProjectRegistryRecord {
@@ -184,109 +62,32 @@ function compareProjects(left: ProjectRegistryRecord, right: ProjectRegistryReco
   return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
 }
 
-function allocateProjectId(base: string, existing: ReadonlySet<string>): string {
-  if (!existing.has(base)) {
-    return base;
-  }
-  for (let suffixNumber = 2; ; suffixNumber += 1) {
-    const suffix = `-${suffixNumber}`;
-    const candidate = `${base.slice(0, PROJECT_ID_MAX_LENGTH - suffix.length).replace(/-+$/u, "")}${suffix}`;
-    if (!existing.has(candidate)) {
-      return candidate;
-    }
-  }
-}
-
-export async function resolveProjectDirectory(projectPath: string): Promise<string> {
-  const requested = await fs.realpath(projectPath).catch(() => {
-    throw new ProjectCheckoutError(`project path does not exist: ${projectPath}`);
-  });
-  const stat = await fs.stat(requested).catch(() => null);
-  if (!stat?.isDirectory()) {
-    throw new ProjectCheckoutError(`project path is not a directory: ${projectPath}`);
-  }
-  return requested;
-}
-
-export async function resolveProjectCheckout(projectPath: string): Promise<{
-  path: string;
-  repoRoot: string;
-  originUrl?: string;
-}> {
-  const requested = await resolveProjectDirectory(projectPath);
-  if (!insideGitCheckout(requested)) {
-    throw new ProjectCheckoutError(`project path is not a git checkout: ${projectPath}`);
-  }
-  const rootResult = await runGit(requested, ["rev-parse", "--show-toplevel"]);
-  if (rootResult.code !== 0) {
-    throw new ProjectCheckoutError(`project path is not a git checkout: ${projectPath}`);
-  }
-  const repoRoot = await fs.realpath(rootResult.stdout.trim()).catch(() => {
-    throw new ProjectCheckoutError(`project checkout root is unavailable: ${projectPath}`);
-  });
-  const headResult = await runGit(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
-  if (headResult.code !== 0) {
-    throw new ProjectCheckoutError(`project checkout has no commits: ${projectPath}`);
-  }
-  const originResult = await runGit(repoRoot, ["config", "--get", "remote.origin.url"]);
-  const originUrl = originResult.code === 0 ? originResult.stdout.trim() : "";
-  return { path: requested, repoRoot, ...(originUrl ? { originUrl } : {}) };
-}
-
-async function registerResolvedProject(
-  input: {
-    path: string;
-    name?: string;
-    originUrl?: string;
-    source: "registered" | "cloned";
-  },
-  options: OpenClawStateDatabaseOptions = {},
-): Promise<ProjectRegistryRecord> {
-  const checkout = await resolveProjectCheckout(input.path);
-  const displayName = input.name?.trim() || path.basename(checkout.repoRoot) || "Project";
-  return await withProjectCheckoutLifecycle(checkout.repoRoot, options, async (lease) => {
-    // A deletion may have won the lease after the first canonicalization. Revalidate under the
-    // lifecycle owner so a stale registration cannot recreate a row for the removed checkout.
-    const current = await resolveProjectCheckout(checkout.repoRoot);
-    if (current.repoRoot !== checkout.repoRoot) {
-      throw new ProjectCheckoutError(`project checkout changed while registering: ${input.path}`);
-    }
-    return insertProjectRegistry(
-      {
-        displayName,
-        repoRoot: checkout.repoRoot,
-        originUrl: input.originUrl ?? checkout.originUrl,
-        source: input.source,
-      },
-      options,
-      lease,
-    );
-  });
-}
-
 export async function registerProjectRegistry(
   input: { path: string; name?: string },
-  options: OpenClawStateDatabaseOptions = {},
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<ProjectRegistryRecord> {
   return await registerResolvedProject({ ...input, source: "registered" }, options);
 }
 
-export async function registerClonedProjectRegistry(
-  input: { path: string; name: string; originUrl: string },
-  options: OpenClawStateDatabaseOptions = {},
-): Promise<ProjectRegistryRecord> {
-  return await registerResolvedProject({ ...input, source: "cloned" }, options);
+export function listWorkspaceProjects(cfg: OpenClawConfig): ProjectRegistryRecord[] {
+  return withAgentRosterFactsBatch(cfg, () =>
+    listAgentIds(cfg)
+      .map((agentId) => workspaceProject(cfg, agentId))
+      .toSorted(compareProjects),
+  );
 }
 
-export function listProjectRegistry(
+export async function listProjectRegistry(
   cfg: OpenClawConfig,
-  options: OpenClawStateDatabaseOptions = {},
-): ProjectRegistryRecord[] {
-  const { sqlite, kysely } = openProjectsDatabase(options);
-  const stored = executeSqliteQuerySync(sqlite, kysely.selectFrom("projects").selectAll()).rows.map(
-    rowToProject,
-  );
-  const workspaces = listAgentIds(cfg).map((agentId) => workspaceProject(cfg, agentId));
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<ProjectRegistryRecord[]> {
+  const context = captureOpenClawStateWorkerContext(options);
+  const workspaces = listWorkspaceProjects(cfg);
+  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+  const stored = await executeOpenClawStateWorker(context, {
+    type: "projects.list",
+    input: undefined,
+  });
   return [...workspaces, ...stored].toSorted(compareProjects);
 }
 
@@ -359,36 +160,61 @@ export function removeProjectCheckoutReference(
   );
 }
 
+export async function resolveProjectCloneRefreshOwner(
+  project: ProjectRegistryIdentity,
+  lease: OpenClawStateLeaseContext,
+  context: OpenClawStateWorkerContext,
+): Promise<ProjectRegistryRecord | undefined> {
+  const { runWithOpenClawStateLeaseWorker } =
+    await import("../state/openclaw-state-worker-store.js");
+  return await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
+    scope.execute({
+      type: "projects.resolveRefreshOwner",
+      input: { project, lease: identity },
+    }),
+  );
+}
+
 export async function resolveRecordedProjectRoot(
   projectPath: string,
-  options: OpenClawStateDatabaseOptions = {},
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<string | undefined> {
+  const context = captureOpenClawStateWorkerContext(options);
   const repoRoot = await fs.realpath(projectPath).catch(() => undefined);
   if (!repoRoot) {
     return undefined;
   }
-  const { sqlite, kysely } = openProjectsDatabase(options);
-  const row = executeSqliteQueryTakeFirstSync(
-    sqlite,
-    kysely.selectFrom("projects").select("repo_root").where("repo_root", "=", repoRoot),
-  );
-  return row?.repo_root;
+  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+  return await executeOpenClawStateWorker(context, {
+    type: "projects.findRoot",
+    input: { repoRoot },
+  });
 }
 
-export function removeProjectRegistry(
-  id: string,
-  options: OpenClawStateDatabaseOptions = {},
-): boolean {
-  ensureProjectRegistrySchema(options);
-  return runOpenClawStateWriteTransaction(
-    ({ db: sqlite }) => {
-      const db = getNodeSqliteKysely<ProjectsDatabase>(sqlite);
-      return (
-        executeSqliteQuerySync(sqlite, db.deleteFrom("projects").where("id", "=", id))
-          .numAffectedRows === 1n
+export async function removeProjectRegistry(
+  project: ProjectRegistryRecord,
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<boolean> {
+  const selectedProject: ProjectRegistryIdentity = {
+    id: project.id,
+    repoRoot: project.repoRoot,
+    source: project.source,
+    originUrl: project.originUrl,
+  };
+  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
+  const context = captureOpenClawStateWorkerContext({ path: options.path, env });
+  return await withProjectCheckoutLifecycle(
+    selectedProject.repoRoot,
+    { path: context.admission.databasePath, env },
+    async (lease) => {
+      const { runWithOpenClawStateLeaseWorker } =
+        await import("../state/openclaw-state-worker-store.js");
+      return await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
+        scope.execute({
+          type: "projects.remove",
+          input: { project: selectedProject, lease: identity },
+        }),
       );
     },
-    options,
-    { operationLabel: "projects.registry.remove" },
   );
 }

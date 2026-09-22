@@ -1,13 +1,16 @@
-// Agent Plugin Gateway E2E proves installed portable bundles through a real dev gateway.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
-import { stopChild as stopProcessTree } from "./lib/gateway-bench-child.ts";
+import {
+  hasUnjoinedWork,
+  runManagedCommand,
+  signalExitCode,
+} from "./lib/managed-child-process.mts";
 
 const LABEL = "agent-plugin-gateway-e2e";
 const PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
@@ -15,11 +18,14 @@ const MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
 const GATEWAY_TOKEN = "agent-plugin-gateway-e2e";
 const MAX_LOG_BYTES = 128 * 1024;
 
+type ChildOutcome = { code: number } | { error: unknown };
+
 type CapturedChild = {
-  child: ChildProcessWithoutNullStreams;
   label: string;
-  stderr: string;
-  stdout: string;
+  output: { stderr: string; stdout: string };
+  completion: Promise<ChildOutcome>;
+  stop(): void;
+  readonly outcome: ChildOutcome | undefined;
 };
 
 type ResponsesPayload = {
@@ -52,111 +58,117 @@ async function freePort(): Promise<number> {
   });
 }
 
-function spawnCaptured(
+function startCaptured(
   command: string,
   args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; label: string },
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    label: string;
+    signal: AbortSignal;
+    onSignal: (received: NodeJS.Signals) => void;
+    timeoutMs?: number;
+  },
 ): CapturedChild {
-  const child = spawn(command, args, {
+  const output = { stderr: "", stdout: "" };
+  const stop = new AbortController();
+  let outcome: ChildOutcome | undefined;
+  const completion = runManagedCommand({
+    bin: command,
+    args,
     cwd: options.cwd,
-    detached: process.platform !== "win32",
     env: options.env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  child.stdin.end();
-  const captured: CapturedChild = {
-    child,
-    label: options.label,
-    stderr: "",
-    stdout: "",
-  };
-  captured.child.stdout?.on("data", (chunk: Buffer) => {
-    captured.stdout = appendBounded(captured.stdout, chunk);
-  });
-  captured.child.stderr?.on("data", (chunk: Buffer) => {
-    captured.stderr = appendBounded(captured.stderr, chunk);
-  });
-  return captured;
-}
-
-async function waitForExit(child: CapturedChild, timeoutMs = 120_000): Promise<void> {
-  if (child.child.exitCode !== null) {
-    if (child.child.exitCode !== 0) {
-      throw childFailure(child);
-    }
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      void stopChild(child).finally(() => {
-        reject(new Error(`${child.label} timed out after ${timeoutMs}ms`));
+    shell: false,
+    stdio: ["ignore", "pipe", "pipe"],
+    signal: AbortSignal.any([options.signal, stop.signal]),
+    onSignal: options.onSignal,
+    timeoutMs: options.timeoutMs,
+    timeoutKillGraceMs: 2_000,
+    signalKillGraceMs: 2_000,
+    abortKillGraceMs: 2_000,
+    cleanupDrainTimeoutMs: 1_000,
+    requireProcessTreeExit: process.platform !== "win32",
+    onReady(child) {
+      child.stdout?.on("data", (chunk: Buffer) => {
+        output.stdout = appendBounded(output.stdout, chunk);
       });
-    }, timeoutMs);
-    child.child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.child.once("exit", (code, signal) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(childFailure(child, code, signal));
-    });
-  });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        output.stderr = appendBounded(output.stderr, chunk);
+      });
+    },
+  }).then(
+    (code) =>
+      (outcome =
+        code === 0 ? { code } : { error: childFailure({ label: options.label, output }, code) }),
+    (error: unknown) => (outcome = { error }),
+  );
+  return {
+    label: options.label,
+    output,
+    completion,
+    stop: () => stop.abort(),
+    get outcome() {
+      return outcome;
+    },
+  };
 }
 
-function childFailure(child: CapturedChild, code = child.child.exitCode, signal?: string | null) {
+function childFailure(child: Pick<CapturedChild, "label" | "output">, code: number) {
   return new Error(
-    `${child.label} failed (exit ${code ?? "unknown"}${signal ? `, signal ${signal}` : ""})\n` +
-      (child.stderr || child.stdout || "<no output>"),
+    `${child.label} failed (exit ${code})\n` +
+      (child.output.stderr || child.output.stdout || "<no output>"),
   );
 }
 
-async function stopChild(child: CapturedChild | undefined): Promise<void> {
-  if (!child) {
-    return;
+function assertChildRunning(child: CapturedChild, signal: AbortSignal): void {
+  signal.throwIfAborted();
+  if (child.outcome) {
+    throw "error" in child.outcome ? child.outcome.error : childFailure(child, child.outcome.code);
   }
-  await stopProcessTree(child.child);
 }
 
-async function waitForHttp(url: string, child: CapturedChild, timeoutMs = 60_000): Promise<void> {
+async function waitForHttp(
+  url: string,
+  child: CapturedChild,
+  signal: AbortSignal,
+  timeoutMs = 60_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (child.child.exitCode !== null) {
-      throw childFailure(child);
-    }
+    assertChildRunning(child, signal);
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
+      const response = await fetch(url, {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(1_000)]),
+      });
+      signal.throwIfAborted();
       if (response.ok) {
         return;
       }
     } catch {
+      signal.throwIfAborted();
       // The service is still starting.
     }
-    await delay(100);
+    await delay(100, undefined, { signal });
   }
-  throw new Error(`${child.label} did not become ready at ${url}\n${child.stderr}`);
+  throw new Error(`${child.label} did not become ready at ${url}\n${child.output.stderr}`);
 }
 
 async function waitForOutputLine(
   child: CapturedChild,
   predicate: (line: string) => boolean,
+  signal: AbortSignal,
   timeoutMs = 30_000,
 ): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (child.child.exitCode !== null) {
-      throw childFailure(child);
-    }
-    const line = `${child.stdout}\n${child.stderr}`.split(/\r?\n/u).find(predicate);
+    assertChildRunning(child, signal);
+    const line = `${child.output.stdout}\n${child.output.stderr}`.split(/\r?\n/u).find(predicate);
     if (line) {
       return line;
     }
-    await delay(50);
+    await delay(50, undefined, { signal });
   }
-  throw new Error(`${child.label} did not emit the expected output\n${child.stderr}`);
+  throw new Error(`${child.label} did not emit the expected output\n${child.output.stderr}`);
 }
 
 async function writeFixture(pluginRoot: string): Promise<void> {
@@ -320,71 +332,97 @@ function responseText(payload: unknown): string {
     .join("\n");
 }
 
-async function main(): Promise<void> {
+async function main() {
+  const cancellation = new AbortController();
+  const signal = cancellation.signal;
+  const children: CapturedChild[] = [];
+  const failures: unknown[] = [];
+  const interruption = new Error(`${LABEL} interrupted`);
+  const handleSignal = (received?: NodeJS.Signals) => {
+    if (received === "SIGHUP") {
+      process.exitCode = signalExitCode(received);
+    }
+    // An external signal still fails the run after normal teardown has begun.
+    if (!failures.includes(interruption)) {
+      failures.push(interruption);
+    }
+    cancellation.abort(interruption);
+  };
+  process.on("SIGINT", handleSignal);
+  process.on("SIGTERM", handleSignal);
+  let rootDir: string | undefined;
+  const keep = process.env.OPENCLAW_AGENT_PLUGIN_GATEWAY_E2E_KEEP === "1";
   const repoRoot = path.resolve(import.meta.dirname, "..");
   const devRunnerPath = path.join(repoRoot, "scripts", "run-node.mjs");
   const entryPath = path.join(repoRoot, "dist", "index.js");
-  const rootDir = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-plugin-gateway-")),
-  );
-  const keep = process.env.OPENCLAW_AGENT_PLUGIN_GATEWAY_E2E_KEEP === "1";
-  const stateDir = path.join(rootDir, "state");
-  const configPath = path.join(stateDir, "openclaw.json");
-  const fixtureDir = path.join(rootDir, "weather-helper");
-  const workspaceDir = path.join(rootDir, "workspace");
-  const mockPort = await freePort();
-  let gatewayPort = await freePort();
-  while (gatewayPort === mockPort) {
-    gatewayPort = await freePort();
-  }
-  const childEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    OPENAI_API_KEY: "agent-plugin-gateway-e2e",
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_NO_RESPAWN: "1",
-    OPENCLAW_SKIP_CHANNELS: "1",
-    OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
-    OPENCLAW_STATE_DIR: stateDir,
-  };
-  let mock: CapturedChild | undefined;
-  let gateway: CapturedChild | undefined;
-  let install: CapturedChild | undefined;
-  const handleSignal = () => {
-    void stopChild(gateway);
-    void stopChild(mock);
-    void stopChild(install);
-  };
-  process.once("SIGINT", handleSignal);
-  process.once("SIGTERM", handleSignal);
-  try {
+  const result = await (async () => {
+    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-plugin-gateway-"));
+    rootDir = await fs.realpath(rootDir);
+    const stateDir = path.join(rootDir, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const fixtureDir = path.join(rootDir, "weather-helper");
+    const workspaceDir = path.join(rootDir, "workspace");
+    const mockPort = await freePort();
+    let gatewayPort = await freePort();
+    while (gatewayPort === mockPort) {
+      signal.throwIfAborted();
+      gatewayPort = await freePort();
+    }
+    signal.throwIfAborted();
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      OPENAI_API_KEY: "agent-plugin-gateway-e2e",
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_NO_RESPAWN: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
     await fs.mkdir(stateDir, { recursive: true });
     await fs.mkdir(workspaceDir, { recursive: true });
     await writeFixture(fixtureDir);
 
-    install = spawnCaptured(
+    const install = startCaptured(
       process.execPath,
-      [devRunnerPath, "plugins", "install", fixtureDir, "--force"],
-      { cwd: repoRoot, env: childEnv, label: "plugin install" },
+      [devRunnerPath, "plugins", "install", fixtureDir, "--force", "--accept-capabilities"],
+      {
+        cwd: repoRoot,
+        env: childEnv,
+        label: "plugin install",
+        signal,
+        onSignal: handleSignal,
+        timeoutMs: 120_000,
+      },
     );
-    await waitForExit(install);
+    children.push(install);
+    const installed = await install.completion;
+    if ("error" in installed) {
+      throw installed.error;
+    }
+    signal.throwIfAborted();
     await writeConfig({ configPath, gatewayPort, mockPort, workspaceDir });
 
-    mock = spawnCaptured(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
+    const mock = startCaptured(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
       cwd: repoRoot,
       env: { ...childEnv, MOCK_PORT: String(mockPort) },
       label: "mock OpenAI server",
+      signal,
+      onSignal: handleSignal,
     });
-    await waitForHttp(`http://127.0.0.1:${mockPort}/health`, mock);
+    children.push(mock);
+    await waitForHttp(`http://127.0.0.1:${mockPort}/health`, mock, signal);
 
-    gateway = spawnCaptured(
+    const gateway = startCaptured(
       process.execPath,
       [entryPath, "gateway", "--port", String(gatewayPort), "--bind", "loopback"],
-      { cwd: repoRoot, env: childEnv, label: "gateway" },
+      { cwd: repoRoot, env: childEnv, label: "gateway", signal, onSignal: handleSignal },
     );
-    await waitForHttp(`http://127.0.0.1:${gatewayPort}/health`, gateway, 120_000);
+    children.push(gateway);
+    await waitForHttp(`http://127.0.0.1:${gatewayPort}/health`, gateway, signal, 120_000);
     const startupLog = await waitForOutputLine(
       gateway,
       (line) => line.includes("http server listening (") && line.includes("weather-helper"),
+      signal,
     );
 
     const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1/responses`, {
@@ -402,7 +440,7 @@ async function main(): Promise<void> {
         max_output_tokens: 256,
         stream: false,
       }),
-      signal: AbortSignal.timeout(180_000),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(180_000)]),
     });
     const responseBody = await response.text();
     if (!response.ok) {
@@ -413,7 +451,7 @@ async function main(): Promise<void> {
       throw new Error(`unexpected final response: ${finalText || responseBody}`);
     }
 
-    const pluginOutput = `${install.stdout}\n${install.stderr}\n${gateway.stdout}\n${gateway.stderr}`;
+    const pluginOutput = `${install.output.stdout}\n${install.output.stderr}\n${gateway.output.stdout}\n${gateway.output.stderr}`;
     if (
       pluginOutput.includes("com.example.other") ||
       pluginOutput.includes("ignoring Agent Plugins")
@@ -441,35 +479,64 @@ async function main(): Promise<void> {
         `invalid probe launch contract: ${JSON.stringify({ expectedLaunch, launchPayload })}`,
       );
     }
-    process.stdout.write(
-      `${JSON.stringify(
-        {
-          ok: true,
-          finalText,
-          installedPlugin,
-          launchMarker,
-          startupLog,
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    signal.throwIfAborted();
+    return { ok: true, finalText, installedPlugin, launchMarker, startupLog };
+  })().then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  if ("error" in result && !failures.includes(result.error)) {
+    failures.push(result.error);
+  }
+  // Keep the mock available while the Gateway drains on ordinary completion or failure.
+  for (const child of children.toReversed()) {
+    child.stop();
+    const outcome = await child.completion;
+    if (
+      "error" in outcome &&
+      outcome.error !== signal.reason &&
+      !(
+        outcome.error instanceof Error &&
+        "code" in outcome.error &&
+        outcome.error.code === "ABORT_ERR"
+      ) &&
+      !failures.includes(outcome.error)
+    ) {
+      failures.push(outcome.error);
+    }
+  }
+  try {
+    if (rootDir) {
+      if (keep || failures.some(hasUnjoinedWork)) {
+        process.stderr.write(`[${LABEL}] retained fixture directory: ${rootDir}\n`);
+      } else {
+        await fs.rm(rootDir, { recursive: true, force: true });
+      }
+    }
+  } catch (error) {
+    failures.push(error);
   } finally {
     process.off("SIGINT", handleSignal);
     process.off("SIGTERM", handleSignal);
-    await stopChild(gateway);
-    await stopChild(mock);
-    await stopChild(install);
-    if (!keep) {
-      await fs.rm(rootDir, { recursive: true, force: true });
-    }
   }
+  if ("error" in result || failures.length > 0) {
+    throw failures.length === 1
+      ? failures[0]
+      : new AggregateError(failures, `${LABEL} failed, including child cleanup`);
+  }
+  return result.value;
 }
 
 try {
-  await main();
+  process.stdout.write(`${JSON.stringify(await main(), null, 2)}\n`);
 } catch (error) {
-  const message = error instanceof Error ? error.stack || error.message : String(error);
-  process.stderr.write(`${message}\n[${LABEL}] FAILED (exit 1)\n`);
-  process.exitCode = 1;
+  const message =
+    error instanceof AggregateError
+      ? formatErrorMessage(error, { redact: (text) => text })
+      : error instanceof Error
+        ? error.stack || error.message
+        : String(error);
+  const exitCode = Number(process.exitCode) || 1;
+  process.stderr.write(`${message}\n[${LABEL}] FAILED (exit ${exitCode})\n`);
+  process.exitCode = exitCode;
 }

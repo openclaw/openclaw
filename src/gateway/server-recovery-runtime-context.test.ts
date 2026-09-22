@@ -19,7 +19,7 @@ function createRecoveryRuntime(result: string) {
     ) => result,
   );
   const runtime: GatewayRecoveryRuntime = {
-    abortAgent: vi.fn(),
+    dispatchSessionMethod: vi.fn(),
     dispatchAgent: async <T = unknown>(
       params: AgentRunRequest,
       timeoutMs?: number,

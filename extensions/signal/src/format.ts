@@ -105,6 +105,10 @@ export function markdownToSignalTextChunks(
   options: SignalMarkdownOptions = {},
 ): SignalFormattedText[] {
   const ir = markdownToSignalIR(markdown, options);
+  // Signal uses public list markers; private source coordinates are only needed by block renderers.
+  if (ir.listItems && ir.text.length > limit) {
+    ir.listItems = ir.listItems.map((item) => ({ ...item }));
+  }
   return renderMarkdownIRChunksWithinLimit({
     ir,
     limit,

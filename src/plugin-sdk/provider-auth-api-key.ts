@@ -4,11 +4,11 @@
 export type { OpenClawConfig } from "../config/config.js";
 export type { SecretInput } from "../config/types.secrets.js";
 
+export { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 export {
-  upsertAuthProfile,
-  upsertAuthProfileWithLockOrThrow,
-} from "../agents/auth-profiles/profiles.js";
-export { upsertAuthProfileWithLockCompat as upsertAuthProfileWithLock } from "./provider-auth-write-compat.js";
+  upsertAuthProfileWithLockCompat as upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrowCompat as upsertAuthProfileWithLockOrThrow,
+} from "./provider-auth-write-compat.js";
 export {
   formatApiKeyPreview,
   normalizeApiKeyInput,

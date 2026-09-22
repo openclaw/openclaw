@@ -1,33 +1,122 @@
 // Verifies plugin registry behavior with runtime config inputs.
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  createLazyPluginRuntime,
+  runPluginRegisterSyncInRegistry,
+} from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { revokePluginRecord } from "./registry-lifecycle.js";
+import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRegistry } from "./registry.js";
+import { disposePluginRegistryInstances, withPluginRegistrationContext } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
-function createTestRegistry(runtime: PluginRuntime) {
-  return createPluginRegistry({
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
-    },
-    runtime,
-    activateGlobalSideEffects: false,
+describe("plugin registration runtime admission", () => {
+  function fixture() {
+    const list = vi.fn(async () => ({ nodes: [] }));
+    const runtime = createPluginRuntime();
+    runtime.nodes.list = list;
+    const builder = createPluginRegistry({
+      runtime,
+      activateGlobalSideEffects: false,
+      logger: { info() {}, warn() {}, error() {} },
+    });
+    const record = createPluginRecord({
+      id: "register-runtime",
+      source: "/plugins/register-runtime/index.js",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = builder.createApi(record, { config: {} });
+    const owner = expectDefined(getPluginInstance(record), "registration instance");
+    return { builder, record, api, owner, list };
+  }
+
+  it("allows the canonical synchronous registration call before publication", async () => {
+    const { builder, record, api, owner, list } = fixture();
+    let pending: ReturnType<PluginRuntime["nodes"]["list"]> | undefined;
+    try {
+      runPluginRegisterSyncInRegistry(
+        (registeredApi) => {
+          pending = registeredApi.runtime.nodes.list({ connected: true });
+        },
+        api,
+        builder.registry,
+        record.id,
+      );
+      await expect(pending).resolves.toEqual({ nodes: [] });
+      expect(list).toHaveBeenCalledExactlyOnceWith({ connected: true });
+      expect(builder.registry.plugins).toEqual([]);
+    } finally {
+      await owner.dispose();
+    }
   });
-}
+
+  it.each([false, true])(
+    "rejects registration metadata without its producer binding (admitted call: %s)",
+    async (admitted) => {
+      const { builder, record, api, owner, list } = fixture();
+      const invoke = () =>
+        withPluginRegistrationContext(builder.registry, record.id, () =>
+          api.runtime.nodes.list({ connected: true }),
+        );
+      try {
+        expect(() => (admitted ? owner.run(invoke) : invoke())).toThrow(
+          "runtime is no longer active",
+        );
+        expect(list).not.toHaveBeenCalled();
+      } finally {
+        await owner.dispose();
+      }
+    },
+  );
+
+  it.each(["revoked", "removed"])(
+    "rejects a retained runtime helper when its admitted instance is %s",
+    async (retirement) => {
+      const { builder, record, api, owner, list } = fixture();
+      builder.registry.plugins.push(record);
+      const retained = api.runtime.nodes.list;
+      const resume = createDeferredCore();
+      const pending = owner.run(async () => {
+        await resume.promise;
+        return withPluginRegistrationContext(builder.registry, record.id, () =>
+          retained({ connected: true }),
+        );
+      });
+      const rejected = expect(pending).rejects.toThrow("runtime is no longer active");
+      try {
+        if (retirement === "revoked") {
+          revokePluginRecord(builder.registry, record);
+        } else {
+          builder.rollbackPluginGlobalSideEffects(record.id, record);
+          builder.registry.plugins.splice(0, 1);
+        }
+        resume.resolve();
+        await rejected;
+        expect(list).not.toHaveBeenCalled();
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([pending, owner.dispose()]);
+      }
+    },
+  );
+});
 
 describe("plugin registry runtime config scope", () => {
   it("rejects a plugin harness that claims the built-in runtime id", () => {
-    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
     const record = createPluginRecord({
       id: "untrusted-plugin",
       source: "/plugins/untrusted-plugin/index.js",
@@ -70,8 +159,8 @@ describe("plugin registry runtime config scope", () => {
       origin: "global",
       packageName: "@openclaw/codex",
     },
-  ] as const)("binds native compaction to the $label Codex harness", (fixture) => {
-    const pluginRegistry = createTestRegistry(createPluginRuntime());
+  ] as const)("binds native compaction to the $label Codex harness", async (fixture) => {
+    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
     const record = createPluginRecord({
       id: "codex",
       source: fixture.source,
@@ -82,6 +171,7 @@ describe("plugin registry runtime config scope", () => {
     });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
     const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
+    const options = { nativeCompaction };
 
     api.registerAgentHarness(
       {
@@ -92,18 +182,34 @@ describe("plugin registry runtime config scope", () => {
           throw new Error("must not run");
         },
       },
-      { nativeCompaction },
+      options,
     );
 
     expect(pluginRegistry.registry.agentHarnesses).toHaveLength(1);
-    expect(pluginRegistry.registry.agentHarnesses[0]?.nativeCompaction).toBe(nativeCompaction);
-    expect(pluginRegistry.registry.agentHarnesses[0]?.harness).not.toHaveProperty("compactNative");
+    const registration = expectDefined(
+      pluginRegistry.registry.agentHarnesses[0],
+      "registered harness",
+    );
+    const compact = expectDefined(registration.nativeCompaction, "native compaction callback");
+    const request = {
+      sessionId: "native-compaction-session",
+      sessionFile: "/tmp/native-compaction/session",
+      workspaceDir: "/tmp/native-compaction",
+      nativeCompactionRequest: "required_preflight",
+    } satisfies Parameters<typeof compact>[0];
+    await expect(compact(request)).resolves.toEqual({ ok: true, compacted: true });
+    expect(nativeCompaction).toHaveBeenCalledWith(request);
+    expect(nativeCompaction.mock.contexts[0]).toBe(options);
+    expect(registration.harness).not.toHaveProperty("compactNative");
+    await expectDefined(getPluginInstance(record), "compaction owner").dispose();
+    expect(() => compact(request)).toThrow(/reloaded|disabled|retiring/);
+    expect(nativeCompaction).toHaveBeenCalledTimes(1);
   });
 
   it.each(["config", "global"] as const)(
     "rejects native compaction from a %s Codex impostor",
     (origin) => {
-      const pluginRegistry = createTestRegistry(createPluginRuntime());
+      const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
       const record = createPluginRecord({
         id: "codex",
         source: "/plugins/impostor/index.js",
@@ -138,7 +244,7 @@ describe("plugin registry runtime config scope", () => {
   );
 
   it("rejects native compaction from a foreign harness owner", () => {
-    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
     const record = createPluginRecord({
       id: "copilot",
       source: "/plugins/copilot/index.js",
@@ -173,7 +279,7 @@ describe("plugin registry runtime config scope", () => {
 
   it("resolves plugin API paths against the plugin root", () => {
     const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
-    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
     const record = createPluginRecord({
       id: "path-plugin",
       name: "Path Plugin",
@@ -198,7 +304,7 @@ describe("plugin registry runtime config scope", () => {
         throw new Error("Unable to resolve plugin runtime module; loader=/tmp/openclaw-loader.js");
       },
     });
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createPluginRecord({
       id: "diagnostic-plugin",
       name: "Diagnostic Plugin",
@@ -260,7 +366,7 @@ describe("plugin registry runtime config scope", () => {
     } satisfies PluginRuntime["config"];
     const runtime = createPluginRuntime();
     runtime.config = configRuntime;
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createPluginRecord({
       id: "legacy-plugin",
       name: "Legacy Plugin",
@@ -302,7 +408,7 @@ describe("plugin registry runtime config scope", () => {
       acquireScope = getPluginRuntimeGatewayRequestScope();
       return undefined;
     });
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createPluginRecord({
       id: "memory-provider",
       name: "Memory Provider",
@@ -321,63 +427,73 @@ describe("plugin registry runtime config scope", () => {
     expect(acquireScope).toMatchObject({ pluginId: "memory-provider" });
   });
 
-  it("runs node helpers with the owning plugin scope", async () => {
-    let listScope = getPluginRuntimeGatewayRequestScope();
-    let invokeScope = getPluginRuntimeGatewayRequestScope();
-    let duplexScope = getPluginRuntimeGatewayRequestScope();
-    const runtime = createPluginRuntime();
-    runtime.nodes = {
-      list: vi.fn(async () => {
-        listScope = getPluginRuntimeGatewayRequestScope();
-        return { nodes: [] };
-      }),
-      invoke: vi.fn(async () => {
-        invokeScope = getPluginRuntimeGatewayRequestScope();
-        return { ok: true };
-      }),
-      openDuplex: vi.fn(async () => {
-        duplexScope = getPluginRuntimeGatewayRequestScope();
-        return {
-          send: vi.fn(async () => {}),
-          onMessage: vi.fn(() => () => {}),
-          closed: Promise.resolve({ ok: true }),
-          close: vi.fn(),
-        };
-      }),
-    };
-    const pluginRegistry = createTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "google-meet",
-      name: "Google Meet",
-      source: "/plugins/google-meet/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+  it.each(["materialized", "lazy"] as const)(
+    "runs node helpers with the owning plugin scope (%s)",
+    async (mode) => {
+      let listScope = getPluginRuntimeGatewayRequestScope();
+      let invokeScope = getPluginRuntimeGatewayRequestScope();
+      let duplexScope = getPluginRuntimeGatewayRequestScope();
+      const nodes: PluginRuntime["nodes"] = {
+        list: vi.fn(async () => {
+          listScope = getPluginRuntimeGatewayRequestScope();
+          return { nodes: [] };
+        }),
+        invoke: vi.fn(async () => {
+          invokeScope = getPluginRuntimeGatewayRequestScope();
+          return { ok: true };
+        }),
+        openDuplex: vi.fn(async () => {
+          duplexScope = getPluginRuntimeGatewayRequestScope();
+          return {
+            send: vi.fn(async () => {}),
+            onMessage: vi.fn(() => () => {}),
+            closed: Promise.resolve({ ok: true }),
+            close: vi.fn(),
+          };
+        }),
+      };
+      const loadPluginModule = vi.fn((_modulePath: string): unknown => {
+        throw new Error("broad runtime should stay lazy during scoped node access");
+      });
+      const runtime =
+        mode === "lazy"
+          ? createLazyPluginRuntime({ loadPluginModule, runtimeOptions: { nodes } })
+          : createPluginRuntime({ nodes });
+      const pluginRegistry = createRuntimeTestRegistry(runtime);
+      const record = createPluginRecord({
+        id: "google-meet",
+        name: "Google Meet",
+        source: "/plugins/google-meet/index.js",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
-    await api.runtime.nodes.list({ connected: true });
-    await api.runtime.nodes.invoke({
-      nodeId: "node-1",
-      command: "browser.proxy",
-      scopes: ["operator.admin"],
-    });
-    await api.runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" });
+      await api.runtime.nodes.list({ connected: true });
+      await api.runtime.nodes.invoke({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        scopes: ["operator.admin"],
+      });
+      await api.runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" });
 
-    expect(listScope).toMatchObject({
-      pluginId: "google-meet",
-      pluginSource: "/plugins/google-meet/index.js",
-    });
-    expect(invokeScope).toMatchObject({
-      pluginId: "google-meet",
-      pluginSource: "/plugins/google-meet/index.js",
-    });
-    expect(duplexScope).toMatchObject({
-      pluginId: "google-meet",
-      pluginSource: "/plugins/google-meet/index.js",
-    });
-    expect(duplexScope?.pluginRegistry).toBe(pluginRegistry.registry);
-  });
+      expect(listScope).toMatchObject({
+        pluginId: "google-meet",
+        pluginSource: "/plugins/google-meet/index.js",
+      });
+      expect(invokeScope).toMatchObject({
+        pluginId: "google-meet",
+        pluginSource: "/plugins/google-meet/index.js",
+      });
+      expect(duplexScope).toMatchObject({
+        pluginId: "google-meet",
+        pluginSource: "/plugins/google-meet/index.js",
+      });
+      expect(duplexScope?.pluginRegistry).toBe(pluginRegistry.registry);
+      expect(loadPluginModule).not.toHaveBeenCalled();
+    },
+  );
 
   it("runs gateway requests with the owning plugin scope", async () => {
     let requestScope = getPluginRuntimeGatewayRequestScope();
@@ -389,7 +505,7 @@ describe("plugin registry runtime config scope", () => {
         return { ok: true } as T;
       },
     };
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createPluginRecord({
       id: "google-meet",
       name: "Google Meet",
@@ -429,7 +545,7 @@ describe("plugin registry runtime config scope", () => {
       },
     );
     runtime.agent.session.createSessionEntry = createSessionEntry;
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const ownerRecord = createPluginRecord({
       id: "codex-owner",
       source: "/plugins/codex-owner/index.js",
@@ -498,7 +614,7 @@ describe("plugin registry runtime config scope", () => {
       entry: { sessionId: "session-1", updatedAt: 1 },
     }));
     runtime.agent.session.createSessionEntry = createSessionEntry;
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createPluginRecord({
       id: "anthropic",
       source: "/plugins/anthropic/index.js",
@@ -563,7 +679,7 @@ describe("plugin registry runtime config scope", () => {
       entry: { sessionId: "session-1", updatedAt: 1 },
     }));
     runtime.agent.session.createSessionEntry = createSessionEntry;
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const record = createPluginRecord({
       id: "opencode",
       source: "/plugins/opencode/index.js",
@@ -608,409 +724,66 @@ describe("plugin registry runtime config scope", () => {
     ).rejects.toThrow("requires exactly one runtime owner");
   });
 
-  it("limits locked harness session mutation and execution to the harness owner", async () => {
-    const reservedKey = "agent:main:harness:codex:thread-1";
-    const ordinaryKey = "agent:main:ordinary";
-    const ordinaryAliasKey = "agent:main:ordinary-alias";
-    const ordinaryNoIdKey = "agent:main:ordinary-no-id";
-    const lockedNoIdKey = "agent:main:locked-no-id";
-    const lockedOrdinaryKey = "agent:main:ordinary-locked";
-    const legacyPrefixedKey = "agent:main:harness:notes";
-    const reservedEntry = {
-      sessionId: "reserved-session",
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: "reserved-session",
-        storePath: "/tmp/sessions.json",
-      }),
-      updatedAt: 1,
-      agentHarnessId: "codex",
-      modelSelectionLocked: true as const,
-    };
-    const ordinaryEntry = { sessionId: "ordinary-session", updatedAt: 1 };
-    const ordinaryAliasEntry = { sessionId: reservedEntry.sessionId, updatedAt: 1 };
-    const ordinaryNoIdEntry = { updatedAt: 1 };
-    const lockedNoIdEntry = {
-      updatedAt: 1,
-      agentHarnessId: "codex",
-      modelSelectionLocked: true as const,
-    };
-    const lockedOrdinaryEntry = {
-      sessionId: "locked-ordinary-session",
-      updatedAt: 1,
-      agentHarnessId: "codex",
-      modelSelectionLocked: true as const,
-    };
-    const legacyPrefixedEntry = {
-      sessionId: "legacy-prefixed-session",
-      updatedAt: 1,
-      agentHarnessId: "legacy-runtime",
-    };
-    const entries = {
-      [ordinaryAliasKey]: ordinaryAliasEntry,
-      [ordinaryNoIdKey]: ordinaryNoIdEntry,
-      [lockedNoIdKey]: lockedNoIdEntry,
-      [reservedKey]: reservedEntry,
-      [ordinaryKey]: ordinaryEntry,
-      [lockedOrdinaryKey]: lockedOrdinaryEntry,
-      [legacyPrefixedKey]: legacyPrefixedEntry,
-    };
-    const typedEntries = entries as unknown as Record<string, SessionEntry>;
-    const subagent = {
-      run: vi.fn(async () => ({ runId: "subagent-run" })),
-      waitForRun: vi.fn(async () => ({ status: "ok" as const })),
-      getSessionMessages: vi.fn(async () => ({ messages: [] })),
-      deleteSession: vi.fn(async () => {}),
-    } satisfies PluginRuntime["subagent"];
-    const runtime = createPluginRuntime({ subagent });
-    const session = runtime.agent.session;
-    session.getSessionEntry = vi.fn((params) => typedEntries[params.sessionKey]);
-    session.listSessionEntries = vi.fn(() =>
-      Object.entries(typedEntries).map(([sessionKey, entry]) => ({ sessionKey, entry })),
-    );
-    session.patchSessionEntry = vi.fn(async (params) => {
-      const entry = typedEntries[params.sessionKey];
-      if (!entry) {
-        return null;
-      }
-      const patch = await params.update(structuredClone(entry), {
-        existingEntry: structuredClone(entry),
-      });
-      return patch ? { ...entry, ...patch } : entry;
-    });
-    session.upsertSessionEntry = vi.fn(async () => {});
-    session.updateSessionStoreEntry = vi.fn(
-      async (params) => typedEntries[params.sessionKey] ?? null,
-    );
-    let admissionScope = getPluginRuntimeGatewayRequestScope();
-    session.runWithWorkAdmission = vi.fn(async (_params, run) => {
-      admissionScope = getPluginRuntimeGatewayRequestScope();
-      return await run(new AbortController().signal);
-    });
-    let embeddedRunScope = getPluginRuntimeGatewayRequestScope();
-    const runEmbeddedAgent = vi.fn(
-      async (params: Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0]) => {
-        if ("preparedRunAdmission" in params || "admittedRunContext" in params) {
-          throw new Error("Plugin embedded-agent execution cannot supply host run authority.");
+  it.each(["patchSessionEntry", "updateSessionStoreEntry"] as const)(
+    "rejects %s writes resumed after their plugin is replaced",
+    async (method) => {
+      let entry: SessionEntry = { sessionId: "session-1", updatedAt: 1, label: "before" };
+      const commitPatch = (patch: Partial<SessionEntry> | null) => {
+        if (patch) {
+          entry = { ...entry, ...patch };
         }
-        embeddedRunScope = getPluginRuntimeGatewayRequestScope();
-        return { ok: true };
-      },
-    ) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"];
-    Object.defineProperties(runtime.agent, {
-      runEmbeddedAgent: { configurable: true, value: runEmbeddedAgent },
-    });
-    const gatewayRequest = vi.fn(async () => ({ ok: true }));
-    runtime.gateway = {
-      isAvailable: vi.fn(async () => true),
-      request: gatewayRequest as unknown as PluginRuntime["gateway"]["request"],
-    };
+        return entry;
+      };
+      const runtime = createPluginRuntime();
+      runtime.agent.session.getSessionEntry = () => ({ ...entry });
+      runtime.agent.session.patchSessionEntry = async (params) =>
+        commitPatch(await params.update({ ...entry }, { existingEntry: { ...entry } }));
+      runtime.agent.session.updateSessionStoreEntry = async (params) =>
+        commitPatch(await params.update({ ...entry }));
+      const pluginRegistry = createRuntimeTestRegistry(runtime);
+      const recordParams = {
+        id: "session-editor",
+        source: "/plugins/session-editor/index.js",
+        origin: "global" as const,
+        enabled: true,
+        configSchema: false,
+      };
+      const record = createPluginRecord(recordParams);
+      const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+      const entered = createDeferredCore();
+      const resume = createDeferredCore<Partial<SessionEntry>>();
+      const scope = { sessionKey: "agent:main:ordinary", storePath: "/tmp/sessions.json" };
+      try {
+        const pending = api.runtime.agent.session[method]({
+          ...scope,
+          update: () => {
+            entered.resolve();
+            return resume.promise;
+          },
+        });
+        await entered.promise;
+        pluginRegistry.rollbackPluginGlobalSideEffects(record.id, record);
+        pluginRegistry.registry.plugins.splice(0, 1);
+        const replacementApi = pluginRegistry.createApi(createPluginRecord(recordParams), {
+          config: {} as OpenClawConfig,
+        });
+        const rejected = expect(pending).rejects.toThrow("runtime is no longer active");
+        resume.resolve({ label: "stale" });
+        await rejected;
+        expect(entry.label).toBe("before");
 
-    const pluginRegistry = createTestRegistry(runtime);
-    const ownerRecord = createPluginRecord({
-      id: "codex-owner",
-      source: "/plugins/codex-owner/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    const otherRecord = createPluginRecord({
-      id: "other-plugin",
-      source: "/plugins/other-plugin/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    const voiceRecord = createPluginRecord({
-      id: "voice-call",
-      source: "/plugins/voice-call/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
-    const otherApi = pluginRegistry.createApi(otherRecord, { config: {} as OpenClawConfig });
-    const voiceApi = pluginRegistry.createApi(voiceRecord, { config: {} as OpenClawConfig });
-    ownerApi.registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      delegatedExecutionPluginIds: ["voice-call"],
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw new Error("unused");
-      },
-    });
-    const runParams = {
-      sessionId: reservedEntry.sessionId,
-      sessionKey: reservedKey,
-      workspaceDir: "/tmp",
-      prompt: "continue",
-      timeoutMs: 1,
-      runId: "run-1",
-    } as Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0];
-    const delegatedRunParams = {
-      ...runParams,
-      agentId: "main",
-      agentHarnessId: "codex",
-      agentHarnessRuntimeOverride: "codex",
-      modelSelectionLocked: true,
-      sessionTarget: {
-        agentId: "main",
-        sessionId: reservedEntry.sessionId,
-        sessionKey: reservedKey,
-        storePath: "/tmp/sessions.json",
-      },
-    };
-    const forgedCollectionRunParams = {
-      ...runParams,
-      skillWorkshopCollectionReconcile: { approvedSkillNames: new Set(["forged"]) },
-    };
-
-    await expect(
-      ownerApi.runtime.agent.session.patchSessionEntry({
-        sessionKey: reservedKey,
-        update: () => ({ archivedAt: undefined }),
-      }),
-    ).resolves.toMatchObject(reservedEntry);
-    await expect(ownerApi.runtime.agent.runEmbeddedAgent(runParams)).resolves.toEqual({ ok: true });
-    await expect(
-      ownerApi.runtime.agent.runEmbeddedAgent(forgedCollectionRunParams),
-    ).resolves.toEqual({ ok: true });
-    expect(runEmbeddedAgent).toHaveBeenLastCalledWith({
-      ...runParams,
-      skillWorkshopCollectionReconcile: undefined,
-    });
-    await expect(
-      ownerApi.runtime.gateway.request("agent", {
-        sessionKey: reservedKey,
-        message: "continue",
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    let delegatedCallbackScope = getPluginRuntimeGatewayRequestScope();
-    await expect(
-      voiceApi.runtime.agent.session.runWithWorkAdmission(
-        { storePath: "/tmp/sessions.json", sessionKey: reservedKey },
-        async () => {
-          delegatedCallbackScope = getPluginRuntimeGatewayRequestScope();
-          return "admitted";
-        },
-      ),
-    ).resolves.toBe("admitted");
-    expect(admissionScope).toMatchObject({ pluginId: "codex-owner" });
-    expect(delegatedCallbackScope).toMatchObject({ pluginId: "voice-call" });
-    await expect(voiceApi.runtime.agent.runEmbeddedAgent(delegatedRunParams)).resolves.toEqual({
-      ok: true,
-    });
-    expect(embeddedRunScope).toMatchObject({ pluginId: "codex-owner" });
-    await expect(
-      voiceApi.runtime.agent.runEmbeddedAgent({
-        ...delegatedRunParams,
-        agentHarnessRuntimeOverride: "openclaw",
-      }),
-    ).rejects.toThrow("only with its exact persisted identity and harness");
-    await expect(
-      voiceApi.runtime.agent.session.patchSessionEntry({
-        sessionKey: reservedKey,
-        update: () => ({ label: "must stay owner-only" }),
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-
-    await expect(
-      otherApi.runtime.agent.session.patchSessionEntry({
-        sessionKey: reservedKey,
-        update: () => ({ archivedAt: undefined }),
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(otherApi.runtime.agent.runEmbeddedAgent(runParams)).rejects.toThrow(
-      'owned by plugin "codex-owner"',
-    );
-    await expect(
-      otherApi.runtime.agent.runEmbeddedAgent({
-        ...runParams,
-        sessionKey: undefined,
-      } as never),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      otherApi.runtime.agent.runEmbeddedAgent({
-        ...runParams,
-        sessionId: undefined,
-        sessionKey: undefined,
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: reservedEntry.sessionId,
-          storePath: "/tmp/sessions.json",
-        }),
-      } as never),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      otherApi.runtime.agent.runEmbeddedAgent({
-        ...runParams,
-        sessionId: undefined,
-        sessionKey: undefined,
-        sessionFile: ordinaryAliasKey,
-      } as never),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      otherApi.runtime.agent.runEmbeddedAgent({
-        ...runParams,
-        sessionId: undefined,
-        sessionKey: undefined,
-        sessionFile: ordinaryNoIdKey,
-      } as never),
-    ).resolves.toEqual({ ok: true });
-    await expect(
-      otherApi.runtime.agent.runEmbeddedAgent({
-        ...runParams,
-        sessionId: ordinaryEntry.sessionId,
-        sessionKey: ordinaryKey,
-        sessionFile: reservedEntry.sessionFile,
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      otherApi.runtime.agent.runEmbeddedAgent({
-        ...runParams,
-        agentId: "main",
-        sessionId: ordinaryEntry.sessionId,
-        sessionKey: ordinaryKey,
-        sessionFile: reservedEntry.sessionFile,
-        sessionTarget: {
-          agentId: "main",
-          sessionId: ordinaryEntry.sessionId,
-          sessionKey: ordinaryKey,
-          storePath: "/tmp/unrelated-sessions.json",
-        },
-      }),
-    ).rejects.toThrow("only with its exact session target identity");
-    await expect(
-      otherApi.runtime.subagent.run({ sessionKey: reservedKey, message: "continue" }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      otherApi.runtime.subagent.deleteSession({ sessionKey: reservedKey }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      otherApi.runtime.gateway.request("sessions.patch", {
-        key: reservedKey,
-        archived: true,
-        expectedSessionId: reservedEntry.sessionId,
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    const gatewayRequestCountBeforeBatch = gatewayRequest.mock.calls.length;
-    await expect(
-      otherApi.runtime.gateway.request("sessions.patchMany", {
-        targets: [
-          { key: ordinaryKey, expectedSessionId: ordinaryEntry.sessionId },
-          { key: reservedKey, expectedSessionId: reservedEntry.sessionId },
-        ],
-        patch: { archived: true },
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    expect(gatewayRequest).toHaveBeenCalledTimes(gatewayRequestCountBeforeBatch);
-    await expect(
-      otherApi.runtime.gateway.request("agent", {
-        sessionId: reservedEntry.sessionId,
-        message: "continue",
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      otherApi.runtime.agent.session.patchSessionEntry({
-        sessionKey: lockedOrdinaryKey,
-        update: () => ({ archivedAt: undefined }),
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      otherApi.runtime.agent.runEmbeddedAgent({
-        ...runParams,
-        sessionId: lockedOrdinaryEntry.sessionId,
-        sessionKey: lockedOrdinaryKey,
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      otherApi.runtime.gateway.request("agent", {
-        sessionKey: lockedOrdinaryKey,
-        message: "continue",
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-
-    await expect(
-      otherApi.runtime.agent.session.patchSessionEntry({
-        sessionKey: legacyPrefixedKey,
-        update: () => ({ label: "still ordinary" }),
-      }),
-    ).resolves.toMatchObject({ ...legacyPrefixedEntry, label: "still ordinary" });
-    await expect(
-      otherApi.runtime.agent.session.patchSessionEntry({
-        sessionKey: legacyPrefixedKey,
-        update: () => ({ agentHarnessId: "codex", modelSelectionLocked: true }),
-      }),
-    ).rejects.toThrow("does not match its reserved session key");
-    await expect(
-      otherApi.runtime.agent.session.upsertSessionEntry({
-        sessionKey: legacyPrefixedKey,
-        entry: { ...legacyPrefixedEntry, label: "still ordinary" },
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      otherApi.runtime.agent.session.upsertSessionEntry({
-        sessionKey: legacyPrefixedKey,
-        entry: {
-          ...legacyPrefixedEntry,
-          agentHarnessId: "codex",
-          modelSelectionLocked: true,
-        },
-      }),
-    ).rejects.toThrow("does not match its reserved session key");
-    await expect(
-      otherApi.runtime.agent.session.runWithWorkAdmission(
-        { storePath: "/tmp/sessions.json", sessionKey: legacyPrefixedKey },
-        async () => "admitted",
-      ),
-    ).resolves.toBe("admitted");
-    const ownershipChangedRun = vi.fn(async () => "must-not-run");
-    vi.mocked(session.getSessionEntry)
-      .mockImplementationOnce(() => legacyPrefixedEntry)
-      .mockImplementationOnce(() => reservedEntry);
-    await expect(
-      otherApi.runtime.agent.session.runWithWorkAdmission(
-        { storePath: "/tmp/sessions.json", sessionKey: legacyPrefixedKey },
-        ownershipChangedRun,
-      ),
-    ).rejects.toThrow("does not match its reserved session key");
-    expect(ownershipChangedRun).not.toHaveBeenCalled();
-    await expect(
-      otherApi.runtime.agent.session.updateSessionStoreEntry({
-        storePath: "/tmp/sessions.json",
-        sessionKey: legacyPrefixedKey,
-        update: () => ({ label: "still ordinary" }),
-      }),
-    ).resolves.toEqual(legacyPrefixedEntry);
-    await expect(
-      otherApi.runtime.agent.runEmbeddedAgent({
-        ...runParams,
-        sessionId: legacyPrefixedEntry.sessionId,
-        sessionKey: legacyPrefixedKey,
-      }),
-    ).resolves.toEqual({ ok: true });
-    await expect(
-      otherApi.runtime.subagent.deleteSession({ sessionKey: legacyPrefixedKey }),
-    ).resolves.toBeUndefined();
-    await expect(
-      otherApi.runtime.gateway.request("sessions.patch", {
-        key: legacyPrefixedKey,
-        archived: true,
-        expectedSessionId: legacyPrefixedEntry.sessionId,
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    await expect(
-      otherApi.runtime.agent.runEmbeddedAgent({
-        ...runParams,
-        sessionId: ordinaryEntry.sessionId,
-        sessionKey: ordinaryKey,
-      }),
-    ).resolves.toEqual({ ok: true });
-    await expect(
-      otherApi.runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
-    ).resolves.toEqual({ ok: true });
-  });
+        await expect(
+          replacementApi.runtime.agent.session[method]({
+            ...scope,
+            update: () => ({ label: "current" }),
+          }),
+        ).resolves.toMatchObject({ label: "current" });
+        expect(entry.label).toBe("current");
+      } finally {
+        resume.resolve({});
+        await getPluginInstance(record)?.dispose();
+        await disposePluginRegistryInstances(pluginRegistry.registry);
+      }
+    },
+  );
 });

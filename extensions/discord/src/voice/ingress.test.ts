@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockIngressInput = {
   accountId?: string;
@@ -22,10 +22,54 @@ vi.mock("../runtime.js", () => ({
 import { runDiscordVoiceAgentTurn } from "./ingress.js";
 
 describe("Discord voice ingress execution correlation", () => {
+  beforeEach(() => mocks.agentCommandFromIngress.mockClear());
+  it.each([false, true])(
+    "binds an owner voice command for its lifetime, including failure=%s",
+    async (fail) => {
+      const release = vi.fn();
+      const bindRun = vi.fn(() => release);
+      const entry = {
+        captureOnly: false,
+        sessionLifecycle: { status: "active" },
+        route: { agentId: "main", sessionKey: "agent:main:discord:voice:room" },
+      };
+      mocks.agentCommandFromIngress.mockImplementationOnce(async (input) => {
+        expect(bindRun).toHaveBeenCalledWith(expect.objectContaining({ runId: input.runId }));
+        expect(input.runId).toEqual(expect.any(String));
+        expect(release).not.toHaveBeenCalled();
+        if (fail) {
+          throw new Error("Agent turn failed");
+        }
+        return { payloads: [{ text: "Voice changed." }] };
+      });
+      const turn = runDiscordVoiceAgentTurn({
+        entry: entry as never,
+        accountId: "work",
+        userId: "owner",
+        message: "Change your voice",
+        cfg: {},
+        discordConfig: {},
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        context: { senderIsOwner: true, speakerLabel: "Owner" },
+        voiceSelection: { bindRun, unregister: vi.fn() },
+        fetchGuildName: vi.fn(async () => "Guild"),
+        speakerContext: {} as never,
+      });
+      if (fail) {
+        await expect(turn).rejects.toThrow("Agent turn failed");
+      } else {
+        await expect(turn).resolves.toMatchObject({ text: "Voice changed." });
+      }
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
   it("admits sequential same-session turns without inventing a public run id", async () => {
     const entry = {
       guildId: "guild-1",
       channelId: "channel-1",
+      captureOnly: false,
+      sessionLifecycle: { status: "active" },
       route: { agentId: "main", sessionKey: "agent:main:discord:channel:channel-1" },
     };
     const shared = {
@@ -36,6 +80,7 @@ describe("Discord voice ingress execution correlation", () => {
       discordConfig: {} as never,
       runtime: { log: vi.fn(), error: vi.fn() } as never,
       context: { senderIsOwner: false, speakerLabel: "Guest" },
+      voiceSelection: { bindRun: vi.fn(() => () => {}), unregister: vi.fn() },
       fetchGuildName: vi.fn(async () => "Guild"),
       speakerContext: {} as never,
     };
@@ -54,29 +99,47 @@ describe("Discord voice ingress execution correlation", () => {
     for (const input of inputs) {
       expect(input).not.toHaveProperty("runId");
     }
+    expect(shared.voiceSelection.bindRun).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])("preserves authenticated Discord speaker owner=%s", async (owner) => {
-    await runDiscordVoiceAgentTurn({
-      entry: {
-        guildId: "guild-1",
-        channelId: "channel-1",
-        route: { agentId: "main", sessionKey: "agent:main:discord:channel:channel-1" },
-      } as never,
-      accountId: "work",
-      userId: owner ? "owner-1" : "guest-1",
-      message: "run the tool",
-      cfg: {} as never,
-      discordConfig: {} as never,
-      runtime: { log: vi.fn(), error: vi.fn() } as never,
-      context: { senderIsOwner: owner, speakerLabel: owner ? "Owner" : "Guest" },
-      fetchGuildName: vi.fn(async () => "Guild"),
-      speakerContext: {} as never,
-    });
+  it.each([
+    { owner: true, state: "active", captureOnly: false },
+    { owner: false, state: "active", captureOnly: false },
+    { owner: false, state: "stopped", captureOnly: false },
+    { owner: false, state: "active", captureOnly: true },
+  ] as const)(
+    "dispatches only active conversational ingress (owner=$owner, state=$state, captureOnly=$captureOnly)",
+    async ({ owner, state, captureOnly }) => {
+      const callsBefore = mocks.agentCommandFromIngress.mock.calls.length;
+      const result = await runDiscordVoiceAgentTurn({
+        entry: {
+          guildId: "guild-1",
+          channelId: "channel-1",
+          captureOnly,
+          sessionLifecycle:
+            state === "active" ? { status: state } : { status: state, reason: "left" },
+          route: { agentId: "main", sessionKey: "agent:main:discord:channel:channel-1" },
+        } as never,
+        accountId: "work",
+        userId: owner ? "owner-1" : "guest-1",
+        message: "run the tool",
+        cfg: {} as never,
+        discordConfig: {} as never,
+        runtime: { log: vi.fn(), error: vi.fn() } as never,
+        context: { senderIsOwner: owner, speakerLabel: owner ? "Owner" : "Guest" },
+        fetchGuildName: vi.fn(async () => "Guild"),
+        speakerContext: {} as never,
+      });
 
-    expect(mocks.agentCommandFromIngress).toHaveBeenLastCalledWith(
-      expect.objectContaining({ messageChannel: "discord", senderIsOwner: owner }),
-      expect.anything(),
-    );
-  });
+      if (captureOnly || state !== "active") {
+        expect(result).toBeNull();
+        expect(mocks.agentCommandFromIngress).toHaveBeenCalledTimes(callsBefore);
+        return;
+      }
+      expect(mocks.agentCommandFromIngress).toHaveBeenLastCalledWith(
+        expect.objectContaining({ messageChannel: "discord", senderIsOwner: owner }),
+        expect.anything(),
+      );
+    },
+  );
 });

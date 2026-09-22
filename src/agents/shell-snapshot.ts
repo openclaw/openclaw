@@ -66,6 +66,7 @@ type ShellSnapshot = {
 };
 
 type ShellSnapshotWrapOptions = {
+  enabled?: boolean;
   command: string;
   shell: string;
   shellArgs: string[];
@@ -83,6 +84,7 @@ export async function maybeWrapCommandWithShellSnapshot(
   opts: ShellSnapshotWrapOptions,
 ): Promise<string> {
   if (
+    opts.enabled === false ||
     process.platform === "win32" ||
     isExecShellSnapshotDisabled(process.env) ||
     !isSupportedSnapshotShell(opts.shell, opts.shellArgs)

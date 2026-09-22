@@ -1,37 +1,21 @@
 // Memory Core plugin module implements dreaming shared behavior.
-import {
-  asNullableRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
-export function extractAssistantText(messages: unknown[]): string | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = asNullableRecord(messages[index]);
-    if (message?.role !== "assistant") {
-      continue;
-    }
-    if (typeof message.content === "string" && message.content.trim()) {
-      return message.content.trim();
-    }
-    if (Array.isArray(message.content)) {
-      const text = message.content
-        .flatMap((part) => {
-          const item = asNullableRecord(part);
-          return (item?.type === "text" || item?.type === "output_text") &&
-            typeof item.text === "string"
-            ? [item.text]
-            : [];
-        })
-        .join("\n")
-        .trim();
-      if (text) {
-        return text;
-      }
-    }
-  }
-  return null;
+export function formatRecallRepairDetails(repair: {
+  removedInvalidEntries: number;
+  removedDanglingEntries?: number;
+  removedOverflowEntries?: number;
+}): string {
+  const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
+  return [
+    repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
+    (repair.removedDanglingEntries ?? 0) > 0 ? `-${repair.removedDanglingEntries} dangling` : null,
+    removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 export function includesSystemEventToken(cleanedBody: string, eventText: string): boolean {

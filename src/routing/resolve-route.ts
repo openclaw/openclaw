@@ -1,4 +1,3 @@
-// Route resolution helpers map user targets to configured channel routes.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   AgentSelectionRequiredError,
@@ -211,8 +210,7 @@ type BindingScope = {
 type EvaluatedBindingsCache = {
   bindingsRef: OpenClawConfig["bindings"];
   byChannel: Map<string, EvaluatedBindingsByChannel>;
-  byChannelAccount: Map<string, EvaluatedBinding[]>;
-  byChannelAccountIndex: Map<string, EvaluatedBindingsIndex>;
+  byChannelAccount: Map<string, EvaluatedBindingsEntry>;
 };
 
 const evaluatedBindingsCacheByCfg = new WeakMap<OpenClawConfig, EvaluatedBindingsCache>();
@@ -238,6 +236,12 @@ type EvaluatedBindingsIndex = {
   byChannel: EvaluatedBinding[];
 };
 
+// Source-order candidates and their lookup index share one cache generation.
+type EvaluatedBindingsEntry = {
+  bindings: EvaluatedBinding[];
+  index: EvaluatedBindingsIndex;
+};
+
 type EvaluatedBindingsByChannel = {
   byAccount: Map<string, EvaluatedBinding[]>;
   byAnyAccount: EvaluatedBinding[];
@@ -257,6 +261,10 @@ function buildEvaluatedBindingsByChannel(
       continue;
     }
     const match = normalizeBindingMatch(binding.match);
+    // Unmatchable peers cannot establish routing or account-ownership evidence.
+    if (match.peer.state === "invalid") {
+      continue;
+    }
     const evaluated: EvaluatedBinding = {
       binding,
       match,
@@ -342,39 +350,9 @@ function pushToIndexMap(
   map.set(key, [binding]);
 }
 
-function peerLookupKeys(kind: ChatType, id: string): string[] {
-  if (kind === "group") {
-    return [`group:${id}`, `channel:${id}`];
-  }
-  if (kind === "channel") {
-    return [`channel:${id}`, `group:${id}`];
-  }
-  return [`${kind}:${id}`];
-}
-
-function collectPeerIndexedBindings(
-  index: EvaluatedBindingsIndex,
-  peer: RoutePeer | null,
-): EvaluatedBinding[] {
-  if (!peer) {
-    return [];
-  }
-  const out: EvaluatedBinding[] = [];
-  const seen = new Set<EvaluatedBinding>();
-  for (const key of peerLookupKeys(peer.kind, peer.id)) {
-    const matches = index.byPeer.get(key);
-    if (!matches) {
-      continue;
-    }
-    for (const match of matches) {
-      if (seen.has(match)) {
-        continue;
-      }
-      seen.add(match);
-      out.push(match);
-    }
-  }
-  return out;
+function peerLookupKey(kind: ChatType, id: string): string {
+  // Group/channel matching is interchangeable; share one source-ordered bucket.
+  return `${kind === "channel" ? "group" : kind}:${id}`;
 }
 
 function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBindingsIndex {
@@ -388,9 +366,11 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
 
   for (const binding of bindings) {
     if (binding.match.peer.state === "valid") {
-      for (const key of peerLookupKeys(binding.match.peer.kind, binding.match.peer.id)) {
-        pushToIndexMap(byPeer, key, binding);
-      }
+      pushToIndexMap(
+        byPeer,
+        peerLookupKey(binding.match.peer.kind, binding.match.peer.id),
+        binding,
+      );
       continue;
     }
     if (binding.match.peer.state === "wildcard-kind") {
@@ -431,7 +411,7 @@ function getEvaluatedBindingsForChannelAccount(
   cfg: OpenClawConfig,
   channel: string,
   accountId: string,
-): EvaluatedBinding[] {
+): EvaluatedBindingsEntry {
   const bindingsRef = cfg.bindings;
   const existing = evaluatedBindingsCacheByCfg.get(cfg);
   const cache =
@@ -440,8 +420,7 @@ function getEvaluatedBindingsForChannelAccount(
       : {
           bindingsRef,
           byChannel: buildEvaluatedBindingsByChannel(cfg),
-          byChannelAccount: new Map<string, EvaluatedBinding[]>(),
-          byChannelAccountIndex: new Map<string, EvaluatedBindingsIndex>(),
+          byChannelAccount: new Map<string, EvaluatedBindingsEntry>(),
         };
   if (cache !== existing) {
     evaluatedBindingsCacheByCfg.set(cfg, cache);
@@ -456,35 +435,16 @@ function getEvaluatedBindingsForChannelAccount(
   const channelBindings = cache.byChannel.get(channel);
   const accountScoped = channelBindings?.byAccount.get(accountId) ?? [];
   const anyAccount = channelBindings?.byAnyAccount ?? [];
-  const evaluated = mergeEvaluatedBindingsInSourceOrder(accountScoped, anyAccount);
+  const bindings = mergeEvaluatedBindingsInSourceOrder(accountScoped, anyAccount);
+  const evaluated = { bindings, index: buildEvaluatedBindingsIndex(bindings) };
 
   cache.byChannelAccount.set(cacheKey, evaluated);
-  cache.byChannelAccountIndex.set(cacheKey, buildEvaluatedBindingsIndex(evaluated));
   if (cache.byChannelAccount.size > MAX_EVALUATED_BINDINGS_CACHE_KEYS) {
     cache.byChannelAccount.clear();
-    cache.byChannelAccountIndex.clear();
     cache.byChannelAccount.set(cacheKey, evaluated);
-    cache.byChannelAccountIndex.set(cacheKey, buildEvaluatedBindingsIndex(evaluated));
   }
 
   return evaluated;
-}
-
-function getEvaluatedBindingIndexForChannelAccount(
-  cfg: OpenClawConfig,
-  channel: string,
-  accountId: string,
-): EvaluatedBindingsIndex {
-  const bindings = getEvaluatedBindingsForChannelAccount(cfg, channel, accountId);
-  const existing = evaluatedBindingsCacheByCfg.get(cfg);
-  const cacheKey = `${channel}\t${accountId}`;
-  const indexed = existing?.byChannelAccountIndex.get(cacheKey);
-  if (indexed) {
-    return indexed;
-  }
-  const built = buildEvaluatedBindingsIndex(bindings);
-  existing?.byChannelAccountIndex.set(cacheKey, built);
-  return built;
 }
 
 /** @internal Lists exact DM peers from the canonical channel/account binding index. */
@@ -493,11 +453,11 @@ export function listExactDirectMessageBindingPeerIds(
 ): string[] {
   const prefix = "direct:";
   return [
-    ...getEvaluatedBindingIndexForChannelAccount(
+    ...getEvaluatedBindingsForChannelAccount(
       input.cfg,
       normalizeLowercaseStringOrEmpty(input.channel),
       normalizeAccountId(input.accountId),
-    ).byPeer.keys(),
+    ).index.byPeer.keys(),
   ].flatMap((key) => (key.startsWith(prefix) ? [key.slice(prefix.length)] : []));
 }
 
@@ -560,7 +520,8 @@ function resolveRouteCacheForConfig(cfg: OpenClawConfig): Map<string, ResolvedAg
 }
 
 function formatRouteCachePeer(peer: RoutePeer | null): string {
-  if (!peer || !peer.id) {
+  // Empty IDs still enable kind-specific wildcard routing, so only a missing peer is peerless.
+  if (!peer) {
     return "-";
   }
   return `${peer.kind}:${peer.id}`;
@@ -593,9 +554,6 @@ function buildResolvedRouteCacheKey(params: {
 }
 
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
-  if (match.peer.state === "invalid") {
-    return false;
-  }
   if (match.peer.state === "valid") {
     if (
       !scope.peer ||
@@ -626,7 +584,6 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const guildId = normalizeRouteBindingId(input.guildId);
   const teamId = normalizeRouteBindingId(input.teamId);
   const memberRoleIds = input.memberRoleIds ?? [];
-  const memberRoleIdSet = new Set(memberRoleIds);
   const dmScope = input.dmScope ?? input.cfg.session?.dmScope ?? "main";
   const groupScope = input.groupScope ?? input.cfg.session?.groupScope ?? "per-group";
   const identityLinks = input.cfg.session?.identityLinks;
@@ -661,8 +618,12 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
 
-  const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
-  const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(input.cfg, channel, accountId);
+  const memberRoleIdSet = new Set(memberRoleIds);
+  const { bindings, index: bindingsIndex } = getEvaluatedBindingsForChannelAccount(
+    input.cfg,
+    channel,
+    accountId,
+  );
 
   const choose = (
     agentId: string,
@@ -705,6 +666,8 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         routeCache.clear();
         routeCache.set(routeCacheKey, route);
       }
+      // Cold and warm returns are caller-owned; edits must not poison the cache.
+      return { ...route };
     }
     return route;
   };
@@ -734,87 +697,48 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       );
     }
   }
-  // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
-  const baseScope = {
+  const scope: BindingScope = {
+    peer,
     guildId,
     teamId,
     memberRoleIds: memberRoleIdSet,
   };
-
-  const tiers: Array<{
-    matchedBy: Exclude<ResolvedAgentRoute["matchedBy"], "default">;
-    enabled: boolean;
-    scopePeer: RoutePeer | null;
-    candidates: EvaluatedBinding[];
-  }> = [
-    {
-      matchedBy: "binding.peer",
-      enabled: Boolean(peer),
-      scopePeer: peer,
-      candidates: collectPeerIndexedBindings(bindingsIndex, peer),
-    },
-    {
-      matchedBy: "binding.peer.parent",
-      enabled: Boolean(parentPeer && parentPeer.id),
-      scopePeer: parentPeer && parentPeer.id ? parentPeer : null,
-      candidates: collectPeerIndexedBindings(bindingsIndex, parentPeer),
-    },
-    {
-      matchedBy: "binding.peer.wildcard",
-      enabled: Boolean(peer),
-      scopePeer: peer,
-      candidates: bindingsIndex.byPeerWildcard,
-    },
-    {
-      matchedBy: "binding.guild+roles",
-      enabled: Boolean(guildId && memberRoleIds.length > 0),
-      scopePeer: peer,
-      candidates: guildId ? (bindingsIndex.byGuildWithRoles.get(guildId) ?? []) : [],
-    },
-    {
-      matchedBy: "binding.guild",
-      enabled: Boolean(guildId),
-      scopePeer: peer,
-      candidates: guildId ? (bindingsIndex.byGuild.get(guildId) ?? []) : [],
-    },
-    {
-      matchedBy: "binding.team",
-      enabled: Boolean(teamId),
-      scopePeer: peer,
-      candidates: teamId ? (bindingsIndex.byTeam.get(teamId) ?? []) : [],
-    },
-    {
-      matchedBy: "binding.account",
-      enabled: true,
-      scopePeer: peer,
-      candidates: bindingsIndex.byAccount,
-    },
-    {
-      matchedBy: "binding.channel",
-      enabled: true,
-      scopePeer: peer,
-      candidates: bindingsIndex.byChannel,
-    },
-  ];
-
-  for (const tier of tiers) {
-    if (!tier.enabled) {
-      continue;
-    }
-    // Index buckets already enforce tier membership; only route scope still
-    // needs validation against this inbound peer, guild, team, and roles.
-    const matched = tier.candidates.find((candidate) =>
-      matchesBindingScope(candidate.match, {
-        ...baseScope,
-        peer: tier.scopePeer,
-      }),
+  const chooseFrom = (
+    candidates: EvaluatedBinding[] | undefined,
+    matchedBy: Exclude<ResolvedAgentRoute["matchedBy"], "default">,
+    bindingScope = scope,
+  ) => {
+    // Index buckets enforce tier membership; compound scope constraints still apply.
+    const matched = candidates?.find((candidate) =>
+      matchesBindingScope(candidate.match, bindingScope),
     );
-    if (matched) {
-      if (shouldLogDebug) {
-        logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
-      }
-      return choose(matched.binding.agentId, tier.matchedBy, matched.binding.session);
+    if (!matched) {
+      return undefined;
     }
+    if (shouldLogDebug) {
+      logDebug(`[routing] match: matchedBy=${matchedBy} agentId=${matched.binding.agentId}`);
+    }
+    return choose(matched.binding.agentId, matchedBy, matched.binding.session);
+  };
+  const route =
+    (peer &&
+      chooseFrom(bindingsIndex.byPeer.get(peerLookupKey(peer.kind, peer.id)), "binding.peer")) ||
+    (parentPeer?.id &&
+      chooseFrom(
+        bindingsIndex.byPeer.get(peerLookupKey(parentPeer.kind, parentPeer.id)),
+        "binding.peer.parent",
+        { ...scope, peer: parentPeer },
+      )) ||
+    (peer && chooseFrom(bindingsIndex.byPeerWildcard, "binding.peer.wildcard")) ||
+    (guildId &&
+      memberRoleIds.length > 0 &&
+      chooseFrom(bindingsIndex.byGuildWithRoles.get(guildId), "binding.guild+roles")) ||
+    (guildId && chooseFrom(bindingsIndex.byGuild.get(guildId), "binding.guild")) ||
+    (teamId && chooseFrom(bindingsIndex.byTeam.get(teamId), "binding.team")) ||
+    chooseFrom(bindingsIndex.byAccount, "binding.account") ||
+    chooseFrom(bindingsIndex.byChannel, "binding.channel");
+  if (route) {
+    return route;
   }
 
   const unboundAgentId = defaultAgentId || tryResolveLegacyCompatibilityAgentId(input.cfg);
@@ -822,7 +746,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     unboundAgentId ??
       resolveDefaultAgentId(input.cfg, {
         surface: `${channel} account ${accountId} routing`,
-        hint: `Add a channel-wide binding for ${channel}:${accountId} or configure a sole agent.`,
+        hint: `Add a channel-wide binding for ${channel}:${accountId}: ${JSON.stringify({ agentId: "<agentId>", match: { channel, accountId } })}. Replace <agentId> with a configured agent, then restart the Gateway.`,
       }),
     "default",
   );
@@ -887,12 +811,5 @@ export function listEffectiveGroupRouteBindings(cfg: OpenClawConfig) {
         }).agentId === markerForIndex(index),
     );
   });
-}
-
-/** @internal Resolves fallback precedence for an unknown direct peer. */
-export function resolveUnknownDirectMessageRoute(
-  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId" | "dmScope" | "groupScope">,
-): ResolvedAgentRoute {
-  return resolveAgentRoute({ ...input, peer: { kind: "direct", id: "" } });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

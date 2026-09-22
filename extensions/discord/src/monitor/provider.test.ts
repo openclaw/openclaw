@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
@@ -211,11 +212,10 @@ describe("monitorDiscordProvider", () => {
   };
 
   beforeAll(async () => {
-    vi.doMock("../accounts.js", () => ({
+    vi.doMock("../accounts.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../accounts.js")>()),
       resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
         resolveDiscordAccountMock(...args),
-      resolveDiscordAccountAllowFrom: () => undefined,
-      resolveDiscordAccountDmPolicy: () => undefined,
     }));
     vi.doMock("../probe.js", () => ({
       fetchDiscordApplicationId: async () => "app-1",
@@ -333,22 +333,99 @@ describe("monitorDiscordProvider", () => {
     providerTesting.setShouldLogVerbose(() => shouldLogVerboseMock());
   });
 
-  it("stops thread bindings when startup fails before lifecycle begins", async () => {
-    createDiscordNativeCommandMock.mockImplementation(() => {
-      throw new Error("native command boom");
+  it("awaits restored thread bindings before reconciliation and provider startup", async () => {
+    const ready = createDeferred<{ stop: ReturnType<typeof vi.fn> }>();
+    const entered = createDeferred<void>();
+    const manager = { stop: vi.fn() };
+    createThreadBindingManagerMock.mockImplementationOnce(() => {
+      entered.resolve();
+      return ready.promise;
     });
+    const monitor = monitorDiscordProvider({ config: baseConfig(), runtime: baseRuntime() });
+    try {
+      await entered.promise;
+      expect(reconcileAcpThreadBindingsOnStartupMock).not.toHaveBeenCalled();
+      expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    } finally {
+      ready.resolve(manager);
+      await monitor;
+    }
+    expect(monitorLifecycleMock).toHaveBeenCalledWith(
+      expect.objectContaining({ threadBindings: manager }),
+    );
+    expect(manager.stop).toHaveBeenCalled();
+  });
 
-    await expect(
-      monitorDiscordProvider({
+  it.each(["binding reconciliation", "interaction registration"] as const)(
+    "stops thread bindings when %s fails before lifecycle begins",
+    async (phase) => {
+      const failure = new Error("startup failed");
+      if (phase === "binding reconciliation") {
+        reconcileAcpThreadBindingsOnStartupMock.mockImplementationOnce(async () => {
+          throw failure;
+        });
+      } else {
+        createDiscordNativeCommandMock.mockImplementationOnce(() => {
+          throw failure;
+        });
+      }
+
+      await expect(
+        monitorDiscordProvider({
+          config: baseConfig(),
+          runtime: baseRuntime(),
+        }),
+      ).rejects.toBe(failure);
+
+      expect(monitorLifecycleMock).not.toHaveBeenCalled();
+      expect(createdBindingManagers).toHaveLength(1);
+      expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["binding restoration", "binding reconciliation"] as const)(
+    "stops acquired thread bindings without starting a client when cancelled during %s",
+    async (phase) => {
+      const ready = createDeferred<void>();
+      const entered = createDeferred<void>();
+      const controller = new AbortController();
+      const manager = { stop: vi.fn() };
+      createThreadBindingManagerMock.mockImplementationOnce(async () => {
+        if (phase === "binding restoration") {
+          entered.resolve();
+          await ready.promise;
+        }
+        return manager;
+      });
+      if (phase === "binding reconciliation") {
+        reconcileAcpThreadBindingsOnStartupMock.mockImplementationOnce(async () => {
+          entered.resolve();
+          await ready.promise;
+          return { checked: 0, removed: 0, staleSessionKeys: [] };
+        });
+      }
+      const monitor = monitorDiscordProvider({
         config: baseConfig(),
         runtime: baseRuntime(),
-      }),
-    ).rejects.toThrow("native command boom");
-
-    expect(monitorLifecycleMock).not.toHaveBeenCalled();
-    expect(createdBindingManagers).toHaveLength(1);
-    expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
-  });
+        abortSignal: controller.signal,
+      });
+      try {
+        await entered.promise;
+        controller.abort();
+        expect(manager.stop).not.toHaveBeenCalled();
+        expect(clientConstructorOptionsMock).not.toHaveBeenCalled();
+      } finally {
+        ready.resolve();
+        await monitor;
+      }
+      expect(manager.stop).toHaveBeenCalledTimes(1);
+      expect(clientConstructorOptionsMock).not.toHaveBeenCalled();
+      expect(monitorLifecycleMock).not.toHaveBeenCalled();
+      if (phase === "binding restoration") {
+        expect(reconcileAcpThreadBindingsOnStartupMock).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("disconnects the shared gateway and keeps a late error guard when startup fails before lifecycle begins", async () => {
     const disconnect = vi.fn();

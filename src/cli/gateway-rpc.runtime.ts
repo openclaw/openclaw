@@ -5,6 +5,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isImplicitLocalGatewayTarget } from "../gateway/call.js";
+import { SUBAGENT_EXEC_ENV_VAR } from "../infra/openclaw-exec-env.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
@@ -47,12 +48,20 @@ export async function isImplicitLocalGatewayTargetFromCliRuntime(
   });
 }
 
-export async function callGatewayFromCliRuntime(
+export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCliTransportRpcOpts,
   params?: unknown,
   extra?: CallGatewayFromCliRuntimeExtra,
 ) {
+  if (
+    process.env[SUBAGENT_EXEC_ENV_VAR] === "1" &&
+    ["sessions.send", "sessions.steer", "chat.send"].includes(method)
+  ) {
+    throw new Error(
+      "Subagent session messages must use the task completion path. Return your result or blocker in the child turn; do not use the CLI to contact other sessions.",
+    );
+  }
   const localPortOverride = resolveGatewayLocalPortOverride(opts);
   // Progress is disabled for JSON output so stdout stays parseable.
   const showProgress = extra?.progress ?? opts.json !== true;
@@ -73,9 +82,10 @@ export async function callGatewayFromCliRuntime(
       enabled: showProgress,
     },
     async () =>
-      await callGateway({
+      await callGateway<T>({
         config: opts.config,
         url: opts.url,
+        expectUrl: opts.expectUrl,
         token: opts.token,
         password: opts.password,
         method,

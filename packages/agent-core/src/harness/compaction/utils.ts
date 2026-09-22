@@ -200,7 +200,7 @@ function truncateForSummary(text: string, maxChars: number): string {
 }
 
 /** Extract text that compaction both estimates and includes in summary prompts. */
-export function getCompactionContentBlockText(block: {
+function getCompactionContentBlockText(block: {
   type: string;
   content?: unknown;
   text?: string;
@@ -217,29 +217,125 @@ export function getCompactionContentBlockText(block: {
     : "";
 }
 
+/** Project summary content once so rendering and token accounting share omission facts. */
+export function getCompactionContent(
+  content: string | Array<{ type: string; content?: unknown; text?: string }>,
+): { text: string; omissionText: string } {
+  const omissions = new Set<string>();
+  const text =
+    typeof content === "string"
+      ? content
+      : content
+          .map((block) => {
+            const blockText = getCompactionContentBlockText(block);
+            if (block.type !== "text" && !blockText) {
+              // This projection knows only what it omits, not whether a model processed it.
+              omissions.add(
+                block.type === "image"
+                  ? "[image data omitted from summary input]"
+                  : "[non-text data omitted from summary input]",
+              );
+            }
+            return blockText;
+          })
+          .join("");
+  return { text, omissionText: [...omissions].join("\n") };
+}
+
+const MAX_OMISSION_MESSAGES = 8;
+const OMISSION_OVERFLOW = "[More image/non-text data omitted from summary input]";
+
+type PersistedSender = {
+  id?: string;
+  name?: string;
+  username?: string;
+};
+
+// Compaction sees both model messages and harness-only AgentMessages. Sender
+// metadata is only meaningful on user turns, so this deliberately accepts the
+// minimal shared shape rather than forcing token accounting through an unsafe
+// Message cast.
+type PersistedSenderCarrier = {
+  role: string;
+};
+
+function readPersistedSender(message: PersistedSenderCarrier): PersistedSender | undefined {
+  if (message.role !== "user") {
+    return undefined;
+  }
+  const metadata = asRecord(Reflect.get(message, "__openclaw"));
+  if (!metadata) {
+    return undefined;
+  }
+  const normalize = (value: unknown): string | undefined => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const normalized = value.replaceAll("\u0000", "").trim();
+    return normalized || undefined;
+  };
+  const sender = {
+    id: normalize(metadata.senderId),
+    name: normalize(metadata.senderName),
+    username: normalize(metadata.senderUsername),
+  };
+  // Display names and usernames are mutable and non-unique. They are useful
+  // labels only once a stable sender ID anchors them; on their own they must
+  // not turn a legacy/partial record into asserted author provenance.
+  return sender.id ? sender : undefined;
+}
+
+/**
+ * Return exactly the persisted-sender text which is projected into a user
+ * conversation label. Keep this shared with token accounting: adding a label
+ * to the prompt without charging it can make bounded compaction overflow.
+ */
+export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
+  const sender = readPersistedSender(message);
+  return sender ? ` sender=${JSON.stringify(sender)}` : "";
+}
+
+function formatConversationSpeaker(message: Message): string {
+  if (message.role !== "user") {
+    return message.role === "toolResult" ? "Tool result" : "User";
+  }
+  return `User${formatPersistedSenderSuffix(message)}`;
+}
+
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
   const parts: string[] = [];
+  let omissionMessages = 0;
 
   for (const msg of messages) {
-    if (msg.role === "user") {
-      const content =
-        typeof msg.content === "string"
-          ? msg.content
-          : msg.content.map(getCompactionContentBlockText).join("");
+    // Carriers remain in replay for thinking-prefix binding, not in summaries
+    // where runtime-only context could become durable assistant-authored text.
+    if (msg.role === "user" && msg.runtimeContextCarrier === true) {
+      continue;
+    }
+    if (msg.role === "user" || msg.role === "toolResult") {
+      const { text, omissionText } = getCompactionContent(msg.content);
+      // Fixed ASCII bounds additions to 8 * (82 markers + 17 wrapper) + 55 overflow = 847 bytes.
+      // Keep the aggregate outside truncation too; later omissions must never disappear silently.
+      if (omissionText && omissionMessages++ === MAX_OMISSION_MESSAGES) {
+        parts.push(OMISSION_OVERFLOW);
+      }
+      const content = [
+        omissionMessages <= MAX_OMISSION_MESSAGES ? omissionText : "",
+        msg.role === "toolResult" ? truncateForSummary(text, TOOL_RESULT_MAX_CHARS) : text,
+      ]
+        .filter(Boolean)
+        .join("\n");
       if (content) {
-        parts.push(`[User]: ${content}`);
+        parts.push(`[${formatConversationSpeaker(msg)}]: ${content}`);
       }
     } else if (msg.role === "assistant") {
       const textParts: string[] = [];
-      const thinkingParts: string[] = [];
       const toolCalls: string[] = [];
 
       for (const block of msg.content) {
         if (block.type === "text") {
           textParts.push(block.text);
-        } else if (block.type === "thinking") {
-          thinkingParts.push(block.thinking);
         } else if (block.type === "toolCall") {
           const argsStr = Object.entries(block.arguments)
             .map(([k, v]) => `${k}=${stringifyCompactionValue(v)}`)
@@ -248,19 +344,11 @@ export function serializeConversation(messages: Message[]): string {
         }
       }
 
-      if (thinkingParts.length > 0) {
-        parts.push(`[Assistant thinking]: ${thinkingParts.join("\n")}`);
-      }
       if (textParts.length > 0) {
         parts.push(`[Assistant]: ${textParts.join("\n")}`);
       }
       if (toolCalls.length > 0) {
         parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
-      }
-    } else if (msg.role === "toolResult") {
-      const content = msg.content.map(getCompactionContentBlockText).join("");
-      if (content) {
-        parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
       }
     }
   }

@@ -1,5 +1,5 @@
 ---
-summary: "Hubs that link to every OpenClaw doc"
+summary: "Hubs that link the main OpenClaw docs"
 read_when:
   - You want a complete map of the documentation
 title: "Docs hubs"
@@ -9,7 +9,7 @@ title: "Docs hubs"
 If you are new to OpenClaw, start with [Getting Started](/start/getting-started).
 </Note>
 
-Use these hubs to discover every page, including deep dives and reference docs that don't appear in the left nav.
+Use these hubs to discover more of the documentation, including deep dives and reference docs that don't appear in the left nav.
 
 ## Start here
 
@@ -18,7 +18,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Onboarding](/start/onboarding)
 - [Onboarding (CLI)](/start/wizard)
 - [Setup](/start/setup)
-- [Dashboard (local Gateway)](http://127.0.0.1:18789/)
+- [Dashboard](/web/dashboard) - on the Gateway host it opens at `http://127.0.0.1:18789/`
 - [Help](/help)
 - [Docs directory](/start/docs-directory)
 - [Configuration](/gateway/configuration)
@@ -29,6 +29,8 @@ Use these hubs to discover every page, including deep dives and reference docs t
 
 ## Installation + updates
 
+- [Install overview](/install)
+- [Installer internals](/install/installer)
 - [Docker](/install/docker)
 - [Nix](/install/nix)
 - [Updating / rollback](/install/updating)
@@ -66,7 +68,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Providers + ingress
 
 - [Chat channels hub](/channels)
-- [Model providers hub](/providers/models)
+- [Model providers hub](/providers)
 - [Discord](/channels/discord)
 - [iMessage](/channels/imessage)
 - [Mattermost](/channels/mattermost)
@@ -95,7 +97,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Dashboard](/web/dashboard)
 - [Control UI](/web/control-ui)
 - [Remote access](/gateway/remote)
-- [Remote gateway README](/gateway/remote-gateway-readme)
+- [macOS SSH tunnel](/gateway/remote#macos-persistent-ssh-tunnel-via-launchagent)
 - [Tailscale](/gateway/tailscale)
 - [Security](/gateway/security)
 - [Troubleshooting](/gateway/troubleshooting)
@@ -166,7 +168,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Agent tools](/plugins/building-plugins#registering-agent-tools)
 - [Plugin bundles](/plugins/bundles)
 - [ClawHub](/clawhub)
-- [Capability cookbook](/tools/capability-cookbook)
+- [Adding capabilities](/plugins/adding-capabilities)
 - [Voice call plugin](/plugins/voice-call)
 - [Zalo user plugin](/plugins/zalouser)
 

@@ -3,6 +3,7 @@ import type {
   SessionsCompanionStateResult,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
   createSessionCompanionAskRuntime,
   type SessionCompanionAskDeps,
@@ -19,6 +20,7 @@ export type SessionCompanionService = {
     sessionKey: string;
     question: string;
     connId: string;
+    assertSourceCurrent?: () => void;
     signal?: AbortSignal;
   }) => Promise<SessionsCompanionAskResult>;
   state: (target: SessionCompanionTarget) => SessionsCompanionStateResult;
@@ -80,6 +82,18 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
     }
     reset({ sessionKey, agentId }, "backing-session-revoked");
   });
+  const unsubscribeIdentity = onSessionIdentityMutation((mutation) => {
+    if (mutation.kind !== "delete" || !mutation.previous.sessionId) {
+      return;
+    }
+    for (const sessionKey of mutation.previous.sessionKeys) {
+      const key = sessionObserverScopeKey(sessionKey, mutation.agentId);
+      // Replayed deletions must not retire a newer generation under the same scoped key.
+      if (threads.get(key)?.context.sessionId === mutation.previous.sessionId) {
+        reset({ sessionKey, agentId: mutation.agentId }, "backing-session-revoked");
+      }
+    }
+  });
 
   return {
     ask: askRuntime.ask,
@@ -104,6 +118,7 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
       disposed = true;
       clearIntervalFn(sweepTimer);
       unsubscribeReset();
+      unsubscribeIdentity();
       askRuntime.dispose();
       threads.clear();
     },

@@ -9,22 +9,37 @@ describe("toPublicCronJob", () => {
       state: {
         nextRunAtMs: 2_000,
         queuedAtMs: 1_900,
+        runningReceiptId: "pending-receipt",
         startupCatchupAtMs: 2_000,
         pacedNextRunAtMs: 2_000,
         forcePreservedNextRunAtMs: 2_000,
+        runningScheduleChangeId: "pending-run-edit",
+        failureAlertIncident: { signature: "internal-incident", scope: "run" },
+        lastFailureNotificationId: "internal-notification",
       },
     });
 
     const publicJob = toPublicCronJob(job);
 
     expect(publicJob.state.queuedAtMs).toBeUndefined();
+    expect(publicJob.state.runningReceiptId).toBeUndefined();
     expect(publicJob.state.startupCatchupAtMs).toBeUndefined();
     expect(publicJob.state.pacedNextRunAtMs).toBeUndefined();
     expect(publicJob.state.forcePreservedNextRunAtMs).toBeUndefined();
+    expect(publicJob.state).not.toHaveProperty("runningScheduleChangeId");
+    expect(publicJob.state).not.toHaveProperty("failureAlertIncident");
+    expect(publicJob.state).not.toHaveProperty("lastFailureNotificationId");
     expect(job.state.queuedAtMs).toBe(1_900);
+    expect(job.state.runningReceiptId).toBe("pending-receipt");
     expect(job.state.startupCatchupAtMs).toBe(2_000);
     expect(job.state.pacedNextRunAtMs).toBe(2_000);
     expect(job.state.forcePreservedNextRunAtMs).toBe(2_000);
+    expect(job.state.runningScheduleChangeId).toBe("pending-run-edit");
+    expect(job.state.failureAlertIncident).toEqual({
+      signature: "internal-incident",
+      scope: "run",
+    });
+    expect(job.state.lastFailureNotificationId).toBe("internal-notification");
   });
 
   it("projects script payload fields without exposing scheduler-only state", () => {
@@ -50,27 +65,46 @@ describe("toPublicCronJob", () => {
     });
   });
 
-  it("strips private tool-cap provenance without mutating the stored job", () => {
-    const job: CronStoredJob = {
-      ...makeCronJob({}),
-      toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
-    };
+  it.each(["final-executable-surface", "authenticated-requester"] as const)(
+    "strips private %s provenance without mutating the stored job",
+    (source) => {
+      const channelRequester = {
+        version: 1 as const,
+        channel: "discord",
+        accountId: "work",
+        senderId: "123456789012345678",
+      };
+      const job: CronStoredJob = {
+        ...makeCronJob({}),
+        toolsAllowProvenance: { version: 1, source, channelRequester },
+        toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+        toolsAllowExecTargetRequirement: {
+          version: 1,
+          target: { version: 1, host: "gateway", ask: "always" },
+          grantIndex: 0,
+        },
+      };
 
-    expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowProvenance");
-    expect(job.toolsAllowProvenance).toEqual({
-      version: 1,
-      source: "final-executable-surface",
-    });
-  });
+      expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowProvenance");
+      expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowExecTarget");
+      expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowExecTargetRequirement");
+      expect(job.toolsAllowProvenance).toEqual({
+        version: 1,
+        source,
+        channelRequester,
+      });
+      expect(job.toolsAllowExecTarget).toEqual({ version: 1, host: "gateway", ask: "always" });
+    },
+  );
 
   it("strips private creator provenance without mutating the stored job", () => {
     const job: CronStoredJob = {
       ...makeCronJob({}),
-      createdActor: { type: "human", id: "profile-ada" },
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
     };
 
     expect(toPublicCronJob(job)).not.toHaveProperty("createdActor");
-    expect(job.createdActor).toEqual({ type: "human", id: "profile-ada" });
+    expect(job.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
   });
 
   it("strips private runtime authority without mutating the stored job", () => {

@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardCommand } from "../dashboard.js";
+import { createTestRuntime } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn(),
   ensureGatewayReadyForOperation: vi.fn(),
   inspectPortUsage: vi.fn(),
   issueDeviceBootstrapToken: vi.fn(),
-  loadGatewayTlsRuntime: vi.fn(),
   openUrl: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveControlUiLinks: vi.fn(),
@@ -38,10 +38,6 @@ vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: mocks.inspectPortUsage,
 }));
 
-vi.mock("../../infra/tls/gateway.js", () => ({
-  loadGatewayTlsRuntime: mocks.loadGatewayTlsRuntime,
-}));
-
 vi.mock("../gateway-readiness.js", () => ({
   ensureGatewayReadyForOperation: mocks.ensureGatewayReadyForOperation,
 }));
@@ -57,9 +53,7 @@ const fakePassword = ["te", "st-password"].join("");
 const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
 
 const runtime = {
-  error: vi.fn(),
-  exit: vi.fn(),
-  log: vi.fn(),
+  ...createTestRuntime(),
   writeJson: vi.fn(),
   writeStdout: vi.fn(),
 };
@@ -112,7 +106,6 @@ describe("dashboardCommand --json", () => {
       token: "browser-bootstrap",
       expiresAtMs: 123_456,
     });
-    mocks.loadGatewayTlsRuntime.mockResolvedValue({ enabled: false, required: false });
     mocks.waitForControlUiDocument.mockResolvedValue({ ready: true });
   });
 
@@ -129,7 +122,7 @@ describe("dashboardCommand --json", () => {
         port: 18789,
         tokenIncluded: true,
         browserUrl:
-          "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+          "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
         browserBootstrapExpiresAtMs: 123_456,
       },
       0,
@@ -139,7 +132,6 @@ describe("dashboardCommand --json", () => {
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
     expect(mocks.inspectPortUsage).toHaveBeenCalledWith(18789);
     expect(mocks.openUrl).not.toHaveBeenCalled();
-    expect(mocks.loadGatewayTlsRuntime).not.toHaveBeenCalled();
     expect(mocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: {
         roles: ["operator"],
@@ -170,11 +162,6 @@ describe("dashboardCommand --json", () => {
     mocks.resolveControlUiLinks.mockReturnValue({
       httpUrl: "https://127.0.0.1:18789/",
       wsUrl: "wss://127.0.0.1:18789",
-    });
-    mocks.loadGatewayTlsRuntime.mockResolvedValue({
-      enabled: true,
-      required: true,
-      fingerprintSha256: "ab".repeat(32),
     });
     mocks.waitForControlUiDocument.mockResolvedValue({
       ready: true,

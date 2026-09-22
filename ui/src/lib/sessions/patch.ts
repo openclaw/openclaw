@@ -11,9 +11,12 @@ export type SessionToolOverrides = {
 export type SessionPatch = {
   label?: string | null;
   icon?: string | null;
+  color?: string | null;
   category?: string | null;
   boardFace?: "chat" | "dashboard";
+  boardPresentation?: "split" | "expanded" | null;
   model?: string | null;
+  agentRuntime?: string | null;
   contextWindow?: string | null;
   thinkingLevel?: string | null;
   fastMode?: FastMode | null;
@@ -44,8 +47,10 @@ export type SessionPatchOptions = {
   deferListRefresh?: boolean;
 };
 
+export type SessionPatchResult = SessionsPatchResult & { listRefreshError?: string };
+
 export type SessionPatchRoute = (
   key: string,
   patch: SessionPatch,
   options?: SessionPatchOptions,
-) => Promise<SessionsPatchResult | null>;
+) => Promise<SessionPatchResult | null>;

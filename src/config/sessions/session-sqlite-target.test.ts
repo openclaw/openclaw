@@ -91,28 +91,62 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     ).toBe(path.resolve("tmp", "stores", "ops.ops.sqlite"));
   });
 
-  it("lets the registered owner retain the unsuffixed target", () => {
-    const storePath = path.join("tmp", "stores", "ops.json");
+  it.each(["ops.sqlite", `${path.sep}ops.sqlite`, `ops.sqlite${path.sep}`])(
+    "lets the registered owner retain the unsuffixed target through input spelling %j",
+    (registeredSuffix) => {
+      const missingDir = path.join(tempDirs.make("openclaw-registered-session-target-"), "future");
+      const storePath = path.join(missingDir, "ops.json");
+      const registeredDatabases = [
+        { agentId: "ops", path: `${missingDir}${path.sep}${registeredSuffix}` },
+      ];
 
-    expect(
-      resolveSqliteTargetFromSessionStorePath(storePath, {
-        agentId: "ops",
-        defaultAgentId: "main",
-        registeredDatabases: [
-          { agentId: "ops", path: path.resolve("tmp", "stores", "ops.sqlite") },
-        ],
-      }).path,
-    ).toBe(path.resolve("tmp", "stores", "ops.sqlite"));
-    expect(
-      resolveSqliteTargetFromSessionStorePath(storePath, {
-        agentId: "main",
-        defaultAgentId: "main",
-        registeredDatabases: [
-          { agentId: "ops", path: path.resolve("tmp", "stores", "ops.sqlite") },
-        ],
-      }).path,
-    ).toBe(path.resolve("tmp", "stores", "ops.main.sqlite"));
-  });
+      expect(
+        resolveSqliteTargetFromSessionStorePath(storePath, {
+          agentId: "ops",
+          defaultAgentId: "main",
+          registeredDatabases,
+        }),
+      ).toMatchObject({
+        path: path.join(missingDir, "ops.sqlite"),
+        ownerSource: "database-registry",
+        unsuffixedOwnerAgentId: "ops",
+      });
+      expect(
+        resolveSqliteTargetFromSessionStorePath(storePath, {
+          agentId: "main",
+          defaultAgentId: "main",
+          registeredDatabases,
+        }),
+      ).toMatchObject({
+        path: path.join(missingDir, "ops.main.sqlite"),
+        ownerSource: "database-registry",
+        unsuffixedOwnerAgentId: "ops",
+      });
+    },
+  );
+
+  it
+    .runIf(process.platform !== "win32")
+    .each([`missing${path.sep}${path.sep}ops.sqlite`, `missing${path.sep}ops.sqlite${path.sep}`])(
+    "does not normalize a missing registered symlink target %j into ownership",
+    (target) => {
+      const dir = tempDirs.make("openclaw-registered-session-symlink-");
+      const aliasPath = path.join(dir, "alias.sqlite");
+      fs.symlinkSync(target, aliasPath);
+
+      expect(
+        resolveSqliteTargetFromSessionStorePath(path.join(dir, "missing", "ops.json"), {
+          agentId: "main",
+          defaultAgentId: "main",
+          registeredDatabases: [{ agentId: "ops", path: aliasPath }],
+        }),
+      ).toMatchObject({
+        path: path.join(dir, "missing", "ops.sqlite"),
+        ownerSource: "configured-default",
+        unsuffixedOwnerAgentId: "main",
+      });
+    },
+  );
 
   it("skips a conventional suffix persisted for another owner", () => {
     const storePath = path.join("tmp", "stores", "shared.json");
@@ -255,6 +289,24 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
       }),
     ).toThrow(expect.objectContaining({ code: "ENOTDIR" }));
   });
+
+  it.each(["sqlite", "json"])(
+    "propagates path inspection errors for a registered %s locator",
+    (extension) => {
+      const dir = tempDirs.make("openclaw-registered-session-inspection-");
+      const storePath = path.join(dir, `invalid\0.${extension}`);
+
+      expect(() =>
+        resolveSqliteTargetFromSessionStorePath(storePath, {
+          registeredDatabases: [
+            { agentId: "main", path: path.join(dir, "invalid\0.sqlite") },
+            { agentId: "main", path: path.join(dir, "invalid\0.main.sqlite") },
+          ],
+          isSameDatabasePath: (left, right) => left === right,
+        }),
+      ).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
+    },
+  );
 
   it("keeps shared custom sessions.json targets distinct by agent", () => {
     const storePath = path.join("tmp", "stores", "sessions.json");

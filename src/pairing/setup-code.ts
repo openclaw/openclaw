@@ -65,6 +65,7 @@ type ResolvePairingSetupOptions = {
   env?: NodeJS.ProcessEnv;
   publicUrl?: string;
   preferRemoteUrl?: boolean;
+  useLocalGateway?: boolean;
   forceSecure?: boolean;
   bootstrapProfile?: DeviceBootstrapProfileInput;
   issuedBootstrap?: { token: string; expiresAtMs: number; setupId: string };
@@ -84,7 +85,7 @@ type PairingSetupResolution =
   | {
       ok: true;
       payload: PairingSetupPayload;
-      authLabel: "token" | "password";
+      authLabel: "token" | "password" | "trusted-proxy";
       urlSource: string;
       access: PairingSetupAccess;
       accessDowngraded: boolean;
@@ -196,7 +197,7 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
 }
 
 type ResolveAuthLabelResult = {
-  label?: "token" | "password";
+  label?: "token" | "password" | "trusted-proxy";
   error?: string;
 };
 
@@ -322,15 +323,26 @@ function resolvePairingSetupAuthLabel(
   if (password) {
     return { label: "password" };
   }
+  // Setup codes carry their own bounded bootstrap credential. Proxy-only
+  // ingress does not need an unrelated shared secret to issue that handoff.
+  if (mode === "trusted-proxy") {
+    return { label: "trusted-proxy" };
+  }
+  if (mode === "none") {
+    return {
+      error: `Pairing setup requires gateway.auth.mode "token" or "password"; current mode is "${mode}".`,
+    };
+  }
   return { error: "Gateway auth is not configured (no token or password)." };
 }
 
-async function resolveGatewayUrl(
+export async function resolvePairingGatewayUrl(
   cfg: OpenClawConfig,
   opts: {
     env: NodeJS.ProcessEnv;
     publicUrl?: string;
     preferRemoteUrl?: boolean;
+    useLocalGateway?: boolean;
     forceSecure?: boolean;
     runCommandWithTimeout?: PairingSetupCommandRunner;
     networkInterfaces: () => ReturnType<typeof os.networkInterfaces>;
@@ -347,7 +359,7 @@ async function resolveGatewayUrl(
     return { error: "Configured publicUrl is invalid." };
   }
 
-  const remoteUrlRaw = cfg.gateway?.remote?.url;
+  const remoteUrlRaw = opts.useLocalGateway ? undefined : cfg.gateway?.remote?.url;
   const hasRemoteUrl = typeof remoteUrlRaw === "string" && remoteUrlRaw.trim();
   const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme) : null;
   if (hasRemoteUrl && !remoteUrl) {
@@ -500,10 +512,11 @@ export async function resolvePairingSetupFromConfig(
   if (authLabel.error) {
     return { ok: false, error: authLabel.error };
   }
-  const urlResult = await resolveGatewayUrl(cfgForAuth, {
+  const urlResult = await resolvePairingGatewayUrl(cfgForAuth, {
     env,
     publicUrl: options.publicUrl,
     preferRemoteUrl: options.preferRemoteUrl,
+    useLocalGateway: options.useLocalGateway,
     forceSecure: options.forceSecure,
     runCommandWithTimeout: options.runCommandWithTimeout,
     networkInterfaces: options.networkInterfaces ?? os.networkInterfaces,

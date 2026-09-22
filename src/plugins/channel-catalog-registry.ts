@@ -1,13 +1,16 @@
 // Maintains channel catalog entries advertised by plugins.
 import { normalizeOptionalString as resolveOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveIsNixMode } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { resolveCompatibilityHostVersion } from "../version.js";
+import {
+  getCurrentPluginMetadataSnapshotState,
+  getGatewayPluginMetadataSnapshot,
+} from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
+import { resolvePluginTrust } from "./installed-plugin-record-match.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";
-import { resolvePluginDiscoveryContext } from "./plugin-control-plane-context.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type PluginChannelCatalogEntry = {
@@ -18,6 +21,7 @@ export type PluginChannelCatalogEntry = {
   rootDir: string;
   channel: PluginPackageChannel;
   install?: PluginPackageInstall;
+  trustedOfficialInstall?: boolean;
 };
 
 type ChannelCatalogParams = {
@@ -35,38 +39,22 @@ type ChannelCatalogParams = {
   discovery?: PluginDiscoveryResult;
 };
 
-const defaultInstallRecordsIdentity = Symbol("default-install-records");
-const noInstallRecordsIdentity = Symbol("no-install-records");
-
-type ChannelCatalogDiscoveryMemo = {
-  scopeKey: string;
-  installRecordsIdentity:
-    | Record<string, PluginInstallRecord>
-    | typeof defaultInstallRecordsIdentity
-    | typeof noInstallRecordsIdentity;
-  installRecordsFingerprint?: string;
-  discovery: PluginDiscoveryResult;
-};
-
-let channelCatalogDiscoveryMemo: ChannelCatalogDiscoveryMemo | undefined;
-
-function clearChannelCatalogDiscoveryMemo(): void {
-  channelCatalogDiscoveryMemo = undefined;
-}
-
-// Catalog discovery is process-stable. Same-process registry writes and Gateway
-// refreshes clear this hook; external install/uninstall/doctor flows are restart-backed,
-// so request-time ledger freshness polling is intentionally absent.
-registerPluginMetadataProcessMemoLifecycleClear(clearChannelCatalogDiscoveryMemo);
-
 export function listChannelCatalogEntries(
   params: ChannelCatalogParams = {},
 ): PluginChannelCatalogEntry[] {
-  // Preserve the ledger-read behavior for callers supplying an exact discovery.
-  if (params.discovery) {
-    resolveInstallRecords(params);
+  // The discovery owner retains each scope and its raw shadows. A validated
+  // Gateway-wide manifest union loses both workspace scope and trust alternatives.
+  let discovery = params.discovery;
+  const installRecords =
+    params.installRecords ?? (discovery ? undefined : resolveInstallRecords(params));
+  if (!discovery) {
+    discovery = discoverOpenClawPlugins({
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      extraPaths: params.extraPaths,
+      ...(installRecords && Object.keys(installRecords).length > 0 ? { installRecords } : {}),
+    });
   }
-  const discovery = params.discovery ?? resolveMemoizedChannelCatalogDiscovery(params);
   return discovery.candidates.flatMap((candidate) => {
     if (params.origin && candidate.origin !== params.origin) {
       return [];
@@ -75,13 +63,29 @@ export function listChannelCatalogEntries(
     if (!channel?.id) {
       return [];
     }
-    const pluginId = resolveChannelCatalogPluginId(candidate);
+    const pluginId =
+      resolveOptionalString(candidate.bundledManifest?.id) ??
+      resolveOptionalString(candidate.bundledManifestId) ??
+      resolveOptionalString(candidate.packageManifest?.plugin?.id) ??
+      resolveOptionalString(candidate.idHint);
     if (!pluginId) {
       return [];
     }
+    // Caller-supplied discovery and install records belong to the same metadata generation.
+    // Never reload the ledger behind an already prepared discovery snapshot.
+    const trusted =
+      installRecords &&
+      resolvePluginTrust({
+        pluginId,
+        candidate,
+        installRecords,
+        env: params.env ?? process.env,
+        registryPath: resolveInstalledPluginIndexStorePath({ env: params.env }),
+      }).reason === "trusted-official";
     return [
       {
         pluginId,
+        ...(trusted ? { trustedOfficialInstall: true } : {}),
         origin: candidate.origin,
         packageName: candidate.packageName,
         workspaceDir: candidate.workspaceDir,
@@ -95,108 +99,25 @@ export function listChannelCatalogEntries(
   });
 }
 
-function resolveMemoizedChannelCatalogDiscovery(params: ChannelCatalogParams) {
-  const installRecordsKey = resolveInstallRecordsKey(params);
-  const scopeKey = resolveChannelCatalogDiscoveryScopeKey(params);
+function resolveInstallRecords(
+  params: ChannelCatalogParams,
+): Record<string, PluginInstallRecord> | undefined {
+  if (params.installRecords || params.origin === "bundled") {
+    return params.installRecords;
+  }
+  const snapshot = getGatewayPluginMetadataSnapshot();
   if (
-    installRecordsKey.cacheable &&
-    channelCatalogDiscoveryMemo?.scopeKey === scopeKey &&
-    channelCatalogDiscoveryMemo.installRecordsIdentity === installRecordsKey.identity &&
-    channelCatalogDiscoveryMemo.installRecordsFingerprint === installRecordsKey.fingerprint
+    snapshot &&
+    getCurrentPluginMetadataSnapshotState().envFingerprint ===
+      resolvePluginMetadataEnvFingerprint(params.env)
   ) {
-    return channelCatalogDiscoveryMemo.discovery;
-  }
-
-  const resolvedInstallRecords = resolveInstallRecords(params);
-  const discovery = discoverOpenClawPlugins({
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    extraPaths: params.extraPaths,
-    ...(resolvedInstallRecords.installRecords &&
-    Object.keys(resolvedInstallRecords.installRecords).length > 0
-      ? { installRecords: resolvedInstallRecords.installRecords }
-      : {}),
-  });
-  if (resolvedInstallRecords.cacheable && installRecordsKey.cacheable) {
-    channelCatalogDiscoveryMemo = {
-      scopeKey,
-      installRecordsIdentity: installRecordsKey.identity,
-      ...(installRecordsKey.fingerprint !== undefined
-        ? { installRecordsFingerprint: installRecordsKey.fingerprint }
-        : {}),
-      discovery,
-    };
-  }
-  return discovery;
-}
-
-function resolveChannelCatalogDiscoveryScopeKey(params: ChannelCatalogParams): string {
-  const env = params.env ?? process.env;
-  return JSON.stringify({
-    workspaceDir: resolveOptionalString(params.workspaceDir) ?? null,
-    discovery: resolvePluginDiscoveryContext({
-      workspaceDir: params.workspaceDir,
-      env,
-      loadPaths: params.extraPaths,
-    }),
-    compatibilityHostVersion: resolveCompatibilityHostVersion(env),
-    bundledSourceOverlaysDisabled: env.OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS ?? "",
-    nixMode: resolveIsNixMode(env),
-  });
-}
-
-function resolveInstallRecordsKey(params: ChannelCatalogParams): {
-  identity: ChannelCatalogDiscoveryMemo["installRecordsIdentity"];
-  fingerprint?: string;
-  cacheable: boolean;
-} {
-  if (params.installRecords) {
-    try {
-      const fingerprint = JSON.stringify(params.installRecords);
-      return fingerprint === undefined
-        ? { identity: params.installRecords, cacheable: false }
-        : { identity: params.installRecords, fingerprint, cacheable: true };
-    } catch {
-      return { identity: params.installRecords, cacheable: false };
-    }
-  }
-  return {
-    identity:
-      params.origin === "bundled" ? noInstallRecordsIdentity : defaultInstallRecordsIdentity,
-    cacheable: true,
-  };
-}
-
-function resolveChannelCatalogPluginId(
-  candidate: PluginDiscoveryResult["candidates"][number],
-): string | undefined {
-  return (
-    resolveOptionalString(candidate.bundledManifest?.id) ??
-    resolveOptionalString(candidate.bundledManifestId) ??
-    resolveOptionalString(candidate.packageManifest?.plugin?.id) ??
-    resolveOptionalString(candidate.idHint)
-  );
-}
-
-function resolveInstallRecords(params: ChannelCatalogParams): {
-  installRecords?: Record<string, PluginInstallRecord>;
-  cacheable: boolean;
-} {
-  if (params.installRecords) {
-    return { installRecords: params.installRecords, cacheable: true };
-  }
-  if (params.origin === "bundled") {
-    return { cacheable: true };
+    // Ledger writes prepare the next boot; catalog reads retain this generation's package paths.
+    return snapshot.index.installRecords;
   }
   try {
-    return {
-      installRecords: loadInstalledPluginIndexInstallRecordsSync(
-        params.env ? { env: params.env } : {},
-      ),
-      cacheable: true,
-    };
+    return loadInstalledPluginIndexInstallRecordsSync(params.env ? { env: params.env } : {});
   } catch {
-    // Retry transient ledger failures instead of memoizing an incomplete catalog.
-    return { cacheable: false };
+    // Failed ledger reads remain retryable within the operation owner.
+    return undefined;
   }
 }

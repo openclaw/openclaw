@@ -1,11 +1,34 @@
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { assertNoGatewayLogSentinels } from "./gateway-log-sentinel.js";
-import { readQaScenarioById, readQaScenarioExecutionConfig } from "./scenario-catalog.js";
+import {
+  readQaScenarioById,
+  readQaScenarioExecutionConfig,
+  readQaScenarioPackYamlSource,
+} from "./scenario-catalog.js";
 import { readFlowAssertExpression, requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
 describe("qa scenario catalog causality", () => {
+  it("treats denied Telegram admission as silent transport suppression", () => {
+    for (const scenarioId of [
+      "telegram-policy-hot-reload",
+      "telegram-group-policy-hot-reload",
+      "telegram-repeated-command-authorization",
+    ]) {
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+      const flow = JSON.stringify(scenario.execution.flow);
+      expect(flow).toContain("waitForNoOutbound");
+      expect(flow).not.toContain("not authorized");
+    }
+  });
+
+  it("never slices bounded gateway log snapshots with absolute cursors", () => {
+    expect(readQaScenarioPackYamlSource()).not.toMatch(
+      /readGatewayLogs\s*\(\s*\)[^\r\n]*\.slice\s*\(/u,
+    );
+  });
+
   it("loads live gateway sentinel scenarios for harness self-health", () => {
     const scenarioIds = [
       "plugin-hook-health-sentinel",

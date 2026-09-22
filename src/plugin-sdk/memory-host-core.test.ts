@@ -15,6 +15,7 @@ import {
   registerMemoryCapability,
   registerTestMemoryPromptBuilder,
 } from "../plugins/memory-state.test-fixtures.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import {
   buildActiveMemoryPromptSection,
   listMemoryHostPublicArtifacts,
@@ -27,8 +28,9 @@ async function createFixtureRoot(prefix: string): Promise<string> {
 }
 
 describe("memory-host-core helpers", () => {
-  afterEach(() => {
+  afterEach(async () => {
     clearMemoryPluginState();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();

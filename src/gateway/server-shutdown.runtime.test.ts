@@ -2,17 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   loaded: [] as string[],
-  close: vi.fn(),
+  prepareClose: vi.fn(),
+  drainEmbeddingProviders: vi.fn(),
+  completeClose: vi.fn(),
   flushSessionChanges: vi.fn(),
   stopPlugins: vi.fn(),
-  clearPluginRegistry: vi.fn(),
   preparePluginRegistryShutdown: vi.fn(async () => undefined),
 }));
 
 vi.mock("./server-close.runtime.js", () => {
   state.loaded.push("server-close");
   return {
-    createGatewayCloseHandler: state.close,
+    prepareGatewayClose: state.prepareClose,
+    completeGatewayClose: state.completeClose,
     drainActiveSessionsForShutdown: vi.fn(),
     runGatewayClosePrelude: vi.fn(),
   };
@@ -42,8 +44,11 @@ vi.mock("../agents/agent-bundle-lsp-runtime.js", () => {
   return { disposeAllBundleLspRuntimes: vi.fn() };
 });
 vi.mock("./embeddings-http.js", () => {
+  throw new Error("shutdown preparation must not load embeddings HTTP");
+});
+vi.mock("./embeddings-provider-lifetime.js", () => {
   state.loaded.push("embeddings");
-  return { drainRetainedOpenAiEmbeddingProviders: vi.fn() };
+  return { drainRetainedOpenAiEmbeddingProviders: state.drainEmbeddingProviders };
 });
 vi.mock("../hooks/gmail-watcher.js", () => {
   state.loaded.push("gmail-watcher");
@@ -60,7 +65,6 @@ vi.mock("../agents/provider-transport-dispatcher-pool.js", () => {
 vi.mock("../plugins/runtime.js", () => {
   state.loaded.push("plugin-runtime");
   return {
-    clearActivePluginRegistry: state.clearPluginRegistry,
     prepareActivePluginRegistryShutdown: state.preparePluginRegistryShutdown,
   };
 });
@@ -87,10 +91,11 @@ describe("gateway shutdown runtime", () => {
         "plugin-runtime",
       ].toSorted(),
     );
-    expect(runtime.createGatewayCloseHandler).toBe(state.close);
+    expect(runtime.prepareGatewayClose).toBe(state.prepareClose);
+    expect(runtime.drainRetainedOpenAiEmbeddingProviders).toBe(state.drainEmbeddingProviders);
+    expect(runtime.completeGatewayClose).toBe(state.completeClose);
     expect(runtime.flushPendingSessionsChangedEvents).toBe(state.flushSessionChanges);
     expect(runtime.runGlobalGatewayStopSafely).toBe(state.stopPlugins);
-    expect(runtime.clearActivePluginRegistry).toBe(state.clearPluginRegistry);
     expect(state.preparePluginRegistryShutdown).toHaveBeenCalledOnce();
   });
 });

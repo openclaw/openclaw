@@ -32,6 +32,9 @@ describe("node worker admission re-arm journal", () => {
     const transport: NodeWorkerSupervisorTransport = {
       isCurrent: () => true,
       hasCurrentRunner: () => true,
+      async getCurrentNode(nodeId) {
+        return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+      },
       listCurrentNodes: async () => [
         {
           nodeId: "node-1",

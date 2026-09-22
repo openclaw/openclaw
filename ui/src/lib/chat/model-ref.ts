@@ -1,4 +1,5 @@
 // Chat model reference normalization.
+import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 
 const LEGACY_OPENAI_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
@@ -179,7 +180,9 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
       continue;
     }
 
-    const qualifiedKey = createQualifiedCatalogKey(entry);
+    const qualifiedKey = normalizeAgentModelRefForConfig(
+      buildQualifiedChatModelValue(entry.id, entry.provider),
+    );
     const normalizedName = name.toLowerCase();
     const providerKey = createNameProviderKey(name, entry.provider);
 
@@ -194,7 +197,9 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
 
   const displayLookup = new Map<string, string>();
   for (const entry of catalog) {
-    const qualifiedKey = createQualifiedCatalogKey(entry);
+    const qualifiedKey = normalizeAgentModelRefForConfig(
+      buildQualifiedChatModelValue(entry.id, entry.provider),
+    );
     const name = resolveCatalogDisplayName(entry);
     if (!name) {
       displayLookup.set(qualifiedKey, formatRawCatalogLabel(entry));
@@ -228,7 +233,9 @@ export function formatCatalogChatModelDisplayFromLookup(
     return "";
   }
 
-  return displayLookup.get(trimmed.toLowerCase()) ?? formatChatModelDisplay(trimmed);
+  return (
+    displayLookup.get(normalizeAgentModelRefForConfig(trimmed)) ?? formatChatModelDisplay(trimmed)
+  );
 }
 
 export function buildChatModelOptionFromLookup(
@@ -238,6 +245,7 @@ export function buildChatModelOptionFromLookup(
   const value = buildQualifiedChatModelValue(entry.id, entry.provider);
   return {
     value,
-    label: displayLookup.get(value.toLowerCase()) ?? formatRawCatalogLabel(entry),
+    label:
+      displayLookup.get(normalizeAgentModelRefForConfig(value)) ?? formatRawCatalogLabel(entry),
   };
 }

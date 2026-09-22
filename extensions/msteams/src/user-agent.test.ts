@@ -83,11 +83,7 @@ describe("buildUserAgent", () => {
   });
 
   it("sends the generated User-Agent in Graph requests by default", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce(
-      new Response(JSON.stringify({ value: [] }), {
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const mockFetch = vi.fn().mockResolvedValueOnce(Response.json({ value: [] }));
     vi.stubGlobal("fetch", mockFetch);
 
     await fetchGraphJson({ token: "test-token", path: "/groups" });
@@ -99,11 +95,7 @@ describe("buildUserAgent", () => {
   });
 
   it("lets caller headers override the default Graph User-Agent", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce(
-      new Response(JSON.stringify({ value: [] }), {
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const mockFetch = vi.fn().mockResolvedValueOnce(Response.json({ value: [] }));
     vi.stubGlobal("fetch", mockFetch);
 
     await fetchGraphJson({

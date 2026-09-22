@@ -24,16 +24,37 @@ export function describeBrowserTool(opts: {
     `For Chrome MCP existing-session profiles, omit timeoutMs on act:type, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.${evaluateEnabled ? " act:evaluate supports timeoutMs." : ""}`,
     ...(!opts.capabilities.tabBound
       ? [
-          'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
+          'Prefer the host browser; auto-route to a connected browser node only when the host has no usable browser capability. Select another location with target="node" or node=<id|name>; configured node pins also take precedence.',
         ]
       : []),
     "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc). For tab operations, targetId also accepts tabId handles (t1) and labels from action=tabs.",
     "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
+    ...(!opts.capabilities.tabBound
+      ? [
+          'Only create a Browser dashboard when the user asks for a dashboard. Opening the browser sidebar or side panel does not require a widget. For a requested agent-controllable HTTP(S) dashboard, first call tool dashboard with action="widget_put", pluginKind="browser:dashboard", name=<stable widget name>, props={url}, and size="full". Next call tool browser with action="open", dashboard=<that widget name>, and no targetUrl. Then call tool dashboard with action="set_presentation", presentation="expanded". The dashboard tool owns widget authoring and presentation; the browser tool owns page interaction. The widget uses the local managed openclaw profile by default. For snapshot, navigate, act, and other tab actions, call tool browser with dashboard=<widget name>; omit targetId and route overrides. This operates the same page the user sees and preserves it while hidden and through ordinary cleanup. Call browser with action="close" and dashboard to request stop, or action="open" and dashboard to resume its saved URL. A session:website widget is a lightweight iframe and cannot be controlled through this selector.',
+        ]
+      : []),
     'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
     "Repeated compatible snapshots with stable document identity mark newly appeared ref-bearing elements with [new].",
     `navigate returns the loaded page's compact snapshot inline (efficient interactive tier; use action=snapshot for a full snapshot); do not call snapshot after navigate.${opts.capabilities.actKinds.includes("batch") ? " Batch act results that report a cross-document navigation also include fresh page state;" : ""} After a single act that triggers navigation, snapshot before using refs.`,
     "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
-    `For page text, use a selector-scoped snapshot${evaluateEnabled ? " or act:evaluate" : ""} that returns only relevant text or structured data, then reason over that bounded result with the active model. Use efficient snapshots for controls and action discovery; they omit most non-interactive prose.`,
+    actions.has("text")
+      ? "For page prose, use action=text with optional selector and maxChars; it reads the first selector match, else article, main, or body. Use efficient snapshots for controls; they omit most prose."
+      : `For page text, use snapshot${evaluateEnabled ? " or a bounded act:evaluate" : ""}; efficient snapshots omit most prose.`,
+    "Use snapshot query to keep lines matching all whitespace-separated tokens, case-insensitively; matching lines retain element refs.",
+    ...(actions.has("requests")
+      ? [
+          "Use requests for the recent network log; filter matches URL/type, limit defaults to 50, and clear=true clears the collected log after reading.",
+        ]
+      : []),
+    ...(actions.has("errors")
+      ? ["Use errors for page errors; limit defaults to 50, clear=true clears after reading."]
+      : []),
+    ...(actions.has("emulate")
+      ? [
+          "Use emulate with device, colorScheme, timezoneId, or locale; at least one setting is required.",
+        ]
+      : []),
     ...(actions.has("upload")
       ? [
           "For file chooser uploads, pass the trigger ref with paths in the same upload call when available; use paths-only arming only when a later trigger is intentional. Use inputRef or element to set a file input directly.",

@@ -13,10 +13,11 @@ import {
 import {
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceiptInDatabase,
-  inspectActiveCronRunReceipt,
-  isCronRunReceiptOwnerDefinitelyStale,
+  isCronRunReceiptOwnerStale,
+  listActiveCronRunReceiptJobIdsInDatabase,
   type CronRunReceiptRecoveryCandidate,
 } from "../store/run-receipt-store.js";
+import { isCronRunTriggerStateRetiredInDatabase } from "../store/run-receipt-trigger-state.js";
 import type { CronJob } from "../types.js";
 import {
   type CronMaintenanceOptions,
@@ -36,6 +37,7 @@ export type CronRunRecoveryProposal = {
   jobId: string;
   queuedAtMs?: number;
   runningAtMs?: number;
+  runningReceiptId?: string;
   receipt?: CronRunReceiptRecoveryCandidate;
 };
 
@@ -68,6 +70,7 @@ function repairInDatabase(params: {
   database: OpenClawStateDatabase;
   proposal: CronRunRecoveryProposal;
   proposedReceiptIsStale: boolean;
+  mode: "startup" | "reclaim";
 }): CronRunRecoveryResult {
   const { state, database, proposal } = params;
   const storeKey = cronStoreKey(state.deps.storePath);
@@ -101,11 +104,18 @@ function repairInDatabase(params: {
         handle: proposal.receipt,
         status: "interrupted",
         finishedAtMs: state.deps.nowMs(),
-        error: "cron: owner exited after the job row was finalized",
+        error: "cron: owner unavailable after the job row was finalized",
       });
       return { kind: "repaired", notifications: [] };
     }
     return { kind: "superseded" };
+  }
+  if (
+    proposal.runningAtMs !== undefined &&
+    job.state.runningAtMs === proposal.runningAtMs &&
+    job.state.runningReceiptId !== proposal.runningReceiptId
+  ) {
+    return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
   }
   let changed = false;
   if (proposal.queuedAtMs !== undefined && job.state.queuedAtMs === proposal.queuedAtMs) {
@@ -116,7 +126,7 @@ function repairInDatabase(params: {
         handle: proposal.receipt,
         status: "interrupted",
         finishedAtMs: state.deps.nowMs(),
-        error: "cron: queued run interrupted by owner process exit",
+        error: "cron: queued run interrupted because owner is unavailable",
       });
     }
     changed = true;
@@ -132,7 +142,7 @@ function repairInDatabase(params: {
           handle: proposal.receipt,
           status: "interrupted",
           finishedAtMs: state.deps.nowMs(),
-          error: "cron: owner exited after run state was already finalized",
+          error: "cron: owner unavailable after run state was already finalized",
         });
         return { kind: "repaired", notifications: [] };
       }
@@ -143,15 +153,28 @@ function repairInDatabase(params: {
       jobId: proposal.jobId,
       startedAt: proposal.runningAtMs,
       storeKey,
-      receiptId: proposal.receipt?.receiptId,
+      receiptId: proposal.runningReceiptId ?? proposal.receipt?.receiptId,
     });
     const finalized = task.finalized;
+    const receiptId = proposal.runningReceiptId ?? currentReceipt?.receiptId ?? task.receiptId;
+    const triggerStateRetired = receiptId
+      ? isCronRunTriggerStateRetiredInDatabase({
+          database: database.db,
+          handle: {
+            receiptId,
+            storeKey,
+            jobId: proposal.jobId,
+            startedAtMs: proposal.runningAtMs,
+          },
+        })
+      : false;
     const restored = finalized
       ? restoreFinalizedStartupRun({
           state,
           job,
           runningAtMs: proposal.runningAtMs,
           entry: finalized.entry,
+          triggerStateRetired,
           ...(finalized.scriptResult ? { scriptResult: finalized.scriptResult } : {}),
           ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
           deferredNotifications: notifications,
@@ -166,6 +189,7 @@ function repairInDatabase(params: {
         taskRunId: task.taskRunId,
         runningAtMs: proposal.runningAtMs,
         nowMs,
+        recoverInterruptedOneShot: params.mode === "startup",
         deferredNotifications: notifications,
       });
       replacementAtMs = interrupted.replacementAtMs;
@@ -176,6 +200,11 @@ function repairInDatabase(params: {
           nowMs,
           deferredNotifications: notifications,
         });
+      }
+      if (params.mode === "startup" && job.schedule.kind === "at") {
+        // Commit the pending occurrence with receipt retirement, so another
+        // restart before admission cannot consume it as terminal run history.
+        job.state.startupCatchupAtMs = job.state.nextRunAtMs;
       }
     }
     if (proposal.receipt) {
@@ -193,7 +222,7 @@ function repairInDatabase(params: {
         error:
           restored && finalized
             ? finalized.entry.error
-            : "cron: job interrupted by owner process exit",
+            : "cron: job interrupted because owner is unavailable",
       });
     }
     if (restored?.shouldDelete) {
@@ -213,7 +242,7 @@ function repairInDatabase(params: {
         handle: proposal.receipt,
         status: "interrupted",
         finishedAtMs: state.deps.nowMs(),
-        error: "cron: owner exited after run marker retirement",
+        error: "cron: owner unavailable after run marker retirement",
       });
       return { kind: "repaired", notifications };
     }
@@ -224,7 +253,9 @@ function repairInDatabase(params: {
     kind: "repaired",
     ...(interrupted ? { interrupted } : {}),
     notifications,
-    ...(replacementAtMs === undefined && proposal.runningAtMs !== undefined
+    ...(replacementAtMs === undefined &&
+    proposal.runningAtMs !== undefined &&
+    !(params.mode === "startup" && interrupted && job.schedule.kind === "at")
       ? { skipStartupCatchup: true }
       : {}),
   };
@@ -236,16 +267,34 @@ export function proposeCronRunRecovery(
   queuedAtMs: number | undefined,
   runningAtMs: number | undefined,
 ): CronRunRecoveryProposal {
-  return {
+  const proposal = {
     jobId,
     ...(queuedAtMs !== undefined ? { queuedAtMs } : {}),
-    ...(queuedAtMs !== undefined || runningAtMs !== undefined
-      ? {
-          receipt: inspectActiveCronRunReceipt({ storePath: state.deps.storePath, jobId }),
-        }
-      : {}),
     ...(runningAtMs !== undefined ? { runningAtMs } : {}),
   };
+  if (queuedAtMs === undefined && runningAtMs === undefined) {
+    return proposal;
+  }
+  // Observe the pending marker and execution authority in one transaction.
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const storePath = state.deps.storePath;
+      const receipt = findActiveCronRunReceiptInDatabase({ database: db, storePath, jobId });
+      const rows =
+        runningAtMs === undefined
+          ? []
+          : loadCronRows(db, cronStoreKey(storePath), new Set([jobId]));
+      const job = loadedCronStoreFromRows(rows).store.jobs[0];
+      return {
+        ...proposal,
+        receipt,
+        runningReceiptId:
+          job?.state.runningAtMs === runningAtMs ? job?.state.runningReceiptId : undefined,
+      };
+    },
+    {},
+    { operationLabel: "cron.run-recovery.propose" },
+  );
 }
 
 /** Reconciles the bounded durable marker set so live siblings can adopt dead owners. */
@@ -253,10 +302,12 @@ export function recoverNonTerminalCronRunReceipts(state: CronServiceState): {
   repaired: boolean;
   receipts: CronRunReceiptRecoveryCandidate[];
   notifications: DeferredCronNotifications;
+  interruptedRuns: InterruptedStartupRun[];
 } {
   let repaired = false;
   const receipts: CronRunReceiptRecoveryCandidate[] = [];
   const notifications: DeferredCronNotifications = [];
+  const interruptedRuns: InterruptedStartupRun[] = [];
   for (const job of state.store?.jobs ?? []) {
     const queuedAtMs = job.state.queuedAtMs;
     const runningAtMs = job.state.runningAtMs;
@@ -276,22 +327,26 @@ export function recoverNonTerminalCronRunReceipts(state: CronServiceState): {
     } else {
       repaired = true;
       notifications.push(...result.notifications);
+      if (result.interrupted) {
+        interruptedRuns.push(result.interrupted);
+      }
     }
   }
-  return { repaired, receipts, notifications };
+  return { repaired, receipts, notifications, interruptedRuns };
 }
 
 export function recoverCronRunProposal(
   state: CronServiceState,
   proposal: CronRunRecoveryProposal,
+  mode: "startup" | "reclaim" = "reclaim",
 ): CronRunRecoveryResult {
   // Process liveness is observed before taking SQLite's write lock, but the
   // transaction decides only after proving this exact receipt is still active.
   const proposedReceiptIsStale = proposal.receipt
-    ? isCronRunReceiptOwnerDefinitelyStale(proposal.receipt)
+    ? isCronRunReceiptOwnerStale(proposal.receipt, state.deps.nowMs())
     : true;
   const result = runOpenClawStateWriteTransaction(
-    (database) => repairInDatabase({ state, database, proposal, proposedReceiptIsStale }),
+    (database) => repairInDatabase({ state, database, proposal, proposedReceiptIsStale, mode }),
     {},
     { operationLabel: "cron.run-recovery" },
   );
@@ -317,17 +372,15 @@ export function recomputeUnownedCronSchedules(
       const notifications: DeferredCronNotifications = [];
       let changed = false;
       const jobs: CronJob[] = [];
-      for (const row of loadCronRows(db, storeKey)) {
-        if (
-          findActiveCronRunReceiptInDatabase({
-            database: db,
-            storePath: state.deps.storePath,
-            jobId: row.job_id,
-          })
-        ) {
+      const rows = loadCronRows(db, storeKey);
+      const decodedJobs = loadedCronStoreFromRows(rows).store.jobs;
+      const jobsById = new Map(decodedJobs.map((job) => [job.id, job]));
+      const activeJobIds = listActiveCronRunReceiptJobIdsInDatabase(db, state.deps.storePath);
+      for (const row of rows) {
+        if (activeJobIds.has(row.job_id)) {
           continue;
         }
-        const job = loadedCronStoreFromRows([row]).store.jobs[0];
+        const job = jobsById.get(row.job_id);
         if (!job) {
           continue;
         }

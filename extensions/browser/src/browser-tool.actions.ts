@@ -13,60 +13,37 @@ import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   browserAct,
   browserConsoleMessages,
+  browserRequests,
+  browserErrors,
+  browserPageText,
+  browserEmulateSetting,
   browserDownload,
   browserTabs,
   browserWaitForDownload,
   jsonResult,
-  normalizeBrowserTabsResult,
   normalizeOptionalString,
   readStringParam,
   readStringValue,
   type BrowserTabsResult,
 } from "./browser-tool.runtime.js";
-import { appendNavigatedPageState, wrapBrowserExternalJson } from "./browser-tool.snapshot.js";
-import { resolveBrowserActRequestTimeoutMs } from "./browser/act-policy.js";
+import {
+  appendNavigatedPageState,
+  formatBrowserDebugLogResult,
+  wrapBrowserExternalJson,
+  wrapBrowserExternalText,
+} from "./browser-tool.snapshot.js";
+import { EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS } from "./browser/act-policy.js";
 import type {
   BrowserBatchAbort,
   BrowserBatchActionResult,
 } from "./browser/client-actions-types.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
-  DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
+  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
 } from "./browser/constants.js";
 import { formatErrorMessage } from "./infra/errors.js";
 
-const browserToolActionDeps = {
-  browserAct,
-  browserConsoleMessages,
-  browserDownload,
-  browserTabs,
-  browserWaitForDownload,
-};
-
-const BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS = 5_000;
-
 type BrowserActRequest = Parameters<typeof browserAct>[1];
-type BrowserActRequestWithTimeout = BrowserActRequest & { timeoutMs?: number };
-
-const ACT_TIMEOUT_KINDS = new Set([
-  "click",
-  "type",
-  "hover",
-  "scrollIntoView",
-  "drag",
-  "select",
-  "fill",
-  "evaluate",
-  "wait",
-]);
-const EXISTING_SESSION_TIMEOUT_REJECTED_KINDS = new Set([
-  "type",
-  "hover",
-  "scrollIntoView",
-  "drag",
-  "select",
-  "fill",
-]);
 
 function normalizePositiveTimeoutMs(value: unknown): number | undefined {
   return readPositiveIntegerParam({ value }, "value", {
@@ -84,19 +61,27 @@ function withLocalActTimeout(
   request: BrowserActRequest,
   usesChromeMcp: boolean,
 ): BrowserActRequest {
-  const typedRequest = request as BrowserActRequestWithTimeout;
   if (
-    normalizePositiveTimeoutMs(typedRequest.timeoutMs) !== undefined ||
-    !ACT_TIMEOUT_KINDS.has(request.kind) ||
-    (usesChromeMcp && EXISTING_SESSION_TIMEOUT_REJECTED_KINDS.has(request.kind))
+    normalizePositiveTimeoutMs("timeoutMs" in request ? request.timeoutMs : undefined) !==
+      undefined ||
+    (usesChromeMcp && !EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS.has(request.kind))
   ) {
     return request;
   }
-  return { ...typedRequest, timeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS } as BrowserActRequest;
-}
-
-function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefined {
-  return resolveBrowserActRequestTimeoutMs(request);
+  switch (request.kind) {
+    case "click":
+    case "type":
+    case "hover":
+    case "scrollIntoView":
+    case "drag":
+    case "select":
+    case "fill":
+    case "evaluate":
+    case "wait":
+      return { ...request, timeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS };
+    default:
+      return request;
+  }
 }
 
 type BrowserTabLike = {
@@ -105,6 +90,7 @@ type BrowserTabLike = {
   label?: unknown;
   title?: unknown;
   url?: unknown;
+  urlUnavailableReason?: unknown;
   type?: unknown;
   targetId?: unknown;
   wsUrl?: unknown;
@@ -125,6 +111,10 @@ function formatAgentTab(tab: unknown): Record<string, unknown> {
     ...(label ? { label } : {}),
     title: source.title,
     url: source.url,
+    ...(source.urlUnavailableReason === "navigation_blocked" ||
+    source.urlUnavailableReason === "navigation_check_failed"
+      ? { urlUnavailableReason: source.urlUnavailableReason }
+      : {}),
     type: source.type,
     ...(targetId ? { targetId } : {}),
     ...(source.wsUrl ? { wsUrl: source.wsUrl } : {}),
@@ -160,7 +150,6 @@ export function formatBrowserExternalToolResult(params: {
   kind: "act" | "download" | "tabs";
   payload: unknown;
 }): AgentToolResult<unknown> {
-  const result = jsonResult(params.payload);
   const wrapped = wrapBrowserExternalJson({
     kind: params.kind,
     payload: params.payload,
@@ -169,8 +158,8 @@ export function formatBrowserExternalToolResult(params: {
   // The Browser tool already marks the turn as network-tainted, and replay
   // strips details; changing this public structured payload breaks callers.
   return {
-    ...result,
     content: [{ type: "text", text: wrapped.wrappedText }],
+    details: params.payload,
   };
 }
 
@@ -210,7 +199,7 @@ function replaceStaleTargetIdInActRequest(
   if (!normalizeOptionalString(request.targetId) || !targetId) {
     return null;
   }
-  return { ...request, targetId } as BrowserActRequest;
+  return { ...request, targetId };
 }
 
 function canRetryChromeActAfterSoleTargetRefresh(request: BrowserActRequest): boolean {
@@ -236,16 +225,7 @@ export async function executeTabsAction(params: {
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
   const { baseUrl, profile, timeoutMs, proxyRequest } = params;
-  if (proxyRequest) {
-    const result = normalizeBrowserTabsResult(
-      await proxyRequest({ method: "GET", path: "/tabs", profile, timeoutMs }),
-    );
-    const tabs = result.tabs.filter(
-      (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
-    );
-    return formatTabsToolResult({ running: result.running, tabs });
-  }
-  const result = await browserToolActionDeps.browserTabs(baseUrl, {
+  const result = await browserTabs(proxyRequest ?? baseUrl, {
     profile,
     timeoutMs,
     signal: params.signal,
@@ -304,57 +284,135 @@ export async function executeConsoleAction(params: {
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
-  const level = normalizeOptionalString(input.level);
-  const targetId = normalizeOptionalString(input.targetId);
-  if (proxyRequest) {
-    const result = (await proxyRequest({
-      method: "GET",
-      path: "/console",
-      profile,
-      query: {
-        level,
-        targetId,
-      },
-    })) as { ok?: boolean; targetId?: string; messages?: unknown[] };
-    return formatConsoleToolResult(result);
-  }
-  const result = await browserToolActionDeps.browserConsoleMessages(baseUrl, {
-    level,
-    targetId,
+  const query = {
+    level: normalizeOptionalString(input.level),
+    targetId: normalizeOptionalString(input.targetId),
+  };
+  const result = await browserConsoleMessages(proxyRequest ?? baseUrl, {
+    ...query,
     profile,
     signal: params.signal,
   });
   return formatConsoleToolResult(result);
 }
 
-function resolveDownloadProxyTimeoutMs(timeoutMs: number | undefined): number {
-  const waitTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS;
-  // The node proxy must outlive the browser-server request; callBrowserProxy
-  // adds a second grace window for the outer Gateway node.invoke call.
-  return waitTimeoutMs + BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS;
+/** Read recent network requests, keeping counts aligned with the bounded payload. */
+export async function executeRequestsAction(
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const targetId = normalizeOptionalString(input.targetId);
+  const filter = normalizeOptionalString(input.filter);
+  const clear = typeof input.clear === "boolean" ? input.clear : undefined;
+  const limit =
+    readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
+    50;
+  const result = await browserRequests(proxyRequest ?? baseUrl, {
+    targetId,
+    filter,
+    clear,
+    profile,
+    signal,
+  });
+  return formatBrowserDebugLogResult("requests", result, result.requests, limit);
 }
 
-type BrowserDownloadRequest =
-  | { action: "download"; route: "/download"; ref: string; path: string }
-  | { action: "waitfordownload"; route: "/wait/download"; path?: string };
+/** Read recent page errors, keeping counts aligned with the bounded payload. */
+export async function executeErrorsAction(
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const targetId = normalizeOptionalString(input.targetId);
+  const clear = typeof input.clear === "boolean" ? input.clear : undefined;
+  const limit =
+    readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
+    50;
+  const result = await browserErrors(proxyRequest ?? baseUrl, {
+    targetId,
+    clear,
+    profile,
+    signal,
+  });
+  return formatBrowserDebugLogResult("errors", result, result.errors, limit);
+}
 
-function readBrowserDownloadRequest(
-  action: BrowserDownloadRequest["action"],
-  input: Record<string, unknown>,
-): BrowserDownloadRequest {
-  if (action === "download") {
-    return {
-      action,
-      route: "/download",
-      ref: readStringParam(input, "ref", { required: true }),
-      path: readStringParam(input, "path", { required: true }),
-    };
-  }
+/** Extract visible page prose with the same trust boundary as snapshots. */
+export async function executeTextAction(
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const targetId = normalizeOptionalString(input.targetId);
+  const selector = normalizeOptionalString(input.selector);
+  const maxChars = Math.min(
+    readPositiveIntegerParam(input, "maxChars", {
+      message: "maxChars must be a positive integer.",
+    }) ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+    DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+  );
+  const result = await browserPageText(proxyRequest ?? baseUrl, {
+    targetId,
+    selector,
+    maxChars,
+    profile,
+    signal,
+  });
+  const wrapped = wrapBrowserExternalText({
+    value: result.text,
+    marker: "\n[truncated — retry with a narrower selector]",
+    includeWarning: true,
+    maxChars,
+    prefix: result.truncated
+      ? "Page text was truncated. Retry with a narrower selector."
+      : undefined,
+  });
   return {
-    action,
-    route: "/wait/download",
-    path: readStringParam(input, "path"),
+    content: [{ type: "text", text: wrapped.text }],
+    details: {
+      ok: result.ok,
+      targetId: result.targetId,
+      url: result.url,
+      truncated: result.truncated || wrapped.truncated,
+      externalContent: { untrusted: true, source: "browser", kind: "text", wrapped: true },
+    },
   };
+}
+
+/** Apply settings in order and pin later changes to the first resolved tab. */
+export async function executeEmulateAction(
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const settings = [
+    ["device", "device", "name"],
+    ["colorScheme", "media", "colorScheme"],
+    ["timezoneId", "timezone", "timezoneId"],
+    ["locale", "locale", "locale"],
+  ] as const;
+  const requested = settings.flatMap(([field, setting, key]) => {
+    const value = normalizeOptionalString(input[field]);
+    return value ? [{ field, setting, key, value }] : [];
+  });
+  if (requested.length === 0) {
+    throw new Error("emulate requires at least one of device, colorScheme, timezoneId, or locale.");
+  }
+  const colorScheme = requested.find(({ field }) => field === "colorScheme")?.value;
+  if (colorScheme && !["dark", "light", "no-preference", "none"].includes(colorScheme)) {
+    throw new Error("colorScheme must be dark|light|no-preference|none.");
+  }
+  let targetId = normalizeOptionalString(input.targetId);
+  const applied: string[] = [];
+  for (const { field, setting, key, value } of requested) {
+    const body = { targetId, [key]: value };
+    const result = await browserEmulateSetting(proxyRequest ?? baseUrl, {
+      setting,
+      body,
+      profile,
+      signal,
+    });
+    targetId = result.targetId ?? targetId;
+    applied.push(field);
+  }
+  return jsonResult({ ok: true, targetId, applied });
 }
 
 /** Execute explicit Browser download operations through the local or node-host path. */
@@ -370,31 +428,30 @@ export async function executeDownloadAction(params: {
   const { action, input, baseUrl, profile, proxyRequest } = params;
   const targetId = normalizeOptionalString(input.targetId);
   const timeoutMs = normalizePositiveTimeoutMs(input.timeoutMs);
-  const request = readBrowserDownloadRequest(action, input);
-  const result = proxyRequest
-    ? await proxyRequest({
-        method: "POST",
-        path: request.route,
-        profile,
-        timeoutMs: resolveDownloadProxyTimeoutMs(timeoutMs),
-        body:
-          request.action === "download"
-            ? { ref: request.ref, path: request.path, targetId, timeoutMs }
-            : { path: request.path, targetId, timeoutMs },
-      })
-    : request.action === "download"
-      ? await browserToolActionDeps.browserDownload(baseUrl, {
-          ref: request.ref,
-          path: request.path,
+  const download = action === "download";
+  const request = download
+    ? {
+        kind: "download" as const,
+        body: {
+          ref: readStringParam(input, "ref", { required: true }),
+          path: readStringParam(input, "path", { required: true }),
           targetId,
           timeoutMs,
+        },
+      }
+    : {
+        kind: "waitfordownload" as const,
+        body: { path: readStringParam(input, "path"), targetId, timeoutMs },
+      };
+  const result =
+    request.kind === "download"
+      ? await browserDownload(proxyRequest ?? baseUrl, {
+          ...request.body,
           profile,
           signal: params.signal,
         })
-      : await browserToolActionDeps.browserWaitForDownload(baseUrl, {
-          path: request.path,
-          targetId,
-          timeoutMs,
+      : await browserWaitForDownload(proxyRequest ?? baseUrl, {
+          ...request.body,
           profile,
           signal: params.signal,
         });
@@ -444,24 +501,19 @@ export async function executeActAction(params: {
       signal: params.signal,
     });
   };
-  try {
-    const result = proxyRequest
-      ? await proxyRequest({
-          method: "POST",
-          path: "/act",
-          profile,
-          body: request,
-          timeoutMs: resolveActProxyTimeoutMs(request),
-        })
-      : await browserToolActionDeps.browserAct(baseUrl, effectiveRequest, {
-          profile,
-          signal: params.signal,
-        });
+  const dispatchAndFinishAct = async (actionRequest: BrowserActRequest) => {
+    const result = await browserAct(proxyRequest ?? baseUrl, actionRequest, {
+      profile,
+      signal: params.signal,
+    });
     return await finishActResult(
       result,
       readStringValue((result as { targetId?: unknown }).targetId) ??
-        readStringValue(effectiveRequest.targetId),
+        readStringValue(actionRequest.targetId),
     );
+  };
+  try {
+    return await dispatchAndFinishAct(effectiveRequest);
   } catch (err) {
     const proxyRoute = proxyRequest?.route();
     const usesChromeMcp = proxyRequest
@@ -471,21 +523,14 @@ export async function executeActAction(params: {
       proxyRoute?.status === "resolved" ? proxyRoute.profile : (profile ?? "default");
     if (isChromeStaleTargetError(usesChromeMcp, err)) {
       let tabRefreshError: unknown;
-      const availability = proxyRequest
-        ? await proxyRequest({ method: "GET", path: "/tabs", profile })
-            .then(normalizeBrowserTabsResult)
-            .catch((refreshError: unknown): BrowserTabsResult => {
-              params.signal?.throwIfAborted();
-              tabRefreshError = refreshError;
-              return { running: false, tabs: [] };
-            })
-        : await browserToolActionDeps
-            .browserTabs(baseUrl, { profile, signal: params.signal })
-            .catch((refreshError: unknown): BrowserTabsResult => {
-              params.signal?.throwIfAborted();
-              tabRefreshError = refreshError;
-              return { running: false, tabs: [] };
-            });
+      const availability = await browserTabs(proxyRequest ?? baseUrl, {
+        profile,
+        signal: params.signal,
+      }).catch((refreshError: unknown): BrowserTabsResult => {
+        params.signal?.throwIfAborted();
+        tabRefreshError = refreshError;
+        return { running: false, tabs: [] };
+      });
       const tabs = availability.tabs;
       const freshTargetId =
         tabs.length === 1
@@ -502,23 +547,7 @@ export async function executeActAction(params: {
         canRetryChromeActAfterSoleTargetRefresh(effectiveRequest) &&
         tabs.length === 1
       ) {
-        const retryResult = proxyRequest
-          ? await proxyRequest({
-              method: "POST",
-              path: "/act",
-              profile,
-              body: retryRequest,
-              timeoutMs: resolveActProxyTimeoutMs(retryRequest),
-            })
-          : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
-              profile,
-              signal: params.signal,
-            });
-        return await finishActResult(
-          retryResult,
-          readStringValue((retryResult as { targetId?: unknown }).targetId) ??
-            readStringValue(retryRequest.targetId),
-        );
+        return await dispatchAndFinishAct(retryRequest);
       }
       if (tabRefreshError) {
         throw new Error(

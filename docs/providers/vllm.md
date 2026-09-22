@@ -20,7 +20,13 @@ vLLM serves open-source (and some custom) models through an **OpenAI-compatible*
 
 <Steps>
   <Step title="Start vLLM with an OpenAI-compatible server">
-    Your base URL must expose `/v1` endpoints (`/v1/models`, `/v1/chat/completions`). vLLM commonly runs on:
+    Your base URL must expose `/v1` endpoints (`/v1/models`, `/v1/chat/completions`). Start the server with the model you want to serve:
+
+    ```bash
+    vllm serve <model-id>
+    ```
+
+    See the [vLLM online serving docs](https://docs.vllm.ai/en/latest/serving/online_serving/) for flags. vLLM commonly runs on:
 
     ```text
     http://127.0.0.1:8000/v1

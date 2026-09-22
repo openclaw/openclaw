@@ -7,6 +7,8 @@ import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "./system-prompt-cache-boundary.js";
 
 describe("system prompt cache boundary helpers", () => {
@@ -99,5 +101,18 @@ describe("ensureSystemPromptCacheBoundary", () => {
       stablePrefix: "Marker-free override",
       dynamicSuffix: "Per-turn media task hint",
     });
+  });
+});
+
+describe("relocatable region splitting", () => {
+  const marked = (facts: string) =>
+    `${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}${facts}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`;
+
+  it("strips both markers from prompt text", () => {
+    const stripped = stripSystemPromptCacheBoundary(
+      `Behavioral guidance${marked("Runtime: session=alpha")}`,
+    );
+    expect(stripped).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
+    expect(stripped).toContain("Runtime: session=alpha");
   });
 });

@@ -1,38 +1,64 @@
 import { describe, expect, it } from "vitest";
 import { resolveMemorySearchConfig } from "../../../agents/memory-search.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace-default.js";
+import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 describe("legacy config migration end to end", () => {
   it("reshapes duplicate agent ids deterministically and keeps canonical entries", () => {
-    const duplicate = applyLegacyDoctorMigrations({
+    const duplicateRaw = {
       agents: {
         list: [
           { id: "main", name: "first" },
           { id: "main", name: "second" },
         ],
       },
+    };
+    const duplicate = applyLegacyDoctorMigrations(duplicateRaw, {
+      sourceConfigBeforeMigrations: duplicateRaw,
     });
     expect(duplicate.next).toEqual({
-      agents: { entries: { main: { name: "first" }, "main-2": { name: "second" } } },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          systemAgent: { agentId: "main" },
+          heartbeat: { agentId: "main" },
+        },
+        entries: {
+          main: { name: "first", workspace: resolveDefaultAgentWorkspaceDir() },
+          "main-2": { name: "second" },
+        },
+      },
     });
-    expect(applyLegacyDoctorMigrations(duplicate.next)).toEqual({ next: null, changes: [] });
+    expect(
+      applyLegacyDoctorMigrations(duplicate.next, { sourceConfigBeforeMigrations: duplicate.next }),
+    ).toEqual({ next: null, changes: [] });
 
-    const canonicalWins = applyLegacyDoctorMigrations({
+    const canonicalRaw = {
       agents: { entries: { main: { name: "canonical" } }, list: [{ id: "main", name: "old" }] },
+    };
+    const canonicalWins = applyLegacyDoctorMigrations(canonicalRaw, {
+      sourceConfigBeforeMigrations: canonicalRaw,
     });
     expect(canonicalWins.next).toEqual({ agents: { entries: { main: { name: "canonical" } } } });
 
-    const prototypeId = applyLegacyDoctorMigrations({
+    const prototypeRaw = {
       agents: { list: [{ id: "__proto__", name: "prototype-safe" }] },
+    };
+    const prototypeId = applyLegacyDoctorMigrations(prototypeRaw, {
+      sourceConfigBeforeMigrations: prototypeRaw,
     });
     const prototypeEntries = (prototypeId.next?.agents as { entries?: Record<string, unknown> })
       ?.entries;
     expect(Object.hasOwn(prototypeEntries ?? {}, "__proto__")).toBe(true);
 
-    const normalizedId = applyLegacyDoctorMigrations({
+    const normalizedRaw = {
       agents: { list: [{ id: "Team Ops", name: "normalized" }] },
+    };
+    const normalizedId = applyLegacyDoctorMigrations(normalizedRaw, {
+      sourceConfigBeforeMigrations: normalizedRaw,
     });
     expect(normalizedId.next).toEqual({
       agents: { entries: { "team-ops": { name: "normalized" } } },
@@ -76,7 +102,7 @@ describe("legacy config migration end to end", () => {
   ])(
     "migrates $name into validated effective memory settings",
     ({ canonical, defaults, expectedSources, expectedPaths }) => {
-      const result = migrateLegacyConfig({
+      const raw = {
         ...(canonical ? { memory: { search: canonical } } : {}),
         session: { dmScope: "per-peer" },
         agents: {
@@ -93,7 +119,8 @@ describe("legacy config migration end to end", () => {
             },
           },
         },
-      });
+      };
+      const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
       expect(result.partiallyValid).toBeUndefined();
       expect(result.config).not.toHaveProperty("agents.defaults.memory");
@@ -113,12 +140,14 @@ describe("legacy config migration end to end", () => {
         extraPaths: expectedPaths,
       });
       expect(validation.config.memory?.search?.experimental?.sessionMemory).toBe(!canonical);
-      expect(migrateLegacyConfig(validation.config)).toEqual({ config: null, changes: [] });
+      expect(
+        migrateLegacyConfig(validation.config, { sourceConfigBeforeMigrations: validation.config }),
+      ).toEqual({ config: null, changes: [] });
     },
   );
 
   it("canonicalizes a multi-family legacy config and is idempotent", () => {
-    const result = migrateLegacyConfig({
+    const raw = {
       env: { shellEnv: { enabled: true }, API_ORIGIN: "https://example.test" },
       agents: {
         defaults: {
@@ -193,7 +222,8 @@ describe("legacy config migration end to end", () => {
           },
         },
       },
-    });
+    };
+    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
     expect(result.partiallyValid).toBeUndefined();
     expect(result.config).toMatchObject({
@@ -235,7 +265,9 @@ describe("legacy config migration end to end", () => {
     );
     const validation = validateConfigObjectRaw(result.config);
     expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
-    expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
+    expect(
+      applyLegacyDoctorMigrations(result.config, { sourceConfigBeforeMigrations: result.config }),
+    ).toEqual({ next: null, changes: [] });
     const serialized = JSON.stringify(result.config);
     for (const key of [
       "pdfMaxBytesMb",
@@ -250,11 +282,29 @@ describe("legacy config migration end to end", () => {
     }
   });
 
+  it("loads WhatsApp-owned acknowledgement migration guidance", () => {
+    const raw = {
+      channels: {
+        whatsapp: {
+          ackReaction: { emoji: "👀", direct: true, group: "mentions" },
+        },
+      },
+    };
+    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+
+    expect(result.sourceConfig?.messages).toEqual({ ackReaction: "👀" });
+    expect(result.config?.channels?.whatsapp?.ackReaction).toBeUndefined();
+    expect(result.changes.join("\n")).toContain(
+      "cannot preserve both direct-message and mentioned-group acknowledgements",
+    );
+  });
+
   it("preserves canonical OpenAI personality over the retired prompt overlay", () => {
-    const result = migrateLegacyConfig({
+    const raw = {
       agents: { defaults: { promptOverlays: { gpt5: { personality: "off" } } } },
       plugins: { entries: { openai: { config: { personality: "friendly" } } } },
-    });
+    };
+    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
     expect(result.config?.plugins?.entries?.openai?.config?.personality).toBe("friendly");
     expect(result.config?.agents?.defaults?.promptOverlays).toBeUndefined();
@@ -264,7 +314,7 @@ describe("legacy config migration end to end", () => {
   });
 
   it("repairs unsupported OTel grpc once and is then a no-op", () => {
-    const result = migrateLegacyConfig({
+    const raw = {
       diagnostics: {
         otel: {
           enabled: true,
@@ -275,7 +325,8 @@ describe("legacy config migration end to end", () => {
           protocol: "grpc",
         },
       },
-    });
+    };
+    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
     expect(result.config?.diagnostics?.otel).toEqual({
       enabled: true,
@@ -285,6 +336,106 @@ describe("legacy config migration end to end", () => {
       logsExporter: "stdout",
     });
     expect(validateConfigObjectRaw(result.config).ok).toBe(true);
-    expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
+    expect(
+      applyLegacyDoctorMigrations(result.config, { sourceConfigBeforeMigrations: result.config }),
+    ).toEqual({ next: null, changes: [] });
+  });
+
+  it("migrates route and ACP dm peer kinds through validation and is idempotent", () => {
+    const raw = {
+      agents: { entries: { main: {} } },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "dm", id: "123" } },
+        },
+        {
+          type: "acp",
+          agentId: "main",
+          match: { channel: "discord", peer: { kind: "dm", id: "456" } },
+          acp: { mode: "persistent" },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "direct", id: "789" } },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "discord", peer: { kind: "group", id: "abc" } },
+        },
+      ],
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "bindings" })]);
+
+    const res = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    const bindings = res.config?.bindings as Array<{ match?: { peer?: { kind?: unknown } } }>;
+    expect(bindings.map((binding) => binding.match?.peer?.kind)).toEqual([
+      "direct",
+      "direct",
+      "direct",
+      "group",
+    ]);
+    expect(res.changes).toContain(
+      'Moved deprecated bindings[].match.peer.kind "dm" → "direct" for 2 bindings.',
+    );
+    expect(res.partiallyValid).toBeUndefined();
+    const validation = validateConfigObjectRaw(res.config);
+    expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
+    expect(migrateLegacyConfig(res.config, { sourceConfigBeforeMigrations: res.config })).toEqual({
+      config: null,
+      changes: [],
+    });
+  });
+
+  it("rewrites only exact dm values and leaves malformed peer kinds visible to validation", () => {
+    const raw = {
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "dm", id: "exact" } },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "DM", id: "uppercase" } },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: " dm ", id: "spaced" } },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: 42, id: "number" } },
+        },
+      ],
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "bindings" })]);
+
+    const res = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    const bindings =
+      (
+        res.config as {
+          bindings?: Array<{ match?: { peer?: { kind?: unknown } } }>;
+        }
+      )?.bindings ?? [];
+    expect(bindings.map((binding) => binding.match?.peer?.kind)).toEqual([
+      "direct",
+      "DM",
+      " dm ",
+      42,
+    ]);
+    expect(res.changes).toContain(
+      'Moved deprecated bindings[].match.peer.kind "dm" → "direct" for 1 binding.',
+    );
+    expect(res.partiallyValid).toBe(true);
+    expect(validateConfigObjectRaw(res.config).ok).toBe(false);
   });
 });

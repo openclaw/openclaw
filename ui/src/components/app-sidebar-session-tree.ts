@@ -1,16 +1,21 @@
 import type { GatewaySessionRow } from "../api/types.ts";
+import { areUiSessionKeysEquivalent, isSubagentSessionKey } from "../lib/sessions/session-key.ts";
+import { resolveSidebarSessionParentKey } from "./app-sidebar-session-parent.ts";
 import {
-  areUiSessionKeysEquivalent,
-  resolveUiSessionNavigationParentKey,
-} from "../lib/sessions/session-key.ts";
-import {
-  SIDEBAR_SESSION_NO_ATTENTION,
-  rowDemandsVisibility,
-  RowVisibilityReason,
-  sidebarSessionAttentionPriority,
+  summarizeSidebarSessionAttention,
   type SidebarKnownSessionAttention,
   type SidebarRecentSession,
+  type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
+
+function attributeChildAttention(
+  attention: SidebarSessionAttention,
+  childLabel: string,
+): SidebarSessionAttention {
+  return attention.kind === "error" && attention.childLabel === undefined
+    ? { ...attention, childLabel }
+    : attention;
+}
 
 /**
  * Pure projection of flat session rows into the sidebar's parent/child tree.
@@ -20,32 +25,25 @@ import {
  */
 export function projectSessionTree(params: {
   roots: readonly GatewaySessionRow[];
-  agentRows: readonly GatewaySessionRow[];
-  childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+  mainSessionKeys?: ReadonlySet<string>;
+  rowsByKey: ReadonlyMap<string, GatewaySessionRow>;
   loadingChildKeys: ReadonlySet<string>;
   knownSessionAttention: readonly SidebarKnownSessionAttention[];
   toSidebarSession: (row: GatewaySessionRow, isChild?: boolean) => SidebarRecentSession;
 }): SidebarRecentSession[] {
   const {
     roots,
-    agentRows,
-    childRowsByParent,
+    mainSessionKeys = new Set<string>(),
+    rowsByKey,
     loadingChildKeys,
     knownSessionAttention,
     toSidebarSession,
   } = params;
-  const rowsByKey = new Map<string, GatewaySessionRow>();
-  for (const rows of Object.values(childRowsByParent)) {
-    for (const row of rows) {
-      rowsByKey.set(row.key, row);
-    }
-  }
-  for (const row of agentRows) {
-    rowsByKey.set(row.key, row);
-  }
   const childKeysByParent = new Map<string, string[]>();
-  const hasExplicitCategory = (row: GatewaySessionRow | undefined) =>
-    typeof row?.category === "string" && row.category.trim().length > 0;
+  const hasRootCategory = (row: GatewaySessionRow | undefined) =>
+    typeof row?.category === "string" &&
+    row.category.trim().length > 0 &&
+    !isSubagentSessionKey(row.key);
   const appendChild = (parentKey: string, childKey: string) => {
     const keys = childKeysByParent.get(parentKey) ?? [];
     if (!keys.includes(childKey)) {
@@ -56,23 +54,22 @@ export function projectSessionTree(params: {
   for (const row of rowsByKey.values()) {
     for (const childKey of row.childSessions ?? []) {
       const child = rowsByKey.get(childKey);
-      // Manual category placement is a first-class sidebar destination. Once
-      // a child is explicitly categorized, render it as a section root rather
-      // than hiding it behind its lineage parent.
-      if (hasExplicitCategory(child)) {
+      // Categories can place independent conversations at a section root;
+      // subagents always remain under their navigation parent.
+      if (hasRootCategory(child)) {
         continue;
       }
-      const navigationParentKey = resolveUiSessionNavigationParentKey(child);
+      const navigationParentKey = resolveSidebarSessionParentKey(child, mainSessionKeys, row.key);
       // Runtime control and sidebar navigation can have different parents;
       // known children belong to their explicit navigation parent only.
-      if (!navigationParentKey || areUiSessionKeysEquivalent(navigationParentKey, row.key)) {
+      if (areUiSessionKeysEquivalent(navigationParentKey, row.key)) {
         appendChild(row.key, childKey);
       }
     }
   }
   for (const row of rowsByKey.values()) {
-    const parentKey = resolveUiSessionNavigationParentKey(row);
-    if (parentKey && !hasExplicitCategory(row)) {
+    const parentKey = resolveSidebarSessionParentKey(row, mainSessionKeys);
+    if (parentKey && !hasRootCategory(row)) {
       appendChild(parentKey, row.key);
     }
   }
@@ -80,74 +77,88 @@ export function projectSessionTree(params: {
   const build = (
     row: GatewaySessionRow,
     isChild: boolean,
-    ancestors: ReadonlySet<string>,
+    ancestors: Set<string>,
   ): SidebarRecentSession => {
     const childSessionKeys = row.archived === true ? [] : (childKeysByParent.get(row.key) ?? []);
-    const nextAncestors = new Set(ancestors);
-    nextAncestors.add(row.key);
+    const ownsAncestor = !ancestors.has(row.key);
+    ancestors.add(row.key);
     const children = childSessionKeys.flatMap((key) => {
       const child = rowsByKey.get(key);
-      return child && !nextAncestors.has(key) ? [build(child, true, nextAncestors)] : [];
+      return child && !ancestors.has(key) ? [build(child, true, ancestors)] : [];
     });
+    // Aliased map entries can share row.key with an ancestor; only remove our own entry.
+    if (ownsAncestor) {
+      ancestors.delete(row.key);
+    }
     const projected = toSidebarSession(row, isChild);
-    const projectedRunningChildCount = children.reduce(
-      (count, child) => count + (child.hasActiveRun ? 1 : 0) + child.runningChildCount,
-      0,
-    );
-    const runningChildCount = Math.max(
-      projectedRunningChildCount,
-      row.hasActiveSubagentRun ? 1 : 0,
-    );
-    const failedChildCount = children.reduce(
-      (count, child) =>
-        count +
-        (child.status === "failed" || child.status === "timeout" ? 1 : 0) +
-        child.failedChildCount,
-      0,
-    );
-    // Conflict attention is transitive: a collapsed parent must expose staged
-    // cloud results held by descendants or the recovery signal disappears.
-    const workspaceConflictCount = Math.min(
-      Number.MAX_SAFE_INTEGER,
-      (projected.workspaceConflictCount ?? 0) +
-        children.reduce((count, child) => count + (child.workspaceConflictCount ?? 0), 0),
-    );
     const unloadedChildKeys = childSessionKeys.filter((key) => !rowsByKey.has(key));
     // Only direct unloaded children can match: parents carry their keys, but not grandchildren's.
     // Grandchildren join the normal transitive fold after their branch is materialized.
-    const unloadedChildAttention = knownSessionAttention.reduce(
-      (current, entry) =>
-        unloadedChildKeys.some((key) => areUiSessionKeysEquivalent(entry.sessionKey, key)) &&
-        sidebarSessionAttentionPriority(entry.attention) > sidebarSessionAttentionPriority(current)
-          ? entry.attention
-          : current,
-      SIDEBAR_SESSION_NO_ATTENTION,
+    const childAttention = [
+      ...new Map(
+        [
+          ...children.flatMap((child) => [
+            attributeChildAttention(child.ownAttention ?? child.attention, child.label),
+            ...(child.childAttention ?? []),
+          ]),
+          ...knownSessionAttention
+            .filter((entry) =>
+              unloadedChildKeys.some((key) => areUiSessionKeysEquivalent(entry.sessionKey, key)),
+            )
+            .map((entry) => entry.attention),
+        ]
+          .filter((value) => value.kind !== "none")
+          .map((value) => [JSON.stringify(value), value]),
+      ).values(),
+    ];
+    const unreadChildCount = children.reduce(
+      (count, child) => count + Number(child.unread) + (child.unreadChildCount ?? 0),
+      0,
     );
-    // Accepted gap: an unloaded failed child needs expansion before its error attention can surface.
+    // Unloaded terminal outcomes require the existing child-detail loader.
     // Child attention is transitive just like live-run counts: a collapsed
     // ancestor remains actionable even when the blocked descendant is hidden.
-    const attention = children.reduce(
-      (current, child) =>
-        rowDemandsVisibility(child, RowVisibilityReason.Attention) &&
-        sidebarSessionAttentionPriority(child.attention) > sidebarSessionAttentionPriority(current)
-          ? child.attention
-          : current,
-      sidebarSessionAttentionPriority(unloadedChildAttention) >
-        sidebarSessionAttentionPriority(projected.attention)
-        ? unloadedChildAttention
-        : projected.attention,
+    const attention = summarizeSidebarSessionAttention([projected.attention, ...childAttention]);
+    let runningChildCount = 0;
+    let failedChildCount = 0;
+    let queuedChildCount = 0;
+    let childWorkspaceConflictCount = 0;
+    let containsActiveDescendant = false;
+    for (const child of children) {
+      runningChildCount =
+        runningChildCount + (child.hasActiveRun ? 1 : 0) + child.runningChildCount;
+      failedChildCount =
+        failedChildCount +
+        (child.status === "failed" || child.status === "timeout" ? 1 : 0) +
+        child.failedChildCount;
+      queuedChildCount +=
+        Number(child.hasActiveRun && child.status === "queued") + (child.queuedChildCount ?? 0);
+      childWorkspaceConflictCount += child.workspaceConflictCount ?? 0;
+      containsActiveDescendant ||=
+        child.active || child.visuallyActive || child.containsActiveDescendant;
+    }
+    // Sum descendants before adding the parent's conflicts, then clamp once.
+    const workspaceConflictCount = Math.min(
+      Number.MAX_SAFE_INTEGER,
+      (projected.workspaceConflictCount ?? 0) + childWorkspaceConflictCount,
     );
+    // The Gateway flag includes the row's own live or queued subagent run.
+    // Only an idle row proves unloaded descendant work from that flag alone.
+    const hasUnloadedDescendantRun =
+      row.archived !== true && !projected.hasActiveRun && row.hasActiveSubagentRun;
     return {
       ...projected,
+      ownAttention: projected.attention,
+      childAttention,
+      unreadChildCount,
+      queuedChildCount,
       attention,
       childSessionKeys,
       children,
       loadingChildren: loadingChildKeys.has(row.key),
-      containsActiveDescendant: children.some(
-        (child) => child.active || child.visuallyActive || child.containsActiveDescendant,
-      ),
+      containsActiveDescendant,
       workspaceConflictCount: workspaceConflictCount || undefined,
-      runningChildCount,
+      runningChildCount: Math.max(runningChildCount, hasUnloadedDescendantRun ? 1 : 0),
       failedChildCount,
     };
   };
@@ -155,10 +166,13 @@ export function projectSessionTree(params: {
   const rootKeys = new Set(roots.map((row) => row.key));
   return roots
     .filter((row) => {
-      if (hasExplicitCategory(row)) {
+      if (isSubagentSessionKey(row.key)) {
+        return false;
+      }
+      if (hasRootCategory(row)) {
         return true;
       }
-      const parentKey = resolveUiSessionNavigationParentKey(row);
+      const parentKey = resolveSidebarSessionParentKey(row, mainSessionKeys);
       return !parentKey || !rootKeys.has(parentKey);
     })
     .map((row) => build(row, false, new Set()));

@@ -3,16 +3,8 @@ import {
   resolveSessionTranscriptDatabasePath,
   type TranscriptTurnBoundary,
 } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  supportsContextEngineDurableTurnAdvancement,
-  type ContextEngineHostSupport,
-} from "../../context-engine/host-compat.js";
-import type {
-  ContextEngineRuntimeContext,
-  ContextEngineRuntimeSettings,
-  ContextEngineSessionTarget,
-} from "../../context-engine/types.js";
+import { supportsContextEngineDurableTurnAdvancement } from "../../context-engine/host-compat.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
@@ -25,6 +17,7 @@ import {
   enqueueContextEngineTurnIntent,
   isRetryableContextEngineTurnReadFailure,
   recoverContextEngineTurnOutbox,
+  type ContextEngineTurnRuntimeContext,
 } from "./context-engine-turn-outbox.js";
 
 const ACCEPTED_TURN_MAX_EVENTS = 20_000;
@@ -35,24 +28,11 @@ export type ContextEngineTurnAttemptFacts = {
   sessionIdUsed: string;
   sessionKey?: string;
   sessionTarget?: ContextEngineSessionTarget;
-  sessionFile: string;
   promptError: boolean;
   aborted: boolean;
   yieldAborted: boolean;
-  tokenBudget?: number;
-  runtimeContext?: ContextEngineRuntimeContext;
-  runtimeSettings?: ContextEngineRuntimeSettings;
-  contextEngineHostSupport?: ContextEngineHostSupport;
-  harnessId?: string | null;
-  runtimeId?: string | null;
-  providerId?: string | null;
-  requestedModelId?: string | null;
-  modelId?: string | null;
-  maxOutputTokens?: number | null;
-  fallbackReason?: string | null;
-  degradedReason?: string | null;
-  config?: OpenClawConfig;
   isHeartbeat?: boolean;
+  runtimeContext?: ContextEngineTurnRuntimeContext;
 };
 
 export async function drainPendingContextEngineTurnsBeforeRun(params: {
@@ -229,6 +209,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       engineId: params.lease.effectiveEngineId,
       isHeartbeat: params.facts.isHeartbeat === true,
       ownerPluginId: params.lease.effectiveEnginePluginId,
+      runtimeContext: params.facts.runtimeContext,
     });
     const closedTurn = readClosedTranscriptTurn({
       boundary: params.facts.boundary,
@@ -256,6 +237,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
         boundary: params.facts.boundary,
         isHeartbeat: params.facts.isHeartbeat === true,
         messages: closedTurn.messages,
+        runtimeContext: params.facts.runtimeContext,
       },
     });
     await drainContextEngineTurnOutbox({

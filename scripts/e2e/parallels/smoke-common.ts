@@ -1,11 +1,12 @@
 // Smoke Common helper supports OpenClaw script workflows.
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
 import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import { resolveProviderConfig } from "../../lib/cross-os-release-checks/config.ts";
 import { parseTcpPort } from "./env-limits.ts";
 import { extractLastOpenClawVersionFromLog } from "./filesystem.ts";
-import { run, say, die } from "./host-command.ts";
+import { run, say, die, shellQuote } from "./host-command.ts";
 import {
   resolveHostIp,
   resolveHostPort,
@@ -259,6 +260,49 @@ export function npmRegistryEnv(registry?: string): Record<string, string> {
   return registry ? { NPM_CONFIG_REGISTRY: registry, npm_config_registry: registry } : {};
 }
 
+export function posixAgentTurnScript(input: {
+  command: string;
+  sessionIdExpression: string;
+  retrySessionIdExpression: string;
+  printOutput: "cat" | "print_log_tail";
+}): string {
+  return `agent_ok=false
+for attempt in 1 2; do
+  session_id=${input.sessionIdExpression}
+  if [ "$attempt" -gt 1 ]; then session_id=${input.retrySessionIdExpression}; fi
+  rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
+  output_file="$(mktemp)"
+  set +e
+  ${input.command} >"$output_file" 2>&1
+  rc=$?
+  set -e
+  ${input.printOutput} "$output_file"
+  if [ "$rc" -ne 0 ]; then
+    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
+      rm -f "$output_file"
+      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+      continue
+    fi
+    rm -f "$output_file"
+    exit "$rc"
+  fi
+  if grep -Eq '"finalAssistant(Raw|Visible)Text"[[:space:]]*:[[:space:]]*"OK"' "$output_file"; then
+    agent_ok=true
+    rm -f "$output_file"
+    break
+  fi
+  rm -f "$output_file"
+  if [ "$attempt" -lt 2 ]; then
+    echo "agent turn attempt $attempt finished without OK response; retrying"
+    sleep 3
+  fi
+done
+if [ "$agent_ok" != true ]; then
+  echo "openclaw agent finished without OK response" >&2
+  exit 1
+fi`;
+}
+
 export function posixStopGatewayScript(managedCommand?: string): string {
   // Embedded turns require exclusive state ownership. Unmanaged stop sends
   // SIGTERM without waiting; Darwin pads the run loop's process title with spaces.
@@ -288,7 +332,6 @@ export async function startSmokeArtifactServer(input: {
   port: number;
 }): Promise<HostServer> {
   const server = await startHostServer({
-    artifactPath: input.artifact.path,
     dir: input.dir,
     hostIp: input.hostIp,
     label: input.label,
@@ -353,6 +396,63 @@ export async function packAndServeSmokeArtifact(
     port: hostPort,
   });
   return [artifact, server, server.port];
+}
+
+export function ensureSmokeGuestRuntime(input: {
+  runShell: (script: string) => string;
+  bootstrap: () => void;
+}): void {
+  const nodeCheck = shellQuote(`process.exit(${PROCESS_NODE_VERSION_CHECK} ? 0 : 1)`);
+  const ready = input.runShell(`if node -e ${nodeCheck} >/dev/null 2>&1 &&
+  npm --version >/dev/null 2>&1 && git --version >/dev/null 2>&1; then
+  printf 'ready\\n'
+fi`);
+  if (ready.trim() === "ready") {
+    say("Reuse supported guest Node, npm, and Git; install candidate directly");
+    return;
+  }
+  // Older pristine snapshots have no Node/npm; retain their installer bootstrap.
+  say("Bootstrap missing or unsupported guest runtime prerequisites");
+  input.bootstrap();
+}
+
+export async function installSmokeRuntimeCompanions(input: {
+  provider: Provider;
+  readCli: (args: string[]) => string;
+  installCli: (args: string[]) => Promise<void> | void;
+}): Promise<void> {
+  const providerConfig = resolveProviderConfig(input.provider);
+  if (!providerConfig) {
+    throw new Error(`missing release smoke configuration for provider: ${input.provider}`);
+  }
+  if (providerConfig.requiredCompanionPackages.length === 0) {
+    return;
+  }
+  const help = input.readCli(["plugins", "install", "--help"]);
+  // Stable 2026.7.1-2 predates capability consent and provisions its own
+  // companion version during onboarding; it must not receive the newer flag.
+  if (!/^\s+--accept-capabilities(?:\s|$)/mu.test(help)) {
+    say("Installed CLI predates capability consent; using its onboarding contract");
+    return;
+  }
+  const version = input
+    .readCli(["--version"])
+    .match(/^OpenClaw\s+(\d{4}\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)(?:\s|$)/mu)?.[1];
+  if (!version) {
+    throw new Error("could not resolve installed OpenClaw version for runtime companions");
+  }
+  // Candidate registries bind reviewed companion artifacts to the core version.
+  // Only the selected provider's required packages receive explicit consent.
+  for (const packageName of providerConfig.requiredCompanionPackages) {
+    say(`Install reviewed runtime companion: ${packageName}@${version}`);
+    await input.installCli([
+      "plugins",
+      "install",
+      `npm:${packageName}@${version}`,
+      "--pin",
+      "--accept-capabilities",
+    ]);
+  }
 }
 
 async function runRequestedSmokeLanes(input: {

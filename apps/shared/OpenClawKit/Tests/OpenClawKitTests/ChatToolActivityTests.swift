@@ -15,8 +15,7 @@ struct ChatToolActivityTests {
             arguments: nil,
             details: nil,
             resultText: "done",
-            isError: false,
-            isPending: false,
+            state: .finished,
             liveDiffStat: nil)])
     }
 
@@ -31,8 +30,7 @@ struct ChatToolActivityTests {
             arguments: nil,
             details: nil,
             resultText: "orphaned",
-            isError: false,
-            isPending: false,
+            state: .finished,
             liveDiffStat: nil)])
     }
 
@@ -51,7 +49,7 @@ struct ChatToolActivityTests {
         #expect(items.map(\.resultText) == ["first", "second"])
     }
 
-    @Test func `leaves call without result unexpandable`() {
+    @Test func `does not report an unanswered call as finished`() {
         let items = ChatToolActivity.items(
             calls: [self.content(type: "toolCall", name: "search")],
             results: [])
@@ -62,9 +60,16 @@ struct ChatToolActivityTests {
             arguments: nil,
             details: nil,
             resultText: nil,
-            isError: false,
-            isPending: false,
+            state: .unavailable,
             liveDiffStat: nil)])
+    }
+
+    @Test func `an empty successful result still confirms completion`() {
+        let items = ChatToolActivity.items(
+            calls: [self.content(type: "toolCall", id: "call-1", name: "exec")],
+            results: [self.content(type: "toolResult", id: "call-1", name: "exec")])
+
+        #expect(items.first?.state == .finished)
     }
 
     @Test func `threads paired result details`() {

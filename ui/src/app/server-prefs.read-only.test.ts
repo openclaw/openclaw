@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
@@ -31,15 +32,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const deferred = () => {
-  let resolve!: (value: unknown) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<unknown>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-};
 const pendingKey = (scope: string) => `openclaw.control.serverPrefs.pending.v1:${scope}`;
 const readPending = (scope: string) =>
   JSON.parse(localStorage.getItem(pendingKey(scope)) ?? "{}") as Record<string, unknown>;
@@ -241,7 +233,7 @@ describe("read-only server preference lifecycle", () => {
 
   it("rechecks write capability after queued config writes settle", async () => {
     const scope = "ws://gw";
-    const gate = deferred();
+    const gate = createDeferred<unknown>();
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => ({}));
     const client = {
       request,

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -30,6 +31,72 @@ const dependencies: SkillToolDispatchDependencies = {
 };
 
 describe("resolveSkillDispatchTools", () => {
+  it.each([
+    { tools: { profile: "coding" }, actions: ["update.run"] },
+    {
+      tools: { profile: "full" },
+      actions: ["config.get", "config.schema.lookup", "update.run"],
+    },
+    {
+      tools: { profile: "messaging", alsoAllow: ["gateway"] },
+      actions: ["config.get", "config.schema.lookup", "update.run"],
+    },
+  ] satisfies Array<{ tools: OpenClawConfig["tools"]; actions: string[] }>)(
+    "limits gateway actions to the skill dispatch policy: $tools",
+    ({ tools: toolPolicy, actions }) => {
+      const tools = resolveSkillDispatchTools(
+        {
+          message: { surface: "webchat" },
+          cfg: { plugins: { enabled: false }, tools: toolPolicy },
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+          provider: "openai",
+          model: "gpt-5.5",
+          senderIsOwner: true,
+        },
+        { createOpenClawTools },
+      );
+
+      expect(tools.find((tool) => tool.name === "gateway")?.parameters).toHaveProperty(
+        "properties.action.enum",
+        actions,
+      );
+    },
+  );
+
+  it.each([
+    { agentId: "isolated", expectedTools: ["read"] },
+    { agentId: "direct", expectedTools: ["read", "cron", "exec", "conversations_send"] },
+  ])("applies $agentId sandbox policy to global skill dispatch", ({ agentId, expectedTools }) => {
+    const tools = resolveSkillDispatchTools(
+      {
+        message: { surface: "webchat" },
+        cfg: {
+          session: { scope: "global" },
+          agents: {
+            entries: {
+              isolated: {
+                sandbox: { mode: "all" },
+                tools: { sandbox: { tools: { allow: ["read"] } } },
+              },
+              direct: { sandbox: { mode: "off" } },
+            },
+          },
+        },
+        agentId,
+        sessionKey: "global",
+        workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        senderIsOwner: true,
+      },
+      dependencies,
+    );
+
+    expect(tools.map((tool) => tool.name)).toEqual(expectedTools);
+  });
+
   it("passes final filtered tool surface to cron jobs", () => {
     const tools = resolveSkillDispatchTools(
       {
@@ -51,7 +118,7 @@ describe("resolveSkillDispatchTools", () => {
       dependencies,
     );
 
-    const args = createOpenClawToolsMock.mock.calls[0]?.[0];
+    const args = createOpenClawToolsMock.mock.calls.at(-1)?.[0];
     expect(tools.map((tool) => tool.name)).toEqual(["read", "cron"]);
     expect(args?.cronCreatorToolAllowlist).toEqual([{ name: "read" }, { name: "automations" }]);
     expect(args?.nativeChannelId).toBe("native-room-1");

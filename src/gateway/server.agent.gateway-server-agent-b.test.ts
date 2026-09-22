@@ -7,11 +7,16 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
+import {
+  listSessionPendingInputs,
+  loadSessionEntry,
+  loadTranscriptEventsSync,
+} from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { ensureSessionPendingInputsSchema } from "../state/openclaw-agent-pending-inputs-schema.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
@@ -35,6 +40,7 @@ import {
   withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -111,13 +117,13 @@ const defaultRegistry = createRegistry([
   },
 ]);
 
-function expectChannels(call: Record<string, unknown>, channel: string) {
+function expectChannels(call: Record<string, unknown>, channel: string | undefined) {
   expect(call.channel).toBe(channel);
   expect(call.messageChannel).toBe(channel);
 }
 
 async function expectAgentRoutingCall(params: {
-  channel: string;
+  channel: string | undefined;
   deliver: boolean;
   to?: string;
   fromEnd?: number;
@@ -198,15 +204,21 @@ afterAll(() => {
 });
 
 describe("gateway server agent", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.mocked(agentCommandMock).mockClear();
     testState.allowFrom = undefined;
     setRegistry(defaultRegistry);
+    await useTempSessionStorePath();
+    await writeSessionStore({ entries: {} });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     testState.allowFrom = undefined;
     setRegistry(emptyRegistry);
+    for (const dir of gwSessionTempDirs) {
+      await releaseGatewaySessionStoreFixture(dir);
+    }
+    cleanupTempDirs(gwSessionTempDirs);
   });
 
   test(
@@ -407,7 +419,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
     await expectAgentRoutingCall({
-      channel: "webchat",
+      channel: undefined,
       deliver: true,
       runId: "idem-agent-multi-configured-best-effort",
     });
@@ -510,40 +522,44 @@ describe("gateway server agent", () => {
         message.type === "res" && message.id === runId && message.payload?.status !== "accepted",
     );
 
-    await sendAgentWsRequest(ws, {
-      reqId: runId,
-      message: "persist this agent turn before ACK",
-      sessionKey: "main",
-      idempotencyKey: runId,
-    });
-    await ackP;
+    try {
+      await sendAgentWsRequest(ws, {
+        reqId: runId,
+        message: "persist this agent turn before ACK",
+        sessionKey: "main",
+        idempotencyKey: runId,
+      });
+      await ackP;
 
-    const storePath = testState.sessionStorePath;
-    if (!storePath) {
-      throw new Error("expected session store path");
-    }
-    expect(
-      loadTranscriptEventsSync({
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("expected session store path");
+      }
+      const scope = {
         agentId: "main",
         sessionId: "sess-durable-agent-ack",
         sessionKey: "agent:main:main",
         storePath,
-      }),
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "message",
-          message: expect.objectContaining({
-            role: "user",
-            content: "persist this agent turn before ACK",
-            idempotencyKey: `${runId}:user`,
-          }),
-        }),
-      ]),
-    );
-
-    dispatch.resolve({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
-    await finalP;
+      };
+      expect(loadTranscriptEventsSync(scope)).toEqual([]);
+      expect(listSessionPendingInputs(scope)).toMatchObject({
+        total: 1,
+        items: [
+          {
+            runId,
+            state: "queued",
+            message: {
+              role: "user",
+              content: "persist this agent turn before ACK",
+              idempotencyKey: `${runId}:user`,
+            },
+          },
+        ],
+      });
+    } finally {
+      dispatch.resolve({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+      await finalP;
+    }
   });
 
   test("an aborted hanging agent dispatch leaves its acknowledged turn queryable", async () => {
@@ -578,6 +594,7 @@ describe("gateway server agent", () => {
       idempotencyKey: runId,
     });
     await ackP;
+    await readAgentCommandCall({ runId });
     await rpcReq(ws, "chat.abort", { runId, sessionKey: "main" });
     const final = await finalP;
     expect(final.payload).toMatchObject({ runId, status: "timeout", stopReason: "rpc" });
@@ -586,23 +603,26 @@ describe("gateway server agent", () => {
     if (!storePath) {
       throw new Error("expected session store path");
     }
-    expect(
-      loadTranscriptEventsSync({
-        agentId: "main",
-        sessionId: "sess-durable-agent-abort",
-        sessionKey: "agent:main:main",
-        storePath,
-      }),
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          message: expect.objectContaining({
+    const scope = {
+      agentId: "main",
+      sessionId: "sess-durable-agent-abort",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    expect(loadTranscriptEventsSync(scope)).toEqual([]);
+    expect(listSessionPendingInputs(scope)).toMatchObject({
+      total: 1,
+      items: [
+        {
+          runId,
+          state: "cancelled",
+          message: {
             role: "user",
             content: "keep this aborted agent turn queryable",
-          }),
-        }),
-      ]),
-    );
+          },
+        },
+      ],
+    });
   });
 
   test("agent returns a wire error when durable user-turn admission fails", async () => {
@@ -613,9 +633,10 @@ describe("gateway server agent", () => {
     }
     const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
     const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path }).db;
+    ensureSessionPendingInputsSchema(database);
     database.exec(`
       CREATE TEMP TRIGGER fail_agent_turn_admission
-      BEFORE INSERT ON transcript_events
+      BEFORE INSERT ON session_pending_inputs
       BEGIN
         SELECT RAISE(ABORT, 'injected agent transcript admission failure');
       END;

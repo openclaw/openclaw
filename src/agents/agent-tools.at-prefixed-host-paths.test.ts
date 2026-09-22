@@ -7,7 +7,7 @@ import "./test-helpers/fast-openclaw-tools.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
-import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
+import { createContainerWorkspaceSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -64,6 +64,21 @@ describe("leading-@ host and mounted sandbox paths", () => {
         await expect(fs.readFile(path.join(siblingParent, "new.md"), "utf8")).resolves.toBe(
           "sibling child",
         );
+        expect(
+          getTextContent(
+            await readTool.execute("at-reference-literal-read", { path: "@@existing.md" }),
+          ),
+        ).toContain("literal edited");
+        await writeTool.execute("at-reference-literal-write", {
+          path: "@@existing.md",
+          content: "referenced original",
+        });
+        await editTool.execute("at-reference-literal-edit", {
+          path: "@@existing.md",
+          edits: [{ oldText: "original", newText: "edited" }],
+        });
+        await expect(fs.readFile(literalPath, "utf8")).resolves.toBe("referenced edited");
+        await expect(fs.readFile(siblingPath, "utf8")).resolves.toBe("sibling original");
       });
     },
   );
@@ -83,7 +98,13 @@ describe("leading-@ host and mounted sandbox paths", () => {
         cwd: workspaceDir,
         workspaceOnly: runtime.workspaceOnly,
         ...(runtime.mounted
-          ? { sandbox: { root: workspaceDir, bridge: createHostSandboxFsBridge(workspaceDir) } }
+          ? {
+              sandbox: {
+                root: workspaceDir,
+                bridge: createContainerWorkspaceSandboxFsBridge(workspaceDir),
+                workspaceMounts: [{ containerRoot: "/workspace", hostRoot: workspaceDir }],
+              },
+            }
           : {}),
       });
       const runPatch = (callId: string, lines: string[]) =>
@@ -122,6 +143,40 @@ describe("leading-@ host and mounted sandbox paths", () => {
       await expect(fs.readFile(path.join(siblingParent, "new.md"), "utf8")).resolves.toBe(
         "sibling before\n",
       );
+    });
+  });
+
+  it.each([
+    { sibling: false, label: "without an unprefixed sibling" },
+    { sibling: true, label: "with an unprefixed sibling" },
+  ])("keeps literal replacement paths stable $label", async ({ sibling }) => {
+    await withWorkspace(async (workspaceDir) => {
+      await fs.writeFile(path.join(workspaceDir, "@replace.md"), "old literal\n", "utf8");
+      if (sibling) {
+        await fs.writeFile(path.join(workspaceDir, "replace.md"), "sibling\n", "utf8");
+      }
+      await createApplyPatchTool({ cwd: workspaceDir }).execute("at-patch-replace", {
+        input: [
+          "*** Begin Patch",
+          "*** Delete File: @replace.md",
+          "*** Add File: @replace.md",
+          "+new literal",
+          "*** End Patch",
+        ].join("\n"),
+      });
+
+      await expect(fs.readFile(path.join(workspaceDir, "@replace.md"), "utf8")).resolves.toBe(
+        "new literal\n",
+      );
+      if (sibling) {
+        await expect(fs.readFile(path.join(workspaceDir, "replace.md"), "utf8")).resolves.toBe(
+          "sibling\n",
+        );
+      } else {
+        await expect(fs.stat(path.join(workspaceDir, "replace.md"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
     });
   });
 });

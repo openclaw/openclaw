@@ -1,17 +1,25 @@
-// Verifies sessions_spawn model, thinking, timeout, and accepted-note planning.
-import { describe, expect, it } from "vitest";
+// Verifies sessions_spawn model, thinking, and timeout planning.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveConfiguredSubagentSpawnModelSelection } from "./model-selection.js";
-import { resolveSubagentSpawnAcceptedNote } from "./subagents/spawn/subagent-spawn-accepted-note.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
   splitModelRef,
 } from "./subagents/spawn/subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "./subagents/spawn/subagent-spawn-thinking.js";
+import { supportedSpawnModelChoice } from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
-type SubagentModelPlan = ReturnType<typeof resolveSubagentModelAndThinkingPlan>;
+const modelChoice = vi.hoisted(() => vi.fn<typeof supportedSpawnModelChoice>());
+vi.mock("./subagents/spawn/subagent-spawn-deps.js", () => ({
+  getSubagentSpawnDeps: () => ({ prepareModelChoice: modelChoice }),
+}));
+beforeEach(() => {
+  modelChoice.mockReset().mockImplementation(supportedSpawnModelChoice);
+});
+
+type SubagentModelPlan = Awaited<ReturnType<typeof resolveSubagentModelAndThinkingPlan>>;
 type OkSubagentModelPlan = Extract<SubagentModelPlan, { status: "ok" }>;
 
 function createConfig(overrides?: Record<string, unknown>): OpenClawConfig {
@@ -31,17 +39,17 @@ function expectOkPlan(plan: SubagentModelPlan): OkSubagentModelPlan {
 }
 
 describe("subagent spawn model + thinking plan", () => {
-  it("includes explicit model overrides in the initial patch", () => {
+  it("includes explicit model overrides in the initial patch", async () => {
     const plan = expectOkPlan(
-      resolveSubagentModelAndThinkingPlan({
+      await resolveSubagentModelAndThinkingPlan({
         cfg: createConfig(),
         targetAgentId: "research",
         modelOverride: "claude-haiku-4-5",
       }),
     );
-    expect(plan.resolvedModel).toBe("claude-haiku-4-5");
+    expect(plan.resolvedModel).toBe(`${DEFAULT_PROVIDER}/claude-haiku-4-5`);
     expect(plan.modelApplied).toBe(true);
-    expect(plan.initialSessionPatch.model).toBe("claude-haiku-4-5");
+    expect(plan.initialSessionPatch.model).toBe(`${DEFAULT_PROVIDER}/claude-haiku-4-5`);
     expect(plan.initialSessionPatch.modelOverrideSource).toBe("user");
   });
 
@@ -52,9 +60,9 @@ describe("subagent spawn model + thinking plan", () => {
     });
   });
 
-  it("normalizes thinking overrides into the initial patch", () => {
+  it("normalizes thinking overrides into the initial patch", async () => {
     const plan = expectOkPlan(
-      resolveSubagentModelAndThinkingPlan({
+      await resolveSubagentModelAndThinkingPlan({
         cfg: createConfig(),
         targetAgentId: "research",
         thinkingOverrideRaw: "high",
@@ -64,9 +72,9 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.initialSessionPatch.thinkingLevel).toBe("high");
   });
 
-  it("threads explicit fast mode into the initial child session patch", () => {
+  it("threads explicit fast mode into the initial child session patch", async () => {
     const plan = expectOkPlan(
-      resolveSubagentModelAndThinkingPlan({
+      await resolveSubagentModelAndThinkingPlan({
         cfg: createConfig(),
         targetAgentId: "research",
         fastMode: "auto",
@@ -75,21 +83,22 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.initialSessionPatch.fastMode).toBe("auto");
   });
 
-  it("rejects invalid thinking levels before any runtime work", () => {
-    const plan = resolveSubagentModelAndThinkingPlan({
+  it("rejects invalid thinking levels before any runtime work", async () => {
+    const plan = await resolveSubagentModelAndThinkingPlan({
       cfg: createConfig(),
       targetAgentId: "research",
       thinkingOverrideRaw: "banana",
     });
     expect(plan.status).toBe("error");
+    expect(modelChoice).not.toHaveBeenCalled();
     if (plan.status === "error") {
       expect(plan.error).toMatch(/Invalid thinking level/i);
     }
   });
 
-  it("applies default subagent model from defaults config", () => {
+  it("applies default subagent model from defaults config", async () => {
     const plan = expectOkPlan(
-      resolveSubagentModelAndThinkingPlan({
+      await resolveSubagentModelAndThinkingPlan({
         cfg: createConfig({
           agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.7" } } },
         }),
@@ -103,9 +112,9 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe("MiniMax-M2.7");
   });
 
-  it("falls back to runtime default model when no model config is set", () => {
+  it("falls back to runtime default model when no model config is set", async () => {
     const plan = expectOkPlan(
-      resolveSubagentModelAndThinkingPlan({
+      await resolveSubagentModelAndThinkingPlan({
         cfg: createConfig(),
         targetAgentId: "research",
       }),
@@ -118,9 +127,9 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBeUndefined();
   });
 
-  it("uses the target default provider for bare configured subagent models", () => {
+  it("uses the target default provider for bare configured subagent models", async () => {
     const plan = expectOkPlan(
-      resolveSubagentModelAndThinkingPlan({
+      await resolveSubagentModelAndThinkingPlan({
         cfg: createConfig({
           agents: {
             defaults: {
@@ -132,7 +141,7 @@ describe("subagent spawn model + thinking plan", () => {
         targetAgentId: "research",
       }),
     );
-    expect(plan.resolvedModel).toBe("gpt-5.4");
+    expect(plan.resolvedModel).toBe("openai/gpt-5.4");
     expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe("openai");
     expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe("gpt-5.4");
   });
@@ -179,12 +188,12 @@ describe("subagent spawn model + thinking plan", () => {
       expectedProvider: "opencode",
       expectedOriginModel: "claude",
     },
-  ])("prefers $name", (row) => {
+  ])("prefers $name", async (row) => {
     const cfg = createConfig({
       agents: { defaults: row.defaults, list: [row.targetAgentConfig] },
     });
     const plan = expectOkPlan(
-      resolveSubagentModelAndThinkingPlan({
+      await resolveSubagentModelAndThinkingPlan({
         cfg,
         targetAgentId: "research",
         targetAgentConfig: row.targetAgentConfig,
@@ -318,56 +327,5 @@ describe("sessions_spawn thinking defaults", () => {
     },
   ] as const)("$name", (row) => {
     expectResolvedThinkingPlan(row);
-  });
-});
-
-describe("sessions_spawn accepted notes", () => {
-  it.each([
-    {
-      name: "suppresses ACCEPTED_NOTE for cron isolated sessions (mode=run)",
-      agentSessionKey: "agent:main:cron:dd871818:run:cf959c9f",
-      expected: undefined,
-    },
-    {
-      name: "preserves ACCEPTED_NOTE for regular sessions (mode=run)",
-      agentSessionKey: "agent:main:telegram:63448508",
-      expected: "Auto-announce is push-based",
-    },
-    {
-      name: "preserves ACCEPTED_NOTE for non-canonical cron-like keys",
-      agentSessionKey: "agent:main:slack:cron:job:run:uuid",
-      expected: "Auto-announce is push-based",
-    },
-    {
-      name: "preserves ACCEPTED_NOTE when agentSessionKey is undefined",
-      agentSessionKey: undefined,
-      expected: "Auto-announce is push-based",
-    },
-  ])("$name", ({ agentSessionKey, expected }) => {
-    const note = resolveSubagentSpawnAcceptedNote({ spawnMode: "run", agentSessionKey });
-    if (expected === undefined) {
-      expect(note).toBeUndefined();
-    } else {
-      expect(note).toContain(expected);
-    }
-  });
-
-  it("keeps regular run guidance push-based without recommending sessions_yield", () => {
-    const note = resolveSubagentSpawnAcceptedNote({ spawnMode: "run" });
-
-    expect(note).toContain("Auto-announce is push-based");
-    expect(note).toContain("Continue any independent work");
-    expect(note).toContain("wait for runtime completion events to arrive as user messages");
-    expect(note).toContain("only answer after completion events for ALL required children arrive");
-    expect(note).not.toContain("sessions_yield");
-  });
-
-  it("uses the session note for cron session-mode spawns", () => {
-    expect(
-      resolveSubagentSpawnAcceptedNote({
-        spawnMode: "session",
-        agentSessionKey: "agent:main:cron:dd871818:run:cf959c9f",
-      }),
-    ).toBe("thread-bound session stays active after this task; continue in-thread for follow-ups.");
   });
 });

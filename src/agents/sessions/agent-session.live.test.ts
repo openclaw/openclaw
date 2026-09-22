@@ -5,8 +5,11 @@ import { join } from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
+import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { isLiveTestEnabled } from "../live-test-helpers.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
@@ -113,6 +116,7 @@ async function resolveLiveModel(
 
 async function createLiveSession(
   options: {
+    tools?: string[];
     customTools?: ToolDefinition[];
     handlers?: ExtensionHandlers;
   } = {},
@@ -132,7 +136,7 @@ async function createLiveSession(
     compaction: { enabled: true, reserveTokens: 128, keepRecentTokens: 0 },
     retry: {
       enabled: false,
-      provider: { timeoutMs: PROVIDER_TIMEOUT_MS, maxRetries: 0, maxRetryDelayMs: 0 },
+      provider: { timeoutMs: PROVIDER_TIMEOUT_MS, maxRetryDelayMs: 0 },
     },
   });
   const { session } = await createAgentSession({
@@ -141,6 +145,7 @@ async function createLiveSession(
     model,
     thinkingLevel: "off",
     noTools: "builtin",
+    tools: options.tools,
     customTools: options.customTools,
     resourceLoader: createResourceLoader(options.handlers),
     authStorage,
@@ -149,7 +154,7 @@ async function createLiveSession(
     settingsManager,
   });
   sessions.push(session);
-  return { session, sessionManager };
+  return { session, sessionManager, cwd };
 }
 
 function assistantText(message: AgentMessage): string {
@@ -167,6 +172,7 @@ afterEach(async () => {
   for (const session of sessions.splice(0)) {
     session.dispose();
   }
+  resetSecretRedactionRegistryForTest();
   await Promise.all(
     tempRoots.splice(0).map(async (root) => {
       await rm(root, { recursive: true, force: true });
@@ -175,6 +181,65 @@ afterEach(async () => {
 });
 
 describeLive("AgentSession live", () => {
+  it(
+    "masks registered secrets before a real provider continues a file-read turn",
+    async () => {
+      const secret = "fixture-live-tool-result-secret-0123456789";
+      const marker = "VISIBLE_TOOL_RESULT_7319";
+      registerSecretValueForRedaction(secret);
+      const { session, sessionManager, cwd } = await createLiveSession({ tools: ["read"] });
+      guardSessionManager(sessionManager, { config: {}, allowedToolNames: ["read"] });
+      const fixtureName = "credential-fixture.txt";
+      const fixturePath = join(cwd, fixtureName);
+      await writeFile(fixturePath, `${marker}\ncredential=${secret}\n`);
+      expect(session.getActiveToolNames().join(",")).toBe("read");
+      const originalStream = session.agent.streamFn;
+      if (!originalStream) {
+        throw new Error("Expected the configured live provider stream");
+      }
+      let secretDetected = false;
+      let requestsWithResult = 0;
+      session.agent.streamFn = (model, context, options) =>
+        originalStream(model, context, {
+          ...options,
+          onPayload: async (payload, requestModel) => {
+            const replacement = await options?.onPayload?.(payload, requestModel);
+            const serialized = JSON.stringify(replacement === undefined ? payload : replacement);
+            // Fail before network egress even when this regression test runs against broken code.
+            if (serialized.includes(secret)) {
+              secretDetected = true;
+              throw new Error("Live tool-result redaction failed; request blocked before egress");
+            }
+            if (serialized.includes(marker)) {
+              requestsWithResult += 1;
+            }
+            return replacement;
+          },
+        });
+      await session.prompt(
+        `Read ${fixtureName} exactly once using read, passing that relative path. Reply with only the VISIBLE_TOOL_RESULT marker from the file; do not repeat its credential.`,
+      );
+      const results = session.messages.filter((message) => message.role === "toolResult");
+      expect(results.length).toBe(1);
+      expect(results[0]?.isError).toBe(false);
+      expect(secretDetected).toBe(false);
+      expect(requestsWithResult).toBeGreaterThan(0);
+      expect((session.getLastAssistantText() ?? "").includes(marker)).toBe(true);
+      const resultText = results
+        .flatMap((message) =>
+          message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])),
+        )
+        .join("\n");
+      expect(resultText.includes(marker)).toBe(true);
+      expect(resultText.includes(secret)).toBe(false);
+      expect(JSON.stringify(sessionManager.getEntries()).includes(secret)).toBe(false);
+      const completed = session.messages.findLast((message) => message.role === "assistant");
+      expect(completed?.role === "assistant" && completed.stopReason === "stop").toBe(true);
+      expect(completed?.role === "assistant" && completed.usage.output > 0).toBe(true);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it(
     "completes a real tool turn",
     async () => {

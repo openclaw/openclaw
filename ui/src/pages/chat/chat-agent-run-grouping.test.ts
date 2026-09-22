@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
 import type {
   ActivityRunRenderItem,
   StreamRunRenderItem,
@@ -13,21 +14,22 @@ function group(
   runId: string | undefined,
   overrides: Record<string, unknown> = {},
 ): MessageGroup {
+  const message = {
+    role: role === "tool" ? "toolResult" : role,
+    content: key,
+    timestamp: 1,
+    ...overrides,
+  };
+  const [prepared] = groupMessages([{ kind: "message", key, message }]);
+  if (prepared?.kind !== "group") {
+    throw new Error("expected a prepared message group");
+  }
   return {
     kind: "group",
     key: `group:${key}`,
     role,
-    messages: [
-      {
-        key,
-        message: {
-          role: role === "tool" ? "toolResult" : role,
-          content: key,
-          timestamp: 1,
-          ...overrides,
-        },
-      },
-    ],
+    visibleContent: "text",
+    messages: prepared.messages,
     timestamp: 1,
     isStreaming: false,
     ...(runId ? { runId } : {}),
@@ -362,6 +364,62 @@ describe("coalesceAgentRunFrames", () => {
           __openclaw: { mirrorOrigin: "codex-app-server", runId: "run-1" },
         }),
         group("tool", "reasoning-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: null },
+    },
+    {
+      name: "attachment-only final followed by work",
+      parts: [
+        group("assistant", "final-document", "run-1", {
+          phase: "final_answer",
+          content: [
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                url: "https://files.example.test/report.pdf",
+                label: "report.pdf",
+                mimeType: "application/pdf",
+              },
+            },
+          ],
+        }),
+        group("tool", "trailing-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final-document" } },
+    },
+    {
+      name: "image-only final",
+      parts: [
+        group("assistant", "final-image", "run-1", {
+          stopReason: "stop",
+          content: [{ type: "image", url: "https://files.example.test/banner.png" }],
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final-image" } },
+    },
+    {
+      name: "omitted-image-only final",
+      parts: [
+        group("assistant", "final-omitted-image", "run-1", {
+          stopReason: "stop",
+          content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final-omitted-image" } },
+    },
+    {
+      name: "empty final",
+      parts: [group("assistant", "empty", "run-1", { stopReason: "stop", content: [] })],
+      outcome: { kind: "completed", actionOwner: null },
+    },
+    {
+      name: "reasoning-only final",
+      parts: [
+        group("assistant", "thinking", "run-1", {
+          stopReason: "stop",
+          content: [{ type: "thinking", thinking: "I am considering the request." }],
+        }),
       ],
       outcome: { kind: "completed", actionOwner: null },
     },

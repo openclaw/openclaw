@@ -17,13 +17,14 @@ import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-ke
 import type { ApprovalRequestChannelRouteClass, ChannelApprovalKind } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
 
 type GatewayRequestFn = <T = unknown>(
   method: string,
   params: Record<string, unknown>,
 ) => Promise<T>;
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 
 type ApprovalRouteRuntimeRecord = {
   runtimeId: string;
@@ -669,6 +670,14 @@ export type ApprovalNativeRouteCoordinator = {
   hasActiveRuntime: typeof hasActiveApprovalNativeRouteRuntime;
   close: () => void;
 };
+
+/** Reads native route activity from the owning Gateway coordinator, else the process default. */
+export function hasActiveNativeApprovalRoute(
+  coordinator: ApprovalNativeRouteCoordinator | undefined,
+  params: Parameters<typeof hasActiveApprovalNativeRouteRuntime>[0],
+): boolean {
+  return coordinator?.hasActiveRuntime(params) ?? hasActiveApprovalNativeRouteRuntime(params);
+}
 
 /** Creates an instance-local route coordinator so Gateway runtimes cannot share account state. */
 export function createApprovalNativeRouteCoordinator(): ApprovalNativeRouteCoordinator {

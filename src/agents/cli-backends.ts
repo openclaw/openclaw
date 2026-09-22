@@ -60,7 +60,10 @@ export type ResolvedCliBackend = {
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   resolveModelId?: CliBackendPlugin["resolveModelId"];
   parseJsonlEvent?: CliBackendPlugin["parseJsonlEvent"];
+  parseJsonlLifecycleEvent?: CliBackendPlugin["parseJsonlLifecycleEvent"];
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
+  isolatesInstructionsWithExactTools?: true;
+  projectNativeToolAuthority?: CliBackendPlugin["projectNativeToolAuthority"];
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
@@ -111,7 +114,7 @@ function resolveCliBackendModelProvider(
 
 function addCliRuntimeModelBinding(
   bindings: Map<string, CliRuntimeModelBackendBinding>,
-  params: { backend: CliBackendPlugin; pluginId?: string },
+  params: { backend: Pick<CliBackendPlugin, "id" | "modelProvider">; pluginId?: string },
 ): void {
   const provider = resolveCliBackendModelProvider(params.backend);
   const runtime = normalizeBackendKey(params.backend.id);
@@ -134,7 +137,7 @@ export function listCliRuntimeModelBackendBindings(
   } = {},
 ): CliRuntimeModelBackendBinding[] {
   const bindings = new Map<string, CliRuntimeModelBackendBinding>();
-  for (const backend of cliBackendsDeps.resolveRuntimeCliBackends()) {
+  for (const backend of cliBackendsDeps.resolveRuntimeCliBackends("metadata")) {
     addCliRuntimeModelBinding(bindings, {
       backend,
       ...(backend.pluginId ? { pluginId: backend.pluginId } : {}),
@@ -325,7 +328,10 @@ export function resolveCliBackendConfig(
     resolveExecutionArgs: backend.resolveExecutionArgs,
     resolveModelId: backend.resolveModelId,
     parseJsonlEvent: backend.parseJsonlEvent,
+    parseJsonlLifecycleEvent: backend.parseJsonlLifecycleEvent,
     toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
+    isolatesInstructionsWithExactTools: backend.isolatesInstructionsWithExactTools,
+    projectNativeToolAuthority: backend.projectNativeToolAuthority,
     nativeToolMode: backend.nativeToolMode,
     sideQuestionToolMode: backend.sideQuestionToolMode,
     runtimeArtifact: backend.runtimeArtifact,

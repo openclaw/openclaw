@@ -1,4 +1,5 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/claude-model-runtime";
 /**
  * Shared Claude CLI backend normalization for args, thinking, and isolated runs.
  */
@@ -8,7 +9,6 @@ import type {
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
@@ -409,6 +409,21 @@ function resolveClaudeCliRestrictedExecutionArgs(
   baseArgs: readonly string[],
   availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
 ): string[] {
+  const preservedDenials: string[] = [];
+  for (let i = 0; i < baseArgs.length; i += 1) {
+    const arg = baseArgs[i] ?? "";
+    if (arg === CLAUDE_DISALLOWED_TOOLS_ARG || arg === "--disallowed-tools") {
+      while (typeof baseArgs[i + 1] === "string" && !baseArgs[i + 1]?.startsWith("-")) {
+        i += 1;
+        preservedDenials.push(...(baseArgs[i] ?? "").split(","));
+      }
+    } else if (
+      arg.startsWith(`${CLAUDE_DISALLOWED_TOOLS_ARG}=`) ||
+      arg.startsWith("--disallowed-tools=")
+    ) {
+      preservedDenials.push(...arg.slice(arg.indexOf("=") + 1).split(","));
+    }
+  }
   const normalized = stripClaudeArgs(baseArgs, {
     bare: CLAUDE_RESTRICTED_BARE_ARGS,
     variadicValue: CLAUDE_RESTRICTED_VARIADIC_VALUE_ARGS,
@@ -433,8 +448,15 @@ function resolveClaudeCliRestrictedExecutionArgs(
       CLAUDE_ALLOWED_TOOLS_ARG,
       availability.openClaw.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`).join(","),
     );
-  } else {
-    normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, CLAUDE_DENY_MCP_TOOLS_VALUE);
+  }
+  const denials = [
+    ...new Set([
+      ...preservedDenials.map((entry) => entry.trim()).filter(Boolean),
+      ...(availability.openClaw.length === 0 ? [CLAUDE_DENY_MCP_TOOLS_VALUE] : []),
+    ]),
+  ].toSorted();
+  if (denials.length > 0) {
+    normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, denials.join(","));
   }
   return normalized;
 }

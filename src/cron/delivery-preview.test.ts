@@ -1,5 +1,6 @@
 // Delivery preview tests cover dry-run delivery plan output for cron jobs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import type { CronJob } from "./types.js";
 
@@ -7,8 +8,14 @@ const mocks = vi.hoisted(() => ({
   resolveDeliveryTarget: vi.fn(),
 }));
 
-vi.mock("./isolated-agent/delivery-target.js", () => ({
+vi.mock("./isolated-agent/delivery-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./isolated-agent/delivery-target.js")>()),
   resolveDeliveryTarget: mocks.resolveDeliveryTarget,
+  prepareCronDeliveryTargetContexts: async (_cfg: unknown, requests: unknown[]) =>
+    requests.map(() => ({
+      ok: true,
+      value: { mainSessionKey: "agent:main:main", usedSharedMainFallback: false },
+    })),
 }));
 
 const { resolveCronDeliveryPreviews } = await import("./delivery-preview.js");
@@ -42,14 +49,12 @@ describe("resolveCronDeliveryPreview", () => {
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
       {},
       "avery",
-      {
+      expect.objectContaining({
         channel: "last",
-        to: undefined,
-        threadId: undefined,
-        accountId: undefined,
         sessionKey: "agent:avery:telegram:direct:direct-123",
-      },
-      { dryRun: true },
+        sessionTarget: job.sessionTarget,
+      }),
+      expect.objectContaining({ dryRun: true }),
     );
     expect(preview.detail).toBe(
       "resolved from last, session agent:avery:telegram:direct:direct-123",
@@ -66,6 +71,35 @@ describe("resolveCronDeliveryPreview", () => {
 
     expect(preview).toEqual({ label: "not requested", detail: "not requested" });
     expect(mocks.resolveDeliveryTarget).not.toHaveBeenCalled();
+  });
+
+  it("lists a refused agent's repair reason beside healthy delivery previews", async () => {
+    const refusal = {
+      agentId: "cleaner",
+      paths: ["/synthetic/cleaner/openclaw-agent.sqlite"],
+      embeddedOwnerId: "main",
+      code: "agent-database-ownership-mismatch" as const,
+      reason: "Refused agent cleaner: its database belongs to main.",
+      repairHint: "Inspect the divergent copy and restart after repair.",
+    };
+    recordAgentDatabaseAdmissions([refusal]);
+    try {
+      const previews = await resolveCronDeliveryPreviews({
+        cfg: {},
+        jobs: [
+          makeCronJob({ id: "healthy", agentId: "main" }),
+          makeCronJob({ id: "refused", agentId: "cleaner" }),
+        ],
+      });
+      expect(previews.healthy?.label).toBe("announce -> telegram:direct-123");
+      expect(previews.refused).toEqual({
+        label: "agent cleaner unavailable",
+        detail: `${refusal.reason}\n${refusal.repairHint}`,
+      });
+      expect(mocks.resolveDeliveryTarget).toHaveBeenCalledTimes(1);
+    } finally {
+      recordAgentDatabaseAdmissions([]);
+    }
   });
 
   it("previews explicit message-tool targets on no-delivery jobs", async () => {
@@ -86,18 +120,61 @@ describe("resolveCronDeliveryPreview", () => {
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
       {},
       "avery",
-      {
+      expect.objectContaining({
         channel: "topicchat",
         to: "room#42",
         threadId: 42,
         accountId: "ops",
         sessionKey: undefined,
-      },
-      { dryRun: true },
+        sessionTarget: "isolated",
+      }),
+      expect.objectContaining({ dryRun: true }),
     );
     expect(preview).toEqual({
       label: "none -> telegram:direct-123",
       detail: "explicit",
+    });
+  });
+
+  it("previews current-target announce with no external route as a conversation commit", async () => {
+    mocks.resolveDeliveryTarget.mockResolvedValueOnce({
+      ok: false,
+      channel: undefined,
+      mode: "implicit",
+      error: new Error("Channel is required (no configured channels detected)."),
+    });
+    const job = makeCronJob({
+      sessionTarget: "current",
+      sessionKey: "agent:main:dashboard:c5557dcf",
+      delivery: undefined,
+    });
+
+    const preview = await previewForJob(job);
+
+    expect(preview).toEqual({
+      label: "announce -> current session",
+      detail: "commits to this conversation (no external channel route)",
+    });
+  });
+
+  it("keeps unavailable external plugin routes fail-closed", async () => {
+    mocks.resolveDeliveryTarget.mockResolvedValueOnce({
+      ok: false,
+      channel: "unavailable-plugin",
+      mode: "implicit",
+      error: new Error("Channel plugin unavailable"),
+    });
+    const job = makeCronJob({
+      sessionTarget: "current",
+      sessionKey: "agent:main:dashboard:c5557dcf",
+      delivery: undefined,
+    });
+
+    const preview = await previewForJob(job);
+
+    expect(preview).toEqual({
+      label: "announce -> last",
+      detail: "last -> no route, will fail-closed: Channel plugin unavailable",
     });
   });
 
@@ -121,14 +198,12 @@ describe("resolveCronDeliveryPreview", () => {
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
       {},
       "avery",
-      {
-        channel: "last",
-        to: undefined,
+      expect.objectContaining({
         threadId: 0,
-        accountId: undefined,
         sessionKey: undefined,
-      },
-      { dryRun: true },
+        sessionTarget: "isolated",
+      }),
+      expect.objectContaining({ dryRun: true }),
     );
     expect(preview).toEqual({
       label: "none -> last",

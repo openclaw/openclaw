@@ -112,6 +112,22 @@ describe("Control UI mount fallback", () => {
     ["Beacon dark", { theme: "beacon", themeMode: "dark" }, "beacon", "rgb(0, 0, 0)"],
     ["Beacon light", { theme: "beacon", themeMode: "light" }, "beacon-light", "rgb(255, 255, 255)"],
     ["Phosphor dark", { theme: "phosphor", themeMode: "dark" }, "phosphor", "rgb(10, 15, 10)"],
+    ["CRT dark", { theme: "crt", themeMode: "dark" }, "crt", "rgb(9, 10, 9)"],
+    ["CRT light", { theme: "crt", themeMode: "light" }, "crt-light", "rgb(245, 245, 244)"],
+    [
+      "Manuscript light",
+      { theme: "manuscript", themeMode: "light" },
+      "manuscript-light",
+      "rgb(246, 241, 228)",
+    ],
+    [
+      "Manuscript dark",
+      { theme: "manuscript", themeMode: "dark" },
+      "manuscript",
+      "rgb(33, 30, 24)",
+    ],
+    ["Ros\u00e9 dark", { theme: "rose", themeMode: "dark" }, "rose", "rgb(25, 23, 36)"],
+    ["Miami dark", { theme: "miami", themeMode: "dark" }, "miami", "rgb(20, 15, 30)"],
   ])(
     "paints %s before the app stylesheet loads",
     async (_name, settings, expectedTheme, expectedBackground) => {
@@ -228,6 +244,33 @@ describe("Control UI mount fallback", () => {
     expect(signals).toHaveLength(6);
     await vi.waitFor(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
   });
+
+  it.each(["Keep waiting", "first render"])(
+    "retires a pending recovery probe on %s",
+    async (action) => {
+      const frameWindow = createIsolatedWindow();
+      const fetch = vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new Error("request aborted")));
+          }),
+      );
+      Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+      installFallbackShell(frameWindow, await readIndexHtmlWithDelay(500));
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+      expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+
+      if (action === "Keep waiting") {
+        frameWindow.document.getElementById("openclaw-mount-wait")?.click();
+      } else {
+        frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-rendered"));
+      }
+      expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      await waitForWindowTimeout(frameWindow, 10);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(frameWindow.document.getElementById("openclaw-mount-fallback")?.hidden).toBe(true);
+    },
+  );
 
   it("bounds automatic recovery attempts while the gateway is unavailable", async () => {
     const frameWindow = createIsolatedWindow();

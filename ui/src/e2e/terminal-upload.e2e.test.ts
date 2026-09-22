@@ -1,4 +1,6 @@
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -10,13 +12,115 @@ const suite = createControlUiE2eSuite({
 });
 
 const expectUploadSurface = process.env.OPENCLAW_TERMINAL_UPLOAD_EXPECT_PRESENT !== "0";
-const screenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_SCREENSHOT?.trim();
-const progressScreenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_PROGRESS_SCREENSHOT?.trim();
-const errorScreenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_ERROR_SCREENSHOT?.trim();
-const videoDir = process.env.OPENCLAW_TERMINAL_UPLOAD_VIDEO_DIR?.trim();
+const requestedScreenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_SCREENSHOT?.trim();
+const requestedProgressScreenshotPath =
+  process.env.OPENCLAW_TERMINAL_UPLOAD_PROGRESS_SCREENSHOT?.trim();
+const requestedErrorScreenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_ERROR_SCREENSHOT?.trim();
+const requestedVideoDir = process.env.OPENCLAW_TERMINAL_UPLOAD_VIDEO_DIR?.trim();
 
 suite.define(() => {
+  it.skipIf(!expectUploadSurface)(
+    "pastes native catalog upload paths without treating the CLI title as a shell",
+    async () => {
+      await suite.withPage(
+        { serviceWorkers: "block", viewport: { width: 1280, height: 800 } },
+        async ({ page }) => {
+          await page.addInitScript(() => {
+            (
+              window as Window & {
+                ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
+              }
+            )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+              gatewayUrl: "ws://gateway.example.test",
+              token: "test",
+            };
+          });
+          const nativeTitle = "claude --resume 12345678…";
+          const stagedPath = "/tmp/openclaw-terminal-upload/reviewer's notes.pdf";
+          const gateway = await installMockGateway(page, {
+            featureMethods: ["terminal.open", "terminal.upload"],
+            methodResponses: {
+              "terminal.list": { sessions: [] },
+              "terminal.open": {
+                agentId: "main",
+                confined: false,
+                cwd: "/workspace",
+                sessionId: "terminal-native-upload-e2e",
+                shell: nativeTitle,
+                title: nativeTitle,
+              },
+            },
+            terminalEnabled: true,
+          });
+
+          await page.goto(`${suite.server.baseUrl}focus/terminal`);
+          await gateway.waitForRequest("terminal.open");
+          await page.locator("button.tp-upload").waitFor({ state: "visible" });
+          await expect
+            .poll(() => page.locator(".tabstrip-tab.is-live").textContent())
+            .toContain(nativeTitle);
+
+          await gateway.deferNext("terminal.upload");
+          await page.locator("input.tp-file-input").setInputFiles({
+            name: "reviewer's notes.pdf",
+            mimeType: "application/pdf",
+            buffer: Buffer.from("%PDF"),
+          });
+          const upload = await gateway.waitForRequest("terminal.upload");
+          expect(upload.params).toEqual({
+            sessionId: "terminal-native-upload-e2e",
+            name: "reviewer's notes.pdf",
+            contentBase64: "JVBERg==",
+          });
+          await gateway.resolveDeferred("terminal.upload", {
+            path: stagedPath,
+            size: 4,
+            uploadPathStyle: "native",
+          });
+
+          await expect
+            .poll(async () => (await gateway.getRequests("terminal.input")).length)
+            .toBe(1);
+          const input = (await gateway.getRequests("terminal.input"))[0]?.params as {
+            data?: string;
+          };
+          expect(input.data).toBe('"/tmp/openclaw-terminal-upload/reviewer\'s notes.pdf"');
+          expect(input.data).not.toMatch(/[\r\n]/);
+          await expect.poll(async () => await page.locator(".tp-upload-card").count()).toBe(0);
+          expect(await gateway.getRequests("terminal.upload")).toHaveLength(1);
+        },
+      );
+    },
+  );
+
   it("uploads picked and dropped files, then pastes staged paths without Enter", async () => {
+    // Independent requested parents stay independent; captures under one parent share this attempt.
+    const directories = new Map<string, string>();
+    const directoryFor = (parent: string) => {
+      const resolved = path.resolve(parent);
+      let directory = directories.get(resolved);
+      if (!directory) {
+        directory = createControlUiE2eArtifactDir("terminal-upload", resolved);
+        directories.set(resolved, directory);
+      }
+      return directory;
+    };
+    const screenshotFor = (requested: string | undefined, stage: string) => {
+      if (!requested) {
+        return undefined;
+      }
+      const output = path.join(
+        directoryFor(path.dirname(requested)),
+        stage,
+        path.basename(requested),
+      );
+      console.info(`[control-ui-e2e] screenshot: ${output}`);
+      return output;
+    };
+    const screenshotPath = screenshotFor(requestedScreenshotPath, "initial");
+    const progressScreenshotPath = screenshotFor(requestedProgressScreenshotPath, "progress");
+    const errorScreenshotPath = screenshotFor(requestedErrorScreenshotPath, "error");
+    const videoDir = requestedVideoDir ? directoryFor(requestedVideoDir) : undefined;
     await suite.withPage(
       {
         serviceWorkers: "block",
@@ -101,12 +205,24 @@ suite.define(() => {
           .toBe(2);
         await page.getByText("Uploading 2 of 2").waitFor();
         await expect.poll(async () => await progress.getAttribute("aria-valuenow")).toBe("1");
+        const relativeLockDirectory = ".openclaw\\tmp\\openclaw\\terminal-upload-lock";
+        const privatePath = "C:\\Users\\operator\\private\\request.log";
+        const recoveryMessage =
+          "terminal upload staging is busy; retry after other uploads finish. " +
+          `If it stays blocked after a crash, locate ${relativeLockDirectory} under the home directory ` +
+          "of the account running this terminal's Gateway or node host. Stop all Gateway and " +
+          "node-host processes using that staging root, remove only this lock directory, then restart them.";
         await gateway.rejectDeferred("terminal.upload", {
           code: "UNAVAILABLE",
-          message: "paired node went offline",
+          message: `${recoveryMessage} Diagnostic: ${privatePath}; token=synthetic-terminal-secret-value`,
         });
         await page.getByText("Upload failed").waitFor();
-        await page.getByText("paired node went offline").waitFor();
+        const uploadError = page.locator(".tp-upload-card__error");
+        await expect.poll(async () => await uploadError.textContent()).toContain(recoveryMessage);
+        const displayedError = await uploadError.textContent();
+        expect(displayedError).toContain("[redacted path]");
+        expect(displayedError).not.toContain(privatePath);
+        expect(displayedError).not.toContain("synthetic-terminal-secret-value");
         expect(await page.getByRole("button", { name: "Retry" }).isVisible()).toBe(true);
         expect((await gateway.getRequests("terminal.input")).length).toBe(0);
         if (errorScreenshotPath) {
@@ -183,6 +299,34 @@ suite.define(() => {
         expect(droppedInput.data).toContain("/tmp/openclaw-terminal-upload/dropped.png");
         expect(droppedInput.data).not.toMatch(/[\r\n]/);
 
+        await gateway.setMethodResponse("terminal.upload", { path: stagedPath, size: 4 });
+        await gateway.deferNext("terminal.upload", { name: "blocked.zip" });
+        await page.locator("input.tp-file-input").setInputFiles([
+          { name: "sample file.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF") },
+          { name: "blocked.zip", mimeType: "application/zip", buffer: Buffer.from("zip") },
+        ]);
+        await page.getByText("Uploading 2 of 2").waitFor();
+        await expect
+          .poll(async () => (await gateway.getRequests("terminal.upload")).length)
+          .toBe(6);
+        await gateway.rejectDeferred("terminal.upload", {
+          code: "UNAVAILABLE",
+          message: "Terminal upload staging is full. Move or remove staged files, then retry.",
+        });
+        const insertUploaded = page.getByRole("button", { name: "Insert uploaded paths" });
+        await insertUploaded.waitFor({ state: "visible" });
+        expect((await gateway.getRequests("terminal.input")).length).toBe(2);
+        await insertUploaded.click();
+        await expect.poll(async () => (await gateway.getRequests("terminal.input")).length).toBe(3);
+        const recoveredInput = (await gateway.getRequests("terminal.input")).at(-1)?.params as {
+          data?: string;
+        };
+        expect(recoveredInput.data).toContain("'/tmp/openclaw-terminal-upload/sample file.pdf'");
+        expect(recoveredInput.data).not.toContain("blocked.zip");
+        expect(recoveredInput.data).not.toMatch(/[\r\n]/);
+        expect((await gateway.getRequests("terminal.upload")).length).toBe(6);
+        await expect.poll(async () => await page.locator(".tp-upload-card").count()).toBe(0);
+
         await gateway.deferNext("terminal.upload");
         await page.locator("input.tp-file-input").setInputFiles({
           name: "cancelled.zip",
@@ -193,7 +337,7 @@ suite.define(() => {
           .poll(async () => (await gateway.getRequests("terminal.upload")).length, {
             timeout: 10_000,
           })
-          .toBe(5);
+          .toBe(7);
         await page.getByText("Uploading 1 of 1").waitFor();
         await page.getByRole("button", { name: "Cancel" }).click();
         await expect.poll(async () => await page.locator(".tp-upload-card").count()).toBe(0);
@@ -202,7 +346,7 @@ suite.define(() => {
           size: 3,
         });
         await page.waitForTimeout(100);
-        expect((await gateway.getRequests("terminal.input")).length).toBe(2);
+        expect((await gateway.getRequests("terminal.input")).length).toBe(3);
       },
     );
   });

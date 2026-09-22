@@ -12,10 +12,8 @@ import type {
 } from "../../config/sessions/transcript-entry-anchor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
 import {
@@ -32,9 +30,9 @@ type ContextEngineTurnOutboxPayload = Parameters<
   typeof enqueueContextEngineTurnCommit
 >[0]["payload"];
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
+afterEach(async () => {
   for (const tempDir of tempDirs.splice(0)) {
+    await cleanupSessionStateForTest({ stateDir: tempDir });
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
@@ -229,6 +227,12 @@ describe("context-engine turn outbox", () => {
       database,
       engineId: "test",
       isHeartbeat: true,
+      runtimeContext: {
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        tokenBudget: 180_000,
+        modelContextWindow: 200_000,
+      },
     });
     const current = await appendTranscriptMessage(target, {
       message: { role: "user", content: "second" },
@@ -292,6 +296,12 @@ describe("context-engine turn outbox", () => {
       expect.objectContaining({
         advancementKey: admission.logicalTurnId,
         isHeartbeat: true,
+        runtimeContext: {
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-6",
+          tokenBudget: 180_000,
+          modelContextWindow: 200_000,
+        },
         messages: [
           { role: "user", content: "first" },
           { role: "assistant", content: "first answer" },
@@ -643,10 +653,18 @@ describe("context-engine turn outbox", () => {
       sequence: 1,
       sessionId: "session-a",
     });
+    Object.assign(payload, {
+      runtimeContext: {
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        tokenBudget: 180_000,
+        modelContextWindow: 200_000,
+      },
+    });
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
 
     let blocked = true;
-    const commitTurn = vi.fn(async () => {
+    const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => {
       if (blocked) {
         throw new Error("temporary failure");
       }
@@ -691,6 +709,11 @@ describe("context-engine turn outbox", () => {
     });
 
     expect(commitTurn).toHaveBeenCalledTimes(2);
+    for (const [call] of commitTurn.mock.calls) {
+      expect(call).toMatchObject({
+        runtimeContext: { tokenBudget: 180_000, modelContextWindow: 200_000 },
+      });
+    }
     expect(degradeBeforeStart).not.toHaveBeenCalled();
 
     enqueueContextEngineTurnCommit({

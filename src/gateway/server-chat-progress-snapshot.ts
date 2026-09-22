@@ -1,11 +1,42 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 const CHAT_RUN_PROGRESS_MAX_EVENTS = 50;
 const CHAT_RUN_PROGRESS_MAX_BYTES = 128 * 1024;
 const CHAT_RUN_PROGRESS_MAX_EVENT_BYTES = 64 * 1024;
 const CHAT_RUN_PROGRESS_MAX_REVIEWS_PER_TOOL = 16;
+const retainedEventBytes = new WeakMap<AgentEventPayload, number>();
+
+function freezeCapturedProgress(value: unknown): void {
+  if (value === null || typeof value !== "object") {
+    return;
+  }
+  for (const child of Object.values(value)) {
+    freezeCapturedProgress(child);
+  }
+  Object.freeze(value);
+}
+
+function captureProgressEvent(event: AgentEventPayload) {
+  try {
+    const json = JSON.stringify(event);
+    const byteLength = Buffer.byteLength(json, "utf8");
+    if (byteLength > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
+      return undefined;
+    }
+    // Own the wire representation; producers and replay readers cannot change
+    // captured content or invalidate its size after this synchronous receipt.
+    const captured: AgentEventPayload = JSON.parse(json);
+    freezeCapturedProgress(captured);
+    if (!asNullableRecord(captured.data)) {
+      return undefined;
+    }
+    retainedEventBytes.set(captured, byteLength);
+    return { event: captured, byteLength };
+  } catch {
+    return undefined;
+  }
+}
 
 export type ChatRunProgressSnapshot = {
   events: AgentEventPayload[];
@@ -27,10 +58,18 @@ export function updateChatRunProgressSnapshot(
     event.stream === "run_status" &&
     [
       "preparing_workspace",
+      "naming_worktree",
+      "creating_worktree",
+      "running_setup",
       "provisioning_environment",
       "preparing_context",
+      "memory_flushing",
       "starting_model",
     ].includes(phase);
+  const isRetryStatus = event.stream === "run_status" && phase === "retrying";
+  const isAssistant =
+    event.stream === "assistant" &&
+    Boolean(snapshot?.events.some((candidate) => candidate.stream === "run_status"));
   const preambleItemId =
     typeof data.itemId === "string" && data.itemId.trim()
       ? data.itemId.trim()
@@ -43,6 +82,7 @@ export function updateChatRunProgressSnapshot(
     ["start", "input_delta", "update", "review", "result"].includes(phase) &&
     (phase !== "review" || (mode === "full" && Boolean(reviewId)));
   const isPreamble = event.stream === "item" && data.kind === "preamble";
+  const isUsage = event.stream === "usage";
   const isNotice = event.stream === "notice" && phase === "warning";
   const guardianTargetItemId =
     typeof data.targetItemId === "string" ? data.targetItemId.trim() : "";
@@ -62,13 +102,16 @@ export function updateChatRunProgressSnapshot(
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
     );
-  if (mode === "summary" && !isTool && !isPreamble) {
+  if (mode === "summary" && !isTool && !isPreamble && !isUsage && !isRetryStatus && !isAssistant) {
     return snapshot;
   }
   if (
     !isTool &&
     !isPreamble &&
+    !isUsage &&
     !isStartupStatus &&
+    !isRetryStatus &&
+    !isAssistant &&
     !isStandaloneGuardian &&
     !isNotice &&
     !resolvesStrictReview
@@ -88,26 +131,40 @@ export function updateChatRunProgressSnapshot(
     candidate.data?.kind === "preamble" &&
     (candidate.data.itemId ?? "") === preambleItemId;
   const previousPreamble = preambleItemId ? next.events.find(matchesPreamble) : undefined;
+  const previousUsage = isUsage
+    ? next.events.find((candidate) => candidate.stream === "usage")
+    : undefined;
 
   const removeWhere = (predicate: (candidate: AgentEventPayload) => boolean) => {
-    next.events = next.events.filter((candidate) => !predicate(candidate));
-    next.byteLength = next.events.reduce((total, candidate) => total + jsonUtf8Bytes(candidate), 0);
+    next.events = next.events.filter((candidate) => {
+      if (!predicate(candidate)) {
+        return true;
+      }
+      next.byteLength -= retainedEventBytes.get(candidate)!;
+      return false;
+    });
   };
 
-  if (isStartupStatus) {
-    if (
-      next.events.some((candidate) => candidate.stream === "tool" || candidate.stream === "item")
-    ) {
-      return next;
-    }
-    removeWhere((candidate) => candidate.stream === "run_status");
-  } else if (isTool || isPreamble) {
-    removeWhere((candidate) => candidate.stream === "run_status");
+  if (
+    isStartupStatus &&
+    next.events.some((candidate) => candidate.stream === "tool" || candidate.stream === "item")
+  ) {
+    return next;
   }
 
-  if (isTool) {
+  if (isUsage) {
+    // Context-only updates must retain the run total already reported by completed responses.
+    removeWhere((candidate) => candidate.stream === "usage");
+  } else if (isStartupStatus || isRetryStatus || isAssistant || isTool || isPreamble) {
+    // Progress clears transient statuses; retry waits may begin after tools completed.
     removeWhere((candidate) => {
-      if (candidate.stream !== "tool" || candidate.data?.toolCallId !== toolCallId) {
+      if (candidate.stream === "run_status" || candidate.stream === "assistant") {
+        return true;
+      }
+      if (isPreamble) {
+        return matchesPreamble(candidate);
+      }
+      if (!isTool || candidate.stream !== "tool" || candidate.data?.toolCallId !== toolCallId) {
         return false;
       }
       if (phase === "start") {
@@ -123,10 +180,7 @@ export function updateChatRunProgressSnapshot(
       // review ID so reconnect restores every still-relevant decision.
       return asNullableRecord(candidate.data.review)?.id === reviewId;
     });
-  } else if (isPreamble) {
-    const progressText = typeof data.progressText === "string" ? data.progressText.trim() : "";
-    removeWhere(matchesPreamble);
-    if (!progressText) {
+    if (isPreamble && !(typeof data.progressText === "string" && data.progressText.trim())) {
       return next;
     }
   } else if ((isStandaloneGuardian || resolvesStrictReview) && typeof data.reviewId === "string") {
@@ -150,28 +204,37 @@ export function updateChatRunProgressSnapshot(
           phase,
           name: typeof data.name === "string" ? data.name : undefined,
           toolCallId,
-          args: phase === "start" ? data.args : undefined,
-          partialResult: phase === "update" ? data.partialResult : undefined,
-          diff: phase === "input_delta" ? data.diff : undefined,
-          review: phase === "review" ? data.review : undefined,
-          approvalReviewOutcome:
-            phase === "review" || phase === "result" ? data.approvalReviewOutcome : undefined,
-          isError: phase === "result" ? data.isError : undefined,
-          result: phase === "result" ? data.result : undefined,
+          ...(phase === "start"
+            ? { args: data.args }
+            : phase === "update"
+              ? { partialResult: data.partialResult }
+              : phase === "input_delta"
+                ? { diff: data.diff }
+                : phase === "review"
+                  ? { review: data.review, approvalReviewOutcome: data.approvalReviewOutcome }
+                  : phase === "result"
+                    ? {
+                        approvalReviewOutcome: data.approvalReviewOutcome,
+                        isError: data.isError,
+                        result: data.result,
+                      }
+                    : {}),
         }
-    : isPreamble
-      ? {
-          kind: "preamble",
-          itemId: preambleItemId || undefined,
-          progressText: data.progressText,
-        }
-      : { ...data };
+    : isAssistant
+      ? {} // Reconnect needs the progress sequence, not another copy of buffered assistant text.
+      : isPreamble
+        ? {
+            kind: "preamble",
+            itemId: preambleItemId || undefined,
+            progressText: data.progressText,
+          }
+        : { ...previousUsage?.data, ...data };
   for (const key of Object.keys(storedData)) {
     if (storedData[key] === undefined) {
       delete storedData[key];
     }
   }
-  let storedEvent: AgentEventPayload = {
+  const storedEvent: AgentEventPayload = {
     runId: event.runId,
     seq: event.seq,
     stream: event.stream,
@@ -181,20 +244,19 @@ export function updateChatRunProgressSnapshot(
     ...(event.sessionKey ? { sessionKey: event.sessionKey } : {}),
     ...(event.agentId ? { agentId: event.agentId } : {}),
   };
-  let eventBytes = jsonUtf8Bytes(storedEvent);
-  if (eventBytes > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES && isTool) {
+  let captured = captureProgressEvent(storedEvent);
+  if (!captured && isTool) {
     delete storedData.args;
     delete storedData.partialResult;
     delete storedData.diff;
     delete storedData.result;
-    storedEvent = { ...storedEvent, data: storedData };
-    eventBytes = jsonUtf8Bytes(storedEvent);
+    captured = captureProgressEvent(storedEvent);
   }
-  if (eventBytes > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
+  if (!captured) {
     return next;
   }
-  next.events.push(storedEvent);
-  next.byteLength += eventBytes;
+  next.events.push(captured.event);
+  next.byteLength += captured.byteLength;
   if (phase === "review") {
     const reviews = next.events.filter(
       (candidate) =>
@@ -212,7 +274,8 @@ export function updateChatRunProgressSnapshot(
     next.events.length > CHAT_RUN_PROGRESS_MAX_EVENTS ||
     next.byteLength > CHAT_RUN_PROGRESS_MAX_BYTES
   ) {
-    const oldest = next.events[0];
+    // The single usage snapshot is current run state, not evictable activity history.
+    const oldest = next.events.find((candidate) => candidate.stream !== "usage");
     if (!oldest) {
       break;
     }

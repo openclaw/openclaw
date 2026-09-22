@@ -12,8 +12,10 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+// The target cwd may be outside this checkout, without our tsconfig aliases.
+import { asRecord, isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { hasNonEmptyString } from "../../packages/normalization-core/src/string-coerce.ts";
+import { appendBoundedTail } from "../lib/bounded-output-tail.mjs";
 import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
@@ -24,6 +26,7 @@ import {
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../lib/windows-taskkill.mjs";
+import { fixtureCapabilityConsentArgs } from "./lib/package-compat.mjs";
 import { readTextFileTail } from "./lib/text-file-utils.mjs";
 
 type JsonRecord = Record<string, unknown>;
@@ -383,7 +386,7 @@ export async function resolveKitchenSinkRpcPort(
 function resolveOpenClawRunner(): OpenClawRunner {
   if (process.env.OPENCLAW_ENTRY) {
     return {
-      command: "node",
+      command: process.execPath,
       baseArgs: [process.env.OPENCLAW_ENTRY],
       label: process.env.OPENCLAW_ENTRY,
     };
@@ -391,7 +394,7 @@ function resolveOpenClawRunner(): OpenClawRunner {
   for (const candidate of ["dist/index.mjs", "dist/index.js"]) {
     const resolved = path.join(process.cwd(), candidate);
     if (fs.existsSync(resolved)) {
-      return { command: "node", baseArgs: [resolved], label: resolved };
+      return { command: process.execPath, baseArgs: [resolved], label: resolved };
     }
   }
   return { pnpm: true, baseArgs: ["openclaw"], label: "pnpm openclaw" };
@@ -459,20 +462,6 @@ function writeJson(file: string, value: unknown) {
 
 function readJson(file: string): unknown {
   return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-export function appendBoundedOutput(
-  buffer: CapturedOutput,
-  chunk: string | Uint8Array,
-  maxChars = resolveKitchenSinkRpcConfig().outputCaptureChars,
-) {
-  const text = String(chunk);
-  const combined = `${buffer.text}${text}`;
-  const overflowChars = Math.max(0, combined.length - maxChars);
-  return {
-    text: overflowChars > 0 ? combined.slice(overflowChars) : combined,
-    truncatedChars: buffer.truncatedChars + overflowChars,
-  };
 }
 
 function formatCapturedOutput(label: string, buffer: CapturedOutput) {
@@ -581,11 +570,11 @@ export function runCommand(
       );
       forceKillTimer.unref();
     }, resolvedTimeoutMs);
-    child.stdout?.on("data", (chunk) => {
-      stdout = appendBoundedOutput(stdout, chunk, outputCaptureChars);
+    child.stdout?.setEncoding("utf8").on("data", (chunk) => {
+      stdout = appendBoundedTail(stdout, chunk, outputCaptureChars);
     });
-    child.stderr?.on("data", (chunk) => {
-      stderr = appendBoundedOutput(stderr, chunk, outputCaptureChars);
+    child.stderr?.setEncoding("utf8").on("data", (chunk) => {
+      stderr = appendBoundedTail(stderr, chunk, outputCaptureChars);
     });
     child.on("error", (error) => {
       clearTimeout(timer);
@@ -1155,7 +1144,7 @@ export function findDistCallGatewayModuleFiles(cwd = process.cwd()) {
   return fs.existsSync(distDir)
     ? fs
         .readdirSync(distDir)
-        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/u.test(name))
+        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.m?js$/u.test(name))
         .toSorted((left, right) => left.localeCompare(right))
     : [];
 }
@@ -1217,7 +1206,7 @@ function isRetryableTransientNetworkError(error: unknown, seen = new Set<unknown
   const message =
     candidate instanceof Error ? candidate.message : typeof candidate === "string" ? candidate : "";
   const code = asRecord(candidate).code;
-  const text = `${String(code ?? "")} ${message}`;
+  const text = `${typeof code === "string" ? code : ""} ${message}`;
   if (
     /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/iu.test(text) ||
     /\b(?:fetch failed|socket hang up|connection reset)\b/iu.test(text)
@@ -1336,9 +1325,10 @@ async function delayWithAbort(delayMs: number, signal?: AbortSignal) {
   }
 }
 
-function configureKitchenSink(env: KitchenSinkEnv, port: number) {
+export function configureKitchenSink(env: KitchenSinkEnv, port: number) {
   const configPath = env.OPENCLAW_CONFIG_PATH;
   const config = asRecord(fs.existsSync(configPath) ? readJson(configPath) : {});
+  const frozenTarget = env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy";
   const gateway = asRecord(config.gateway);
   const plugins = asRecord(config.plugins);
   const pluginEntries = asRecord(plugins.entries);
@@ -1363,7 +1353,11 @@ function configureKitchenSink(env: KitchenSinkEnv, port: number) {
   config.plugins = {
     ...plugins,
     enabled: true,
-    allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), PLUGIN_ID])],
+    ...(frozenTarget
+      ? {}
+      : {
+          allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), PLUGIN_ID])],
+        }),
     entries: {
       ...pluginEntries,
       [PLUGIN_ID]: {
@@ -1391,8 +1385,7 @@ function configureKitchenSink(env: KitchenSinkEnv, port: number) {
       ...new Set([...(Array.isArray(tools.alsoAllow) ? tools.alsoAllow : []), ...EXPECTED_TOOLS]),
     ],
   };
-  config.tts = {
-    ...tts,
+  const ttsConfig = {
     provider: tts.provider ?? speechProvider,
     providers: {
       ...ttsProviders,
@@ -1401,6 +1394,12 @@ function configureKitchenSink(env: KitchenSinkEnv, port: number) {
       },
     },
   };
+  if (frozenTarget) {
+    const messages = asRecord(config.messages);
+    config.messages = { ...messages, tts: { ...asRecord(messages.tts), ...ttsConfig } };
+  } else {
+    config.tts = { ...tts, ...ttsConfig };
+  }
   writeJson(configPath, config);
 }
 
@@ -1980,7 +1979,7 @@ export async function assertOperatorRpcDenied(
   } catch (error) {
     const candidate = asRecord(error);
     const gatewayCode = candidate.gatewayCode;
-    const message = String(candidate.message ?? "");
+    const message = typeof candidate.message === "string" ? candidate.message : "";
     if (gatewayCode === "INVALID_REQUEST" && message.includes("unauthorized role: operator")) {
       return;
     }
@@ -2754,12 +2753,27 @@ async function main() {
   let sampleTimer: ReturnType<typeof setInterval> | undefined;
   try {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
-    await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC, "--force"], env, {
-      ...commandResourceOptions,
-      requireResourceSample: true,
-      resourceLabel: "plugins install",
-      timeoutMs: config.installTimeoutMs,
-    });
+    const installHelp = await runOpenClaw(runner, ["plugins", "install", "--help"], env);
+    if (installHelp.stdoutTruncatedChars > 0) {
+      throw new Error("Plugin fixture help probe output was truncated");
+    }
+    await runOpenClaw(
+      runner,
+      [
+        "plugins",
+        "install",
+        PLUGIN_SPEC,
+        "--force",
+        ...fixtureCapabilityConsentArgs(installHelp.stdout),
+      ],
+      env,
+      {
+        ...commandResourceOptions,
+        requireResourceSample: true,
+        resourceLabel: "plugins install",
+        timeoutMs: config.installTimeoutMs,
+      },
+    );
     runner = resolveOpenClawRunner();
     console.log(`Kitchen Sink RPC runtime runner: ${runner.label}`);
     configureKitchenSink(env, port);

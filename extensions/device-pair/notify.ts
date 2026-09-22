@@ -4,7 +4,10 @@ import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
 import { listDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateCompareIntent,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
@@ -80,7 +83,8 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
 }
 
 type NotifySubscriberStore = PluginStateKeyedStore<NotifySubscription> & {
-  deleteIf: NonNullable<PluginStateKeyedStore<NotifySubscription>["deleteIf"]>;
+  observe: NonNullable<PluginStateKeyedStore<NotifySubscription>["observe"]>;
+  compareAndApply: NonNullable<PluginStateKeyedStore<NotifySubscription>["compareAndApply"]>;
 };
 
 function openNotifySubscriberStore(api: OpenClawPluginApi): NotifySubscriberStore {
@@ -88,9 +92,9 @@ function openNotifySubscriberStore(api: OpenClawPluginApi): NotifySubscriberStor
     namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
     maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
   });
-  if (!store.deleteIf) {
+  if (!store.observe || !store.compareAndApply) {
     throw new Error(
-      "device-pair notify requires a runtime with atomic plugin state conditional delete support",
+      "device-pair notify requires a runtime with atomic plugin state compare-and-apply support",
     );
   }
   return store as NotifySubscriberStore;
@@ -177,6 +181,35 @@ function isSameNotifySubscription(
     current.addedAtMs === expected.addedAtMs &&
     notifySubscriberKey(current) === notifySubscriberKey(expected)
   );
+}
+
+function decideDeliveredNotifySubscriptionDeletion(
+  current: NotifySubscription | undefined,
+  delivered: NotifySubscription,
+): PluginStateCompareIntent<NotifySubscription> {
+  return {
+    operation: "delete",
+    action: current && isSameNotifySubscription(current, delivered) ? "delete" : "keep",
+  };
+}
+
+async function deleteDeliveredNotifySubscription(
+  store: NotifySubscriberStore,
+  key: string,
+  delivered: NotifySubscription,
+): Promise<void> {
+  let observation = await store.observe(key);
+  for (;;) {
+    const result = await store.compareAndApply(
+      key,
+      observation.comparison,
+      decideDeliveredNotifySubscriptionDeletion(observation.value, delivered),
+    );
+    if (result.status !== "conflict") {
+      return;
+    }
+    observation = result.current;
+  }
 }
 
 function buildPairingRequestNotificationText(request: PendingPairingRequest): string {
@@ -313,9 +346,7 @@ async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }):
           deliveredOneShots.add(entry.key);
           // Delivery is fallible and uncancellable. Delete only the exact arm
           // that was sent so an overlapping re-arm remains subscribed.
-          await subscriberStore.deleteIf(entry.key, (current) =>
-            isSameNotifySubscription(current, subscriber),
-          );
+          await deleteDeliveredNotifySubscription(subscriberStore, entry.key, subscriber);
         }
       }
 
@@ -427,9 +458,11 @@ export async function handleNotifyCommand(params: {
   }
 
   if (params.action === "status" || params.action === "") {
-    const [current, subscribers, pending] = await Promise.all([
+    const [current, subscriberCount, pending] = await Promise.all([
       subscriberStore.lookup(targetStoreKey),
-      subscriberStore.entries(),
+      subscriberStore.count
+        ? subscriberStore.count()
+        : subscriberStore.entries().then((entries) => entries.length),
       listDevicePairing(),
     ]);
     const enabled = Boolean(current);
@@ -438,7 +471,7 @@ export async function handleNotifyCommand(params: {
       text: [
         `Pair request notifications: ${enabled ? "enabled" : "disabled"} for this chat.`,
         `Mode: ${mode}`,
-        `Subscribers: ${subscribers.length}`,
+        `Subscribers: ${subscriberCount}`,
         `Pending requests: ${pending.pending.length}`,
         "",
         "Use /pair notify on|off|once",

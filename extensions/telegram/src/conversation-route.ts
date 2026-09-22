@@ -56,22 +56,6 @@ type ResolveTelegramConversationRouteParams = {
   topicAgentId?: string | null;
 };
 
-export function buildTelegramConversationRouteContext(params: {
-  chatId: number | string;
-  isGroup: boolean;
-  threadSpec: TelegramThreadSpec;
-  senderId?: string | number | null;
-  resolvedThreadId?: number;
-}) {
-  return {
-    ConversationRouteContextObserved: true,
-    ConversationRoutePeerId: params.isGroup
-      ? buildTelegramConversationId({ chatId: params.chatId, thread: params.threadSpec })
-      : resolveTelegramDirectPeerId(params),
-    ThreadParentId: buildTelegramParentPeer(params)?.id,
-  };
-}
-
 function resolveTelegramConversationRouteWithRuntimePolicy(
   params: ResolveTelegramConversationRouteParams,
   touchRuntimeBinding: boolean,

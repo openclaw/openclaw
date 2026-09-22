@@ -1,138 +1,18 @@
 /** Session MCP config loading, filtering, and catalog fingerprints. */
 import crypto from "node:crypto";
-import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { PluginLruCache } from "../plugins/plugin-cache-primitives.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { assignSafeServerNames } from "./agent-bundle-mcp-names.js";
 import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
 import {
   partitionMcpServersByConnectionScope,
   redactMcpServersForFingerprint,
 } from "./mcp-connection-resolver.js";
+import { createMcpServerToolDenyMatcher } from "./tool-policy-match.js";
 
 type LoadedMcpConfig = ReturnType<typeof loadEmbeddedAgentMcpConfig>;
-type PreparedSessionMcpConfig = {
-  loaded: LoadedMcpConfig;
-  fingerprint: string;
-};
-type SessionMcpConfigDiscoveryCacheEntry = {
-  loaded: LoadedMcpConfig;
-  preparedByVariant: PluginLruCache<PreparedSessionMcpConfig>;
-};
-
-const SESSION_MCP_CONFIG_DISCOVERY_CACHE_KEY = Symbol.for(
-  "openclaw.sessionMcpConfigDiscoveryCache.pluginLru.v1",
-);
-const SESSION_MCP_CONFIG_DISCOVERY_CACHE_LIMIT = 128;
-const SESSION_MCP_PREPARED_CONFIG_VARIANT_LIMIT = 64;
-const EMPTY_OPENCLAW_CONFIG: OpenClawConfig = {};
-
-type SessionMcpConfigDiscoveryCacheState = {
-  entries: PluginLruCache<SessionMcpConfigDiscoveryCacheEntry>;
-  manifestRegistryIds: WeakMap<object, number>;
-  nextManifestRegistryId: number;
-};
-
-function getSessionMcpConfigDiscoveryCacheState(): SessionMcpConfigDiscoveryCacheState {
-  return resolveGlobalSingleton(SESSION_MCP_CONFIG_DISCOVERY_CACHE_KEY, () => ({
-    entries: new PluginLruCache(SESSION_MCP_CONFIG_DISCOVERY_CACHE_LIMIT),
-    manifestRegistryIds: new WeakMap(),
-    nextManifestRegistryId: 1,
-  }));
-}
-
-function resolveManifestRegistryCacheId(
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">,
-): string {
-  if (!manifestRegistry) {
-    return "discovered";
-  }
-  const state = getSessionMcpConfigDiscoveryCacheState();
-  const identity = manifestRegistry.plugins;
-  const existing = state.manifestRegistryIds.get(identity);
-  if (existing !== undefined) {
-    return String(existing);
-  }
-  const created = state.nextManifestRegistryId;
-  state.nextManifestRegistryId += 1;
-  state.manifestRegistryIds.set(identity, created);
-  return String(created);
-}
-
-function buildSessionMcpConfigDiscoveryCacheKey(params: {
-  workspaceDir: string;
-  cfg?: OpenClawConfig;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  toolOverrides?: Pick<SessionToolOverrides, "mcpServers">;
-}): string {
-  // Discovery is process-wide, so the session server overlay belongs in the key or sessions leak.
-  return JSON.stringify({
-    v: 1,
-    workspaceDir: params.workspaceDir,
-    config: resolveRuntimeConfigCacheKey(params.cfg ?? EMPTY_OPENCLAW_CONFIG),
-    manifestRegistry: resolveManifestRegistryCacheId(params.manifestRegistry),
-    mcpServers: params.toolOverrides?.mcpServers
-      ? Object.fromEntries(
-          Object.entries(params.toolOverrides.mcpServers).toSorted(([left], [right]) =>
-            left.localeCompare(right),
-          ),
-        )
-      : undefined,
-  });
-}
-
-function clonePreparedSessionMcpConfig(
-  prepared: PreparedSessionMcpConfig,
-): PreparedSessionMcpConfig {
-  // Session runtimes own and may normalize their launch config. Keep cached
-  // preparation immutable by never exposing its object graph to a caller.
-  return structuredClone(prepared);
-}
-
-function loadCachedEmbeddedAgentMcpConfig(params: {
-  workspaceDir: string;
-  cfg?: OpenClawConfig;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  toolOverrides?: Pick<SessionToolOverrides, "mcpServers">;
-}): SessionMcpConfigDiscoveryCacheEntry {
-  const state = getSessionMcpConfigDiscoveryCacheState();
-  const key = buildSessionMcpConfigDiscoveryCacheKey(params);
-  const cached = state.entries.get(key);
-  if (cached) {
-    return cached;
-  }
-  // Bundle manifests and their MCP JSON are process-stable metadata. Keep the
-  // merged discovery result warm; live clients, catalogs, and failures remain
-  // session-owned and are never stored here.
-  const discovered = structuredClone(loadEmbeddedAgentMcpConfig(params));
-  const loaded = {
-    loaded: discovered,
-    preparedByVariant: new PluginLruCache<PreparedSessionMcpConfig>(
-      SESSION_MCP_PREPARED_CONFIG_VARIANT_LIMIT,
-    ),
-  };
-  // Diagnostics can represent transient filesystem or manifest failures. Keep
-  // those results session-owned so the next run retries discovery.
-  if (discovered.diagnostics.length > 0) {
-    return loaded;
-  }
-  state.entries.set(key, loaded);
-  return loaded;
-}
-
-function clearSessionMcpConfigDiscoveryCache(): void {
-  const state = getSessionMcpConfigDiscoveryCacheState();
-  state.entries.clear();
-  state.manifestRegistryIds = new WeakMap();
-  state.nextManifestRegistryId = 1;
-}
-
-registerPluginMetadataProcessMemoLifecycleClear(clearSessionMcpConfigDiscoveryCache);
 
 function digestSafeServerNameAssignments(
   safeServerNamesByServer?: ReadonlyMap<string, string>,
@@ -143,10 +23,6 @@ function digestSafeServerNameAssignments(
   return Object.fromEntries(
     [...safeServerNamesByServer.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
   );
-}
-
-function sortedSetEntries(values?: ReadonlySet<string>): string[] | undefined {
-  return values ? [...values].toSorted((a, b) => a.localeCompare(b)) : undefined;
 }
 
 function digestMcpToolDenials(
@@ -165,24 +41,6 @@ function digestMcpToolDenials(
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-function buildPreparedConfigVariantKey(params: {
-  includeServerNames?: ReadonlySet<string>;
-  excludeServerNames?: ReadonlySet<string>;
-  redactConnectionServerNames?: ReadonlySet<string>;
-  safeServerNames?: Record<string, string>;
-  mcpAppsEnabled: boolean;
-  mcpToolsDeny?: Record<string, string[]>;
-}): string {
-  return JSON.stringify({
-    include: sortedSetEntries(params.includeServerNames),
-    exclude: sortedSetEntries(params.excludeServerNames),
-    redact: sortedSetEntries(params.redactConnectionServerNames),
-    safeServerNames: params.safeServerNames,
-    mcpAppsEnabled: params.mcpAppsEnabled,
-    mcpToolsDeny: params.mcpToolsDeny,
-  });
-}
-
 function createCatalogFingerprint(params: {
   servers: Record<string, unknown>;
   mcpAppsEnabled: boolean;
@@ -198,20 +56,26 @@ function createCatalogFingerprint(params: {
 
 function filterMcpServers<T>(
   mcpServers: Record<string, T>,
-  options?: {
+  options: {
     includeServerNames?: ReadonlySet<string>;
     excludeServerNames?: ReadonlySet<string>;
+    safeServerNamesByServer: ReadonlyMap<string, string>;
+    toolDenylist?: string[];
   },
 ): Record<string, T> {
-  if (!options?.includeServerNames && !options?.excludeServerNames) {
+  if (!options.includeServerNames && !options.excludeServerNames && !options.toolDenylist?.length) {
     return mcpServers;
   }
   const filtered: Record<string, T> = {};
+  const isDenied = createMcpServerToolDenyMatcher(options.toolDenylist);
   for (const [serverName, rawServer] of Object.entries(mcpServers)) {
     if (options.includeServerNames && !options.includeServerNames.has(serverName)) {
       continue;
     }
     if (options.excludeServerNames?.has(serverName)) {
+      continue;
+    }
+    if (isDenied(options.safeServerNamesByServer.get(serverName) ?? serverName)) {
       continue;
     }
     filtered[serverName] = rawServer;
@@ -222,6 +86,7 @@ function filterMcpServers<T>(
 export function loadSessionMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  loaded?: LoadedMcpConfig;
   logDiagnostics?: boolean;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   includeServerNames?: ReadonlySet<string>;
@@ -231,42 +96,38 @@ export function loadSessionMcpConfig(params: {
   /** Full-set safe-name assignments; folded into fingerprint for all partitions. */
   safeServerNamesByServer?: ReadonlyMap<string, string>;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+  toolDenylist?: string[];
 }): {
   loaded: LoadedMcpConfig;
   fingerprint: string;
+  safeServerNamesByServer: ReadonlyMap<string, string>;
 } {
-  const discovery = loadCachedEmbeddedAgentMcpConfig({
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
-    manifestRegistry: params.manifestRegistry,
-    toolOverrides: params.toolOverrides,
-  });
+  const loaded =
+    params.loaded ??
+    loadEmbeddedAgentMcpConfig({
+      workspaceDir: params.workspaceDir,
+      cfg: params.cfg,
+      manifestRegistry: params.manifestRegistry,
+      toolOverrides: params.toolOverrides,
+    });
   if (params.logDiagnostics !== false) {
-    for (const diagnostic of discovery.loaded.diagnostics) {
+    for (const diagnostic of loaded.diagnostics) {
       logWarn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
     }
   }
-  const safeServerNames = digestSafeServerNameAssignments(params.safeServerNamesByServer);
+  const safeServerNamesByServer =
+    params.safeServerNamesByServer ?? assignSafeServerNames(Object.keys(loaded.mcpServers));
+  const safeServerNames = digestSafeServerNameAssignments(safeServerNamesByServer);
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
   const mcpToolsDeny = digestMcpToolDenials(params.toolOverrides?.mcpToolsDeny);
-  const variantKey = buildPreparedConfigVariantKey({
+  const mcpServers = filterMcpServers(loaded.mcpServers, {
     includeServerNames: params.includeServerNames,
     excludeServerNames: params.excludeServerNames,
-    redactConnectionServerNames: params.redactConnectionServerNames,
-    safeServerNames,
-    mcpAppsEnabled,
-    mcpToolsDeny,
-  });
-  const prepared = discovery.preparedByVariant.get(variantKey);
-  if (prepared) {
-    return clonePreparedSessionMcpConfig(prepared);
-  }
-  const mcpServers = filterMcpServers(discovery.loaded.mcpServers, {
-    includeServerNames: params.includeServerNames,
-    excludeServerNames: params.excludeServerNames,
+    safeServerNamesByServer,
+    toolDenylist: params.toolDenylist,
   });
   const prepareDataDirsByServer = Object.fromEntries(
-    Object.entries(discovery.loaded.prepareDataDirsByServer ?? {}).filter(([serverName]) =>
+    Object.entries(loaded.prepareDataDirsByServer ?? {}).filter(([serverName]) =>
       Object.hasOwn(mcpServers, serverName),
     ),
   );
@@ -274,8 +135,9 @@ export function loadSessionMcpConfig(params: {
     ? redactMcpServersForFingerprint(mcpServers, params.redactConnectionServerNames)
     : mcpServers;
   const result = {
+    safeServerNamesByServer,
     loaded: {
-      ...discovery.loaded,
+      ...loaded,
       mcpServers,
       // Launch ownership is not serialized or fingerprinted; the injected env path already
       // participates in the server fingerprint and this sidecar only authorizes mkdir.
@@ -288,8 +150,8 @@ export function loadSessionMcpConfig(params: {
       mcpToolsDeny,
     }),
   };
-  discovery.preparedByVariant.set(variantKey, result);
-  return clonePreparedSessionMcpConfig(result);
+  // Launch normalization is session-owned; never expose cached package facts or user config.
+  return structuredClone(result);
 }
 
 /**
@@ -301,35 +163,28 @@ export function resolveSessionMcpConfigSummary(params: {
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+  toolDenylist?: string[];
 }): { fingerprint: string; serverNames: string[] } {
-  const { loaded, fingerprint } = loadSessionMcpConfig({
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
+  const { loaded, safeServerNamesByServer } = loadSessionMcpConfig({
+    ...params,
     logDiagnostics: false,
-    manifestRegistry: params.manifestRegistry,
-    toolOverrides: params.toolOverrides,
   });
-  const serverNames = Object.keys(loaded.mcpServers).toSorted((a, b) => a.localeCompare(b));
-  if (serverNames.length === 0) {
-    return { fingerprint, serverNames };
-  }
+  const declaredServerNames = Object.keys(loaded.mcpServers);
+  const serverNames = declaredServerNames.toSorted((a, b) => a.localeCompare(b));
   // Mirror getOrCreate: the bare-keyed runtime folds full-set safe names into
   // its fingerprint and excludes requester-scoped servers from its partition.
   // Compare apples-to-apples or tools.effective reports stale-config forever.
-  const safeServerNamesByServer = assignSafeServerNames(Object.keys(loaded.mcpServers));
   const { requesterScopedServerNames } = partitionMcpServersByConnectionScope(loaded.mcpServers);
-  const { fingerprint: bareRuntimeFingerprint } = loadSessionMcpConfig({
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
+  const { fingerprint } = loadSessionMcpConfig({
+    ...params,
+    loaded,
     logDiagnostics: false,
-    manifestRegistry: params.manifestRegistry,
-    toolOverrides: params.toolOverrides,
     ...(requesterScopedServerNames.length > 0
       ? { excludeServerNames: new Set(requesterScopedServerNames) }
       : {}),
     safeServerNamesByServer,
   });
-  return { fingerprint: bareRuntimeFingerprint, serverNames };
+  return { fingerprint, serverNames };
 }
 
 /** Reads the enabled static MCP server set without opening transports or listing tools. */

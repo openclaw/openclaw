@@ -122,16 +122,17 @@ if (mode === "admission-rearm") {
   }
 } else if (mode === "wait") {
   return;
-} else if (mode === "tree") {
+} else if (mode === "tree" || mode === "tree-cancel-reject") {
   grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
   fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "grandchild.pid"), String(grandchild.pid));
-} else if (mode === "background-start") {
+} else if (mode === "background-start" || mode.startsWith("background-start:")) {
+  const port = mode === "background-start" ? 0 : Number(mode.slice("background-start:".length));
   grandchild = spawn(process.execPath, ["-e", [
     "const server = require('node:http').createServer((req, res) => res.end('preview-ready'));",
-    "server.listen(0, '127.0.0.1', () => process.stdout.write(JSON.stringify({",
+    "server.listen(Number(process.argv[1]), '127.0.0.1', () => process.stdout.write(JSON.stringify({",
     "pid: process.pid, url: 'http://127.0.0.1:' + server.address().port,",
     "}) + '\\n'));",
-  ].join("\n")], { stdio: ["ignore", "pipe", "inherit"] });
+  ].join("\n"), String(port)], { stdio: ["ignore", "pipe", "inherit"] });
   background = await new Promise((resolve, reject) => {
     grandchild.once("error", reject);
     const output = createInterface({ input: grandchild.stdout });
@@ -157,7 +158,6 @@ if (mode === "admission-rearm") {
 } else if (mode === "quiet-fail") {
   exitWorker(7);
 } else if (mode === "secret-fail") {
-  await new Promise((resolve) => setTimeout(resolve, 500));
   const credential = descriptor.admission.credential;
   const escaped = JSON.stringify(credential).slice(1, -1);
   process.stderr.write(
@@ -176,11 +176,11 @@ if (mode === "admission-rearm") {
   process.stderr.write("x".repeat(5000) + representation + "y".repeat(suffixBytes));
   exitWorker(7);
 } else if (mode === "secret-success") {
-  await new Promise((resolve) => setTimeout(resolve, 500));
   const credential = descriptor.admission.credential;
   finish(descriptor, {
     ...completedResult,
-    transcriptLeafId: "raw " + credential + " encoded " + encodeURIComponent(credential),
+    transcriptLeafId: "raw " + credential + " encoded " + encodeURIComponent(credential) +
+      (descriptor.assignment.github ? " github " + descriptor.assignment.github.token : ""),
   });
 } else if (mode === "overflow") {
   fs.writeSync(1, "x".repeat(70 * 1024));
@@ -209,9 +209,16 @@ lines.on("line", (line) => {
   if (request.type === "cancel") {
     const descriptor = currentTurn;
     if (!descriptor || descriptor.assignment.turnId !== request.turnId) return;
-    const settle = () => finish(descriptor, {
-      status: "failed", reason: "turn-failed", transcriptLeafId: null, transcriptNextSeq: 1,
-    }, Boolean(background));
+    const settle = () => {
+      if (descriptor.assignment.prompt === "tree-cancel-reject") {
+        fs.writeSync(2, "worker live event rejected: invalid-event\n");
+        exitWorker(1);
+        return;
+      }
+      finish(descriptor, {
+        status: "failed", reason: "turn-failed", transcriptLeafId: null, transcriptNextSeq: 1,
+      }, Boolean(background));
+    };
     if (grandchild && !background) {
       grandchild.once("exit", settle);
       grandchild.kill("SIGKILL");

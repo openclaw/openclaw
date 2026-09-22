@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
   configureProviderRoutes,
@@ -27,16 +28,8 @@ function configureMixedOpenAiAuthStore(): void {
   authStoreMocks.state.store = {
     version: 1,
     profiles: {
-      [API_PRIMARY_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-primary",
-      },
-      [API_BACKUP_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-backup",
-      },
+      [API_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
+      [API_BACKUP_PROFILE_ID]: createApiKeyCredential("openai", "sk-backup"),
       [OAUTH_PROFILE_ID]: {
         type: "oauth",
         provider: "openai",
@@ -56,11 +49,7 @@ function configureAnthropicFallbackStore(): void {
   authStoreMocks.state.store = {
     version: 1,
     profiles: {
-      [ANTHROPIC_API_PROFILE_ID]: {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-anthropic",
-      },
+      [ANTHROPIC_API_PROFILE_ID]: createApiKeyCredential("anthropic", "sk-anthropic"),
       [CLAUDE_CLI_PROFILE_ID]: {
         type: "oauth",
         provider: "claude-cli",
@@ -81,6 +70,12 @@ function createTriggeredSessionEntry(params: {
   trigger: RotationTrigger;
 }): SessionEntry {
   if (params.trigger === "cooldown") {
+    authStoreMocks.state.store.usageStats = {
+      [params.profileId]: {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit",
+      },
+    };
     authStoreMocks.isProfileInCooldown.mockImplementation(
       (_store: AuthProfileStore, profileId: string) => profileId === params.profileId,
     );
@@ -94,6 +89,96 @@ function createTriggeredSessionEntry(params: {
 }
 
 describe("session auth-profile rotation", () => {
+  it("retries preferred OAuth after its cooldown in the same session", async () => {
+    await withAuthState(async (state) => {
+      const agentDir = state.agentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      configureMixedOpenAiAuthStore();
+      authStoreMocks.state.store.order = undefined;
+      const cfg = {
+        auth: { order: { openai: [OAUTH_PROFILE_ID, API_PRIMARY_PROFILE_ID] } },
+      };
+      configureProviderRoutes({
+        provider: "openai",
+        modelId: OPENAI_MODEL_ID,
+        requirements: ["subscription", "api-key"],
+      });
+      authStoreMocks.state.store.usageStats = {
+        [OAUTH_PROFILE_ID]: {
+          cooldownUntil: Date.now() + 60_000,
+          cooldownReason: "rate_limit",
+          failureCounts: { rate_limit: 1 },
+        },
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: 1,
+        model: OPENAI_MODEL_ID,
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      expect(await resolveSession({ agentDir, sessionEntry, sessionStore, cfg })).toBe(
+        API_PRIMARY_PROFILE_ID,
+      );
+      expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+
+      authStoreMocks.state.store.usageStats[OAUTH_PROFILE_ID] = {
+        cooldownUntil: Date.now() - 1,
+        cooldownReason: "rate_limit",
+        failureCounts: { rate_limit: 1 },
+      };
+
+      expect(await resolveSession({ agentDir, sessionEntry, sessionStore, cfg })).toBe(
+        OAUTH_PROFILE_ID,
+      );
+      expect(sessionEntry.authProfileOverride).toBe(OAUTH_PROFILE_ID);
+      expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+    });
+  });
+
+  it("keeps an automatic API-key selection when auth order is implicit", async () => {
+    await withAuthState(async (state) => {
+      const agentDir = state.agentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      configureMixedOpenAiAuthStore();
+      authStoreMocks.state.store.order = undefined;
+      const sessionEntry = createAutomaticSessionEntry({
+        model: OPENAI_MODEL_ID,
+        authProfileOverride: API_PRIMARY_PROFILE_ID,
+      });
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      expect(await resolveSession({ agentDir, sessionEntry, sessionStore })).toBe(
+        API_PRIMARY_PROFILE_ID,
+      );
+      expect(sessionEntry.authProfileOverride).toBe(API_PRIMARY_PROFILE_ID);
+    });
+  });
+
+  it("does not reverse an automatic compaction rotation on the next resolution", async () => {
+    await withAuthState(async (state) => {
+      const agentDir = state.agentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      configureMixedOpenAiAuthStore();
+      authStoreMocks.state.store.order = undefined;
+      const cfg = {
+        auth: { order: { openai: [OAUTH_PROFILE_ID, API_PRIMARY_PROFILE_ID] } },
+      };
+      const sessionEntry = createAutomaticSessionEntry({
+        model: OPENAI_MODEL_ID,
+        authProfileOverride: API_PRIMARY_PROFILE_ID,
+        compactionCount: 1,
+        authProfileOverrideCompactionCount: 1,
+      });
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      expect(await resolveSession({ agentDir, sessionEntry, sessionStore, cfg })).toBe(
+        API_PRIMARY_PROFILE_ID,
+      );
+      expect(sessionEntry.authProfileOverride).toBe(API_PRIMARY_PROFILE_ID);
+    });
+  });
+
   it.each(["compaction", "cooldown"] as const)(
     "keeps a multi-route OpenAI session on its physical route after %s",
     async (trigger) => {
@@ -101,6 +186,9 @@ describe("session auth-profile rotation", () => {
         const agentDir = state.agentDir();
         await fs.mkdir(agentDir, { recursive: true });
         configureMixedOpenAiAuthStore();
+        authStoreMocks.state.store.order = {
+          openai: [OAUTH_PROFILE_ID, API_PRIMARY_PROFILE_ID, API_BACKUP_PROFILE_ID],
+        };
         configureProviderRoutes({
           provider: "openai",
           modelId: OPENAI_MODEL_ID,

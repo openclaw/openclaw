@@ -25,6 +25,7 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
     status: unknown,
     position: unknown,
     scope?: WorkboardMutationScope,
+    options: { expectedUpdatedAt?: number } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
       const result = await this.updateLatestCard(
@@ -38,6 +39,7 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
         {
           allowMetadataDependencyLinks: false,
           enforceStatusHolds: true,
+          expectedUpdatedAt: options.expectedUpdatedAt,
         },
       );
       return result.card;

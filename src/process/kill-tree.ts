@@ -5,6 +5,7 @@
  */
 export {
   killProcessTree,
+  readUnixProcessGroupMembers,
   signalPtySessionTree,
   signalProcessTree,
 } from "../../packages/agent-core/src/harness/env/kill-tree.js";

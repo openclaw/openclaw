@@ -1,21 +1,17 @@
 import type { DatabaseSync } from "node:sqlite";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { SESSION_PARTICIPANTS_TABLE } from "./openclaw-agent-db-contract.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
 
-export const SESSION_PARTICIPANTS_TABLE = "session_participants";
-
-const SCHEMA_START = `CREATE TABLE IF NOT EXISTS ${SESSION_PARTICIPANTS_TABLE} (`;
-const SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_key_contract (";
 const ensuredDatabases = new WeakSet<DatabaseSync>();
 
-function sessionParticipantsSchemaSql(): string {
-  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SCHEMA_START);
-  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SCHEMA_END, start);
-  if (start === -1 || end === -1) {
-    throw new Error("OpenClaw session participant schema markers are missing.");
-  }
-  return OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end);
+export function sessionParticipantsSchemaSql(): string {
+  return extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, SESSION_PARTICIPANTS_TABLE, {
+    endMarker: "CREATE TABLE IF NOT EXISTS session_key_contract (",
+    includeEndMarker: false,
+    errorMessage: "OpenClaw session participant schema markers are missing.",
+  });
 }
 
 /** Lazily installs the additive participant table on the first admitted prompt. */
@@ -26,8 +22,6 @@ export function ensureSessionParticipantsSchema(database: DatabaseSync): boolean
   const ensure = () => {
     // sqlite-allow-raw -- canonical additive DDL only.
     database.exec(sessionParticipantsSchemaSql());
-    ensureColumn(database, SESSION_PARTICIPANTS_TABLE, "actor_source TEXT");
-    ensureColumn(database, SESSION_PARTICIPANTS_TABLE, "contribution_count INTEGER");
   };
   if (database.isTransaction) {
     ensure();

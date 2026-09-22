@@ -4,11 +4,28 @@ import {
   extractAssistantTextForPhase,
   extractAssistantPhaseText,
   extractFirstTextBlock,
+  readAssistantTextBlocksForPhase,
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "./chat-message-content.js";
 
 describe("shared/chat-message-content", () => {
+  it.each(["commentary", "final_answer"] as const)(
+    "lets explicit blocks override top-level %s without reviving unphased siblings",
+    (phase) => {
+      const opposite = phase === "commentary" ? "final_answer" : "commentary";
+      const explicit = {
+        type: "text",
+        text: "Selected",
+        textSignature: JSON.stringify({ v: 1, id: "selected", phase: opposite }),
+      };
+      const message = { phase, content: [{ type: "text", text: "Unphased sibling" }, explicit] };
+      expect(readAssistantTextBlocksForPhase(message, phase)).toEqual([]);
+      expect(readAssistantTextBlocksForPhase(message, opposite)).toEqual([explicit]);
+      expect(extractAssistantTextForPhase(message, { phase })).toBeUndefined();
+      expect(extractAssistantTextForPhase(message, { phase: opposite })).toBe("Selected");
+    },
+  );
   it("extracts the first text block from array content", () => {
     expect(
       extractFirstTextBlock({
@@ -236,4 +253,15 @@ describe("resolveAssistantMessagePhase", () => {
       }),
     ).toBeUndefined();
   });
+});
+
+it.each(["    code", "\tcode", "\n\n    code"])("retains selected phase source: %j", (text) => {
+  expect(extractAssistantPhaseText({ role: "assistant", content: text })).toBe(text);
+  expect(
+    extractAssistantPhaseText({
+      role: "assistant",
+      phase: "final_answer",
+      content: [{ type: "text", text }],
+    }),
+  ).toBe(text);
 });

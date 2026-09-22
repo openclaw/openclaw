@@ -1,23 +1,40 @@
 /* @vitest-environment jsdom */
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import type { RouteLocation } from "@openclaw/uirouter";
+import type { PropertyValues } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { RunInspectorState } from "./run-inspector-model.ts";
+import {
+  createGatewayEvent,
+  createGatewayStoreTestStore,
+} from "../../app/gateway-store.test-support.ts";
+import { loadSettings } from "../../app/settings.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+import { createLiveActivity, type LiveActivity } from "./live-activity.ts";
+import type { ActivityRouteData, RunInspectorState } from "./run-inspector-model.ts";
 import type { ActivityEntry } from "./tool-activity.ts";
+import * as activityView from "./view.ts";
 import "./activity-page.ts";
 
 type TestActivityPage = HTMLElement & {
   context: ApplicationContext;
   entries: ActivityEntry[];
-  routeData: {
-    mode: "run";
-    selector: { kind: "run"; id: string };
-    selectorId: string | null;
-    decisionCursor: string | null;
-  };
+  expandedIds: Set<string>;
+  clearEntries: () => void;
+  routeLocation?: RouteLocation;
+  routeData?: ActivityRouteData;
+  willUpdate: (changed: PropertyValues) => void;
+  updated: (changed: PropertyValues) => void;
+  render: () => unknown;
   runInspector: RunInspectorState;
   loadRunInspector: (
     gateway: ApplicationContext["gateway"],
@@ -46,7 +63,9 @@ function gateway(): ApplicationContext["gateway"] {
   return {
     snapshot,
     eventLog: [],
+    eventLogRevision: 0,
     subscribe: vi.fn(() => () => undefined),
+    subscribeEventLog: vi.fn(() => () => undefined),
     subscribeEvents: vi.fn(() => () => undefined),
   } as unknown as ApplicationContext["gateway"];
 }
@@ -68,25 +87,398 @@ function staleEntry(): ActivityEntry {
   };
 }
 
-afterEach(() => {
+const activeGateways = new Set<ApplicationContext["gateway"]>();
+const activePages = new Set<TestActivityPage>();
+const activeActivities = new Map<ApplicationContext["gateway"], LiveActivity>();
+const activeAgents = new Map<ApplicationContext["gateway"], ApplicationContext["agents"]>();
+
+function activityContext(source: ApplicationContext["gateway"]) {
+  let liveActivity = activeActivities.get(source);
+  if (!liveActivity) {
+    liveActivity = createLiveActivity(source);
+    activeActivities.set(source, liveActivity);
+  }
+  let agents = activeAgents.get(source);
+  if (!agents) {
+    agents = createAgentCapability(source);
+    activeAgents.set(source, agents);
+  }
+  return { gateway: source, liveActivity, agents };
+}
+
+function activityHello(recoveryScope = "activity-owner-a"): GatewayHelloOk {
+  return {
+    type: "hello-ok",
+    protocol: 1,
+    auth: { role: "operator", scopes: ["operator.read"], recoveryScope },
+  };
+}
+
+function activityGateway() {
+  const store = createGatewayStoreTestStore({
+    settings: {
+      ...loadSettings(),
+      gatewayUrl: "wss://activity.example.test",
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+    },
+  });
+  activeGateways.add(store.gateway);
+  activityContext(store.gateway);
+  store.gateway.start();
+  store.current().opts.onHello?.(activityHello());
+  return store;
+}
+
+function bindActivity(source: ApplicationContext["gateway"]): TestActivityPage {
+  const page = document.createElement("openclaw-activity-page") as TestActivityPage;
+  page.context = activityContext(source) as ApplicationContext;
+  page.routeLocation = { pathname: "/activity", search: "?view=live", hash: "" };
+  page.routeData = { mode: "live", selector: null };
+  activePages.add(page);
+  page.subscriptions.hostConnected();
+  return page;
+}
+
+function toolEvent(id: string, sessionKey = "main") {
+  return createGatewayEvent("session.tool", {
+    stream: "tool",
+    runId: `run-${id}`,
+    sessionKey,
+    data: {
+      toolCallId: id,
+      name: "read",
+      phase: "result",
+      result: { text: `${id} output` },
+    },
+  });
+}
+
+afterEach(async () => {
+  for (const page of activePages) {
+    page.subscriptions.hostDisconnected();
+  }
+  for (const activity of activeActivities.values()) {
+    activity.dispose();
+  }
+  for (const agents of activeAgents.values()) {
+    agents.dispose();
+  }
+  for (const source of activeGateways) {
+    source.stop();
+  }
+  // Credential changes start lazy cache cleanup; finish it before clearing the environment.
+  await vi.dynamicImportSettled();
+  activePages.clear();
+  activeGateways.clear();
+  activeActivities.clear();
+  activeAgents.clear();
+  setAvatarGatewayOrigin(null);
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe("ActivityPage gateway lifecycle", () => {
+  it.each(["sessions", "run"] as const)("skips Live Activity rendering in %s mode", (mode) => {
+    const page = document.createElement("openclaw-activity-page") as TestActivityPage;
+    page.context = { ...activityContext(gateway()), basePath: "" } as ApplicationContext;
+    page.entries = [staleEntry()];
+    page.routeLocation = {
+      pathname: "/activity",
+      search: mode === "run" ? "?view=run" : "",
+      hash: "",
+    };
+    page.routeData =
+      mode === "sessions"
+        ? { mode, filters: { personId: null, query: "", time: "7d" }, selector: null }
+        : { mode, selector: null, selectorId: null, decisionCursor: null };
+    const render = vi.spyOn(activityView, "renderActivity");
+    try {
+      page.render();
+      expect(render).not.toHaveBeenCalled();
+      page.routeLocation = { pathname: "/activity", search: "?view=live", hash: "" };
+      page.routeData = { mode: "live", selector: null };
+      page.render();
+      expect(render).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ entries: page.entries }),
+      );
+    } finally {
+      render.mockRestore();
+    }
+  });
+
   it("replays the active gateway on initial bind and source replacement", () => {
     const page = document.createElement("openclaw-activity-page") as TestActivityPage;
-    page.context = { gateway: gateway() } as unknown as ApplicationContext;
+    page.context = activityContext(gateway()) as ApplicationContext;
     page.entries = [staleEntry()];
 
     page.subscriptions.hostConnected();
     expect(page.entries).toEqual([]);
 
     page.entries = [staleEntry()];
-    page.context = { gateway: gateway() } as unknown as ApplicationContext;
+    page.context = activityContext(gateway()) as ApplicationContext;
     page.subscriptions.hostUpdate();
     expect(page.entries).toEqual([]);
 
     page.subscriptions.hostDisconnected();
+  });
+
+  it("waits for route data before querying sessions on the first Gateway bind", () => {
+    const { gateway: source, current } = activityGateway();
+    const request = current().request.mockResolvedValue({
+      ts: 1,
+      path: "",
+      count: 0,
+      sessions: [],
+      defaults: { model: null, modelProvider: null, contextTokens: null },
+    });
+    const page = document.createElement("openclaw-activity-page") as TestActivityPage;
+    page.context = { ...activityContext(source), basePath: "" } as ApplicationContext;
+    activePages.add(page);
+    request.mockClear();
+
+    page.subscriptions.hostConnected();
+
+    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toEqual([]);
+
+    page.routeLocation = { pathname: "/activity", search: "?q=alpha", hash: "" };
+    page.willUpdate(new Map([["routeLocation", undefined]]));
+
+    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toEqual([
+      ["sessions.list", expect.objectContaining({ search: "alpha" }), expect.anything()],
+    ]);
+  });
+
+  it.each(["gateway", "account"] as const)(
+    "retires the mounted session's activity after a %s change",
+    (change) => {
+      const { gateway: source, current } = activityGateway();
+      const page = bindActivity(source);
+      current().opts.onEvent?.(toolEvent("old"));
+      expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["old output"]);
+      page.expandedIds.add(page.entries[0]!.id);
+
+      if (change === "gateway") {
+        source.connect({ gatewayUrl: "wss://other-activity.example.test" });
+      } else {
+        current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+        current().opts.onHello?.(activityHello("activity-owner-b"));
+      }
+
+      expect(page.entries).toEqual([]);
+      expect(page.expandedIds.size).toBe(0);
+      current().opts.onEvent?.(toolEvent("new"));
+      expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["new output"]);
+    },
+  );
+
+  it("keeps streamed previews and expansion across ordinary appends and reconnects", () => {
+    const { gateway: source, current } = activityGateway();
+    const page = bindActivity(source);
+    current().opts.onEvent?.(toolEvent("first"));
+    const firstId = page.entries[0]!.id;
+    page.expandedIds.add(firstId);
+
+    current().opts.onEvent?.(toolEvent("second"));
+    source.connect();
+    current().opts.onHello?.(activityHello());
+
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual([
+      "first output",
+      "second output",
+    ]);
+    expect([...page.expandedIds]).toEqual([firstId]);
+  });
+
+  it.each(["stop", "event"] as const)(
+    "retires activity when an earlier reset observer triggers a reentrant %s",
+    (action) => {
+      const { gateway: source, current } = activityGateway();
+      let retiring = false;
+      const unsubscribe = source.subscribeEventLog((events) => {
+        if (!retiring || events.length > 0) {
+          return;
+        }
+        retiring = false;
+        if (action === "stop") {
+          source.stop();
+        } else {
+          current().opts.onEvent?.(toolEvent("new"));
+        }
+      });
+      try {
+        const page = bindActivity(source);
+        current().opts.onEvent?.(toolEvent("old"));
+        retiring = true;
+
+        source.connect({ gatewayUrl: "wss://other-activity.example.test" });
+
+        expect(page.entries.map((entry) => entry.outputPreview)).toEqual(
+          action === "stop" ? [] : ["new output"],
+        );
+        if (action === "stop") {
+          expect(source.snapshot.phase).toBe("stopped");
+        }
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
+
+  it("preserves manual Clear across navigation and unchanged reconnects", () => {
+    const { gateway: source, current } = activityGateway();
+    const firstPage = bindActivity(source);
+    current().opts.onEvent?.(toolEvent("cleared"));
+    firstPage.clearEntries();
+    firstPage.subscriptions.hostDisconnected();
+
+    const nextPage = bindActivity(source);
+    expect(nextPage.entries).toEqual([]);
+    source.connect();
+    current().opts.onHello?.(activityHello());
+    expect(nextPage.entries).toEqual([]);
+    current().opts.onEvent?.(toolEvent("new"));
+    expect(nextPage.entries.map((entry) => entry.outputPreview)).toEqual(["new output"]);
+    nextPage.subscriptions.hostDisconnected();
+
+    const revisitedPage = bindActivity(source);
+    expect(revisitedPage.entries.map((entry) => entry.outputPreview)).toEqual(["new output"]);
+  });
+
+  it("retains activity across navigation after diagnostic eviction", () => {
+    const { gateway: source, current } = activityGateway();
+    const page = bindActivity(source);
+    const fillDiagnosticLog = () => {
+      for (let index = 0; index < 300; index += 1) {
+        current().opts.onEvent?.(createGatewayEvent("diagnostic", { index }));
+      }
+    };
+    current().opts.onEvent?.(toolEvent("original"));
+    fillDiagnosticLog();
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["original output"]);
+    page.subscriptions.hostDisconnected();
+
+    current().opts.onEvent?.(toolEvent("while-away", "agent:other:work"));
+    fillDiagnosticLog();
+    expect(source.eventLog).toHaveLength(250);
+    expect(source.eventLog.every((event) => event.event === "diagnostic")).toBe(true);
+
+    const revisitedPage = bindActivity(source);
+    expect(revisitedPage.entries.map((entry) => entry.outputPreview)).toEqual([
+      "original output",
+      "while-away output",
+    ]);
+  });
+
+  it.each(["tool", "answer_candidate"] as const)(
+    "collects delivered %s activity across sessions before the page opens",
+    (kind) => {
+      const { gateway: source, current } = activityGateway();
+      const origins = [
+        { runId: "selected", sessionKey: "main", agentId: "main" },
+        { runId: "other", sessionKey: "agent:research:work", agentId: "research" },
+        { runId: "global", sessionKey: "global", agentId: "research" },
+        { runId: "unscoped" },
+      ];
+      for (const origin of origins) {
+        current().opts.onEvent?.(
+          createGatewayEvent(kind === "tool" ? "session.tool" : "agent", {
+            ...origin,
+            stream: kind === "tool" ? "tool" : "item",
+            data:
+              kind === "tool"
+                ? {
+                    phase: "result",
+                    name: "read",
+                    toolCallId: "shared-call",
+                    result: { text: `${origin.runId} output` },
+                  }
+                : {
+                    kind: "answer_candidate",
+                    itemId: "shared-item",
+                    status: "selected",
+                    progressText: `${origin.runId} output`,
+                  },
+          }),
+        );
+      }
+
+      const page = bindActivity(source);
+      expect(page.entries.map((entry) => entry.runId)).toEqual(
+        origins.map((origin) => origin.runId),
+      );
+      expect(page.entries.map((entry) => entry.sessionKey)).toEqual([
+        "main",
+        "agent:research:work",
+        "global",
+        undefined,
+      ]);
+      expect(new Set(page.entries.map((entry) => entry.id)).size).toBe(origins.length);
+    },
+  );
+
+  it("preserves activity and Clear when the selected chat changes", () => {
+    const { gateway: source, current } = activityGateway();
+    const page = bindActivity(source);
+    current().opts.onEvent?.(toolEvent("original"));
+    const originalId = page.entries[0]!.id;
+    page.expandedIds.add(originalId);
+    for (let index = 0; index < 300; index += 1) {
+      current().opts.onEvent?.(createGatewayEvent("diagnostic", { index }));
+    }
+
+    source.setSessionKey("agent:other:work");
+
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["original output"]);
+    expect([...page.expandedIds]).toEqual([originalId]);
+    current().opts.onEvent?.(toolEvent("other", "agent:other:work"));
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual([
+      "original output",
+      "other output",
+    ]);
+
+    page.clearEntries();
+    source.setSessionKey("main");
+    expect(page.entries).toEqual([]);
+    current().opts.onEvent?.(toolEvent("after-clear", "agent:other:work"));
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["after-clear output"]);
+  });
+
+  it.each(["gateway", "account"] as const)(
+    "retires activity after a %s change while the page is closed",
+    (change) => {
+      const { gateway: source, current } = activityGateway();
+      const page = bindActivity(source);
+      current().opts.onEvent?.(toolEvent("old"));
+      page.subscriptions.hostDisconnected();
+      if (change === "gateway") {
+        source.connect({ gatewayUrl: "wss://other-activity.example.test" });
+      } else {
+        current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+        current().opts.onHello?.(activityHello("activity-owner-b"));
+      }
+      current().opts.onEvent?.(toolEvent("new"));
+
+      const revisitedPage = bindActivity(source);
+      expect(revisitedPage.entries.map((entry) => entry.outputPreview)).toEqual(["new output"]);
+    },
+  );
+
+  it("releases retained activity and subscriptions with the application owner", () => {
+    const { gateway: source, current } = activityGateway();
+    const { liveActivity } = activityContext(source);
+    const observe = vi.fn();
+    liveActivity.subscribe(observe);
+    current().opts.onEvent?.(toolEvent("original"));
+    expect(observe).toHaveBeenCalledOnce();
+    observe.mockClear();
+
+    liveActivity.dispose();
+    current().opts.onEvent?.(toolEvent("after-disposal"));
+
+    expect(liveActivity.snapshot.entries).toEqual([]);
+    expect(observe).not.toHaveBeenCalled();
   });
 
   it("stores the safe-only inspection response directly", async () => {
@@ -108,18 +500,74 @@ describe("ActivityPage gateway lifecycle", () => {
     } as unknown as ApplicationContext["gateway"];
     const page = document.createElement("openclaw-activity-page") as TestActivityPage;
     page.context = { gateway: activeGateway } as unknown as ApplicationContext;
+    const selector = { kind: "run", id: "run-1" } as const;
+    page.routeLocation = { pathname: "/activity", search: "?view=run&run=run-1", hash: "" };
     page.routeData = {
       mode: "run",
-      selector: { kind: "run", id: "run-1" },
+      selector,
       selectorId: null,
       decisionCursor: null,
     };
 
-    await page.loadRunInspector(activeGateway, client, page.routeData.selector);
+    await page.loadRunInspector(activeGateway, client, selector);
 
     expect(page.runInspector.status).toBe("ready");
     if (page.runInspector.status === "ready") {
       expect(page.runInspector.result).toBe(result);
+    }
+  });
+
+  it("retires a run inspector when route data disappears and excludes its late response", async () => {
+    const result = {
+      schemaVersion: 1,
+      run: { runId: "run-1", status: "unknown" },
+      identity: {
+        state: "unknown",
+        reasonCode: "run_not_found",
+        missingEvidence: ["run.record"],
+        remediation: [],
+      },
+      decisionDisplays: [],
+      coverage: { state: "unknown", missingEvidence: ["run.record"] },
+    } satisfies AuditRunInspectResult;
+    const pending = createDeferred<AuditRunInspectResult>();
+    const request = vi.fn(
+      (_method: string, _params: unknown, _options?: { signal?: AbortSignal }) => pending.promise,
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const activeGateway = {
+      snapshot: { client, phase: "connected" },
+    } as unknown as ApplicationContext["gateway"];
+    const page = document.createElement("openclaw-activity-page") as TestActivityPage;
+    page.context = { gateway: activeGateway, basePath: "" } as unknown as ApplicationContext;
+    const selector = { kind: "run", id: "run-1" } as const;
+    page.routeLocation = { pathname: "/activity", search: "?view=run&run=run-1", hash: "" };
+    page.routeData = { mode: "run", selector, selectorId: null, decisionCursor: null };
+    const operation = page.loadRunInspector(activeGateway, client, selector);
+    try {
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "audit.run.inspect",
+        { runId: "run-1", decisionLimit: 50, executionLimit: 50 },
+        { signal: expect.any(AbortSignal) },
+      );
+      const signal = request.mock.calls[0]?.[2]?.signal;
+      expect(signal?.aborted).toBe(false);
+      expect(page.runInspector.status).toBe("loading");
+
+      const changed = new Map([["routeLocation", page.routeLocation]]);
+      page.routeLocation = undefined;
+      page.willUpdate(changed);
+      page.updated(changed);
+
+      expect(signal?.aborted).toBe(true);
+      expect(page.runInspector).toEqual({ status: "empty" });
+      pending.resolve(result);
+      await operation;
+      expect(page.runInspector).toEqual({ status: "empty" });
+      expect(request).toHaveBeenCalledOnce();
+    } finally {
+      pending.resolve(result);
+      await operation;
     }
   });
 
@@ -163,14 +611,20 @@ describe("ActivityPage gateway lifecycle", () => {
     } as unknown as ApplicationContext["gateway"];
     const page = document.createElement("openclaw-activity-page") as TestActivityPage;
     page.context = { gateway: activeGateway } as unknown as ApplicationContext;
+    const selector = { kind: "run", id: "run-1" } as const;
+    page.routeLocation = {
+      pathname: "/activity",
+      search: "?view=run&run=run-1&receipt=receipt-1&decision=cursor-1",
+      hash: "",
+    };
     page.routeData = {
       mode: "run",
-      selector: { kind: "run", id: "run-1" },
+      selector,
       selectorId: "receipt-1",
       decisionCursor: "cursor-1",
     };
 
-    await page.loadRunInspector(activeGateway, client, page.routeData.selector);
+    await page.loadRunInspector(activeGateway, client, selector);
 
     expect(page.runInspector).toEqual({ status: "error", recovery });
   });

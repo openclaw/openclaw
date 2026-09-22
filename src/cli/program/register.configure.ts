@@ -21,21 +21,16 @@ export function registerConfigureCommand(program: Command): void {
       (value: string, previous: string[]) => [...previous, value],
       [] as string[],
     )
-    .option(
-      "--agent <id>",
-      "Agent that owns this configuration (required when agents.ownership is explicit and no System Agent is set)",
-    )
+    .option("--agent <id>", "Agent that owns the guided setup")
     .action(async (opts) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { configureCommandFromSectionsArg } =
           await import("../../commands/configure.commands.js");
-        // Presence, not truthiness: `--agent ""` must reach validation instead of being
-        // dropped and silently resolving to the default owner.
         await configureCommandFromSectionsArg(
           opts.section,
           defaultRuntime,
-          opts.agent === undefined ? {} : { agentId: String(opts.agent) },
+          opts.agent !== undefined ? { agentId: String(opts.agent) } : {},
         );
       });
     });

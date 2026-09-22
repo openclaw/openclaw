@@ -8,6 +8,7 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
+  isDirectGatewayChatUserTurn,
   resolveGatewayChatCronCreatorAuthorityAdmission,
   resolveGatewayCronCreatorAuthorityAdmission,
   type GatewayCronCreatorAuthorityAdmission,
@@ -163,11 +164,78 @@ function createChatParams(
 }
 
 describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
+  it.each([
+    ["Incognito", { isIncognito: true }],
+    ["fresh message after reconnect", { isReconnectResume: true }],
+  ] as const)("keeps %s dashboard input separate from cron authority", (_label, mode) => {
+    const params = createChatParams({
+      client: createClient({ isLocalClient: undefined, controlUiAdmin: true }),
+      ...mode,
+    });
+    expect(isDirectGatewayChatUserTurn(params)).toBe(true);
+    expect(resolveGatewayChatCronCreatorAuthorityAdmission(params)).toBeUndefined();
+    expect(isDirectGatewayChatUserTurn({ ...params, isDirectExternalUser: false })).toBe(false);
+  });
+
   it("mints only for a direct external local-admin user turn", () => {
     expect(resolveGatewayChatCronCreatorAuthorityAdmission(createChatParams())).toEqual({
       runId: "run-local-chat",
       callerOrigin: { kind: "local" },
     });
+  });
+
+  it.each([true, undefined] as const)(
+    "retains host-attested Control UI admin authority with locality %s",
+    (isLocalClient) => {
+      const client = createClient({ isLocalClient, controlUiAdmin: true });
+      expect(resolveGatewayChatCronCreatorAuthorityAdmission(createChatParams({ client }))).toEqual(
+        {
+          runId: "run-local-chat",
+          callerOrigin: { kind: isLocalClient ? "local" : "unknown" },
+          managementEntitlement: { source: "control-ui-admin" },
+        },
+      );
+    },
+  );
+
+  it("does not derive Control UI authority from a claimed client name or session route", () => {
+    const client = createClient({ isLocalClient: undefined });
+    client.connect.client = {
+      id: "openclaw-control-ui",
+      mode: "webchat",
+      version: "test",
+      platform: "web",
+    };
+    expect(
+      resolveGatewayChatCronCreatorAuthorityAdmission(
+        createChatParams({ client, resolvedSessionKey: "agent:main:telegram:direct:operator" }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it.each(["operator.read", "operator.write"])(
+    "rejects a Control UI connection narrowed to %s",
+    (scope) => {
+      const client = createClient({ controlUiAdmin: true });
+      client.connect.scopes = [scope];
+      expect(
+        resolveGatewayChatCronCreatorAuthorityAdmission(createChatParams({ client })),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["channel-origin turn", { hasExplicitOrigin: true }],
+    ["reconnect", { isReconnectResume: true }],
+    ["spawned turn", { spawnedBy: "agent:main:parent" }],
+    ["cron continuation", { hasRestoredCronContinuation: true }],
+    ["internal entry", { isDirectExternalUser: false }],
+  ] as const)("does not promote Control UI admin authority for %s", (_label, overrides) => {
+    expect(
+      resolveGatewayChatCronCreatorAuthorityAdmission(
+        createChatParams({ client: createClient({ controlUiAdmin: true }), ...overrides }),
+      ),
+    ).toBeUndefined();
   });
 
   it.each([

@@ -80,6 +80,18 @@ describe("registerNodeCli", () => {
     expect(action.mock.calls[0]?.[0]?.json).toBe(true);
   });
 
+  it.each(["/opt/Runtime Tools/node", "C:\\\\Runtime Tools\\\\node.exe"])(
+    "forwards an exact node runtime pin: %s",
+    async (pin) => {
+      await createProgram().parseAsync(["node", "install", "--runtime-path", pin, "--force"], {
+        from: "user",
+      });
+      expect(daemonMocks.runNodeDaemonInstall).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimePath: pin, force: true }),
+      );
+    },
+  );
+
   it("forwards node install options to the daemon adapter", async () => {
     const program = createProgram();
 
@@ -110,6 +122,64 @@ describe("registerNodeCli", () => {
     );
   });
 
+  it.each(["run", "install"] as const)(
+    "accepts exact command allowlists before or after node %s",
+    async (leaf) => {
+      const action = leaf === "run" ? daemonMocks.runNodeHost : daemonMocks.runNodeDaemonInstall;
+      for (const args of [
+        ["node", "--commands", "fixture.read,fixture.list", leaf],
+        ["node", leaf, "--commands", "fixture.read", "--commands", "fixture.list,fixture.read"],
+      ]) {
+        await createProgram().parseAsync(args, { from: "user" });
+        expect(action).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            commands: ["fixture.list", "fixture.read"],
+          }),
+        );
+      }
+    },
+  );
+
+  it("rejects empty command ids instead of silently widening the surface", async () => {
+    await expect(
+      createProgram().parseAsync(["node", "run", "--commands", "fixture.list,"], { from: "user" }),
+    ).rejects.toThrow("non-empty command ids");
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+  });
+
+  it.each(["run", "install"] as const)(
+    "accepts --all-commands before or after node %s",
+    async (leaf) => {
+      const action = leaf === "run" ? daemonMocks.runNodeHost : daemonMocks.runNodeDaemonInstall;
+      for (const args of [
+        ["node", "--all-commands", leaf],
+        ["node", leaf, "--all-commands"],
+      ]) {
+        await createProgram().parseAsync(args, { from: "user" });
+        expect(action).toHaveBeenLastCalledWith(expect.objectContaining({ allCommands: true }));
+      }
+    },
+  );
+
+  it.each(["run", "install"] as const)(
+    "rejects conflicting command selections for node %s",
+    async (leaf) => {
+      for (const args of [
+        ["node", leaf, "--all-commands", "--commands", "fixture.read"],
+        ["node", "--all-commands", leaf, "--commands", "fixture.read"],
+        ["node", "--commands", "fixture.read", leaf, "--all-commands"],
+        ["node", "--commands", "fixture.read", "--all-commands", leaf],
+      ]) {
+        await expect(createProgram().parseAsync(args, { from: "user" })).rejects.toThrow(
+          /--all-commands.*--commands/,
+        );
+      }
+      expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+      expect(daemonMocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+      expect(daemonMocks.loadNodeHostConfig).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects an explicit invalid node run port", async () => {
     const program = createProgram();
 
@@ -138,7 +208,7 @@ describe("registerNodeCli", () => {
     await program.parseAsync(["node", "run", "--ephemeral"], { from: "user" });
 
     expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
-      expect.objectContaining({ forceWorkerRuns: true }),
+      expect.objectContaining({ forceWorkerRuns: true, ephemeral: true }),
     );
     const nodeCommand = program.commands.find((command) => command.name() === "node");
     const runCommand = nodeCommand?.commands.find((command) => command.name() === "run");

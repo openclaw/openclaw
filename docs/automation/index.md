@@ -48,6 +48,8 @@ flowchart TD
 | Execute code on every tool call           | Plugin hooks                               | Typed `api.on(...)` handlers can intercept tool calls  |
 | Always check compliance before replying   | Standing Orders                            | Injected into every session automatically              |
 
+<a id="scheduled-tasks-cron-vs-heartbeat" />
+
 ### Automations vs Heartbeat
 
 | Dimension       | User-authored automations                   | Heartbeat monitor automation            |
@@ -122,6 +124,17 @@ See [Heartbeat](/gateway/heartbeat).
 - **Standing orders** give the agent persistent context and authority boundaries.
 - **Task Flow** coordinates multi-step flows above individual tasks.
 - **Tasks** automatically track all detached work so you can inspect and audit it.
+
+## Retired inferred commitments
+
+The inferred commitments experiment was removed in v2026.8.1: OpenClaw no longer
+extracts follow-ups from conversations or delivers them through heartbeat.
+The `openclaw commitments` maintenance CLI is also gone. The database migration
+discards the old commitment rows and removes their table and indexes.
+
+For reminders or scheduled work, create an explicit
+[automation](/automation/cron-jobs). Automations are an alternative with a
+schedule and instructions you choose; they do not restore inferred follow-ups.
 
 ## Related
 

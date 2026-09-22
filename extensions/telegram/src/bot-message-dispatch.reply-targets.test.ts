@@ -27,6 +27,58 @@ import {
 } from "./outbound-message-context.js";
 
 describeTelegramDispatch("dispatchTelegramMessage reply-targets", () => {
+  it("honors disabled reply targeting and silent errors for native commands", async () => {
+    const context = createContext();
+    context.ctxPayload.CommandSource = "native";
+    context.ctxPayload.ReplyToId = "99";
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Request failed", isError: true }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    await dispatchWithContext({
+      context,
+      streamMode: "off",
+      telegramCfg: { silentErrorReplies: true },
+      replyToMode: "off",
+    });
+    expect(
+      expectDeliveredReply(0, { text: "Request failed", isError: true }).replyToId,
+    ).toBeUndefined();
+    expectDeliverRepliesParams({ silent: true });
+  });
+
+  it("suppresses local structured approval replies from native commands", async () => {
+    const context = createContext();
+    context.ctxPayload.CommandSource = "native";
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Approval required.",
+          channelData: {
+            execApproval: {
+              approvalId: "7f423fdc-1111-2222-3333-444444444444",
+              approvalSlug: "7f423fdc",
+              allowedDecisions: ["allow-once", "allow-always", "deny"],
+            },
+          },
+        },
+        { kind: "tool" },
+      );
+      return { queuedFinal: false };
+    });
+    await dispatchWithContext({
+      context,
+      streamMode: "off",
+      cfg: {
+        channels: {
+          telegram: { execApprovals: { enabled: true, approvers: ["123"], target: "dm" } },
+        },
+      },
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("does not build native quote candidates when reply mode is off", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });

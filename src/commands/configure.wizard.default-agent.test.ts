@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { committedConfigFiles as configFiles } from "./committed-config.test-support.js";
 
 type SetupChannels = typeof import("./onboard-channels.js").setupChannels;
 
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   ensureWorkspaceAndSessions: vi.fn(),
   setupPluginConfig: vi.fn(),
   setupSkills: vi.fn(),
+  promptAuthConfig: vi.fn(),
   setupChannels: vi.fn<SetupChannels>(async (config) => config),
   select: vi.fn(),
   text: vi.fn(),
@@ -45,7 +47,7 @@ vi.mock("../plugins/install-record-commit.js", () => ({
     };
     const nextConfig = params.transform(snapshot.sourceConfig ?? snapshot.config).nextConfig;
     const committed = await mocks.commitConfig({ nextConfig, writeOptions: params.writeOptions });
-    return { nextConfig: committed.config };
+    return committed;
   },
 }));
 
@@ -87,6 +89,8 @@ vi.mock("./onboard-helpers.js", () => ({
   waitForGatewayReachable: vi.fn(),
 }));
 
+vi.mock("./configure.gateway-auth.js", () => ({ promptAuthConfig: mocks.promptAuthConfig }));
+
 vi.mock("./onboard-skills.js", () => ({ setupSkills: mocks.setupSkills }));
 
 vi.mock("./onboard-channels.js", () => ({ setupChannels: mocks.setupChannels }));
@@ -102,6 +106,9 @@ const runtime = {
 describe("runConfigureWizard default-agent ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    configFiles.clear();
+    mocks.select.mockReset();
+    mocks.text.mockReset();
     const baseConfig = {
       agents: {
         defaults: { workspace: "/tmp/global-workspace" },
@@ -128,8 +135,9 @@ describe("runConfigureWizard default-agent ownership", () => {
       async ({ config }: { config: OpenClawConfig }) => config,
     );
     mocks.setupSkills.mockImplementation(async (config: OpenClawConfig) => config);
-    mocks.commitConfig.mockImplementation(
-      async ({ nextConfig }: { nextConfig: OpenClawConfig }) => ({ config: nextConfig }),
+    mocks.promptAuthConfig.mockImplementation(async (config: OpenClawConfig) => config);
+    mocks.commitConfig.mockImplementation(async ({ nextConfig }: { nextConfig: OpenClawConfig }) =>
+      configFiles.write(nextConfig),
     );
   });
 
@@ -235,6 +243,148 @@ describe("runConfigureWizard default-agent ownership", () => {
       expect.objectContaining({ agentId: "main" }),
     );
   });
+
+  it("selects one explicit owner for workspace, plugins, skills, and channel setup", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          alpha: { workspace: "/tmp/alpha-workspace" },
+          beta: { workspace: "/tmp/beta-workspace" },
+        },
+      },
+    };
+    mocks.state.snapshot = {
+      exists: true,
+      valid: true,
+      hash: "config-hash",
+      config,
+      sourceConfig: config,
+      issues: [],
+    };
+    mocks.select.mockResolvedValueOnce("beta").mockResolvedValueOnce("configure");
+    mocks.text.mockResolvedValueOnce("/tmp/new-beta-workspace");
+
+    await runConfigureWizard(
+      { command: "configure", sections: ["workspace", "plugins", "skills", "channels"] },
+      runtime,
+    );
+
+    const committed = mocks.commitConfig.mock.calls[0]?.[0].nextConfig as OpenClawConfig;
+    expect(committed.agents).toEqual({
+      ownership: "explicit",
+      entries: {
+        alpha: { workspace: "/tmp/alpha-workspace" },
+        beta: { workspace: "/tmp/new-beta-workspace" },
+      },
+    });
+    expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      "/tmp/new-beta-workspace",
+      runtime,
+      expect.objectContaining({ agentId: "beta" }),
+    );
+    expect(mocks.setupPluginConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/new-beta-workspace" }),
+    );
+    expect(mocks.setupSkills).toHaveBeenCalledWith(
+      expect.any(Object),
+      "/tmp/new-beta-workspace",
+      runtime,
+      expect.any(Object),
+    );
+    expect(mocks.setupChannels).toHaveBeenCalledWith(
+      expect.any(Object),
+      runtime,
+      expect.any(Object),
+      expect.objectContaining({ workspaceDir: "/tmp/new-beta-workspace" }),
+    );
+    expect(
+      mocks.select.mock.calls.filter(
+        ([params]) => params.message === "Which agent do you want to configure?",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("preselects a validated explicit owner for model and channel sections", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          alpha: { agentDir: "/tmp/alpha-agent", workspace: "/tmp/alpha-workspace" },
+          ops: { agentDir: "/tmp/ops-agent", workspace: "/tmp/ops-workspace" },
+        },
+      },
+    };
+    mocks.state.snapshot = {
+      exists: true,
+      valid: true,
+      hash: "hash",
+      config,
+      sourceConfig: config,
+      issues: [],
+    };
+    await runConfigureWizard(
+      { command: "configure", agentId: " OPS ", sections: ["model", "channels"] },
+      runtime,
+    );
+    expect(mocks.promptAuthConfig).toHaveBeenCalledWith(config, runtime, expect.any(Object), {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      workspaceDir: "/tmp/ops-workspace",
+      defaultsScope: "agent",
+    });
+    expect(mocks.setupChannels).toHaveBeenCalledWith(
+      config,
+      runtime,
+      expect.any(Object),
+      expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
+    );
+    expect(
+      mocks.select.mock.calls.some(
+        ([params]) => params.message === "Which agent do you want to configure?",
+      ),
+    ).toBe(false);
+    expect(mocks.commitConfig).toHaveBeenCalledOnce();
+  });
+
+  it.each(["", "ops!", "ops".repeat(22), "unknown"])(
+    "rejects selector %j before prompts, setup, or persistence",
+    async (agentId) => {
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            ops: { workspace: "/tmp/ops-workspace" },
+            alpha: { workspace: "/tmp/alpha-workspace" },
+            ["ops".repeat(22).slice(0, 64)]: { workspace: "/tmp/truncated-workspace" },
+          },
+        },
+      };
+      mocks.state.snapshot = {
+        exists: true,
+        valid: true,
+        hash: "hash",
+        config,
+        sourceConfig: config,
+        issues: [],
+      };
+      await expect(runConfigureWizard({ command: "configure", agentId }, runtime)).rejects.toThrow(
+        agentId === "unknown" ? "Unknown agent" : "Invalid --agent",
+      );
+      for (const effect of [
+        mocks.select,
+        mocks.text,
+        mocks.promptAuthConfig,
+        mocks.setupChannels,
+        mocks.setupPluginConfig,
+        mocks.setupSkills,
+        mocks.ensureWorkspaceAndSessions,
+        mocks.commitConfig,
+      ]) {
+        expect(effect).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("preserves the legacy default owner when system-agent ownership is not explicit", async () => {
     const baseConfig = {
@@ -353,6 +503,95 @@ describe("runConfigureWizard default-agent ownership", () => {
     );
   });
 
+  it.each([false, true])(
+    "keeps a selected legacy sibling workspace private (provisioning fails=%s)",
+    async (provisioningFails) => {
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: { workspace: "/tmp/main-workspace" },
+          entries: {
+            main: { default: true, agentDir: "/tmp/main-agent" },
+            ops: { agentDir: "/tmp/ops-agent" },
+          },
+        },
+      };
+      mocks.state.snapshot = {
+        exists: true,
+        valid: true,
+        hash: "config-hash",
+        config,
+        sourceConfig: config,
+        issues: [],
+      };
+      mocks.text.mockResolvedValueOnce("/tmp/selected-ops-workspace");
+      if (provisioningFails) {
+        mocks.ensureWorkspaceAndSessions.mockRejectedValueOnce(
+          new Error("workspace is unwritable"),
+        );
+      }
+      const result = runConfigureWizard(
+        {
+          command: "configure",
+          agentId: "ops",
+          sections: ["workspace", "model", "plugins", "skills", "channels"],
+        },
+        runtime,
+      );
+      if (provisioningFails) {
+        await expect(result).rejects.toThrow("workspace is unwritable");
+        expect(mocks.commitConfig).not.toHaveBeenCalled();
+        expect(mocks.promptAuthConfig).not.toHaveBeenCalled();
+        expect(mocks.setupPluginConfig).not.toHaveBeenCalled();
+        expect(mocks.setupSkills).not.toHaveBeenCalled();
+        expect(mocks.setupChannels).not.toHaveBeenCalled();
+      } else {
+        await result;
+        expect(mocks.commitConfig).toHaveBeenCalledOnce();
+        const committed = mocks.commitConfig.mock.calls[0]?.[0].nextConfig as OpenClawConfig;
+        expect(committed.agents).toEqual({
+          defaults: { workspace: "/tmp/main-workspace" },
+          entries: {
+            main: { default: true, agentDir: "/tmp/main-agent" },
+            ops: { agentDir: "/tmp/ops-agent", workspace: "/tmp/selected-ops-workspace" },
+          },
+        });
+        expect(mocks.promptAuthConfig).toHaveBeenCalledWith(
+          expect.any(Object),
+          runtime,
+          expect.any(Object),
+          {
+            agentId: "ops",
+            agentDir: "/tmp/ops-agent",
+            workspaceDir: "/tmp/selected-ops-workspace",
+            defaultsScope: "agent",
+          },
+        );
+        expect(mocks.setupPluginConfig).toHaveBeenCalledWith(
+          expect.objectContaining({ workspaceDir: "/tmp/selected-ops-workspace" }),
+        );
+        expect(mocks.setupSkills).toHaveBeenCalledWith(
+          expect.any(Object),
+          "/tmp/selected-ops-workspace",
+          runtime,
+          expect.any(Object),
+        );
+        expect(mocks.setupChannels).toHaveBeenCalledWith(
+          expect.any(Object),
+          runtime,
+          expect.any(Object),
+          expect.objectContaining({ workspaceDir: "/tmp/selected-ops-workspace" }),
+        );
+      }
+      expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+        "/tmp/selected-ops-workspace",
+        runtime,
+        expect.objectContaining({ agentId: "ops" }),
+      );
+      expect(config.agents?.defaults?.workspace).toBe("/tmp/main-workspace");
+      expect(config.agents?.entries?.ops?.workspace).toBeUndefined();
+    },
+  );
+
   it("does not persist an unprovisionable workspace", async () => {
     mocks.ensureWorkspaceAndSessions.mockRejectedValueOnce(new Error("workspace is unwritable"));
 
@@ -384,6 +623,29 @@ describe("runConfigureWizard default-agent ownership", () => {
     expect(hook).toHaveBeenCalledOnce();
     expect(mocks.commitConfig.mock.invocationCallOrder[0]!).toBeLessThan(
       hook.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("can remove channel configuration without selecting an agent", async () => {
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+    };
+    mocks.state.snapshot = {
+      exists: true,
+      valid: true,
+      hash: "config-hash",
+      config,
+      sourceConfig: config,
+      issues: [],
+    };
+    mocks.select.mockResolvedValueOnce("remove");
+
+    await runConfigureWizard({ command: "configure", sections: ["channels"] }, runtime);
+
+    expect(mocks.setupChannels).not.toHaveBeenCalled();
+    expect(mocks.select).toHaveBeenCalledOnce();
+    expect(mocks.commitConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig: config }),
     );
   });
 });

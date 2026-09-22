@@ -165,54 +165,42 @@ describe("google-meet CLI", () => {
     ).rejects.toThrow("access policy options require OAuth/API room creation");
   });
 
-  it("prints the latest conference record", async () => {
-    stubMeetArtifactsApi();
-    const stdout = captureStdout();
+  for (const { name, selectorArgs, expected } of [
+    {
+      name: "prints the latest conference record",
+      selectorArgs: ["--meeting", "abc-defg-hij"],
+      expected: "space: spaces/abc-defg-hij",
+    },
+    {
+      name: "prints the latest conference record from today's calendar",
+      selectorArgs: ["--today"],
+      expected: "calendar event: Project sync",
+    },
+  ]) {
+    it(name, async () => {
+      stubMeetArtifactsApi();
+      const stdout = captureStdout();
 
-    try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "latest",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--meeting",
-          "abc-defg-hij",
-        ],
-        { from: "user" },
-      );
-      expect(stdout.output()).toContain("space: spaces/abc-defg-hij");
-      expect(stdout.output()).toContain("conference record: conferenceRecords/rec-1");
-    } finally {
-      stdout.restore();
-    }
-  });
-
-  it("prints the latest conference record from today's calendar", async () => {
-    stubMeetArtifactsApi();
-    const stdout = captureStdout();
-
-    try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "latest",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--today",
-        ],
-        { from: "user" },
-      );
-      expect(stdout.output()).toContain("calendar event: Project sync");
-      expect(stdout.output()).toContain("conference record: conferenceRecords/rec-1");
-    } finally {
-      stdout.restore();
-    }
-  });
+      try {
+        await setupCli({}).parseAsync(
+          [
+            "googlemeet",
+            "latest",
+            "--access-token",
+            "token",
+            "--expires-at",
+            String(Date.now() + 120_000),
+            ...selectorArgs,
+          ],
+          { from: "user" },
+        );
+        expect(stdout.output()).toContain(expected);
+        expect(stdout.output()).toContain("conference record: conferenceRecords/rec-1");
+      } finally {
+        stdout.restore();
+      }
+    });
+  }
 
   it("prints calendar event previews", async () => {
     stubMeetArtifactsApi();
@@ -261,6 +249,48 @@ describe("google-meet CLI", () => {
         ),
       ).rejects.toThrow("page-size must be a positive integer");
       expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { command: "artifacts", explicitSummary: false },
+    { command: "artifacts", explicitSummary: true },
+    { command: "attendance", explicitSummary: false },
+    { command: "attendance", explicitSummary: true },
+  ])(
+    "writes $command summary to --output (explicitSummary=$explicitSummary)",
+    async ({ command, explicitSummary }) => {
+      stubMeetArtifactsApi();
+      const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-summary-"));
+      const outputPath = path.join(tempDir, "summary.txt");
+      const stdout = captureStdout();
+      const argv = [
+        "googlemeet",
+        command,
+        "--access-token",
+        "token",
+        "--expires-at",
+        String(Date.now() + 120_000),
+        "--conference-record",
+        "rec-1",
+        ...(explicitSummary ? ["--format", "summary"] : []),
+      ];
+
+      try {
+        await setupCli({}).parseAsync(argv, { from: "user" });
+        const summary = stdout.output();
+        expect(summary).toContain("conference records: 1\n");
+        expect(summary).toContain("token source: cached-access-token\n");
+
+        await setupCli({}).parseAsync([...argv, "--output", outputPath], { from: "user" });
+
+        expect(existsSync(outputPath)).toBe(true);
+        expect(readFileSync(outputPath, "utf8")).toBe(summary);
+        expect(stdout.output().slice(summary.length)).toBe(`wrote: ${outputPath}\n`);
+      } finally {
+        stdout.restore();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
     },
   );
 
@@ -369,84 +399,51 @@ describe("google-meet CLI", () => {
     },
   );
 
-  it("prints CSV attendance output", async () => {
-    stubMeetArtifactsApi();
-    const stdout = captureStdout();
+  for (const { name, options, expected } of [
+    {
+      name: "prints CSV attendance output",
+      options: {},
+      expected: ["conferenceRecord,displayName,user", "conferenceRecords/rec-1,Alice,users/alice"],
+    },
+    {
+      name: "neutralizes spreadsheet formulas in CSV attendance output",
+      options: { participantDisplayName: " \t=1+1" },
+      expected: ["conferenceRecords/rec-1,' \t=1+1,users/alice"],
+    },
+    {
+      name: "quotes carriage returns in formula-neutralized CSV cells",
+      options: { participantDisplayName: "\r=1+1" },
+      expected: ['conferenceRecords/rec-1,"\'\r=1+1",users/alice'],
+    },
+  ]) {
+    it(name, async () => {
+      stubMeetArtifactsApi(options);
+      const stdout = captureStdout();
 
-    try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "attendance",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--conference-record",
-          "rec-1",
-          "--format",
-          "csv",
-        ],
-        { from: "user" },
-      );
-      expect(stdout.output()).toContain("conferenceRecord,displayName,user");
-      expect(stdout.output()).toContain("conferenceRecords/rec-1,Alice,users/alice");
-    } finally {
-      stdout.restore();
-    }
-  });
-
-  it("neutralizes spreadsheet formulas in CSV attendance output", async () => {
-    stubMeetArtifactsApi({ participantDisplayName: " \t=1+1" });
-    const stdout = captureStdout();
-
-    try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "attendance",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--conference-record",
-          "rec-1",
-          "--format",
-          "csv",
-        ],
-        { from: "user" },
-      );
-      expect(stdout.output()).toContain("conferenceRecords/rec-1,' \t=1+1,users/alice");
-    } finally {
-      stdout.restore();
-    }
-  });
-
-  it("quotes carriage returns in formula-neutralized CSV cells", async () => {
-    stubMeetArtifactsApi({ participantDisplayName: "\r=1+1" });
-    const stdout = captureStdout();
-
-    try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "attendance",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--conference-record",
-          "rec-1",
-          "--format",
-          "csv",
-        ],
-        { from: "user" },
-      );
-      expect(stdout.output()).toContain('conferenceRecords/rec-1,"\'\r=1+1",users/alice');
-    } finally {
-      stdout.restore();
-    }
-  });
+      try {
+        await setupCli({}).parseAsync(
+          [
+            "googlemeet",
+            "attendance",
+            "--access-token",
+            "token",
+            "--expires-at",
+            String(Date.now() + 120_000),
+            "--conference-record",
+            "rec-1",
+            "--format",
+            "csv",
+          ],
+          { from: "user" },
+        );
+        for (const text of expected) {
+          expect(stdout.output()).toContain(text);
+        }
+      } finally {
+        stdout.restore();
+      }
+    });
+  }
 
   it("writes an export bundle", async () => {
     stubMeetArtifactsApi();

@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SnapshotResult } from "../browser/client.js";
 import { writeExternalFileWithinOutputRoot } from "../browser/output-files.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
@@ -20,7 +21,6 @@ import {
   getRuntimeConfig,
   inheritOptionFromParent,
   shortenHomePath,
-  type SnapshotResult,
 } from "./core-api.js";
 
 function parseOptionalIntegerOption(
@@ -242,7 +242,7 @@ export function registerBrowserInspectCommands(
               const indent = "  ".repeat(Math.min(20, n.depth));
               const name = n.name ? ` "${n.name}"` : "";
               const value = n.value ? ` = "${n.value}"` : "";
-              return `${indent}- ${n.role}${name}${value}`;
+              return `${indent}- ${n.role}${name}${value} [ref=${n.ref}]`;
             })
             .join("\n"),
         );

@@ -2,13 +2,13 @@ import type {
   DesktopObserveResult,
   DesktopSource,
   EnvironmentSummary,
-  EnvironmentsListResult,
-  WorkerDesktopLaunchResult,
 } from "@openclaw/gateway-protocol";
-import { html, nothing } from "lit";
+import type { ControlUiFocusBuildTarget } from "@openclaw/session-url-contract";
+import { nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
@@ -16,30 +16,30 @@ import {
   DESKTOP_PANEL_TOGGLE_EVENT,
   type DesktopPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
-import { DesktopClient, type DesktopConnectionHandle } from "./desktop-client.ts";
-import { resolveDesktopDocumentInventoryTarget } from "./desktop-document-inventory.ts";
-import { renderDesktopDocumentView } from "./desktop-document-view.ts";
+import { DesktopAppLauncher } from "./desktop-app-launcher.ts";
+import * as desktopTransport from "./desktop-client.ts";
 import { openDesktopFocus } from "./desktop-focus-window.ts";
 import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
-import type {
-  DesktopAppId,
-  DesktopCredentials,
-  ObservedDesktopConnection,
-  PendingDesktopConnection,
+import {
+  DesktopConnectionHandoff,
+  releaseDesktopObservation,
+  type DesktopAppId,
+  type DesktopCredentials,
+  type ObservedDesktopConnection,
+  type PendingDesktopConnection,
 } from "./desktop-panel-connection.ts";
-import { desktopCredentialRequirement } from "./desktop-panel-credentials.ts";
+import * as desktopAuth from "./desktop-panel-credentials.ts";
 import { DesktopPanelFullscreenController } from "./desktop-panel-fullscreen-controller.ts";
 import { desktopPanelLayout } from "./desktop-panel-layout.ts";
 import { type DesktopPanelState, renderDesktopPanelRecovery } from "./desktop-panel-state.ts";
 import { desktopPanelElementStyles } from "./desktop-panel-styles.ts";
-import {
-  renderDesktopConnection,
-  renderDesktopCredentials,
-  renderDesktopNotice,
-  renderDesktopPanelHeader,
-  renderDesktopPicker,
-} from "./desktop-panel-view.ts";
+import { renderDesktopCredentials, renderDesktopPicker } from "./desktop-panel-view.ts";
+import { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
+import { renderDesktopPresentation } from "./desktop-presentation.ts";
+import { DesktopSessionController } from "./desktop-session-controller.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
+
+registerDesktopEnglish();
 
 /** `<openclaw-desktop-panel>` — dockable RFB access to Gateway desktop sources. */
 class OpenClawDesktopPanel extends OpenClawLitElement {
@@ -47,20 +47,28 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ type: Boolean }) available = false;
   @property({ type: Boolean }) suppressed = false;
   @property({ type: Boolean }) documentMode = false;
-  @property({ attribute: false }) documentSource: string | null = null;
-  @property({ attribute: false }) documentSession: string | null = null;
+  @property({ attribute: false }) requestedSource: string | null = null;
+  @property({ attribute: false }) sessionKey: string | null = null;
   @property({ type: Boolean }) documentControl = false;
   @property({ attribute: false }) basePath = "";
-  /** Hosted by the chat side panel, which owns visibility and geometry. */
+  /** Host-owned inventory; null preserves the standalone/session inventory owner. */
+  @property({ attribute: false }) suppliedEnvironments: readonly EnvironmentSummary[] | null = null;
+  /** Show the canonical focus/fullscreen controls inside an embedded workspace. */
+  @property({ type: Boolean }) workspaceControls = false;
+  /** Hosted by a side panel or workspace, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;
   /** This embedded instance is the active pane's visible Desktop presenter. */
   @property({ type: Boolean }) presented = false;
   /** Whether a newly ready embedded presentation owns its initial inventory refresh. */
   @property({ type: Boolean }) refreshOnPresentation = true;
   @property({ attribute: false }) onDocumentClose: (() => void) | null = null;
+  @property({ attribute: false }) onFocusTargetChange:
+    | ((target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>) => void)
+    | null = null;
 
   /** Browser tests replace the transport without opening a real RFB socket. */
-  desktopClientFactory: () => Pick<DesktopClient, "connect"> = () => new DesktopClient();
+  desktopClientFactory: () => Pick<desktopTransport.DesktopClient, "connect"> = () =>
+    new desktopTransport.DesktopClient();
 
   @state() private environments: EnvironmentSummary[] = [];
   @state() private loading = false;
@@ -71,21 +79,67 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @state() private errorText: string | null = null;
   @state() private noticeText: string | null = null;
   @state() private disconnectedReason: string | null = null;
-  @state() private launchingApp: DesktopAppId | null = null;
-  @state() private launchErrorText: string | null = null;
   @state() private desktopApps: DesktopAppId[] = [];
-  @state() private scaleViewport = true;
+  @state() private sizingMode: desktopTransport.DesktopSizingMode = "fit";
+  @state() private canResize = false;
 
-  private connection: DesktopConnectionHandle | null = null;
+  private readonly connection = new DesktopConnectionHandoff();
+  private readonly launcher = new DesktopAppLauncher(this, () => ({
+    client: this.client,
+    source: this.source,
+    presented: !this.embedded || this.presented,
+    state: this.state,
+    apps: this.desktopApps,
+  }));
+
+  private readonly pictureInPicture = new DesktopPictureInPicture(this, () => this.state);
   private credentials: DesktopCredentials | undefined;
   private credentialAuth: "vnc-password" | "ard-account" | undefined;
   private pendingConnection: PendingDesktopConnection | null = null;
   private operationId = 0;
-  private launchOperationId = 0;
   private controlTakeoverRecoveryUsed = false;
-  private documentSourceResolved = false;
+  // Automatic resolution follows the session; an explicit choice owns its pop-out target.
+  @state() private sourceSelection: "pending" | "resolved" | "explicit" | "picker" = "pending";
+  private readonly sessionSource = new DesktopSessionController(
+    this,
+    () => this.environmentId,
+    (target) => {
+      if (this.usesAutomaticSource) {
+        this.returnToPicker("pending");
+        void this.refreshEnvironments(undefined, target);
+      }
+    },
+    () => {
+      // Inventory refresh advances operationId; active viewers and credential prompts keep their owner.
+      if (
+        (this.state === "picker" ||
+          (this.state === "inventory-error" && this.usesAutomaticSource)) &&
+        !this.suppressed &&
+        (this.embedded ? this.presented : this.documentMode || this.dockLayout.open)
+      ) {
+        void this.refreshEnvironments();
+      }
+    },
+    () =>
+      (this.state === "picker" && !this.loading) || this.state === "inventory-error"
+        ? null
+        : (this.environmentId ?? (this.usesAutomaticSource ? this.requestedSource : null)),
+    (error) => {
+      // Failed refreshes keep an attached viewer, but cannot strand initial target loading.
+      if (
+        this.usesAutomaticSource &&
+        (this.state === "picker" || this.state === "inventory-error")
+      ) {
+        this.sessionSource.invalidate();
+        this.operationId += 1;
+        this.loading = false;
+        this.errorText = t("desktop.errors.listFailed", { error: formatUiError(error) });
+        this.state = "inventory-error";
+      }
+    },
+  );
   private readonly mobileKeyboard = new DesktopMobileKeyboard({
-    connection: () => this.connection,
+    connection: () => this.connection.handle,
     controlling: () => this.controlling,
     input: () => this.shadowRoot?.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input"),
   });
@@ -109,16 +163,24 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     }
     this.dockLayout.setSuppressed(this.suppressed);
-    if (this.documentMode && this.available) {
-      void this.refreshEnvironments();
-    } else if (!this.embedded && this.dockLayout.open) {
+    // The first document update owns startup; reconnects still need a fresh lookup.
+    if (
+      (this.documentMode && this.hasUpdated && this.available) ||
+      (!this.documentMode && !this.embedded && this.dockLayout.open)
+    ) {
       void this.refreshEnvironments();
     }
   }
 
   override disconnectedCallback(): void {
+    this.launcher.clear();
     window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-    this.disconnectConnection();
+    if (this.documentMode && this.usesAutomaticSource) {
+      this.returnToPicker("pending");
+    } else {
+      this.disconnectConnection();
+    }
+    this.sessionSource.clearDesktopSource();
     this.credentials = undefined;
     super.disconnectedCallback();
   }
@@ -139,27 +201,29 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         void this.refreshEnvironments();
       }
     }
-    if (changed.has("documentSource") || changed.has("documentSession")) {
-      this.documentSourceResolved = false;
-    }
     const gatewayAvailabilityChanged = changed.has("client") || changed.has("available");
-    const embeddedPresentationChanged =
-      this.embedded && (changed.has("embedded") || changed.has("presented"));
-    const documentPresentationChanged =
+    // Embedded source props track placement without replacing a picker's explicit choice.
+    const contextChanged =
+      gatewayAvailabilityChanged ||
+      changed.has("embedded") ||
       changed.has("documentMode") ||
-      changed.has("documentSource") ||
-      changed.has("documentSession") ||
+      (changed.has("requestedSource") &&
+        (!this.embedded || this.suppliedEnvironments !== null || this.usesAutomaticSource)) ||
+      changed.has("sessionKey") ||
       changed.has("documentControl");
-    if (this.documentMode && (gatewayAvailabilityChanged || documentPresentationChanged)) {
-      if (!this.available) {
-        this.documentSourceResolved = false;
-        this.returnToPicker();
-      } else {
+    if ((this.documentMode || this.embedded) && contextChanged) {
+      // Release input and invalidate pending work before resolving a different session or machine.
+      this.returnToPicker("pending");
+      if (this.available && (!this.embedded || (this.presented && this.refreshOnPresentation))) {
         void this.refreshEnvironments();
       }
-    } else if (this.embedded && (embeddedPresentationChanged || gatewayAvailabilityChanged)) {
-      this.returnToPicker();
-      if (this.presented && this.available && this.client && this.refreshOnPresentation) {
+    } else if (this.embedded && changed.has("presented") && this.state !== "disconnected") {
+      this.pictureInPicture.close();
+      this.mobileKeyboard.reset();
+      if (
+        this.connection.setPresented(this.presented, () => this.returnToPicker("pending")) &&
+        this.refreshOnPresentation
+      ) {
         void this.refreshEnvironments();
       }
     } else if (gatewayAvailabilityChanged) {
@@ -170,11 +234,27 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         void this.refreshEnvironments();
       }
     }
+    if (changed.has("suppliedEnvironments") && this.suppliedEnvironments !== null) {
+      this.environments = [...this.suppliedEnvironments];
+      const selected = this.environments.find((entry) => entry.id === this.environmentId);
+      if (this.source) {
+        this.sessionSource.setDesktopSource(this.source, selected?.desktopAvailability);
+      }
+    }
     this.dockLayout.syncReservation();
+    this.onFocusTargetChange?.({
+      kind: "desktop",
+      control: this.controlling,
+      ...(this.sourceSelection === "picker"
+        ? {}
+        : this.sourceSelection === "explicit" || this.sessionKey === null
+          ? { source: this.environmentId }
+          : { session: this.sessionKey }),
+    });
   }
 
   handleToggleRequest(event: Event): void {
-    if (this.documentMode) {
+    if (this.documentMode || this.suppressed) {
       return;
     }
     const detail =
@@ -195,6 +275,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       if (detail?.environmentId) {
         void this.connectRequestedEnvironment(detail.environmentId);
       } else {
+        this.returnToPicker(this.sessionKey !== null ? "pending" : "picker");
         void this.refreshEnvironments();
       }
       return;
@@ -225,101 +306,103 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.dockLayout.setOpen(false);
   }
 
-  private returnToPicker(): void {
+  private get usesAutomaticSource(): boolean {
+    return this.sourceSelection === "pending" || this.sourceSelection === "resolved";
+  }
+
+  private returnToPicker(sourceSelection: typeof this.sourceSelection = "picker"): void {
+    this.sessionSource.invalidate();
+    this.loading = false;
     this.disconnectConnection();
-    this.clearLaunchState();
+    this.launcher.clear();
     this.state = "picker";
+    this.sourceSelection = sourceSelection;
     this.environmentId = null;
     this.source = null;
     this.credentials = undefined;
     this.credentialAuth = undefined;
     this.desktopApps = [];
     this.controlling = false;
+    this.sizingMode = "fit";
+    this.canResize = false;
     this.disconnectedReason = null;
+    this.sessionSource.clearDesktopSource();
   }
 
-  private disconnectConnection(): void {
+  private disconnectConnection(retainViewer = false): void {
+    this.pictureInPicture.close();
     this.operationId += 1;
     this.pendingConnection = null;
-    const connection = this.connection;
-    this.connection = null;
-    connection?.disconnect();
+    this.connection.begin(retainViewer);
     this.mobileKeyboard.reset();
   }
 
-  private clearLaunchState(): void {
-    this.launchOperationId += 1;
-    this.launchingApp = null;
-    this.launchErrorText = null;
-  }
-
-  private async refreshEnvironments(expectedOperationId?: number): Promise<boolean> {
-    const client = this.client;
-    if (!client || !this.available || (this.embedded && !this.presented)) {
+  private async refreshEnvironments(
+    expectedOperationId?: number,
+    resolvedSessionTarget?: string | null,
+  ): Promise<boolean> {
+    if (!this.client || !this.available || (this.embedded && !this.presented)) {
       return false;
     }
     const operationId = expectedOperationId ?? ++this.operationId;
     this.loading = true;
     this.errorText = null;
     let refreshed = false;
-    try {
-      const result = await client.request<EnvironmentsListResult>("environments.list", {});
-      if (operationId !== this.operationId) {
-        return false;
+    let requestedSource: string | undefined;
+    if (this.suppliedEnvironments !== null) {
+      this.environments = [...this.suppliedEnvironments];
+      this.loading = false;
+      const selected = this.environments.find(
+        (entry) => entry.id === this.requestedSource && entry.desktop,
+      );
+      if (selected && this.sourceSelection === "pending") {
+        this.sourceSelection = "resolved";
+        await this.connectEnvironment(selected.id, false);
       }
-      this.environments = result.environments.filter((environment) => environment.desktop === true);
-      refreshed = true;
+      return true;
+    }
+    const inventoryRequest = this.sessionSource.loadInventory({
+      automatic: this.sourceSelection === "pending",
+      target: resolvedSessionTarget,
+      isCurrent: () => operationId === this.operationId && (!this.embedded || this.presented),
+    });
+    try {
+      const inventory = await inventoryRequest.result;
+      if (inventory && inventoryRequest.isCurrent()) {
+        requestedSource = inventory.selectedSource;
+        this.environments = inventory.environments;
+        refreshed = true;
+      }
     } catch (error) {
-      if (operationId === this.operationId) {
+      if (inventoryRequest.isCurrent()) {
         this.errorText = t("desktop.errors.listFailed", { error: formatUiError(error) });
-        if (this.documentMode && (this.documentSource !== null || this.documentSession !== null)) {
-          // A session key only names a machine once the inventory loads, so it stays out of
-          // `environmentId`; document-mode retry refreshes the inventory rather than reconnecting.
-          this.environmentId = this.documentSource;
+        if (this.requestedSource !== null || this.sessionKey !== null) {
+          // Keep an explicit target through retry; an unresolved session has no environment yet.
           this.state = "inventory-error";
         }
       }
     } finally {
-      if (operationId === this.operationId) {
+      if (inventoryRequest.isCurrent()) {
         this.loading = false;
       }
     }
-    if (refreshed) {
-      await this.resolveDocumentSource(operationId);
+    if (refreshed && inventoryRequest.isCurrent() && this.sourceSelection === "pending") {
+      if (requestedSource !== undefined) {
+        this.sourceSelection = "resolved";
+        await this.connectEnvironment(requestedSource, this.documentControl);
+      } else if (this.requestedSource !== null || this.sessionKey !== null) {
+        this.noticeText = t("desktop.sourceUnavailable");
+      }
     }
     return refreshed;
   }
 
-  private async resolveDocumentSource(operationId: number): Promise<void> {
-    if (!this.documentMode || this.documentSourceResolved || operationId !== this.operationId) {
-      return;
-    }
-    this.documentSourceResolved = true;
-    const requestedSource = await resolveDesktopDocumentInventoryTarget({
-      client: this.client,
-      source: this.documentSource,
-      sessionKey: this.documentSession,
-      environments: this.environments,
-    });
-    if (operationId !== this.operationId) {
-      return;
-    }
-    if (requestedSource === null) {
-      if (this.documentSource !== null || this.documentSession !== null) {
-        this.state = "picker";
-        this.noticeText = t("desktop.sourceUnavailable");
-      }
-      return;
-    }
-    await this.connectEnvironment(requestedSource, this.documentControl);
-  }
-
   private async connectRequestedEnvironment(environmentId: string): Promise<void> {
-    this.returnToPicker();
+    this.returnToPicker("explicit");
     this.environmentId = environmentId;
     this.state = "connecting";
     const operationId = this.operationId;
-    const inventoryLoaded = await this.refreshEnvironments(operationId);
+    const inventoryLoaded = await this.refreshEnvironments(operationId, environmentId);
     if (operationId !== this.operationId) {
       return;
     }
@@ -331,31 +414,29 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   private async connectEnvironment(
-    environmentId: string,
+    environmentId: string | null,
     control: boolean,
     options: { preserveNotice?: boolean; takeoverRecovery?: boolean } = {},
   ): Promise<void> {
     const client = this.client;
-    if (!client || !this.available || (this.embedded && !this.presented)) {
+    if (!environmentId || !client || !this.available || (this.embedded && !this.presented)) {
       return;
     }
     if (this.environmentId !== environmentId) {
-      this.clearLaunchState();
+      this.launcher.clear();
       this.credentials = undefined;
       this.credentialAuth = undefined;
+      this.sizingMode = "fit";
     }
-    this.desktopApps = [
-      ...(this.environments.find((environment) => environment.id === environmentId)?.worker
-        ?.desktopApps ?? []),
-    ];
-    this.disconnectConnection();
+    this.canResize = false;
+    const environment = this.environments.find((candidate) => candidate.id === environmentId);
+    this.desktopApps = [...(environment?.worker?.desktopApps ?? [])];
+    this.disconnectConnection(this.environmentId === environmentId);
     const operationId = this.operationId;
-    const environment = this.environments.find((candidate) => candidate.id === environmentId) ?? {
-      id: environmentId,
-    };
-    const source = desktopSourceForEnvironment(environment);
+    const source = desktopSourceForEnvironment(environment ?? { id: environmentId });
     this.environmentId = environmentId;
     this.source = source;
+    this.sessionSource.setDesktopSource(source, environment?.desktopAvailability);
     this.controlling = control;
     this.state = "connecting";
     this.errorText = null;
@@ -365,49 +446,38 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     this.controlTakeoverRecoveryUsed = options.takeoverRecovery === true;
     try {
-      const observeCredentials =
-        source.kind !== "environment" &&
-        this.credentials?.password &&
-        (this.credentialAuth === "vnc-password" ||
-          (this.credentialAuth === "ard-account" && this.credentials.username))
-          ? this.credentials
-          : undefined;
+      const supplied = desktopAuth.forObserve(source, this.credentialAuth, this.credentials);
       const observed = await client.request<DesktopObserveResult>("desktop.observe", {
         source,
         control,
-        ...(observeCredentials ? { credentials: observeCredentials } : {}),
+        ...(supplied ? { credentials: supplied } : {}),
       });
+      const abandon = () => releaseDesktopObservation(client, observed.wsPath);
       if (operationId !== this.operationId) {
+        abandon();
         return;
       }
       this.controlling = observed.control;
-      const credentials = observed.preauthenticated
-        ? undefined
-        : observed.vncPassword
-          ? { password: observed.vncPassword }
-          : observed.auth === "vnc-password"
-            ? this.credentials
-            : undefined;
-      if (
-        observed.auth === "vnc-password" &&
-        observed.preauthenticated !== true &&
-        !credentials?.password
-      ) {
-        this.credentialAuth = "vnc-password";
+      this.canResize = observed.canResize === true;
+      if ((!this.canResize || !this.controlling) && this.sizingMode === "match") {
+        this.sizingMode = "fit";
+      }
+      const { credentials, auth, phase } = desktopAuth.forConnection(observed, this.credentials);
+      if (phase === "credentials") {
+        this.connection.disconnect();
+      }
+      this.connection.retainObservation(abandon);
+      this.credentialAuth = auth ?? this.credentialAuth;
+      if (phase === "credentials") {
         this.pendingConnection = { environmentId, control, observed, operationId };
         this.state = "credentials";
         return;
       }
-      if (observed.auth === "ard-account") {
-        this.credentialAuth = "ard-account";
-      }
-      await this.connectObserved(
-        { environmentId, control, observed, operationId },
-        observed.auth === "vnc-password" ? credentials : undefined,
-      );
+      await this.connectObserved({ environmentId, control, observed, operationId }, credentials);
     } catch (error) {
-      const requiredAuth = desktopCredentialRequirement(error);
+      const requiredAuth = desktopAuth.desktopCredentialRequirement(error);
       if (requiredAuth && operationId === this.operationId) {
+        this.connection.disconnect();
         this.credentialAuth = requiredAuth;
         this.pendingConnection = { environmentId, control, operationId };
         this.state = "credentials";
@@ -435,31 +505,33 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       if (!target) {
         throw new Error("Desktop render target is unavailable");
       }
-      const desktopClient = this.desktopClientFactory();
-      const background = getComputedStyle(target).backgroundColor;
-      const connection = await desktopClient.connect({
-        background,
+      const connection = await this.desktopClientFactory().connect({
+        background: getComputedStyle(target).backgroundColor,
+        isCurrent: () => pending.operationId === this.operationId,
         wsUrl: pending.observed.wsPath,
         gatewayUrl: client.gatewayUrl,
         credentials,
         viewOnly: !pending.observed.control,
-        scaleViewport: this.scaleViewport,
+        canResize: pending.observed.canResize,
+        sizingMode: this.sizingMode,
         target,
         onConnect: () => {
           if (pending.operationId === this.operationId) {
+            this.connection.setSizingMode(this.sizingMode);
+            this.connection.markConnected();
             this.state = "connected";
           }
         },
         onDisconnect: (detail) => {
           if (pending.operationId === this.operationId) {
-            this.handleDesktopDisconnect(pending.environmentId, detail.code, detail.reason);
+            this.handleDesktopDisconnect(pending.environmentId, detail);
           }
         },
         onSecurityFailure: (detail) => {
           if (pending.operationId === this.operationId) {
-            this.errorText = t("desktop.errors.securityFailed", {
-              reason: formatUiExternalText(detail.reason, t("desktop.unknownReason")),
-            });
+            const reason = formatUiExternalText(detail.reason, t("desktop.unknownReason"));
+            this.errorText = t("desktop.errors.securityFailed", { reason });
+            this.failConnection(pending.operationId, new Error(reason));
           }
         },
       });
@@ -467,7 +539,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         connection.disconnect();
         return;
       }
-      this.connection = connection;
+      this.connection.attach(connection);
+      this.connection.setSizingMode(this.sizingMode);
     } catch (error) {
       this.failConnection(pending.operationId, error);
     }
@@ -477,9 +550,10 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     if (operationId !== this.operationId) {
       return;
     }
+    this.disconnectConnection();
     this.state = "disconnected";
     this.disconnectedReason = formatUiError(error);
-    this.clearLaunchState();
+    this.launcher.clear();
   }
 
   private handleCredentialsSubmit(event: SubmitEvent): void {
@@ -488,22 +562,13 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     if (!pending || pending.operationId !== this.operationId) {
       return;
     }
-    const formData = new FormData(event.currentTarget as HTMLFormElement);
-    const password = formData.get("password");
-    if (typeof password !== "string" || password.length === 0) {
+    const credentials = desktopAuth.fromForm(
+      new FormData(event.currentTarget as HTMLFormElement),
+      this.credentialAuth,
+    );
+    if (!credentials) {
       return;
     }
-    const username = formData.get("username");
-    if (
-      this.credentialAuth === "ard-account" &&
-      (typeof username !== "string" || username.trim().length === 0)
-    ) {
-      return;
-    }
-    const credentials = {
-      ...(typeof username === "string" && username.trim() ? { username: username.trim() } : {}),
-      password,
-    };
     this.credentials = credentials;
     this.pendingConnection = null;
     if (pending.observed) {
@@ -513,10 +578,15 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
   }
 
-  private handleDesktopDisconnect(environmentId: string, code?: number, reason?: string): void {
-    this.connection = null;
-    this.clearLaunchState();
-    if (code === 1008 && this.credentialAuth === "ard-account") {
+  private handleDesktopDisconnect(
+    environmentId: string | null,
+    { code, reason, clean }: desktopTransport.DesktopDisconnectDetail,
+  ): void {
+    this.sessionSource.invalidate();
+    this.loading = false;
+    this.disconnectConnection();
+    this.launcher.clear();
+    if (code === 1008 && this.credentialAuth === "ard-account" && environmentId !== null) {
       this.credentials = this.credentials?.username
         ? { username: this.credentials.username }
         : undefined;
@@ -533,11 +603,16 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     if (
       code === 4000 &&
-      reason === "control-taken" &&
+      (reason === "control-taken" || reason?.startsWith("control-taken:")) &&
       this.controlling &&
+      environmentId !== null &&
+      (!this.embedded || this.presented) &&
       !this.controlTakeoverRecoveryUsed
     ) {
-      this.noticeText = t("desktop.controlTaken");
+      const operator = formatUiExternalText(reason.slice("control-taken:".length));
+      this.noticeText = operator
+        ? t("desktop.controlTakenBy", { operator })
+        : t("desktop.controlTaken");
       void this.connectEnvironment(environmentId, false, {
         preserveNotice: true,
         takeoverRecovery: true,
@@ -547,56 +622,27 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.state = "disconnected";
     this.disconnectedReason =
       formatUiExternalText(reason, code ? t("desktop.closeCode", { code: String(code) }) : "") ||
-      null;
-  }
-
-  private async launchApp(app: DesktopAppId): Promise<void> {
-    const client = this.client;
-    const source = this.source;
-    if (
-      !client ||
-      (this.embedded && !this.presented) ||
-      source?.kind !== "environment" ||
-      (this.state !== "connecting" && this.state !== "connected") ||
-      !this.desktopApps.includes(app) ||
-      this.launchingApp === app
-    ) {
-      return;
-    }
-    const operationId = ++this.launchOperationId;
-    this.launchingApp = app;
-    this.launchErrorText = null;
-    try {
-      await client.request<WorkerDesktopLaunchResult>("desktop.launch", {
-        source,
-        app,
-      });
-      if (operationId !== this.launchOperationId || source !== this.source) {
-        return;
-      }
-      this.launchingApp = null;
-    } catch (error) {
-      if (operationId !== this.launchOperationId || source !== this.source) {
-        return;
-      }
-      this.launchingApp = null;
-      this.launchErrorText = formatUiError(error);
-    }
+      (!clean ? t("desktop.errors.connectionFailed") : null);
   }
 
   override render() {
-    if (!this.available) {
+    if (!this.available || (!this.documentMode && !this.embedded && !this.dockLayout.open)) {
       return nothing;
     }
-    const notice = renderDesktopNotice(
-      this.fullscreenMode.errorText ?? this.launchErrorText ?? this.errorText,
+    const notice = this.pictureInPicture.renderNotice(
+      this.fullscreenMode.errorText ?? this.launcher.error ?? this.errorText,
       this.noticeText,
+      this.sessionSource.desktopAvailability,
     );
     const picker = renderDesktopPicker({
+      automatic: this.usesAutomaticSource && this.embedded && this.sessionKey !== null,
       environments: this.environments,
       loading: this.loading,
       onRefresh: () => void this.refreshEnvironments(),
-      onConnect: (environmentId) => void this.connectEnvironment(environmentId, false),
+      onConnect: (environmentId) => {
+        this.sourceSelection = "explicit";
+        void this.connectEnvironment(environmentId, false);
+      },
     });
     const credentials = renderDesktopCredentials({
       ardAccount: this.credentialAuth === "ard-account",
@@ -607,102 +653,79 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       inventoryError: this.state === "inventory-error",
       reason: this.disconnectedReason,
       onRetry: () => {
-        if (this.state === "inventory-error" && this.documentMode) {
-          this.documentSourceResolved = false;
-          this.state = "connecting";
+        if ((this.state === "inventory-error" && this.documentMode) || !this.environmentId) {
+          if (this.sourceSelection !== "picker") {
+            this.sourceSelection = "pending";
+          }
+          this.state = "picker";
           void this.refreshEnvironments();
           return;
         }
-        if (!this.environmentId) {
-          return;
-        }
-        if (this.state === "inventory-error") {
+        if (this.state === "inventory-error" && this.environmentId) {
           void this.connectRequestedEnvironment(this.environmentId);
           return;
         }
         void this.connectEnvironment(this.environmentId, this.controlling);
       },
     });
-    const connection = renderDesktopConnection({
-      state: this.state,
+    // Source lookup and RFB authentication share the same stage and loading indicator.
+    const content = {
+      state:
+        this.state === "picker" &&
+        this.loading &&
+        this.usesAutomaticSource &&
+        (this.sessionKey !== null || this.requestedSource !== null)
+          ? "connecting"
+          : this.state,
+      notice,
+      picker,
+      credentials,
+      recovery,
+    } as const;
+    const sizing = {
+      mode: this.sizingMode,
+      canResize: this.canResize && this.controlling && this.state === "connected",
+      onChange: (mode: desktopTransport.DesktopSizingMode) => {
+        this.sizingMode = mode;
+        this.connection.setSizingMode(mode);
+      },
+    };
+    return renderDesktopPresentation({
+      documentMode: this.documentMode,
+      embedded: this.embedded,
+      workspaceControls: this.workspaceControls,
+      content,
       controlling: this.controlling,
       desktopApps: this.desktopApps,
       environmentSelected: this.environmentId !== null,
-      launchingApp: this.launchingApp,
+      launchingApp: this.launcher.app,
       showApps: this.source?.kind === "environment",
-      onLaunch: (app) => void this.launchApp(app),
-      onTakeControl: () => {
-        if (this.environmentId) {
-          void this.connectEnvironment(this.environmentId, true);
+      sizing,
+      mobileKeyboard: this.mobileKeyboard,
+      pictureInPictureControl: this.pictureInPicture.renderButton(),
+      dockLayout: this.dockLayout,
+      fullscreenMode: this.fullscreenMode,
+      onControlToggle: () => void this.connectEnvironment(this.environmentId, !this.controlling),
+      onTakeControl: () => void this.connectEnvironment(this.environmentId, true),
+      onLaunch: (app) => void this.launcher.launch(app),
+      onClose: () => this.closePanel(),
+      onDocumentClose: () => this.onDocumentClose?.(),
+      onOpenWindow: () => {
+        // A workspace pop-out starts view-only; a second window never takes input.
+        openDesktopFocus(
+          this.basePath,
+          this.environmentId,
+          this.workspaceControls ? false : this.controlling,
+        );
+      },
+      onDisconnect: () => {
+        if (this.embedded && (this.sessionKey !== null || this.suppliedEnvironments !== null)) {
+          this.handleDesktopDisconnect(this.environmentId, { clean: true });
+        } else {
+          this.returnToPicker();
         }
       },
-      onDisconnect: () => this.returnToPicker(),
     });
-    if (this.documentMode) {
-      return renderDesktopDocumentView({
-        state: this.state,
-        controlling: this.controlling,
-        scaleViewport: this.scaleViewport,
-        keyboardInputValue: this.mobileKeyboard.value,
-        notice,
-        picker,
-        credentials,
-        recovery,
-        onControlToggle: () => {
-          if (this.environmentId) {
-            void this.connectEnvironment(this.environmentId, !this.controlling);
-          }
-        },
-        onKeyboardFocus: () => this.mobileKeyboard.focus(),
-        onKeyboardEvent: (event) => this.mobileKeyboard.handleKeyboardEvent(event),
-        onKeyboardInput: (event) => this.mobileKeyboard.handleInput(event),
-        onScaleToggle: () => {
-          this.scaleViewport = !this.scaleViewport;
-          this.connection?.setScaleViewport?.(this.scaleViewport);
-        },
-        onClose: () => this.onDocumentClose?.(),
-      });
-    }
-    if (!this.embedded && !this.dockLayout.open) {
-      return nothing;
-    }
-    const dock = this.dockLayout.dock;
-    const style = this.embedded
-      ? ""
-      : this.fullscreenMode.active
-        ? ""
-        : dock === "bottom"
-          ? `height:${this.dockLayout.height}px`
-          : `width:${this.dockLayout.width}px`;
-    return html`
-      <section
-        class="bp bp--${this.embedded ? "embedded" : dock}"
-        style=${style}
-        aria-label=${t("desktop.title")}
-      >
-        ${this.embedded ? nothing : this.dockLayout.renderResizer("bp", t("desktop.resize"))}
-        ${this.embedded
-          ? nothing
-          : renderDesktopPanelHeader({
-              dock,
-              fullscreenControl: this.fullscreenMode.renderButton(),
-              onDock: (nextDock) => this.dockLayout.setDock(nextDock),
-              onOpenWindow: () =>
-                openDesktopFocus(this.basePath, this.environmentId, this.controlling),
-              onClose: () => this.closePanel(),
-            })}
-        <div class="desktop-content">
-          ${notice}
-          ${this.state === "picker"
-            ? picker
-            : this.state === "inventory-error" || this.state === "disconnected"
-              ? recovery
-              : this.state === "credentials"
-                ? credentials
-                : connection}
-        </div>
-      </section>
-    `;
   }
 }
 

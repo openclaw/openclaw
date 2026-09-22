@@ -4,6 +4,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
+  publishTranscriptUpdate,
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
@@ -13,13 +14,13 @@ import {
   onTrustedToolExecutionEvent,
   type TrustedToolExecutionEvent,
 } from "../infra/diagnostic-events.js";
+import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../state/openclaw-agent-db.js";
-import {
+  type ClientVoiceConfirmationUtteranceContext,
   deactivateClientVoiceConfirmationSession,
   noteClientVoiceConfirmationUtterance,
+  prepareClientVoiceConfirmationTranscript,
+  recordClientVoiceConfirmationTranscriptAppend,
   releaseClientVoiceConfirmationRun,
 } from "./client-voice-confirmation.js";
 import {
@@ -36,7 +37,7 @@ import {
   parseStoredVoiceSessionRecord as parseStoredRecord,
   readVoiceSessionRecord as readRecord,
   readVoiceSessionRecordInTransaction as readRecordInTransaction,
-  VOICE_SESSION_CACHE_SCOPE as CACHE_SCOPE,
+  readVoiceSessionRecordRows,
   VOICE_SESSION_RECORD_VERSION as RECORD_VERSION,
   VOICE_SESSION_STALE_AFTER_MS as STALE_AFTER_MS,
   writeVoiceSessionRecordInTransaction as writeRecordInTransaction,
@@ -229,6 +230,7 @@ export function createOrResumeClientVoiceSession(params: {
 export function resolveClientVoiceAgentSessionId(params: {
   agentId: string;
   sessionKey: string;
+  storePath?: string;
 }): string | undefined {
   return loadSessionEntryReadOnly(params)?.sessionId?.trim() || undefined;
 }
@@ -237,25 +239,37 @@ export function resolveClientVoiceAgentSessionId(params: {
 export async function ensureClientVoiceAgentSessionEntry(params: {
   agentId: string;
   sessionKey: string;
+  storePath?: string;
   deadlineAt?: number;
+  assertCommitAllowed?: () => void;
+  creation?: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
 }): Promise<string> {
   const created = await patchSessionEntryCore(
     params,
     (_entry, context) => {
-      // Browser credentials can be short-lived. Check at the authoritative
-      // write boundary so a queued write cannot create an unusable empty chat.
-      if (params.deadlineAt !== undefined && Date.now() >= params.deadlineAt) {
-        throw new Error("Realtime browser session expired during startup; try again");
-      }
       if (context.existingEntry?.sessionId) {
         return null;
       }
       if (context.existingEntry) {
         return { sessionId: randomUUID() };
       }
-      return buildSessionCreationStamp({ via: "talk", actor: { type: "human" } });
+      return buildSessionCreationStamp({
+        via: "talk",
+        actor: params.creation?.actor ?? { type: "human", source: "unknown" },
+        sandbox: params.creation?.sandbox,
+      });
     },
-    { fallbackEntry: mergeSessionEntry(undefined, {}) },
+    {
+      fallbackEntry: mergeSessionEntry(undefined, {}),
+      assertCommitAllowed: () => {
+        // Provider startup can end while this write is queued or being prepared.
+        // Revalidate at commit so it cannot leave an unusable empty chat.
+        params.assertCommitAllowed?.();
+        if (params.deadlineAt !== undefined && Date.now() >= params.deadlineAt) {
+          throw new Error("Realtime browser session expired during startup; try again");
+        }
+      },
+    },
   );
   if (!created?.sessionId) {
     throw new Error(`agent session could not be initialized (${params.sessionKey})`);
@@ -291,11 +305,35 @@ export function registerClientVoiceConsultRun(params: {
     },
     { agentId: params.agentId },
   );
-  voiceSessionByRunId.set(params.runId, {
-    agentId: params.agentId,
-    voiceSessionId: params.voiceSessionId,
-    sessionKey: params.sessionKey,
-  });
+  const previousBinding = voiceSessionByRunId.get(params.runId);
+  if (
+    previousBinding &&
+    (previousBinding.agentId !== params.agentId ||
+      previousBinding.voiceSessionId !== params.voiceSessionId)
+  ) {
+    // A run ID has one authoritative voice scope. Replacing it must retire the
+    // prior scope's post-close grant or completion can no longer find that owner.
+    releaseClientVoiceConfirmationRun(
+      previousBinding.agentId,
+      previousBinding.voiceSessionId,
+      params.runId,
+    );
+  }
+  if (
+    previousBinding?.agentId !== params.agentId ||
+    previousBinding.voiceSessionId !== params.voiceSessionId ||
+    previousBinding.sessionKey !== params.sessionKey
+  ) {
+    // Replays keep the operational claim; a reassignment must never revive it.
+    voiceSessionByRunId.set(
+      params.runId,
+      Object.freeze({
+        agentId: params.agentId,
+        voiceSessionId: params.voiceSessionId,
+        sessionKey: params.sessionKey,
+      }),
+    );
+  }
   // Bound to a call that already closed: re-arm the point-in-time summary owner so
   // the run completion becomes a retry point without coupling it to transcript work.
   if (recordClosed && params.config) {
@@ -358,15 +396,12 @@ export function resolveClientVoiceSessionOrigin(params: {
   return record.origin;
 }
 
-/** Resolve the newest open client-owned call for legacy tool-call clients. */
+/** Resolve the unique open client-owned call for legacy tool-call clients. */
 export function resolveOpenClientVoiceSessionId(params: {
   agentId: string;
   sessionKey: string;
 }): string | undefined {
-  const database = openOpenClawAgentDatabase({ agentId: params.agentId });
-  const rows = database.db
-    .prepare("SELECT value_json FROM cache_entries WHERE scope = ? ORDER BY updated_at DESC")
-    .all(CACHE_SCOPE) as Array<{ value_json?: unknown }>;
+  const rows = readVoiceSessionRecordRows(params.agentId);
   let match: string | undefined;
   for (const row of rows) {
     const record = parseStoredRecord(row.value_json);
@@ -419,6 +454,7 @@ function transcriptFailureKey(entryId: string): string {
 function appendVoiceTranscript(params: {
   agentId: string;
   sessionKey: string;
+  sessionTarget: { sessionKey: string; storePath?: string };
   voiceSessionId: string;
   origin: "client" | "relay";
   entryId: string;
@@ -426,12 +462,22 @@ function appendVoiceTranscript(params: {
   text: string;
   timestamp?: number;
   config?: OpenClawConfig;
+  confirmation?: ClientVoiceConfirmationUtteranceContext | null;
 }): Promise<void> {
   // Normalize before admission so the queued task retains only bounded text.
   const normalized = { ...params, text: normalizeVoiceTranscriptText(params.text) };
   if (!normalized.text) {
     return Promise.resolve();
   }
+  const confirmation =
+    normalized.role === "user"
+      ? prepareClientVoiceConfirmationTranscript({
+          agentId: normalized.agentId,
+          voiceSessionId: normalized.voiceSessionId,
+          entryId: normalized.entryId,
+          confirmation: normalized.confirmation,
+        })
+      : null;
   return runVoiceSessionOperation(
     normalized.agentId,
     normalized.voiceSessionId,
@@ -454,15 +500,14 @@ function appendVoiceTranscript(params: {
       ) {
         throw new Error("voice transcript persistence has too many unresolved entries");
       }
-      const sessionEntry = loadSessionEntryReadOnly({
-        agentId: normalized.agentId,
-        sessionKey: normalized.sessionKey,
-      });
+      // Voice ownership keeps the original key; transcript storage uses the target
+      // prepared before main/global aliases lose their selected agent identity.
+      const sessionTarget = { ...normalized.sessionTarget, agentId: normalized.agentId };
+      const sessionEntry = loadSessionEntryReadOnly(sessionTarget);
       if (!sessionEntry?.sessionId) {
         throw new Error(`agent session not found (${normalized.sessionKey})`);
       }
-      const observedAt = Date.now();
-      const timestamp = normalized.timestamp ?? observedAt;
+      const timestamp = normalized.timestamp ?? Date.now();
       // Reserve before the fallible append. A crash can leave a conservative
       // retry requirement, but can never let close skip an accepted entry.
       runOpenClawAgentWriteTransaction(
@@ -480,12 +525,8 @@ function appendVoiceTranscript(params: {
         },
         { agentId: normalized.agentId },
       );
-      await appendTranscriptMessage(
-        {
-          agentId: normalized.agentId,
-          sessionId: sessionEntry.sessionId,
-          sessionKey: normalized.sessionKey,
-        },
+      const appended = await appendTranscriptMessage(
+        { ...sessionTarget, sessionId: sessionEntry.sessionId },
         {
           ...(normalized.config ? { config: normalized.config } : {}),
           eventId: `voice:${normalized.voiceSessionId}:${normalized.entryId}`,
@@ -498,6 +539,21 @@ function appendVoiceTranscript(params: {
           now: timestamp,
         },
       );
+      // Publish the committed row before fallible bookkeeping; a retry can deduplicate it.
+      if (confirmation) {
+        recordClientVoiceConfirmationTranscriptAppend({
+          confirmation,
+          entryId: normalized.entryId,
+          text: normalized.text,
+          appended: appended.appended,
+        });
+      }
+      if (appended.appended) {
+        await publishTranscriptUpdate(
+          { ...sessionTarget, sessionId: sessionEntry.sessionId },
+          { message: appended.message, messageId: appended.messageId },
+        );
+      }
       runOpenClawAgentWriteTransaction(
         (database) => {
           const current = readRecordInTransaction(database, normalized.voiceSessionId);
@@ -519,12 +575,12 @@ function appendVoiceTranscript(params: {
         },
         { agentId: normalized.agentId },
       );
-      if (normalized.role === "user") {
+      if (normalized.role === "user" && confirmation) {
         noteClientVoiceConfirmationUtterance({
           agentId: normalized.agentId,
           voiceSessionId: normalized.voiceSessionId,
-          text: normalized.text,
-          timestamp: observedAt,
+          timestamp: Date.now(),
+          confirmation,
         });
       }
     },
@@ -671,10 +727,7 @@ export async function closeStaleClientVoiceSessions(params: {
   // A new voice session remains a retry point, but channel I/O is detached so a
   // stalled adapter cannot block stale-session recovery.
   mutationDigestDeliveryOwner.retryAgent(params.agentId, params.config);
-  const database = openOpenClawAgentDatabase({ agentId: params.agentId });
-  const rows = database.db
-    .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND updated_at <= ?")
-    .all(CACHE_SCOPE, now - STALE_AFTER_MS) as Array<{ value_json?: unknown }>;
+  const rows = readVoiceSessionRecordRows(params.agentId, now - STALE_AFTER_MS);
   const stale = rows.flatMap((row) => {
     const record = parseStoredRecord(row.value_json);
     return record &&

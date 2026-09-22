@@ -1,30 +1,42 @@
 /** Read-only diagnostic readers used by the session SQLite doctor mode. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { TextDecoder } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  classifySessionFileEntry,
   migrateSessionFileEntryToCurrentVersion,
   normalizeLoadedFileEntry,
-  partitionSessionFileEntries,
   type SessionFileEntryMigrationState,
 } from "../agents/sessions/session-manager-codec.js";
 import type { FileEntry } from "../agents/sessions/session-manager-types.js";
+import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
-import type { SqliteTranscriptStorageRow } from "../config/sessions/session-accessor.sqlite-read.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  parseOpaqueLeafEntry,
+  parseParentLinkedOpaqueEntry,
+} from "../config/sessions/session-entry-codec.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 
+export type ExistingAgentDatabaseTarget = SessionStoreTarget & { sqlitePath: string };
+
 export type ReadOnlySqliteValidationSnapshot = {
   sessionIdsBySessionKey: ReadonlyMap<string, string>;
+  sessionKeysBySessionId: ReadonlyMap<string, string>;
   transcriptEventCountsBySessionId: ReadonlyMap<string, number>;
 };
 
@@ -56,6 +68,65 @@ type TranscriptEventCountResult =
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_LEGACY_COMPACTION_TARGETS = 100_000;
 
+/** Validate an unregistered primary without retaining transcript payloads in memory. */
+export function readLegacyPrimaryTranscriptIdentity(
+  filePath: string,
+  originalPath: string,
+  retainedSharedAliasIds?: ReadonlySet<string>,
+): { sessionId: string; updatedAt: number } | undefined {
+  const filename = path.basename(originalPath);
+  const filenameId =
+    extractGeneratedTranscriptSessionId(filename) ?? filename.slice(0, -".jsonl".length);
+  let sessionId: string | undefined;
+  let version = 1;
+  let messages = 0;
+  for (const { event: raw } of iterateTranscriptEvents(filePath, false)) {
+    if (!isRecord(raw) || raw.traceSchema !== undefined) {
+      return undefined;
+    }
+    if (!sessionId) {
+      const id = raw.id ?? raw.sessionId;
+      if (
+        raw.type !== "session" ||
+        typeof id !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)
+      ) {
+        return undefined;
+      }
+      if (id !== filenameId) {
+        // Shared aliases retained by an earlier migration are not unregistered primaries.
+        if (retainedSharedAliasIds?.has(id)) {
+          return undefined;
+        }
+        throw new Error("Primary transcript header does not match its original filename");
+      }
+      version = typeof raw.version === "number" ? raw.version : 1;
+      if (!Number.isInteger(version) || version < 1 || version > 3) {
+        throw new Error("Unsupported primary transcript version");
+      }
+      sessionId = id;
+      continue;
+    }
+    if (raw.type === "session") {
+      throw new Error("Multiple primary transcript headers");
+    }
+    const classified = classifySessionFileEntry(raw, version);
+    if (
+      !classified.recognized &&
+      !parseOpaqueLeafEntry(raw) &&
+      !parseParentLinkedOpaqueEntry(raw)
+    ) {
+      throw new Error("Unrecognized primary transcript record");
+    }
+    if (classified.recognized && classified.entry.type === "message") {
+      messages += 1;
+    }
+  }
+  return sessionId && messages > 0
+    ? { sessionId, updatedAt: Math.max(0, Math.floor(fs.statSync(filePath).mtimeMs)) }
+    : undefined;
+}
+
 export function countTranscriptEventsForPath(
   transcriptPath: string | undefined,
 ): TranscriptEventCountResult {
@@ -68,14 +139,17 @@ export function countTranscriptEventsForPath(
   let events = 0;
   try {
     for (const line of iterateJsonlLinesSync(transcriptPath)) {
-      if (!parseJsonlLine(line)) {
+      if (!JSON.parse(line)) {
         continue;
       }
       events += 1;
     }
     return { status: "ok", events };
   } catch (err) {
-    return { status: "malformed", message: String(err) };
+    return {
+      status: "malformed",
+      message: `${transcriptPath}: ${String(err)}. Only the readable prefix can be imported; the original remains protected for recovery.`,
+    };
   }
 }
 
@@ -84,93 +158,70 @@ export function createTranscriptEventReader(
   sessionId: string,
   allowMalformedPrefix = false,
   sourceFingerprint = readTranscriptFingerprint(transcriptPath),
-): (append: (event: TranscriptEvent) => void) => void {
+  originalSourcePath = transcriptPath,
+): (append: (event: TranscriptEvent) => void) => () => void {
   return (append) => {
-    for (const event of readTranscriptEventsForImport(
+    // Production import owns the process-wide Gateway/SQLite-maintenance lock
+    // through commit and archive. Fingerprints catch non-cooperating external edits.
+    const plan = planTranscriptImport(transcriptPath, allowMalformedPrefix);
+    assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
+    // V1 compactions refer to original row indexes. Hash the original source path
+    // so archive verification reproduces import IDs without retaining the transcript.
+    const idPrefix = createHash("sha256")
+      .update(originalSourcePath)
+      .update("\0")
+      .update(sessionId)
+      .digest("hex")
+      .slice(0, 16);
+    assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
+    const migratedTargetIds = new Map<number, string>();
+    const migrationState: SessionFileEntryMigrationState = {
+      createEntryId: (originalIndex) => `${idPrefix}-${originalIndex.toString(36)}`,
+      previousId: null,
+      resolveOriginalEntryId: (originalIndex) => migratedTargetIds.get(originalIndex),
+      sourceVersion: plan.sourceVersion,
+    };
+    for (const { event: loadedEvent, originalIndex } of iterateTranscriptEvents(
       transcriptPath,
-      sessionId,
       allowMalformedPrefix,
-      sourceFingerprint,
     )) {
+      let event = loadedEvent;
+      if (plan.sourceVersion >= 2) {
+        recordLegacyCompactionTarget(event, plan.compactionTargetIndexes);
+      }
+      let recognizedEvent: FileEntry | undefined;
+      if (originalIndex === plan.headerIndex) {
+        const canonicalHeader = {
+          ...event,
+          id: sessionId,
+          type: "session" as const,
+          timestamp: typeof event.timestamp === "string" ? event.timestamp : "",
+          cwd: "cwd" in event && typeof event.cwd === "string" ? event.cwd : "",
+        };
+        Reflect.deleteProperty(canonicalHeader, "sessionId");
+        event = canonicalHeader;
+        recognizedEvent = event;
+      } else {
+        const classified = classifySessionFileEntry(event, plan.sourceVersion);
+        // Runtime retains normalized opaque rows; import preserves their loaded bytes.
+        recognizedEvent = classified.recognized ? classified.entry : undefined;
+      }
+
+      if (recognizedEvent) {
+        migrateSessionFileEntryToCurrentVersion(recognizedEvent, originalIndex, migrationState);
+        if (
+          plan.sourceVersion < 2 &&
+          recognizedEvent.type !== "session" &&
+          plan.compactionTargetIndexes.has(originalIndex)
+        ) {
+          migratedTargetIds.set(originalIndex, recognizedEvent.id);
+        }
+        event = recognizedEvent;
+      }
       append(event as TranscriptEvent);
     }
-  };
-}
-
-function readTranscriptEventsForImport(
-  transcriptPath: string,
-  sessionId: string,
-  allowMalformedPrefix: boolean,
-  sourceFingerprint: TranscriptFileFingerprint,
-): Iterable<FileEntry> {
-  // Production import owns the process-wide Gateway/SQLite-maintenance lock
-  // through commit and archive. Fingerprints catch non-cooperating external edits.
-  const plan = planTranscriptImport(transcriptPath, allowMalformedPrefix);
-  assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
-  const classificationHeader = {
-    id: sessionId,
-    type: "session",
-    version: plan.sourceVersion,
-    timestamp: "",
-    cwd: "",
-  } satisfies FileEntry;
-  // V1 compactions refer to original row indexes. Stable index-derived IDs let
-  // the second pass resolve those links without retaining the transcript.
-  const idPrefix = createHash("sha256")
-    .update(transcriptPath)
-    .update("\0")
-    .update(sessionId)
-    .digest("hex")
-    .slice(0, 16);
-
-  return {
-    *[Symbol.iterator]() {
-      assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
-      const migratedTargetIds = new Map<number, string>();
-      const migrationState: SessionFileEntryMigrationState = {
-        createEntryId: (originalIndex) => `${idPrefix}-${originalIndex.toString(36)}`,
-        previousId: null,
-        resolveOriginalEntryId: (originalIndex) => migratedTargetIds.get(originalIndex),
-        sourceVersion: plan.sourceVersion,
-      };
-      for (const { event: loadedEvent, originalIndex } of iterateTranscriptEvents(
-        transcriptPath,
-        allowMalformedPrefix,
-      )) {
-        let event = loadedEvent;
-        let recognizedEvent: FileEntry | undefined;
-        if (originalIndex === plan.headerIndex) {
-          const canonicalHeader = {
-            ...event,
-            id: sessionId,
-            type: "session" as const,
-            timestamp: typeof event.timestamp === "string" ? event.timestamp : "",
-            cwd: "cwd" in event && typeof event.cwd === "string" ? event.cwd : "",
-          };
-          Reflect.deleteProperty(canonicalHeader, "sessionId");
-          event = canonicalHeader;
-          recognizedEvent = event;
-        } else {
-          // Reuse the runtime partition contract one row at a time. The
-          // synthetic header carries the source version without being emitted.
-          recognizedEvent = partitionSessionFileEntries([classificationHeader, event])
-            .fileEntriesByOriginalIndex[1];
-        }
-
-        if (recognizedEvent) {
-          migrateSessionFileEntryToCurrentVersion(recognizedEvent, originalIndex, migrationState);
-          if (
-            recognizedEvent.type !== "session" &&
-            plan.compactionTargetIndexes.has(originalIndex)
-          ) {
-            migratedTargetIds.set(originalIndex, recognizedEvent.id);
-          }
-          event = recognizedEvent;
-        }
-        yield event;
-      }
-      assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
-    },
+    assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
+    return () => assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
   };
 }
 
@@ -235,26 +286,32 @@ function planTranscriptImport(
     if (plan.headerIndex < 0 && isRecord(event) && event.type === "session") {
       plan.headerIndex = originalIndex;
       plan.sourceVersion = typeof event.version === "number" ? event.version : 1;
-    }
-    if (
-      isRecord(event) &&
-      event.type === "compaction" &&
-      Number.isInteger(event.firstKeptEntryIndex) &&
-      Number(event.firstKeptEntryIndex) >= 0
-    ) {
-      const targetIndex = Number(event.firstKeptEntryIndex);
-      if (
-        !plan.compactionTargetIndexes.has(targetIndex) &&
-        plan.compactionTargetIndexes.size >= MAX_LEGACY_COMPACTION_TARGETS
-      ) {
-        throw new TranscriptImportLimitError(
-          `Transcript has more than ${MAX_LEGACY_COMPACTION_TARGETS} legacy compaction targets`,
-        );
+      // Only v1 needs future row indexes before migration. Newer files validate
+      // the same target limit while streaming, before any canonical write.
+      if (plan.sourceVersion >= 2) {
+        return plan;
       }
-      plan.compactionTargetIndexes.add(targetIndex);
     }
+    recordLegacyCompactionTarget(event, plan.compactionTargetIndexes);
   }
   return plan;
+}
+
+function recordLegacyCompactionTarget(event: FileEntry, targets: Set<number>): void {
+  if (
+    isRecord(event) &&
+    event.type === "compaction" &&
+    Number.isInteger(event.firstKeptEntryIndex) &&
+    Number(event.firstKeptEntryIndex) >= 0
+  ) {
+    const targetIndex = Number(event.firstKeptEntryIndex);
+    if (!targets.has(targetIndex) && targets.size >= MAX_LEGACY_COMPACTION_TARGETS) {
+      throw new TranscriptImportLimitError(
+        `Transcript has more than ${MAX_LEGACY_COMPACTION_TARGETS} legacy compaction targets`,
+      );
+    }
+    targets.add(targetIndex);
+  }
 }
 
 function* iterateTranscriptEvents(
@@ -264,7 +321,7 @@ function* iterateTranscriptEvents(
   let originalIndex = 0;
   try {
     for (const line of iterateJsonlLinesSync(transcriptPath)) {
-      const parsed = parseJsonlLine(line);
+      const parsed = JSON.parse(line);
       if (!parsed) {
         continue;
       }
@@ -299,6 +356,7 @@ export function readOnlySqliteValidationSnapshot(
 ): ReadOnlySqliteValidationSnapshotResult {
   const empty: ReadOnlySqliteValidationSnapshot = {
     sessionIdsBySessionKey: new Map(),
+    sessionKeysBySessionId: new Map(),
     transcriptEventCountsBySessionId: new Map(),
   };
   const result = readSessionDatabase(target, (database) => {
@@ -315,6 +373,16 @@ export function readOnlySqliteValidationSnapshot(
         sessionIdsBySessionKey.set(row.session_key, row.session_id);
       }
     }
+    const sessionKeysBySessionId = new Map<string, string>();
+    if (tableExists(database, "session_windows")) {
+      for (const row of database
+        .prepare("SELECT session_id, session_key FROM session_windows")
+        .iterate()) {
+        if (typeof row.session_id === "string" && typeof row.session_key === "string") {
+          sessionKeysBySessionId.set(row.session_id, row.session_key);
+        }
+      }
+    }
     const transcriptEventCountsBySessionId = new Map<string, number>();
     if (tableExists(database, "transcript_events")) {
       const statement = database.prepare(
@@ -328,6 +396,7 @@ export function readOnlySqliteValidationSnapshot(
     }
     return {
       sessionIdsBySessionKey,
+      sessionKeysBySessionId,
       transcriptEventCountsBySessionId,
     };
   });
@@ -473,32 +542,38 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
   }
 }
 
-export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
-  if (target.sqlitePath) {
-    return resolveOpenClawAgentSqlitePath({ agentId: target.agentId, path: target.sqlitePath });
-  }
-  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(target.storePath, {
-    agentId: target.agentId,
-  });
-  return resolveOpenClawAgentSqlitePath({
-    agentId: sqliteTarget.agentId ?? target.agentId,
-    ...(sqliteTarget.path ? { path: sqliteTarget.path } : {}),
-  });
+export function resolveTargetSqliteOptions(target: SessionStoreTarget, env?: NodeJS.ProcessEnv) {
+  return toDatabaseOptions(
+    resolveSqliteReadScope({
+      agentId: target.agentId,
+      env,
+      storePath: target.sqlitePath ?? target.storePath,
+    }),
+  );
+}
+
+export function resolveTargetSqlitePath(
+  target: SessionStoreTarget,
+  env?: NodeJS.ProcessEnv,
+): string {
+  return resolveOpenClawAgentSqlitePath(resolveTargetSqliteOptions(target, env));
 }
 
 /**
- * Enumerates existing per-agent session SQLite databases for a Doctor repair.
- * Deduplicates by resolved path (aliases collapse to one target) and skips
- * databases that do not yet exist on disk. Shared by every session-row repair
- * so target enumeration cannot drift between repair surfaces.
+ * Projects each caller's ordered targets onto existing physical databases.
+ * Keep target selection with the caller: canonical repair selects owners,
+ * while ordinary row repairs enumerate candidates. First physical path wins.
  */
-export function listExistingAgentDatabaseTargets(
-  cfg: OpenClawConfig,
+export function projectExistingAgentDatabaseTargets(
+  targets: readonly SessionStoreTarget[],
   env: NodeJS.ProcessEnv,
-): Array<{ agentId: string; sqlitePath: string; storePath: string }> {
+): ExistingAgentDatabaseTarget[] {
   const seenPaths = new Set<string>();
-  return resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }).flatMap((target) => {
-    const sqlitePath = resolveTargetSqlitePath(target);
+  return targets.flatMap((target) => {
+    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+      return [];
+    }
+    const sqlitePath = resolveTargetSqlitePath(target, env);
     if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
       return [];
     }
@@ -507,11 +582,21 @@ export function listExistingAgentDatabaseTargets(
   });
 }
 
-function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: number; text: string }> {
+export function listExistingAgentDatabaseTargets(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): ExistingAgentDatabaseTarget[] {
+  return projectExistingAgentDatabaseTargets(
+    resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }),
+    env,
+  );
+}
+
+function* iterateJsonlLinesSync(filePath: string): Generator<string> {
   const fd = fs.openSync(filePath, "r");
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const buffer = Buffer.allocUnsafe(JSONL_READ_CHUNK_BYTES);
-  let carry = "";
+  let fragments: string[] = [];
   let lineNumber = 0;
   try {
     while (true) {
@@ -519,21 +604,27 @@ function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: numbe
       if (bytesRead === 0) {
         break;
       }
-      carry += decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
-      const parts = carry.split(/\r?\n/);
-      carry = parts.pop() ?? "";
-      for (const part of parts) {
+      const parts = decoder.decode(buffer.subarray(0, bytesRead), { stream: true }).split("\n");
+      // Only the first complete line can span chunks. Keep unterminated giant
+      // records fragmented until a newline arrives instead of repeatedly joining them.
+      if (parts.length > 1 && fragments.length > 0) {
+        fragments.push(parts[0]!);
+        parts[0] = fragments.join("");
+        fragments = [];
+      }
+      for (let index = 0; index < parts.length - 1; index++) {
         lineNumber += 1;
-        const text = part.trim();
+        const text = parts[index]!.trim();
         if (text) {
-          yield { lineNumber, text };
+          yield text;
         }
       }
+      fragments.push(parts.at(-1)!);
     }
-    carry += decoder.decode();
-    const text = carry.trim();
+    fragments.push(decoder.decode());
+    const text = fragments.join("").trim();
     if (text) {
-      yield { lineNumber: lineNumber + 1, text };
+      yield text;
     }
   } catch (err) {
     throw new Error(`${filePath}:${lineNumber + 1}: ${String(err)}`, { cause: err });
@@ -550,129 +641,4 @@ function sqliteNumber(value: unknown): number {
     return Number(value);
   }
   return 0;
-}
-
-function parseJsonlLine(line: { text: string }): unknown {
-  return JSON.parse(line.text);
-}
-
-// Schema-tolerant session enumeration for transcript-label migration (avoids post-ship columns).
-// Queries transcript_events table (schema-stable) instead of sessions table.
-// Returns read-only view of all distinct session IDs with events.
-export function readOnlySqliteTranscriptSessionIds(sqlitePath: string): string[] {
-  if (!fs.existsSync(sqlitePath)) {
-    return [];
-  }
-  let database: DatabaseSync | undefined;
-  try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    if (!tableExists(database, "transcript_events")) {
-      return [];
-    }
-    const rows = database
-      .prepare("SELECT DISTINCT session_id FROM transcript_events ORDER BY session_id ASC")
-      .all() as Array<{ session_id?: unknown }>;
-    return rows
-      .filter((row): row is { session_id: string } => typeof row.session_id === "string")
-      .map((row) => row.session_id);
-  } finally {
-    database?.close();
-  }
-}
-
-// Read-only transcript snapshot reader for dry-run detection phase.
-// Avoids opening writable database lifecycle (lease/WAL/schema-ensure).
-// Returns rows only; migration parses per-row during repair.
-type ReadOnlyTranscriptSnapshot =
-  | {
-      ok: true;
-      rows: Array<{ eventJson: string; seq: number }>;
-    }
-  | { ok: false; error: unknown };
-
-export function readOnlySqliteTranscriptSnapshot(
-  sqlitePath: string,
-  sessionId: string,
-): ReadOnlyTranscriptSnapshot {
-  if (!fs.existsSync(sqlitePath)) {
-    return { ok: false, error: new Error(`SQLite database not found: ${sqlitePath}`) };
-  }
-  let database: DatabaseSync | undefined;
-  try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const rows = database
-      .prepare(
-        "SELECT event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
-      )
-      .all(sessionId) as Array<{ event_json?: string; seq?: number }>;
-    const validRows = rows.filter(
-      (row): row is { event_json: string; seq: number } =>
-        typeof row.event_json === "string" && typeof row.seq === "number",
-    );
-    return {
-      ok: true,
-      rows: validRows.map((row) => ({ eventJson: row.event_json, seq: row.seq })),
-    };
-  } catch (error) {
-    return { ok: false, error };
-  } finally {
-    database?.close();
-  }
-}
-
-/** Reads exact row metadata for a guarded transcript replacement without opening a writer. */
-export function readOnlySqliteTranscriptStorageSnapshot(
-  sqlitePath: string,
-  sessionId: string,
-):
-  | { ok: true; rows: SqliteTranscriptStorageRow[]; sessionKey?: string }
-  | { ok: false; error: unknown } {
-  if (!fs.existsSync(sqlitePath)) {
-    return { ok: false, error: new Error(`SQLite database not found: ${sqlitePath}`) };
-  }
-  let database: DatabaseSync | undefined;
-  try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const rows = database
-      .prepare(
-        "SELECT created_at, event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
-      )
-      .all(sessionId) as Array<{
-      created_at?: unknown;
-      event_json?: unknown;
-      seq?: unknown;
-    }>;
-    const sessionKeyRow = database
-      .prepare("SELECT session_key FROM session_windows WHERE session_id = ? LIMIT 1")
-      .get(sessionId) as { session_key?: unknown } | undefined;
-    const storageRows: SqliteTranscriptStorageRow[] = [];
-    for (const row of rows) {
-      if (
-        typeof row.created_at !== "number" ||
-        typeof row.event_json !== "string" ||
-        typeof row.seq !== "number"
-      ) {
-        return {
-          ok: false,
-          error: new Error(`Invalid transcript row metadata for session ${sessionId}`),
-        };
-      }
-      storageRows.push({
-        createdAt: row.created_at,
-        eventJson: row.event_json,
-        seq: row.seq,
-      });
-    }
-    return {
-      ok: true,
-      rows: storageRows,
-      ...(typeof sessionKeyRow?.session_key === "string"
-        ? { sessionKey: sessionKeyRow.session_key }
-        : {}),
-    };
-  } catch (error) {
-    return { ok: false, error };
-  } finally {
-    database?.close();
-  }
 }

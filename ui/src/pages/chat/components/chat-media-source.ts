@@ -168,17 +168,13 @@ export class ChatMediaSourceController {
   }
 
   handleError(media: HTMLMediaElement): boolean {
-    if (!this.pendingSource) {
-      this.sourceFailed = true;
-      this.playbackSource = "";
-      this.playbackReadiness = "unavailable";
-      return false;
+    if (this.applyPendingSource(media)) {
+      return true;
     }
-    this.applySource(media, this.pendingSource, this.pendingIdentity, {
-      currentTime: finiteMediaTime(media.currentTime),
-      paused: media.paused,
-    });
-    return true;
+    this.sourceFailed = true;
+    this.playbackSource = "";
+    this.playbackReadiness = "unavailable";
+    return false;
   }
 
   applyPendingSource(media: HTMLMediaElement): boolean {

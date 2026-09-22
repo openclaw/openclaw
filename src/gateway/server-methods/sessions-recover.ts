@@ -63,11 +63,13 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    emitSessionArchived(
-      context,
-      recovered.sourceKey,
-      recovered.sourceKey === "global" ? recovered.agentId : undefined,
-    );
+    if (recovered.sourceKey !== recovered.successorKey) {
+      emitSessionArchived(
+        context,
+        recovered.sourceKey,
+        recovered.sourceKey === "global" ? recovered.agentId : undefined,
+      );
+    }
     emitSessionsChanged(context, {
       sessionKey: recovered.successorKey,
       reason: recovered.created ? "create" : "recovery",

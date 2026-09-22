@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
+import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   makeChatLog,
@@ -46,7 +47,6 @@ describe("tui session actions", () => {
     const chatLog = makeChatLog({
       addSystem,
       clearAll,
-      clearPendingUsers: vi.fn(),
       addUser,
       addLiveUser: vi.fn(),
       addPendingUser: vi.fn(),
@@ -118,7 +118,6 @@ describe("tui session actions", () => {
         addLiveUser: vi.fn(),
         addPendingUser: vi.fn(),
         finalizeAssistant: vi.fn(),
-        clearPendingUsers: vi.fn(),
         clearAll: vi.fn(),
       }),
       btw: createBtwPresenter(),
@@ -1450,7 +1449,6 @@ describe("tui session actions", () => {
     const chatLog = makeChatLog({
       addSystem: vi.fn(),
       clearAll: vi.fn(),
-      clearPendingUsers: vi.fn(),
       addUser: vi.fn(),
       finalizeAssistant: vi.fn(),
       updateAssistant,
@@ -1472,87 +1470,130 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
   });
 
-  it("retires the previous session run before adopting and finalizing a restored run", async () => {
-    vi.useFakeTimers();
-    try {
-      const previousSessionKey = "agent:main:previous";
-      const nextSessionKey = "agent:main:next";
-      const previousRunId = "run-previous";
-      const nextRunId = "run-next";
-      const state = createBaseState({
-        currentSessionKey: previousSessionKey,
-        currentSessionId: "session-previous",
-        historyLoaded: true,
-      });
-      const chatLog = new ChatLog();
-      const addPendingSystem = vi.spyOn(chatLog, "addPendingSystem");
-      const tui = makeTui();
-      const setActivityStatus = vi.fn((status: string) => {
-        state.activityStatus = status;
-      });
-      let loadSelectedHistory: () => Promise<TuiHistoryLoadResult> = async () => ({
-        loaded: false,
-      });
-      const handlers = createEventHandlers({
-        chatLog,
-        btw: createBtwPresenter(),
-        tui,
-        state,
-        setActivityStatus,
-        loadHistory: () => loadSelectedHistory(),
-        streamingWatchdogMs: 100,
-      });
-      handlers.handleChatEvent({
-        runId: previousRunId,
-        sessionKey: previousSessionKey,
-        seq: 1,
-        state: "delta",
-        message: { role: "assistant", content: [{ type: "text", text: "old partial" }] },
-      });
-      expect(state.activeChatRunId).toBe(previousRunId);
+  it.each([
+    ["a different session", false, undefined, false],
+    ["a same-session replacement with exact active runs", true, ["run-next"], false],
+    ["a same-session concurrent run", true, ["run-previous", "run-next"], true],
+    ["a same-session run with unknown active membership", true, undefined, true],
+    ["a same-session run with null active membership", true, null, true],
+    ["a same-session run with malformed active membership", true, ["run-next", 42], true],
+  ])(
+    "reconciles previous run ownership when restoring %s",
+    async (_description, sameSession, activeRunIds, preservesOld) => {
+      vi.useFakeTimers();
+      try {
+        const previousSessionKey = "agent:main:previous";
+        const nextSessionKey = sameSession ? previousSessionKey : "agent:main:next";
+        const previousRunId = "run-previous";
+        const nextRunId = "run-next";
+        const state = createBaseState({
+          currentSessionKey: previousSessionKey,
+          currentSessionId: "session-previous",
+          historyLoaded: true,
+        });
+        const chatLog = new ChatLog();
+        const addPendingSystem = vi.spyOn(chatLog, "addPendingSystem");
+        const tui = makeTui();
+        const setActivityStatus = vi.fn((status: string) => {
+          state.activityStatus = status;
+        });
+        let loadSelectedHistory: () => Promise<TuiHistoryLoadResult> = async () => ({
+          loaded: false,
+        });
+        const handlers = createEventHandlers({
+          chatLog,
+          btw: createBtwPresenter(),
+          tui,
+          state,
+          setActivityStatus,
+          updateFooter: vi.fn(),
+          loadHistory: () => loadSelectedHistory(),
+          streamingWatchdogMs: 100,
+        });
+        handlers.handleChatEvent({
+          runId: previousRunId,
+          sessionKey: previousSessionKey,
+          seq: 1,
+          state: "delta",
+          message: { role: "assistant", content: [{ type: "text", text: "old partial" }] },
+        });
+        expect(state.activeChatRunId).toBe(previousRunId);
 
-      const actions = createTestSessionActions({
-        client: makeTuiBackend({
-          listSessions: vi.fn(),
-          loadHistory: vi.fn().mockResolvedValue({
-            sessionId: "session-next",
-            sessionInfo: {
-              key: nextSessionKey,
-              sessionId: "session-next",
-              updatedAt: 1,
-            },
-            messages: [],
-            inFlightRun: { runId: nextRunId, text: "new partial" },
+        const actions = createTestSessionActions({
+          client: makeTuiBackend({
+            listSessions: vi.fn(),
+            loadHistory: vi.fn().mockResolvedValue({
+              sessionId: sameSession ? "session-previous" : "session-next",
+              sessionInfo: {
+                key: nextSessionKey,
+                sessionId: sameSession ? "session-previous" : "session-next",
+                activeRunIds,
+                updatedAt: 1,
+              },
+              messages: [],
+              inFlightRun: { runId: nextRunId, text: "new partial" },
+            }),
           }),
-        }),
-        chatLog,
-        state,
-        tui,
-        setActivityStatus,
-        invalidateRunOwnership: handlers.dispose,
-      });
-      loadSelectedHistory = actions.loadHistory;
+          chatLog,
+          state,
+          tui,
+          setActivityStatus,
+          invalidateRunOwnership: handlers.dispose,
+        });
+        loadSelectedHistory = async () => {
+          const reconcileMembership = handlers.captureHistoryRunMembership();
+          const result = await actions.loadHistory();
+          if (result.loaded) {
+            reconcileMembership(result.activeRunIds);
+          }
+          return result;
+        };
 
-      await actions.setSession(nextSessionKey);
-      expect(state.activeChatRunId).toBe(nextRunId);
+        if (sameSession) {
+          handlers.pauseStreamingWatchdog();
+          handlers.reconnectStreamingWatchdog();
+          const recovered = await loadSelectedHistory();
+          expect(recovered.loaded).toBe(true);
+          if (recovered.loaded) {
+            handlers.reconnectStreamingWatchdog(recovered.runOutcome);
+          }
+        } else {
+          await actions.setSession(nextSessionKey);
+        }
+        expect(state.activeChatRunId).toBe(nextRunId);
 
-      handlers.handleChatEvent({
-        runId: nextRunId,
-        sessionKey: nextSessionKey,
-        seq: 2,
-        state: "final",
-        message: { role: "assistant", content: [{ type: "text", text: "new final" }] },
-      });
+        handlers.handleChatEvent({
+          runId: nextRunId,
+          sessionKey: nextSessionKey,
+          seq: 2,
+          state: "final",
+          message: { role: "assistant", content: [{ type: "text", text: "new final" }] },
+        });
 
-      expect(state.activeChatRunId).toBeNull();
-      expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
-      vi.advanceTimersByTime(101);
-      expect(addPendingSystem).not.toHaveBeenCalled();
-      handlers.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(state.activeChatRunId).toBe(preservesOld ? previousRunId : null);
+        expect(setActivityStatus).toHaveBeenLastCalledWith(preservesOld ? "running" : "idle");
+        vi.advanceTimersByTime(101);
+        expect(addPendingSystem).toHaveBeenCalledTimes(preservesOld ? 1 : 0);
+        if (sameSession && !preservesOld) {
+          handlers.handleChatEvent({
+            runId: previousRunId,
+            sessionKey: previousSessionKey,
+            seq: 3,
+            state: "final",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "late complete reply" }],
+            },
+          });
+          expect(chatLog.render(120).join("\n")).toContain("late complete reply");
+          expect(state.activeChatRunId).toBeNull();
+        }
+        handlers.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each(["agent:main:main", "main"])(
     "preserves run ownership when reselecting the same session as %s",
@@ -1633,7 +1674,6 @@ describe("tui session actions", () => {
     const chatLog = makeChatLog({
       addSystem: vi.fn(),
       clearAll: vi.fn(),
-      clearPendingUsers: vi.fn(),
       addUser: vi.fn(),
       finalizeAssistant: vi.fn(),
       updateAssistant,
@@ -1663,7 +1703,6 @@ describe("tui session actions", () => {
     const chatLog = makeChatLog({
       addSystem: vi.fn(),
       clearAll: vi.fn(),
-      clearPendingUsers: vi.fn(),
       addUser: vi.fn(),
       finalizeAssistant: vi.fn(),
       updateAssistant,
@@ -2152,6 +2191,104 @@ describe("tui session actions", () => {
     expect(addSystem).toHaveBeenCalledWith("session agent:main:new");
   });
 
+  it.each(["none", "before adoption", "during refresh", "after acknowledgement"])(
+    "keeps the reset acknowledgement with a notification %s",
+    async (notification) => {
+      const state = createBaseState({
+        currentSessionId: "same-session",
+        sessionGeneration: 4,
+        historyLoaded: true,
+        sessionInfo: { updatedAt: 10, totalTokens: 42 },
+      });
+      const entry = { sessionId: "same-session", updatedAt: 20, totalTokens: 0 };
+      const result = { ok: true, key: state.currentSessionKey, entry };
+      const chatLog = makeChatLog();
+      chatLog.addUser("before reset");
+      const tui = makeTui();
+      const btw = createBtwPresenter();
+      const setActivityStatus = (text: string) => {
+        state.activityStatus = text;
+      };
+      const refreshStarted = createDeferred();
+      const refreshResult = createDeferred<TuiSessionList>();
+      const resetResponse = createDeferred<typeof result>();
+      const client = makeTuiBackend({
+        resetSession: vi.fn(() => resetResponse.promise),
+        listSessions: vi.fn(() => {
+          refreshStarted.resolve();
+          return refreshResult.promise;
+        }),
+        loadHistory: vi.fn(async () => ({
+          messages: [],
+          sessionInfo: { key: result.key, ...entry },
+        })),
+      });
+      const actions = createTestSessionActions({ client, chatLog, tui, btw, state });
+      const histories: Array<Promise<TuiHistoryLoadResult>> = [];
+      const events = createEventHandlers({
+        chatLog,
+        tui,
+        btw,
+        state,
+        setActivityStatus,
+        updateFooter: vi.fn(),
+        loadHistory: () => {
+          const history = actions.loadHistory();
+          histories.push(history);
+          return history;
+        },
+        refreshSessionInfo: actions.refreshSessionInfo,
+      });
+      const commands = createCommandHandlers({
+        client,
+        chatLog,
+        tui,
+        state,
+        opts: {},
+        deliverDefault: false,
+        openOverlay: (component) => tui.showOverlay(component),
+        closeOverlay: () => tui.hideOverlay(),
+        setActivityStatus,
+        formatSessionKey: (key) => key,
+        requestExit: vi.fn(),
+        ...actions,
+      });
+      const notify = () =>
+        events.handleSessionsChangedEvent({
+          sessionKey: result.key,
+          agentId: "main",
+          reason: "reset",
+          ...entry,
+        });
+      try {
+        const resetting = commands.handleCommand("/reset");
+        resetResponse.resolve(result);
+        if (notification === "before adoption") {
+          notify();
+        } else {
+          await refreshStarted.promise;
+          if (notification === "during refresh") {
+            notify();
+          }
+        }
+        refreshResult.resolve(makeTuiSessionList({ sessions: [{ key: result.key, ...entry }] }));
+        await resetting;
+        if (notification === "after acknowledgement") {
+          notify();
+        }
+        await Promise.all(histories);
+        await vi.waitFor(() => {
+          const rendered = chatLog.render(120).join("\n");
+          expect(rendered).not.toContain("before reset");
+          expect(rendered.match(/session agent:main:main reset/g)).toHaveLength(1);
+        });
+        expect(commands.resolveMessageAdmission("after reset")).toEqual({ status: "allowed" });
+      } finally {
+        events.dispose();
+      }
+    },
+  );
+
   it("fences pre-reset history and session-info reads when reset commits", async () => {
     const history = createDeferred<unknown>();
     const sessionInfo = createDeferred<TuiSessionList>();
@@ -2524,70 +2661,46 @@ describe("tui session actions", () => {
   });
 
   it.each([
-    {
-      name: "successful abort after a session switch",
-      initialKey: "agent:main:first",
-      nextKey: "agent:main:second",
-      aborted: true,
-      rejected: false,
-    },
-    {
-      name: "no-active-run abort after a session switch",
-      initialKey: "agent:main:first",
-      nextKey: "agent:main:second",
-      aborted: false,
-      rejected: false,
-    },
-    {
-      name: "rejected abort after a session switch",
-      initialKey: "agent:main:first",
-      nextKey: "agent:main:second",
-      aborted: false,
-      rejected: true,
-    },
-    {
-      name: "successful global abort after an agent switch",
-      initialKey: "global",
-      nextKey: "global",
-      aborted: true,
-      rejected: false,
-    },
-    {
-      name: "no-active-run global abort after an agent switch",
-      initialKey: "global",
-      nextKey: "global",
-      aborted: false,
-      rejected: false,
-    },
-    {
-      name: "rejected global abort after an agent switch",
-      initialKey: "global",
-      nextKey: "global",
-      aborted: false,
-      rejected: true,
-    },
-    {
-      name: "successful abort after the same session is replaced",
-      initialKey: "agent:main:main",
-      nextKey: "agent:main:main",
-      aborted: true,
-      rejected: false,
-    },
-    {
-      name: "no-active-run abort after the same session is replaced",
-      initialKey: "agent:main:main",
-      nextKey: "agent:main:main",
-      aborted: false,
-      rejected: false,
-    },
-    {
-      name: "rejected abort after the same session is replaced",
-      initialKey: "agent:main:main",
-      nextKey: "agent:main:main",
-      aborted: false,
-      rejected: true,
-    },
-  ])("ignores a $name", async ({ initialKey, nextKey, aborted, rejected }) => {
+    [
+      "successful abort after a session switch",
+      "agent:main:first",
+      "agent:main:second",
+      true,
+      false,
+    ],
+    [
+      "no-active-run abort after a session switch",
+      "agent:main:first",
+      "agent:main:second",
+      false,
+      false,
+    ],
+    ["rejected abort after a session switch", "agent:main:first", "agent:main:second", false, true],
+    ["successful global abort after an agent switch", "global", "global", true, false],
+    ["no-active-run global abort after an agent switch", "global", "global", false, false],
+    ["rejected global abort after an agent switch", "global", "global", false, true],
+    [
+      "successful abort after the same session is replaced",
+      "agent:main:main",
+      "agent:main:main",
+      true,
+      false,
+    ],
+    [
+      "no-active-run abort after the same session is replaced",
+      "agent:main:main",
+      "agent:main:main",
+      false,
+      false,
+    ],
+    [
+      "rejected abort after the same session is replaced",
+      "agent:main:main",
+      "agent:main:main",
+      false,
+      true,
+    ],
+  ])("ignores a %s", async (_name, initialKey, nextKey, aborted, rejected) => {
     const deferred = createDeferred<Awaited<ReturnType<TuiBackend["abortChat"]>>>();
     const abortChat = vi.fn(() => deferred.promise);
     const loadHistory = vi.fn().mockResolvedValue({
@@ -2913,7 +3026,6 @@ describe("tui session actions", () => {
       addPendingUser: vi.fn(),
       finalizeAssistant: vi.fn(),
       clearAll: vi.fn(),
-      clearPendingUsers: vi.fn(),
     });
     const state = createBaseState({ currentSessionId: "session-main" });
     sendPendingUser(state, "optimistic-run", "optimistic prompt");
@@ -3102,6 +3214,7 @@ describe("tui session actions", () => {
               __openclaw: {
                 id: "persisted-pending-user",
                 idempotencyKey: "run-pending:user",
+                runId: "execution-run",
                 seq: 1,
               },
             },

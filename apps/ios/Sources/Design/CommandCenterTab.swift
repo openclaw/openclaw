@@ -34,6 +34,7 @@ struct CommandCenterTab: View {
         let route: WorkRoute
         let isUnread: Bool
         let isPinned: Bool
+        var sessionColor: String?
     }
 
     var body: some View {
@@ -373,6 +374,12 @@ struct CommandCenterTab: View {
             VStack(spacing: 10) {
                 self.cardHeader(title: "Recent sessions")
 
+                if let sessionErrorText = self.dashboardModel.sessionErrorText {
+                    Text(verbatim: sessionErrorText)
+                        .font(OpenClawType.captionMedium)
+                        .foregroundStyle(OpenClawBrand.warn)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 if self.recentSessionPreviewSessions.isEmpty {
                     CommandEmptyStateRow(
                         icon: self.gatewayConnected ? "bubble.left.and.text.bubble.right.fill" : "wifi.slash",
@@ -401,6 +408,7 @@ struct CommandCenterTab: View {
                                 actions: CommandSessionActions(
                                     rename: { self.patchSession(session, label: .some($0)) },
                                     moveToGroup: { self.patchSession(session, category: .some($0)) },
+                                    setColor: { self.patchSession(session, color: .some($0)) },
                                     togglePinned: { self.patchSession(session, pinned: session.pinned != true) },
                                     toggleUnread: { self.patchSession(session, unread: session.unread != true) },
                                     fork: { self.forkSession(session) },
@@ -487,7 +495,8 @@ struct CommandCenterTab: View {
             progress: nil,
             route: .chat(nil),
             isUnread: self.effectiveDefaultChatSessionEntry?.unread == true,
-            isPinned: self.effectiveDefaultChatSessionEntry?.pinned == true)
+            isPinned: self.effectiveDefaultChatSessionEntry?.pinned == true,
+            sessionColor: self.effectiveDefaultChatSessionEntry?.color)
     }
 
     private var defaultChatActivityText: String {
@@ -521,7 +530,8 @@ struct CommandCenterTab: View {
             sessions: sessions,
             currentSessionKey: "main",
             mainSessionKey: self.appModel.defaultChatSessionKey,
-            activeAgentID: self.appModel.chatAgentId)
+            activeAgentID: self.appModel.chatAgentId,
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract)
         return sessions.first { $0.key == mainKey }
     }
 
@@ -557,6 +567,7 @@ struct CommandCenterTab: View {
         _ session: OpenClawChatSessionEntry,
         label: String?? = nil,
         category: String?? = nil,
+        color: String?? = nil,
         pinned: Bool? = nil,
         archived: Bool? = nil,
         unread: Bool? = nil)
@@ -567,6 +578,7 @@ struct CommandCenterTab: View {
                 expectedSessionID: archived == nil ? nil : session.sessionId,
                 label: label,
                 category: category,
+                color: color,
                 pinned: pinned,
                 archived: archived,
                 unread: unread)
@@ -586,6 +598,7 @@ struct CommandCenterTab: View {
                 expectedSessionID: session.sessionId,
                 label: nil,
                 category: nil,
+                color: nil,
                 pinned: nil,
                 archived: true,
                 unread: nil)
@@ -600,7 +613,9 @@ struct CommandCenterTab: View {
                     fromLastCompleted: session.hasActiveRun == true)
                 await self.dashboardModel.refreshSessions(appModel: self.appModel)
                 self.open(.chat(key))
-            } catch {}
+            } catch {
+                self.dashboardModel.reportSessionError(error)
+            }
         }
     }
 
@@ -615,7 +630,9 @@ struct CommandCenterTab: View {
                     self.appModel.focusChatSession(nil)
                 }
                 await self.dashboardModel.refreshSessions(appModel: self.appModel)
-            } catch {}
+            } catch {
+                self.dashboardModel.reportSessionError(error)
+            }
         }
     }
 
@@ -644,7 +661,8 @@ struct CommandCenterTab: View {
             progress: nil,
             route: .chat(session.key),
             isUnread: session.unread == true,
-            isPinned: session.pinned == true)
+            isPinned: session.pinned == true,
+            sessionColor: session.color)
     }
 
     static func sessionTitle(_ session: OpenClawChatSessionEntry) -> String {
@@ -652,17 +670,22 @@ struct CommandCenterTab: View {
         if let label, !label.isEmpty {
             return label
         }
-        if let title = redactedSessionTitle(for: session.key) {
-            return title
-        }
 
         let displayName = session.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let displayName, !displayName.isEmpty {
             return Self.redactedSessionTitle(for: displayName) ?? displayName
         }
+        let autoLabel = session.autoLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let autoLabel, !autoLabel.isEmpty {
+            return autoLabel
+        }
         let subject = session.subject?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let subject, !subject.isEmpty {
             return Self.redactedSessionTitle(for: subject) ?? subject
+        }
+        // Generic key placeholders only after real topic names are absent.
+        if let title = redactedSessionTitle(for: session.key) {
+            return title
         }
         return session.key
     }
@@ -1149,6 +1172,7 @@ struct CommandSessionsScreen: View {
                         expectedSessionID: nil,
                         label: nil,
                         category: .some(category),
+                        color: nil,
                         pinned: nil,
                         archived: nil,
                         unread: nil)
@@ -1183,6 +1207,7 @@ struct CommandSessionsScreen: View {
             actions: CommandSessionActions(
                 rename: { self.patchSession(session, label: .some($0)) },
                 moveToGroup: { self.patchSession(session, category: .some($0)) },
+                setColor: { self.patchSession(session, color: .some($0)) },
                 togglePinned: { self.patchSession(session, pinned: session.pinned != true) },
                 toggleUnread: { self.patchSession(session, unread: session.unread != true) },
                 fork: { self.forkSession(session) },
@@ -1204,6 +1229,7 @@ struct CommandSessionsScreen: View {
         _ session: OpenClawChatSessionEntry,
         label: String?? = nil,
         category: String?? = nil,
+        color: String?? = nil,
         pinned: Bool? = nil,
         archived: Bool? = nil,
         unread: Bool? = nil)
@@ -1214,6 +1240,7 @@ struct CommandSessionsScreen: View {
                 expectedSessionID: archived == nil ? nil : session.sessionId,
                 label: label,
                 category: category,
+                color: color,
                 pinned: pinned,
                 archived: archived,
                 unread: unread)
@@ -1234,6 +1261,7 @@ struct CommandSessionsScreen: View {
                 expectedSessionID: session.sessionId,
                 label: nil,
                 category: nil,
+                color: nil,
                 pinned: nil,
                 archived: archivesSession,
                 unread: nil)
@@ -1276,6 +1304,8 @@ struct CommandSessionsScreen: View {
         // New Group editor) alongside the fresh session list.
         self.knownGroups = SessionGroupStore.load()
         let requestsArchived = self.showArchived
+        let sourceGatewayID = self.appModel.chatTranscriptCacheGatewayID
+        let sourceAgentID = self.appModel.chatDeliveryAgentId
         self.isLoading = true
         self.loadErrorText = nil
         defer { self.isLoading = false }
@@ -1288,7 +1318,9 @@ struct CommandSessionsScreen: View {
             self.sessions = roster.sessions
         } catch {
             guard requestsArchived == self.showArchived else { return }
-            self.sessions = requestsArchived ? [] : await self.appModel.loadCachedChatSessions()
+            self.sessions = requestsArchived ? [] : await self.appModel.loadCachedChatSessions(
+                gatewayID: sourceGatewayID,
+                agentID: sourceAgentID)
             self.loadErrorText = self.sessions.isEmpty ? "Try again after the gateway reconnects." : nil
         }
     }

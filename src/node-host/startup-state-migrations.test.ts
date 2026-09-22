@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
+import { readDeviceAuthTokenForTest } from "../infra/device-auth-store.test-support.js";
 import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
 import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import { resolveExecApprovalsPath } from "../infra/exec-approvals-config.js";
@@ -79,7 +79,11 @@ describe("node-host startup state migrations", () => {
       `${JSON.stringify({
         version: 1,
         defaults: { security: "deny" },
-        agents: {},
+        agents: {
+          main: {
+            allowlist: [{ pattern: "/usr/bin/rg", lastUsedAt: null, lastUsedCommand: null }],
+          },
+        },
       })}\n`,
     );
     return sourcePath;
@@ -92,7 +96,9 @@ describe("node-host startup state migrations", () => {
     await runStartupMigrations({ env, log });
 
     expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toMatchObject({
+    expect(
+      readDeviceAuthTokenForTest({ deviceId: "device-1", role: "operator", env }),
+    ).toMatchObject({
       token: "legacy-token",
       scopes: ["operator.read", "operator.write"],
     });
@@ -100,7 +106,7 @@ describe("node-host startup state migrations", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("migrates legacy exec approvals into the canonical store", async () => {
+  it("migrates legacy null exec usage metadata into the canonical store", async () => {
     const { env, stateDir } = useStateDir();
     const sourcePath = await writeExecApprovals(env);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -109,7 +115,11 @@ describe("node-host startup state migrations", () => {
     await runStartupMigrations({ env, log });
 
     expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(loadExecApprovals().defaults?.security).toBe("deny");
+    const imported = loadExecApprovals();
+    expect(imported.defaults?.security).toBe("deny");
+    expect(imported.agents?.main?.allowlist).toEqual([
+      { id: expect.any(String), pattern: "/usr/bin/rg" },
+    ]);
     expect(log.info).toHaveBeenCalledWith(
       "Imported legacy exec approvals into shared SQLite state.",
     );

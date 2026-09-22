@@ -1,7 +1,10 @@
 import { html, nothing } from "lit";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
+
+registerModelControlsEnglish();
 
 const AUTH_KIND_I18N: Record<ModelProviderAuthKind, string> = {
   ok: "modelProviders.status.ok",
@@ -49,6 +52,12 @@ export function hasVerifiedProvider(card: ModelProviderCard): boolean {
 }
 
 export function renderProviderStatus(card: ModelProviderCard) {
+  if (card.checkingModels) {
+    return renderSettingsStatus({
+      kind: "muted",
+      label: t("chat.modelControls.checkingProviderModels", { providers: card.displayName }),
+    });
+  }
   if (
     card.auth?.kind === "expired" ||
     card.auth?.kind === "missing" ||
@@ -62,7 +71,7 @@ export function renderProviderStatus(card: ModelProviderCard) {
   if (card.catalogStatus === "unavailable") {
     return renderSettingsStatus({
       kind: "warn",
-      label: t("common.failed"),
+      label: t("modelProviders.status.modelsUnavailable"),
     });
   }
   if (!hasProviderCredentials(card)) {

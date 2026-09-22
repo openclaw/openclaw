@@ -63,8 +63,6 @@ type ResetSessionEntry = {
   groupActivation?: string;
   groupActivationNeedsSystemIntro?: boolean;
   execHost?: string;
-  execSecurity?: string;
-  execAsk?: string;
   execNode?: string;
   displayName?: string;
   cliSessionBindings?: Record<
@@ -79,6 +77,7 @@ type ResetSessionEntry = {
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   label?: string;
+  autoLabel?: string;
 };
 
 type ModelResetEntry = Pick<
@@ -207,8 +206,6 @@ const ownedChildMetadata = {
   groupActivation: "always",
   groupActivationNeedsSystemIntro: true,
   execHost: "gateway",
-  execSecurity: "allowlist",
-  execAsk: "on-miss",
   execNode: "mac-mini",
   displayName: "Ops Child",
   cliSessionIds: {
@@ -223,6 +220,7 @@ const ownedChildMetadata = {
   },
   claudeCliSessionId: "cli-session-123",
   label: "owned child",
+  autoLabel: "Device",
 } satisfies SessionEntryOverrides & ResetSessionEntry;
 
 function expectSqliteSessionFile(entry: ResetSessionEntry | undefined) {

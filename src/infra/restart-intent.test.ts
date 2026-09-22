@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -14,21 +15,28 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import {
+  clearGatewayRestartIntentSync,
   consumeGatewayRestartIntentPayloadSync,
   consumeGatewayRestartIntentSync,
   writeGatewayRestartIntentSync,
 } from "./restart-intent.js";
+import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
+import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
 
 const tempDirs: string[] = [];
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
 
-function createIntentEnv(): NodeJS.ProcessEnv {
+function createIntentEnv(initialize = true): NodeJS.ProcessEnv {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-intent-"));
   tempDirs.push(dir);
-  return {
+  const env = {
     ...process.env,
     OPENCLAW_STATE_DIR: dir,
   };
+  if (initialize) {
+    openOpenClawStateDatabase({ env });
+  }
+  return env;
 }
 
 function legacyIntentPath(env: NodeJS.ProcessEnv): string {
@@ -92,6 +100,59 @@ describe("gateway restart intent", () => {
     expect(consumeGatewayRestartIntentSync(env)).toBe(true);
     expect(readIntentRow(env)).toBeUndefined();
     expect(fs.existsSync(legacyIntentPath(env))).toBe(false);
+  });
+
+  it("records restart options while an older Gateway owns a pending-migration database", () => {
+    const env = createIntentEnv();
+    const database = openOpenClawStateDatabase({ env });
+    const filename = database.path;
+    closeOpenClawStateDatabaseForTest();
+    const db = new DatabaseSync(filename);
+    // The restart table is unchanged across this schema boundary.
+    db.exec("PRAGMA user_version=15; UPDATE schema_meta SET schema_version=15");
+    const before = db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all();
+    const anchor = acquireGatewayLifecycleCoordinator({ databasePath: filename });
+    anchor.release();
+    // An independent connection models the running Gateway's non-reentrant lease.
+    const owner = tryAcquireExclusiveSqliteCoordinator(anchor.path);
+    if (!owner) {
+      db.close();
+      throw new Error("Fixture Gateway lifecycle lease unavailable");
+    }
+    try {
+      expect(
+        writeGatewayRestartIntentSync({
+          env,
+          targetPid: process.pid,
+          intent: { reason: "gateway.restart", force: true, waitMs: 12_345 },
+        }),
+      ).toBe(true);
+      expect(
+        db.prepare("SELECT pid, reason, force, wait_ms FROM gateway_restart_intent").get(),
+      ).toEqual({
+        pid: process.pid,
+        reason: "gateway.restart",
+        force: 1,
+        wait_ms: 12_345,
+      });
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+      expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+        schema_version: 15,
+      });
+      expect(db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all()).toEqual(before);
+      clearGatewayRestartIntentSync(env);
+      expect(db.prepare("SELECT * FROM gateway_restart_intent").all()).toEqual([]);
+      expect(db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all()).toEqual(before);
+    } finally {
+      owner.release();
+      db.close();
+    }
+  });
+
+  it("skips intent recording instead of bootstrapping missing Gateway state", () => {
+    const env = createIntentEnv(false);
+    expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid })).toBe(false);
+    expect(fs.readdirSync(env.OPENCLAW_STATE_DIR ?? "")).toEqual([]);
   });
 
   it("rejects an intent for a different process", () => {

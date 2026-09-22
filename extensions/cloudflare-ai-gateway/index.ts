@@ -17,7 +17,10 @@ import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-a
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildCloudflareAiGatewayCatalogProvider } from "./catalog-provider.js";
 import { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "./models.js";
-import { applyCloudflareAiGatewayConfig, buildCloudflareAiGatewayConfigPatch } from "./onboard.js";
+import {
+  applyCloudflareAiGatewayConnectionConfig,
+  applyCloudflareAiGatewayProviderConnectionConfig,
+} from "./onboard.js";
 import { wrapCloudflareAiGatewayProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "cloudflare-ai-gateway";
@@ -132,7 +135,7 @@ export default definePluginEntry({
                   ),
                 },
               ],
-              configPatch: buildCloudflareAiGatewayConfigPatch(metadata),
+              configPatch: applyCloudflareAiGatewayProviderConnectionConfig(ctx.config, metadata),
               defaultModel: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
             };
           },
@@ -195,7 +198,7 @@ export default definePluginEntry({
               provider: PROVIDER_ID,
               mode: "api_key",
             });
-            return applyCloudflareAiGatewayConfig(next, { accountId, gatewayId });
+            return applyCloudflareAiGatewayConnectionConfig(next, { accountId, gatewayId });
           },
         },
       ],

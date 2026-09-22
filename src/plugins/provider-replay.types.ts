@@ -1,4 +1,4 @@
-import type { AgentMessage } from "../agents/runtime/index.js";
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
@@ -23,6 +23,8 @@ export type ProviderReplayPolicy = {
   duplicateToolCallIdStyle?: "openai";
   preserveNativeAnthropicToolUseIds?: boolean;
   preserveSignatures?: boolean;
+  /** Keep per-turn runtime context in place to preserve signed thinking prefixes. */
+  appendOnlyRuntimeContext?: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;

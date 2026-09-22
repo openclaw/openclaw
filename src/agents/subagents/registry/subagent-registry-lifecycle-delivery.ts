@@ -7,6 +7,10 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../../config/sessions/session-store-path.js";
 import { formatErrorMessage, readErrorName } from "../../../infra/errors.js";
+import {
+  getGatewayContextResolver,
+  withPluginRuntimeGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
@@ -15,16 +19,17 @@ import {
   failTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId,
 } from "../../../tasks/detached-task-runtime.js";
-import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../../../tasks/task-completion-contract.js";
-import type { TaskDeliveryStatus } from "../../../tasks/task-registry.types.js";
+import {
+  isTerminalTaskStatus,
+  type TaskDeliveryStatus,
+} from "../../../tasks/task-registry.types.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "../../announce-idempotency.js";
 import { isSilentAgentReplyText } from "../../embedded-agent-runner/message-visibility.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
-import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
+import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -37,7 +42,8 @@ import type {
   SubagentLifecycleCommonContext,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle-context.js";
-import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
+import type { PendingFinalDeliveryPayload } from "./subagent-registry-read.types.js";
+import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
@@ -86,7 +92,9 @@ export const recordAnnounceDeliveryResult = (
     deliveryState.enqueuedAt ??= delivery.enqueuedAt;
   }
   if (!delivery.delivered && delivery.disposition !== "intentional_non_delivery") {
-    if (
+    if (delivery.reason === "message_tool_delivery_missing") {
+      deliveryState.lastDropReason = "message_tool_delivery_missing";
+    } else if (
       delivery.reason === "steer_dropped" ||
       delivery.phases?.some((phase) => phase.reason === "steer_dropped")
     ) {
@@ -133,13 +141,32 @@ export const recordAnnounceDeliveryResult = (
     delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
 };
 
+export const markRequesterSettleWakePending = (
+  entry: SubagentRunRecord,
+  options?: { retireAfterSettle?: boolean },
+) => {
+  const existing = entry.requesterSettleWake;
+  entry.requesterSettleWake = {
+    ...structuredClone(existing),
+    status: existing?.status ?? "pending",
+    attemptCount: existing?.attemptCount ?? 0,
+    ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true
+      ? { retireAfterSettle: true }
+      : {}),
+  } satisfies RequesterSettleWakeState;
+};
+
 export const hasPriorRequesterDeliveryMirror = async (
   params: SubagentLifecycleOptions,
   entry: SubagentRunRecord,
 ): Promise<boolean> => {
   const completion = ensureCompletionState(entry);
   const expectedText = extractTextFromChatContent(completion.resultText, { joinWith: "" });
-  if (entry.expectsCompletionMessage !== true || expectedText == null) {
+  if (
+    entry.completionTarget === "parent" ||
+    entry.expectsCompletionMessage !== true ||
+    expectedText == null
+  ) {
     return false;
   }
   const mirrorNotBefore = entry.execution.startedAt ?? entry.createdAt;
@@ -158,17 +185,21 @@ export const hasPriorRequesterDeliveryMirror = async (
       value.startsWith(`${entry.runId}:message-tool:`) ||
       value.startsWith(`${entry.runId}:internal-source-reply:`));
   try {
-    const history = await params.callGateway<{
-      messages?: unknown[];
-    }>({
-      method: "chat.history",
-      params: {
-        sessionKey: entry.requesterSessionKey,
-        limit: 25,
-        maxChars: DELIVERY_MIRROR_HISTORY_MAX_CHARS,
-      },
-      timeoutMs: 5_000,
-    });
+    const history = await withPluginRuntimeGatewayContextResolver(
+      getGatewayContextResolver(entry),
+      () =>
+        params.callGateway<{
+          messages?: unknown[];
+        }>({
+          method: "chat.history",
+          params: {
+            sessionKey: entry.requesterSessionKey,
+            limit: 25,
+            maxChars: DELIVERY_MIRROR_HISTORY_MAX_CHARS,
+          },
+          timeoutMs: 5_000,
+        }),
+    );
     const mirror = history.messages?.find((message) => {
       if (!message || typeof message !== "object") {
         return false;
@@ -192,7 +223,8 @@ export const hasPriorRequesterDeliveryMirror = async (
         text === expectedText
       );
     });
-    if (mirror) {
+    // A late history result must not replace the newer requester delivery timestamp.
+    if (mirror && entry.delivery?.status !== "delivered") {
       ensureDeliveryState(entry).deliveredAt = (mirror as { timestamp: number }).timestamp;
     }
     return Boolean(mirror);
@@ -246,7 +278,7 @@ export const safeSetSubagentTaskDeliveryStatus = (
   }
 };
 
-export const safeFinalizeSubagentTaskRun = (
+export const finalizeSubagentTaskRun = (
   params: SubagentLifecycleOptions,
   args: {
     entry: SubagentRunRecord;
@@ -258,12 +290,20 @@ export const safeFinalizeSubagentTaskRun = (
   if (!terminal) {
     return [];
   }
-  const target = resolveSubagentTaskTarget(params, args.entry, args.taskResolution);
+  const taskResolution = args.taskResolution ?? params.resolveSubagentTask(args.entry);
+  const pendingTask =
+    taskResolution.lookup === "available" &&
+    taskResolution.task &&
+    !isTerminalTaskStatus(taskResolution.task.status)
+      ? taskResolution.task
+      : undefined;
+  const target = resolveSubagentTaskTarget(params, args.entry, taskResolution);
   const { status, error, terminalOutcome, ...details } = terminal;
   const suppressDelivery = args.entry.suppressCompletionDelivery === true;
+  let finalized: ReturnType<typeof completeTaskRunByRunId>;
   try {
     if (status === "succeeded") {
-      return completeTaskRunByRunId({
+      finalized = completeTaskRunByRunId({
         runId: target.runId,
         runtime: "subagent",
         sessionKey: target.sessionKey,
@@ -271,16 +311,17 @@ export const safeFinalizeSubagentTaskRun = (
         terminalOutcome,
         suppressDelivery,
       });
+    } else {
+      finalized = failTaskRunByRunId({
+        runId: target.runId,
+        runtime: "subagent",
+        sessionKey: target.sessionKey,
+        ...details,
+        status,
+        error,
+        suppressDelivery,
+      });
     }
-    return failTaskRunByRunId({
-      runId: target.runId,
-      runtime: "subagent",
-      sessionKey: target.sessionKey,
-      ...details,
-      status,
-      error,
-      suppressDelivery,
-    });
   } catch (err) {
     params.warn("failed to finalize subagent background task state", {
       error: buildSafeLifecycleErrorMeta(err),
@@ -288,44 +329,22 @@ export const safeFinalizeSubagentTaskRun = (
       childSessionKey: maskLifecycleIdentifier(args.entry.childSessionKey, "session"),
       outcomeStatus: args.outcome.status,
     });
+    if (pendingTask) {
+      throw err;
+    }
     return [];
   }
-};
-
-export const safeMarkRequiredCompletionDeliveryBlocked = (
-  params: SubagentLifecycleOptions,
-  args: {
-    entry: SubagentRunRecord;
-    reason?: string;
-  },
-) => {
+  // A failed task write must keep the native terminal owner replayable.
+  // Otherwise cleanup can discard the only outcome that repairs the running task.
   if (
-    args.entry.expectsCompletionMessage !== true ||
-    args.entry.execution.outcome?.status !== "ok"
+    pendingTask &&
+    !finalized?.some(
+      (task) => task.taskId === pendingTask.taskId && isTerminalTaskStatus(task.status),
+    )
   ) {
-    return;
+    throw new Error("subagent task projection did not finalize");
   }
-  const endedAt = args.entry.execution.endedAt ?? Date.now();
-  const terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(args.reason);
-  const target = resolveSubagentTaskTarget(params, args.entry);
-  try {
-    completeTaskRunByRunId({
-      runId: target.runId,
-      runtime: "subagent",
-      sessionKey: target.sessionKey,
-      endedAt,
-      lastEventAt: Date.now(),
-      progressSummary: resolveSubagentCompletionResultText(args.entry),
-      terminalSummary: terminalResult.terminalSummary,
-      terminalOutcome: terminalResult.terminalOutcome,
-    });
-  } catch (err) {
-    params.warn("failed to mark subagent completion delivery blocked", {
-      error: buildSafeLifecycleErrorMeta(err),
-      runId: maskLifecycleIdentifier(args.entry.runId, "run"),
-      childSessionKey: maskLifecycleIdentifier(args.entry.childSessionKey, "session"),
-    });
-  }
+  return finalized;
 };
 
 export const freezeRunResultAtCompletion = async (
@@ -367,11 +386,15 @@ export const freezeRunResultAtCompletion = async (
         : undefined);
     const sessionTarget: SessionTranscriptRuntimeTarget | undefined =
       agentId && sessionId && storePath ? { agentId, sessionId, sessionKey, storePath } : undefined;
-    const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
-      waitForReply: entry.expectsCompletionMessage === true,
-      outcome,
-      ...(sessionTarget ? { sessionTarget } : {}),
-    });
+    const captured = await withPluginRuntimeGatewayContextResolver(
+      getGatewayContextResolver(entry),
+      () =>
+        params.captureSubagentCompletionReply(entry.childSessionKey, {
+          waitForReply: entry.expectsCompletionMessage === true,
+          outcome,
+          ...(sessionTarget ? { sessionTarget } : {}),
+        }),
+    );
     resultText = captured?.trim() ? capFrozenResultText(captured) : null;
   } catch {
     resultText = null;
@@ -393,48 +416,29 @@ export const freezeRunResultAtCompletion = async (
   return true;
 };
 
-const listPendingCompletionRunsForSession = (
-  params: SubagentLifecycleOptions,
-  sessionKey: string,
-): SubagentRunRecord[] => {
-  const key = sessionKey.trim();
-  if (!key) {
-    return [];
-  }
-  const out: SubagentRunRecord[] = [];
-  for (const entry of params.runs.values()) {
-    if (entry.childSessionKey !== key) {
-      continue;
-    }
-    if (entry.expectsCompletionMessage !== true) {
-      continue;
-    }
-    if (typeof entry.execution.endedAt !== "number") {
-      continue;
-    }
-    if (typeof entry.cleanupCompletedAt === "number") {
-      continue;
-    }
-    // A paused row's result was deliberately cleared when it yielded; the text
-    // now in its session belongs to whatever turn runs next, not to the paused
-    // work. Refreezing it here would announce a stranger's output as this run's
-    // completion once the row finally settles.
-    if (entry.pauseReason === "sessions_yield") {
-      continue;
-    }
-    out.push(entry);
-  }
-  return out;
-};
-
 export const refreshFrozenResultFromSession = async (
   context: SubagentLifecycleCommonContext,
   sessionKey: string,
 ): Promise<boolean> => {
   const params = context.options;
-  const candidates = listPendingCompletionRunsForSession(params, sessionKey).filter(
-    (entry) => entry.execution.outcome?.status !== "error",
-  );
+  const key = sessionKey.trim();
+  if (!key) {
+    return false;
+  }
+  // A paused row's result was cleared on yield; later session text belongs to the next turn.
+  const candidates: SubagentRunRecord[] = [];
+  for (const entry of params.runs.values()) {
+    if (
+      entry.childSessionKey === key &&
+      entry.expectsCompletionMessage === true &&
+      typeof entry.execution.endedAt === "number" &&
+      typeof entry.cleanupCompletedAt !== "number" &&
+      entry.pauseReason !== "sessions_yield" &&
+      entry.execution.outcome?.status !== "error"
+    ) {
+      candidates.push(entry);
+    }
+  }
   const entry = candidates.toSorted(compareSubagentRunGeneration).at(-1);
   if (!entry || context.newerGenerationOwnsSession(entry)) {
     return false;
@@ -443,7 +447,9 @@ export const refreshFrozenResultFromSession = async (
 
   let captured: string | undefined;
   try {
-    captured = await params.captureSubagentCompletionReply(sessionKey);
+    captured = await withPluginRuntimeGatewayContextResolver(getGatewayContextResolver(entry), () =>
+      params.captureSubagentCompletionReply(sessionKey),
+    );
   } catch {
     return false;
   }
@@ -493,6 +499,7 @@ export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
   delivery.payload = undefined;
   delivery.createdAt = undefined;
   delivery.lastAttemptAt = undefined;
+  delivery.nextAttemptAt = undefined;
   delivery.attemptCount = undefined;
   delivery.lastError = undefined;
   delivery.suspendedAt = undefined;
@@ -518,10 +525,13 @@ export const loadPendingFinalDeliveryPayload = (
     outcome: entry.delivery?.payload?.outcome ?? entry.execution.outcome,
     expectsCompletionMessage:
       entry.delivery?.payload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
+    completionTarget: entry.completionTarget,
+    completionRequesterSessionId: entry.completionRequesterSessionId,
     spawnMode: entry.delivery?.payload?.spawnMode ?? entry.spawnMode,
     wakeOnDescendantSettle:
       entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
-    terminalReply: entry.delivery?.payload?.terminalReply ?? entry.completion?.terminalReply,
+    // Completion is the terminal-reply owner; a retry payload can predate its final receipt.
+    terminalReply: entry.completion?.terminalReply ?? entry.delivery?.payload?.terminalReply,
   };
 };
 

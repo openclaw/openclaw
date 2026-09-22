@@ -10,6 +10,38 @@ import {
 } from "./daemon-install-plan.shared.js";
 
 describe("resolveDaemonInstallRuntimeInputs", () => {
+  it.skipIf(process.platform === "win32")(
+    "keeps a persisted runtime pin instead of selecting system Node",
+    async () => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daemon-pin-")));
+      const pinned = path.join(root, "node");
+      try {
+        fs.symlinkSync(process.execPath, pinned);
+        await expect(
+          resolveDaemonInstallRuntimeInputs({
+            env: {},
+            pinnedRuntimePath: pinned,
+            runtime: "node",
+            devMode: false,
+          }),
+        ).resolves.toEqual({ devMode: false, runtimePath: pinned });
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rejects a relative persisted pin instead of silently selecting another runtime", async () => {
+    await expect(
+      resolveDaemonInstallRuntimeInputs({
+        env: {},
+        pinnedRuntimePath: "relative/node",
+        runtime: "node",
+        devMode: false,
+      }),
+    ).rejects.toThrow(/absolute/);
+  });
+
   it("detects src ts entrypoints when devMode is not overridden", async () => {
     const originalArgv = process.argv;
     try {

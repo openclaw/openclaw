@@ -124,12 +124,14 @@ suite.define(() => {
 
         await pastePng(composer);
         await page.getByRole("img", { name: "pixel.png" }).waitFor();
-        await page.getByRole("button", { name: "Remove attachment" }).click();
+        await page.getByRole("button", { name: "Remove pixel.png" }).click();
         await expectActiveObjectUrls(0);
 
         await pastePng(composer);
         await page.getByRole("img", { name: "pixel.png" }).waitFor();
         await waitForCommittedNewSessionDraft(page, "", 1);
+        // Synthetic paste leaves the pointer over the replacement remove button.
+        await page.mouse.move(0, 0);
         const agentDropdown = page.locator(".new-session-page__select--agent wa-dropdown");
         await page.locator(".new-session-page__select--agent .agent-select__trigger").click();
         await expect
@@ -172,7 +174,7 @@ suite.define(() => {
           unknownRevocations: 0,
         });
         await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
-        await page.getByRole("button", { name: "Remove attachment" }).click();
+        await page.getByRole("button", { name: "Remove pixel.png" }).click();
         await expectActiveObjectUrls(0);
 
         await pastePng(composer);
@@ -185,7 +187,7 @@ suite.define(() => {
         await navigate("new-session");
         await composer.waitFor();
         await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
-        await page.getByRole("button", { name: "Remove attachment" }).click();
+        await page.getByRole("button", { name: "Remove pixel.png" }).click();
         await expectActiveObjectUrls(0);
 
         await pastePng(composer);

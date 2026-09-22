@@ -1,6 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -26,15 +28,15 @@ const models = [
   },
 ];
 
-const proofDir =
-  process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-    ? path.join(process.cwd(), ".artifacts", "control-ui-e2e", "model-alias-display")
-    : null;
+let proofDir: string | null;
+beforeEach(() => {
+  proofDir =
+    process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+      ? createControlUiE2eArtifactDir("model-alias-display")
+      : null;
+});
 
 async function createProofContext() {
-  if (proofDir) {
-    await mkdir(proofDir, { recursive: true });
-  }
   return suite.newBrowserContext({
     locale: "en-US",
     serviceWorkers: "block",
@@ -55,7 +57,7 @@ suite.define(() => {
     const context = await createProofContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
+      featureMethods: ["models.list", "chat.startup", "sessions.patch"],
       models,
       sessionKey: "agent:main:main",
     });
@@ -77,10 +79,10 @@ suite.define(() => {
       await expect.poll(() => sonnet.textContent()).toBe("Sonnet 5 · sonnet");
 
       if (proofDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "anthropic-versioned-model-aliases.png"),
-        });
+        await writeFile(
+          path.join(proofDir, "anthropic-versioned-model-aliases.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [opus, sonnet]),
+        );
       }
 
       const nvidia = main.locator(
@@ -90,10 +92,10 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       if (proofDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "preserved-nvidia-model-alias.png"),
-        });
+        await writeFile(
+          path.join(proofDir, "preserved-nvidia-model-alias.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [nvidia]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -142,28 +144,34 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("agents.list");
       await gateway.waitForRequest("config.get");
-      const modelRequest = await gateway.waitForRequest("chat.metadata");
-      expect(modelRequest.params).toEqual({ agentId: "main" });
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      const modelRequest = await gateway.waitForRequest("models.list");
+      expect(modelRequest.params).toEqual({ agentId: "main", view: "configured" });
+      expect(await gateway.getRequests("models.list")).toHaveLength(1);
 
-      const select = page.locator("wa-select.model-picker__select").first();
+      const select = page.locator("openclaw-select-picker.model-picker__select").first();
       await select.waitFor({ state: "visible", timeout: 10_000 });
       await expect
-        .poll(() => select.locator('wa-option[value="anthropic/claude-opus-4-8"]').textContent())
+        .poll(() =>
+          select.locator('[role="option"][data-value="anthropic/claude-opus-4-8"]').textContent(),
+        )
         .toContain("Opus 4.8 · opus");
       await expect
-        .poll(() => select.locator('wa-option[value="anthropic/claude-sonnet-5"]').textContent())
+        .poll(() =>
+          select.locator('[role="option"][data-value="anthropic/claude-sonnet-5"]').textContent(),
+        )
         .toContain("Sonnet 5 · sonnet");
       await expect
-        .poll(() => select.locator('wa-option[value="nvidia/moonshotai/kimi-k2.5"]').textContent())
+        .poll(() =>
+          select.locator('[role="option"][data-value="nvidia/moonshotai/kimi-k2.5"]').textContent(),
+        )
         .toContain("Kimi K2.5 (NVIDIA)");
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
       if (proofDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "agents-versioned-model-aliases.png"),
-        });
+        await writeFile(
+          path.join(proofDir, "agents-versioned-model-aliases.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [select]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);

@@ -15,11 +15,16 @@ import {
   buildCommandItemTitle,
   buildToolItemId,
   buildToolItemTitle,
+  buildToolStartKey,
   emitAgentEventCallbackBestEffort,
   emitTrackedItemEvent,
   isExecToolName,
+  toolStartData,
 } from "./embedded-agent-subscribe.handlers.tools.start.js";
-import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
+import type {
+  ExecLiveItemMetadata,
+  ToolHandlerContext,
+} from "./embedded-agent-subscribe.handlers.types.js";
 import {
   capLiveExecResult,
   sanitizeToolResult,
@@ -47,16 +52,31 @@ function readChannelToolProgress(result: unknown): ChannelToolProgress | undefin
   return { text: truncateLiveExecOutput(text) };
 }
 
-function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): boolean {
+function prepareLiveExecUpdate(
+  ctx: ToolHandlerContext,
+  toolCallId: string,
+  partialResult: unknown,
+  itemMetadata: ExecLiveItemMetadata,
+): { update?: { result: unknown }; emitItems: boolean } {
   const now = Date.now();
-  const state = ctx.state.execLiveUpdateStateById ?? new Map<string, { lastEmittedAtMs: number }>();
-  ctx.state.execLiveUpdateStateById = state;
+  const state = (ctx.state.execLiveUpdateStateById ??= new Map());
   const previous = state.get(toolCallId);
   if (previous && now - previous.lastEmittedAtMs < LIVE_EXEC_UPDATE_MIN_INTERVAL_MS) {
-    return false;
+    const emitItems =
+      previous.itemMetadata.name !== itemMetadata.name ||
+      previous.itemMetadata.meta !== itemMetadata.meta ||
+      previous.itemMetadata.commandBearing !== itemMetadata.commandBearing ||
+      previous.itemMetadata.hideFromChannelProgress !== itemMetadata.hideFromChannelProgress;
+    if (emitItems) {
+      previous.itemMetadata = itemMetadata;
+    }
+    return { emitItems };
   }
-  state.set(toolCallId, { lastEmittedAtMs: now });
-  return true;
+  // Skip payload work inside the throttle; stamp after preparation so slow
+  // redaction cannot make the next detailed frame arrive back-to-back.
+  const result = capLiveExecResult(sanitizeToolResult(partialResult));
+  state.set(toolCallId, { lastEmittedAtMs: Date.now(), itemMetadata });
+  return { update: { result }, emitItems: true };
 }
 
 /** Handles partial tool output and emits throttled live UI updates. */
@@ -71,15 +91,26 @@ export function handleToolExecutionUpdate(
 ) {
   const toolName = normalizeToolPolicyName(evt.toolName);
   const toolCallId = evt.toolCallId;
+  const parentToolCallId = toolStartData.get(
+    buildToolStartKey(ctx.params.runId, toolCallId),
+  )?.parentToolCallId;
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const partial = evt.partialResult;
-  const sanitized = sanitizeToolResult(partial);
   const isExecTool = isExecToolName(toolName);
-  const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
+  const toolMeta = ctx.state.toolMetaById.get(toolCallId);
+  const execProgress = isExecTool
+    ? prepareLiveExecUpdate(ctx, toolCallId, partial, {
+        name: toolName,
+        meta: toolMeta?.meta,
+        commandBearing: toolMeta?.commandBearing,
+        hideFromChannelProgress,
+      })
+    : undefined;
+  const execUpdate = execProgress?.update;
+  const liveResult = isExecTool ? execUpdate?.result : sanitizeToolResult(partial);
   const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
   // Typed progress already has a sanitized path; suppress duplicate raw previews.
-  const emitDetailedLiveUpdate =
-    !toolProgress && (!isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId));
+  const emitDetailedLiveUpdate = !toolProgress && (!isExecTool || execUpdate !== undefined);
   if (emitDetailedLiveUpdate) {
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -88,6 +119,7 @@ export function handleToolExecutionUpdate(
         phase: "update",
         name: toolName,
         toolCallId,
+        ...(parentToolCallId ? { parentToolCallId } : {}),
         partialResult: liveResult,
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
@@ -97,20 +129,16 @@ export function handleToolExecutionUpdate(
     itemId: buildToolItemId(toolCallId),
     phase: "update",
     kind: "tool",
-    title: buildToolItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
+    title: buildToolItemTitle(toolName, toolMeta?.meta),
     status: "running",
     name: toolName,
     toolCallId,
-    commandBearing: ctx.state.toolMetaById.get(toolCallId)?.commandBearing,
+    commandBearing: toolMeta?.commandBearing,
     ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    ...(ctx.state.toolMetaById.get(toolCallId)?.commandBearing && !isExecTool
-      ? { suppressChannelProgress: true }
-      : {}),
-    ...(toolProgress
-      ? { progressText: toolProgress.text }
-      : { meta: ctx.state.toolMetaById.get(toolCallId)?.meta }),
+    ...(toolMeta?.commandBearing && !isExecTool ? { suppressChannelProgress: true } : {}),
+    ...(toolProgress ? { progressText: toolProgress.text } : { meta: toolMeta?.meta }),
   };
-  emitTrackedItemEvent(ctx, itemData);
+  emitTrackedItemEvent(ctx, itemData, execProgress?.emitItems);
   if (!toolProgress) {
     emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
@@ -118,6 +146,7 @@ export function handleToolExecutionUpdate(
         phase: "update",
         name: toolName,
         toolCallId,
+        ...(parentToolCallId ? { parentToolCallId } : {}),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
@@ -128,14 +157,14 @@ export function handleToolExecutionUpdate(
       itemId: buildCommandItemId(toolCallId),
       phase: "update",
       kind: "command",
-      title: buildCommandItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
+      title: buildCommandItemTitle(toolName, toolMeta?.meta),
       status: "running",
       name: toolName,
-      meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
+      meta: toolMeta?.meta,
       toolCallId,
       ...(emitDetailedLiveUpdate && output ? { progressText: output } : {}),
     };
-    emitTrackedItemEvent(ctx, commandData);
+    emitTrackedItemEvent(ctx, commandData, execProgress?.emitItems);
     if (emitDetailedLiveUpdate && output) {
       const outputData: AgentCommandOutputEventData = {
         itemId: commandData.itemId,

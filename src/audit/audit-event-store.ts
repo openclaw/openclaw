@@ -1,7 +1,7 @@
 /** SQLite persistence and stable cursor queries for metadata-only audit events. */
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable, Selectable } from "kysely";
+import type { Selectable } from "kysely";
 import { AUDIT_ACTIVITY_MESSAGE_KIND } from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import {
   executeSqliteQuerySync,
@@ -15,6 +15,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { getAuditEventQueries, type AuditEventInsert } from "./audit-event-queries.js";
 import {
   AUDIT_EVENT_SCHEMA_VERSION,
   AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS,
@@ -510,7 +511,7 @@ function projectMessageIdentities(db: DatabaseSync, input: MessageAuditEventInpu
   };
 }
 
-function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): Insertable<AuditEventsTable> {
+function bindAuditEvent(db: DatabaseSync, input: AuditEventInput) {
   const message =
     input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? projectMessageIdentities(db, input) : undefined;
   return {
@@ -544,7 +545,7 @@ function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): Insertable<Au
     conversation_ref: message?.conversationRef ?? null,
     message_ref: message?.messageRef ?? null,
     target_ref: message?.targetRef ?? null,
-  };
+  } satisfies AuditEventInsert;
 }
 
 function countAuditEvents(db: DatabaseSync): number {
@@ -624,28 +625,19 @@ export function recordAuditEvent(
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       countCacheDatabase = db;
-      const insert = executeSqliteQuerySync(
-        db,
-        getAuditKysely(db)
-          .insertInto("audit_events")
-          .values(bindAuditEvent(db, input))
-          .onConflict((conflict) => conflict.column("source_id").doNothing()),
-      );
-      if (insert.insertId === undefined) {
+      // Read losslessly so Node's rowid decoding cannot preempt the safe-integer guard.
+      const values = bindAuditEvent(db, input);
+      const queries = getAuditEventQueries(db);
+      const insert = queries.insert(values);
+      if (insert === undefined) {
         return undefined;
       }
-      const insertedSequence = Number(insert.insertId);
+      const insertedSequence = Number(insert.sequence);
       if (!Number.isSafeInteger(insertedSequence) || insertedSequence < 1) {
         throw new Error("audit event sequence is outside the supported integer range");
       }
       pruneAuditEventsAfterInsert(db, Date.now());
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        getAuditKysely(db)
-          .selectFrom("audit_events")
-          .selectAll()
-          .where("sequence", "=", insertedSequence),
-      );
+      const row = queries.read(insertedSequence);
       recordConfirmedTerminalMessageExecutionBinding(db, {
         eventId: row?.event_id,
         token: executionToken,

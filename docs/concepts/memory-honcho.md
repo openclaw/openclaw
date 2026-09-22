@@ -53,7 +53,10 @@ openclaw gateway --force
 ```
 
 The setup command prompts for your API credentials, writes the config, and
-optionally migrates existing workspace memory files.
+optionally migrates existing workspace memory files. The API key it asks for is
+issued by [Honcho](https://honcho.dev), not by OpenClaw, and is only needed for
+the managed API at `api.honcho.dev`; a self-hosted Honcho deployment has no key
+to enter.
 
 <Info>
 Honcho can run entirely locally (self-hosted) or via the managed API at

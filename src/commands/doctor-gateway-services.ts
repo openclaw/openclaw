@@ -6,8 +6,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { isDefaultInstallIdentity, resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { formatGatewayHeapLimitReport, inspectGatewayHeapLimit } from "../daemon/gateway-heap.js";
@@ -19,6 +21,7 @@ import {
 import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
+import { readDaemonRuntimePin } from "../daemon/runtime-pin-state.js";
 import { readWindowsStartupFallbackRuntimeForUpdate } from "../daemon/schtasks.js";
 import {
   auditGatewayServiceConfig,
@@ -26,6 +29,7 @@ import {
   readEmbeddedGatewayToken,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
+import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import { SERVICE_PROXY_ENV_KEYS } from "../daemon/service-env.js";
 import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import {
@@ -34,6 +38,7 @@ import {
 } from "../daemon/service-managed-env.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import {
+  assertServiceDefinitionWritable,
   hasGatewayServiceEnvironmentOverride,
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
@@ -53,9 +58,9 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
-import { resolveGatewayDaemonRuntime, type GatewayDaemonRuntime } from "./daemon-runtime.js";
+import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
+import { buildExpectedGatewayServicePlan } from "./doctor-gateway-runtime-plan.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { isDoctorUpdateRepairMode } from "./doctor-repair-mode.js";
 import {
@@ -63,11 +68,11 @@ import {
   EXTERNAL_SERVICE_REPAIR_NOTE,
   isServiceRepairExternallyManaged,
   resolveServiceRepairPolicy,
+  resolveUpdateParentGatewayActivation,
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 import {
   UPDATE_IN_PROGRESS_ENV,
-  UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV,
   UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
   UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV,
@@ -89,9 +94,9 @@ function shouldSkipLegacyUpdateRepairConfigWrite(env: NodeJS.ProcessEnv): boolea
 }
 
 function updateParentAllowsGatewayActivation(env: NodeJS.ProcessEnv): boolean {
-  const activationPolicy = env[UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV];
+  const activationPolicy = resolveUpdateParentGatewayActivation(env);
   if (activationPolicy !== undefined) {
-    return isTruthyEnvValue(activationPolicy);
+    return activationPolicy;
   }
   // Shipped parents predate the marker. Recover their explicit CLI policy from
   // the direct parent; unreadable ancestry stays staged rather than disrupting it.
@@ -161,26 +166,6 @@ function findGatewayEntrypoint(programArguments?: string[]): string | null {
   return programArguments[gatewayIndex - 1] ?? null;
 }
 
-async function buildExpectedGatewayServicePlan(params: {
-  cfg: OpenClawConfig;
-  command: GatewayServiceCommandConfig;
-  serviceInstallEnv: NodeJS.ProcessEnv;
-  port: number;
-  runtime: GatewayDaemonRuntime;
-  runtimePath?: string;
-}) {
-  return buildGatewayInstallPlan({
-    env: params.serviceInstallEnv,
-    port: params.port,
-    runtime: params.runtime,
-    runtimePath: params.runtimePath,
-    existingEnvironment: params.command.environment,
-    existingEnvironmentValueSources: params.command.environmentValueSources,
-    warn: (message, title) => note(message, title),
-    config: params.cfg,
-  });
-}
-
 async function normalizeExecutablePath(value: string): Promise<string> {
   const resolvedPath = path.resolve(value);
   try {
@@ -216,6 +201,10 @@ function isOperatorOwnedEnvironmentIssue(
     case SERVICE_AUDIT_CODES.gatewayTokenMismatch:
     case SERVICE_AUDIT_CODES.gatewayTokenDrift:
       return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_TOKEN"], {
+        environmentValueSources,
+      });
+    case SERVICE_AUDIT_CODES.gatewayPasswordEmbedded:
+      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_PASSWORD"], {
         environmentValueSources,
       });
     case SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded:
@@ -332,7 +321,7 @@ export function extraGatewayServiceToHealthFinding(service: ExtraGatewayService)
     target: service.label,
     fixHint:
       service.legacy === true
-        ? "Run openclaw doctor --fix to remove legacy gateway services."
+        ? "Run `openclaw doctor` interactively to review legacy gateway services and confirm supported cleanup."
         : "Run a single gateway per machine unless this extra gateway is intentional.",
   };
 }
@@ -520,18 +509,38 @@ export async function maybeRepairGatewayServiceConfig(
     command = null;
   }
   if (!command) {
+    const audit = await auditGatewayServiceConfig({
+      env: process.env,
+      command: null,
+      platform: process.platform,
+    });
+    if (audit.issues.length > 0) {
+      note(
+        audit.issues
+          .map((issue) =>
+            issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
+          )
+          .join("\n"),
+        "Gateway service config",
+      );
+    }
     return cfg;
   }
   const managedDefinition = resolveManagedGatewayServiceCommand(command) ?? command;
   note(
-    formatGatewayHeapLimitReport(inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS)),
+    formatGatewayHeapLimitReport(
+      inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS, {}, command.programArguments),
+    ),
     "Gateway heap",
   );
   const managedWrapperPath = managedDefinition.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
-  const serviceInstallEnv =
-    managedWrapperPath && !Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)
-      ? { ...process.env, [OPENCLAW_WRAPPER_ENV_KEY]: managedWrapperPath }
-      : process.env;
+  const pinSnapshot = readDaemonRuntimePin({ kind: "gateway", env: process.env }, command);
+  const serviceInstallEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...(managedWrapperPath && !Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)
+      ? { [OPENCLAW_WRAPPER_ENV_KEY]: managedWrapperPath }
+      : {}),
+  };
   const serviceWrapperPath = normalizeOptionalString(
     command.environment?.[OPENCLAW_WRAPPER_ENV_KEY],
   );
@@ -542,7 +551,7 @@ export async function maybeRepairGatewayServiceConfig(
   const sourceCheckoutWarning = serviceLayout?.entrypointSourceCheckout
     ? [
         `Gateway service entrypoint resolves to a source checkout: ${serviceLayout.packageRootReal ?? serviceLayout.packageRoot ?? serviceLayout.entrypointReal ?? serviceLayout.entrypoint}.`,
-        "Run `openclaw doctor --fix` from the intended package install, or reinstall the gateway service with `openclaw gateway install --force`.",
+        "Run `openclaw gateway install --force` from the intended package install to replace the gateway service definition.",
       ].join("\n")
     : null;
 
@@ -563,16 +572,25 @@ export async function maybeRepairGatewayServiceConfig(
   }
   const expectedGatewayToken = tokenRefConfigured ? undefined : gatewayTokenResolution.token;
   const port = resolveGatewayPort(cfg, process.env);
-  const runtimeChoice = resolveGatewayDaemonRuntime(managedDefinition.programArguments);
+  const hasInstallWrapper = Boolean(serviceInstallEnv[OPENCLAW_WRAPPER_ENV_KEY]?.trim());
+  const activeRuntimePin = hasInstallWrapper ? undefined : pinSnapshot.pin?.path;
+  const runtimeChoice = hasInstallWrapper
+    ? "node"
+    : resolveGatewayDaemonRuntime(
+        activeRuntimePin ? [activeRuntimePin] : managedDefinition.programArguments,
+      );
   const installedRuntimePath =
-    runtimeChoice === "bun" ? managedDefinition.programArguments[0] : undefined;
+    runtimeChoice === "bun"
+      ? (activeRuntimePin ?? managedDefinition.programArguments[0])
+      : undefined;
   const expectedPlan = await buildExpectedGatewayServicePlan({
     cfg,
-    command: managedDefinition,
+    command,
     serviceInstallEnv,
     port,
     runtime: runtimeChoice,
     runtimePath: installedRuntimePath,
+    pinnedRuntimePath: pinSnapshot.pin?.path,
   });
   const expectedManagedServiceEnvKeys = readManagedServiceEnvKeysFromEnvironment(
     expectedPlan.environment,
@@ -585,6 +603,9 @@ export async function maybeRepairGatewayServiceConfig(
     expectedServicePath: expectedPlan.environment.PATH,
     expectedPort: port,
   });
+  if (audit.runtimeNote) {
+    note(audit.runtimeNote, "Gateway runtime");
+  }
   const serviceToken = readEmbeddedGatewayToken(command);
   if (tokenRefConfigured && serviceToken) {
     audit.issues.push({
@@ -595,19 +616,20 @@ export async function maybeRepairGatewayServiceConfig(
       level: "recommended",
     });
   }
-  const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
-  // Unsupported Bun and version-managed Node services migrate through a concrete system Node.
+  const needsNodeRuntime =
+    !hasInstallWrapper && !activeRuntimePin && needsNodeRuntimeMigration(audit.issues);
+  // Unusable runtimes and version-managed Node services migrate through a concrete system Node.
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
-  const systemNodePath = systemNodeInfo?.supported ? systemNodeInfo.path : null;
+  const systemNodePath = systemNodeInfo?.status === "supported" ? systemNodeInfo.path : null;
   if (needsNodeRuntime && !systemNodePath && runtimeChoice !== "node") {
     const warning = renderSystemNodeWarning(systemNodeInfo);
     if (warning) {
       note(warning, "Gateway runtime");
     } else {
       note(
-        "System Node 22 LTS (22.22.3+) or Node 24.15+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+        `System Node ${SUPPORTED_NODE_VERSIONS} not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.`,
         "Gateway runtime",
       );
     }
@@ -617,7 +639,7 @@ export async function maybeRepairGatewayServiceConfig(
     needsNodeRuntime && systemNodePath
       ? await buildExpectedGatewayServicePlan({
           cfg,
-          command: managedDefinition,
+          command,
           serviceInstallEnv,
           port,
           runtime: "node",
@@ -679,6 +701,9 @@ export async function maybeRepairGatewayServiceConfig(
     ),
   );
   note(consolidatedLines.join("\n"), "Gateway service config");
+  if (audit.issues.every((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed)) {
+    return cfg;
+  }
 
   const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
   const needsAggressive = aggressiveIssues.length > 0;
@@ -765,6 +790,24 @@ export async function maybeRepairGatewayServiceConfig(
         "Gateway service config",
       );
     }
+    return cfg;
+  }
+  try {
+    // Installed and planned environments can select different state files. Check
+    // both before token persistence; native publication still revalidates under locks.
+    for (const environment of [
+      mergeGatewayServiceEnv(serviceInstallEnv, command),
+      expectedRuntimePlan.environment,
+    ]) {
+      const capability = await service
+        .readDefinitionMutationCapability?.({ env: serviceInstallEnv, environment })
+        .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const);
+      if (capability) {
+        assertServiceDefinitionWritable(capability);
+      }
+    }
+  } catch (err) {
+    runtime.error(`Gateway service repair blocked: ${String(err)}`);
     return cfg;
   }
   const serviceEmbeddedToken = readEmbeddedGatewayToken(managedDefinition);
@@ -869,6 +912,9 @@ export async function maybeRepairGatewayServiceConfig(
         "Gateway",
       );
     } catch (err) {
+      if (err instanceof ConfigWritePostCommitError) {
+        throw err;
+      }
       runtime.error(`Failed to persist gateway.auth.token before service repair: ${String(err)}`);
       return cfg;
     }
@@ -877,11 +923,12 @@ export async function maybeRepairGatewayServiceConfig(
   const updatedPort = resolveGatewayPort(cfgForServiceInstall, process.env);
   const updatedPlan = await buildExpectedGatewayServicePlan({
     cfg: cfgForServiceInstall,
-    command: managedDefinition,
+    command,
     serviceInstallEnv,
     port: updatedPort,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     runtimePath: needsNodeRuntime && systemNodePath ? systemNodePath : installedRuntimePath,
+    pinnedRuntimePath: pinSnapshot.pin?.path,
   });
   // Windows `install` activates the task/login item. Require both a running
   // gateway and parent authorization so `update --no-restart` stays non-disruptive.
@@ -889,6 +936,7 @@ export async function maybeRepairGatewayServiceConfig(
     updateRepairMode && !updateRepairShouldInstall ? service.stage : service.install;
   try {
     await repairService({
+      runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
       env: serviceRepairEnv,
       stdout: process.stdout,
       warn: (message) => note(message, "Gateway"),
@@ -985,9 +1033,6 @@ export async function maybeScanExtraGatewayServices(
       if (failed.length > 0) {
         note(failed.map((line) => `- ${line}`).join("\n"), "Legacy gateway cleanup skipped");
       }
-      if (removed.length > 0) {
-        runtime.log("Legacy gateway services removed. Installing OpenClaw gateway next.");
-      }
     }
   }
 
@@ -997,7 +1042,10 @@ export async function maybeScanExtraGatewayServices(
     extraServices.filter((service) => service.legacy !== true),
   );
   if (cleanupHints.length > 0) {
-    note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
+    note(
+      cleanupHints.map((hint) => `- ${hint}`).join("\n"),
+      process.platform === "linux" ? "Inspection hints" : "Cleanup hints",
+    );
   }
 
   note(

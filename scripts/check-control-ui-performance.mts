@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 
 function isMetricsRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -21,26 +22,47 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
 // may accumulate. The fixed startup JS ceiling bounds that cumulative creep.
 const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 512;
 const CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES = 64;
+const CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES = 45 * KIB;
+// Immediate Home and diagnostic frames approved in #147574, including shared header styles.
+const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
+// The opaque Mermaid sandbox loads one self-contained classic script only when
+// a diagram is viewed. Keep its size visible without relaxing ordinary chunks.
+const MERMAID_RENDERER_ASSET = /^assets\/mermaid\.min-[\w-]+\.js$/u;
+const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
+// Locale catalogs are named Vite chunks loaded only after a language selection.
+// Base and config-hint chunks share one budget because they activate atomically.
+const CONTROL_UI_LOCALE_ASSET_PATTERNS = CONTROL_UI_LOCALE_ENTRIES.flatMap(({ locale }) => [
+  {
+    locale,
+    kind: "base" as const,
+    pattern: new RegExp(`^assets/${escapeRegExp(locale)}-[^/]+\\.js$`, "u"),
+  },
+  {
+    locale,
+    kind: "configHints" as const,
+    pattern: new RegExp(`^assets/locale-config-hints-${escapeRegExp(locale)}-[^/]+\\.js$`, "u"),
+  },
+]);
+const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
   startupJsRequests: 18,
   startupCssRequests: 1,
-  // 350 KiB maintainer-approved by Vyctor 2026-08-11 for #121686;
-  // #121734 left main 6 B below the prior 319 KiB hard ceiling.
-  startupJsGzipBytes: 350 * KIB,
-  // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
-  // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
-  // Briefly 47 KiB for the Tide/Beacon/Phosphor palettes, restored to 45 KiB
-  // once those palettes moved out of the startup sheet into public/themes and
-  // measured 42.2 KiB — below where they started. Adding a built-in theme no
-  // longer costs the default path anything, so this ceiling should stay put.
-  startupCssGzipBytes: 45 * KIB,
+  // 355 KiB approved in #149291 for the measured existing bundle; growth allowances stay fixed.
+  startupJsGzipBytes: 355 * KIB,
+  // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
+  // The fixed 50 KiB ceiling bounds accumulation of small changes.
+  startupCssGzipBytes: 50 * KIB,
   largestJsGzipBytes: 215 * KIB,
   // Composer multiline surface (stack #124301) legitimately grew boot CSS;
   // operator decision 2026-08-25 rejected boot splitting due to precedence risk.
-  largestCssGzipBytes: 53 * KIB,
+  // 53.0 KiB was exhausted by organic growth (main sat at 99.94% by 2026-08-29);
+  // bumped to 53.5 KiB with operator approval on PR #132054. 2026-09-02: side
+  // panel, workboard chip, and Lobsterdex styles moved to their lazy owners,
+  // measured boot sheet 52,337 B; ceiling lowered to keep ~1 KiB headroom.
+  largestCssGzipBytes: 53_400,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
@@ -107,6 +129,48 @@ function largestAsset(assets: Array<ReturnType<typeof readAssetMetrics>>) {
   )[0]!;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function controlUiLocaleAssetIdentity(
+  file: string,
+): { locale: string; kind: "base" | "configHints" } | null {
+  const match = CONTROL_UI_LOCALE_ASSET_PATTERNS.find(({ pattern }) => pattern.test(file));
+  return match ? { locale: match.locale, kind: match.kind } : null;
+}
+
+function collectControlUiLocaleAssetGroups(
+  assets: Array<ReturnType<typeof readAssetMetrics>>,
+): Array<{
+  locale: string;
+  base: Array<ReturnType<typeof readAssetMetrics>>;
+  configHints: Array<ReturnType<typeof readAssetMetrics>>;
+}> {
+  const groups = new Map<
+    string,
+    {
+      locale: string;
+      base: Array<ReturnType<typeof readAssetMetrics>>;
+      configHints: Array<ReturnType<typeof readAssetMetrics>>;
+    }
+  >();
+  for (const asset of assets) {
+    const identity = controlUiLocaleAssetIdentity(asset.file);
+    if (!identity) {
+      continue;
+    }
+    const group = groups.get(identity.locale) ?? {
+      locale: identity.locale,
+      base: [],
+      configHints: [],
+    };
+    group[identity.kind].push(asset);
+    groups.set(identity.locale, group);
+  }
+  return [...groups.values()];
+}
+
 export function collectControlUiPerformanceMetrics(distDir: string) {
   const assetsDir = path.join(distDir, "assets");
   const html = fs.readFileSync(path.join(distDir, "index.html"), "utf8");
@@ -123,8 +187,16 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
     return asset;
   });
   const jsAssets = assets.filter((asset) => asset.type === "js");
+  const mermaidRenderer = jsAssets.filter((asset) => MERMAID_RENDERER_ASSET.test(asset.file));
+  const localeCatalogs = jsAssets.filter(
+    (asset) => controlUiLocaleAssetIdentity(asset.file) !== null,
+  );
+  const ordinaryJsAssets = jsAssets.filter(
+    (asset) =>
+      !MERMAID_RENDERER_ASSET.test(asset.file) && controlUiLocaleAssetIdentity(asset.file) === null,
+  );
   const cssAssets = assets.filter((asset) => asset.type === "css");
-  if (jsAssets.length === 0 || cssAssets.length === 0 || startup.length === 0) {
+  if (ordinaryJsAssets.length === 0 || cssAssets.length === 0 || startup.length === 0) {
     throw new Error("Control UI performance check found an incomplete production bundle");
   }
   return {
@@ -139,9 +211,11 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
       css: summarizeAssets(cssAssets),
     },
     largest: {
-      js: largestAsset(jsAssets),
+      js: largestAsset(ordinaryJsAssets),
       css: largestAsset(cssAssets),
     },
+    mermaidRenderer,
+    localeCatalogs,
   };
 }
 
@@ -150,6 +224,7 @@ export function evaluateControlUiPerformanceBudgets(
   budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS> = CONTROL_UI_PERFORMANCE_BUDGETS,
   startupBudgetBaseline: Readonly<ControlUiStartupBudgetBaseline> | null = null,
   startupJsTolerance = CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
+  baseMetrics: ReturnType<typeof collectControlUiPerformanceMetrics> | null = null,
 ) {
   const baselineBytes = startupBudgetBaseline?.startupJsGzipBytes;
   const startupJsLimits = resolveControlUiStartupJsGzipLimits(
@@ -157,6 +232,7 @@ export function evaluateControlUiPerformanceBudgets(
     startupBudgetBaseline,
     startupJsTolerance,
   );
+  const localeGroups = collectControlUiLocaleAssetGroups(metrics.localeCatalogs);
   const checks: Array<[string, number, number, "count" | "bytes"]> = [
     ["startup JS requests", metrics.startup.js.requests, budgets.startupJsRequests, "count"],
     ["startup CSS requests", metrics.startup.css.requests, budgets.startupCssRequests, "count"],
@@ -164,10 +240,72 @@ export function evaluateControlUiPerformanceBudgets(
     ["startup CSS gzip", metrics.startup.css.gzipBytes, budgets.startupCssGzipBytes, "bytes"],
     ["largest JS gzip", metrics.largest.js.gzipBytes, budgets.largestJsGzipBytes, "bytes"],
     ["largest CSS gzip", metrics.largest.css.gzipBytes, budgets.largestCssGzipBytes, "bytes"],
+    ["isolated Mermaid JS assets", metrics.mermaidRenderer.length, 1, "count"],
+    [
+      "isolated Mermaid JS gzip",
+      summarizeAssets(metrics.mermaidRenderer).gzipBytes,
+      MERMAID_RENDERER_GZIP_BYTES,
+      "bytes",
+    ],
+    [
+      "startup Mermaid JS assets",
+      metrics.startup.assets.filter((asset) => MERMAID_RENDERER_ASSET.test(asset.file)).length,
+      0,
+      "count",
+    ],
+    [
+      "locale catalog JS assets",
+      metrics.localeCatalogs.length,
+      CONTROL_UI_LOCALE_ENTRIES.length * 2,
+      "count",
+    ],
+    [
+      "locale catalog base JS assets per locale",
+      Math.max(0, ...localeGroups.map((group) => group.base.length)),
+      1,
+      "count",
+    ],
+    [
+      "locale config-hint JS assets per locale",
+      Math.max(0, ...localeGroups.map((group) => group.configHints.length)),
+      1,
+      "count",
+    ],
+    [
+      "largest locale catalog pair JS gzip",
+      Math.max(
+        0,
+        ...localeGroups.map(
+          (group) => summarizeAssets([...group.base, ...group.configHints]).gzipBytes,
+        ),
+      ),
+      CONTROL_UI_LOCALE_GZIP_BYTES,
+      "bytes",
+    ],
+    [
+      "startup locale catalog JS assets",
+      metrics.startup.assets.filter((asset) => controlUiLocaleAssetIdentity(asset.file) !== null)
+        .length,
+      0,
+      "count",
+    ],
   ];
   const violations = checks.flatMap(([metric, actual, limit, unit]) =>
     actual > limit ? [{ metric, actual, limit, unit }] : [],
   );
+  if (baseMetrics) {
+    for (const area of ["startup", "largest"] as const) {
+      const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
+      if (growth >= CONTROL_UI_CSS_GZIP_GROWTH_BYTES) {
+        violations.push({
+          metric: `${area} CSS gzip growth`,
+          actual: growth,
+          limit: CONTROL_UI_CSS_GZIP_GROWTH_BYTES - 1,
+          unit: "bytes",
+        });
+      }
+    }
+  }
   if (baselineBytes !== undefined && baselineBytes > budgets.startupJsGzipBytes) {
     violations.unshift({
       metric: "startup JS gzip baseline",
@@ -216,7 +354,24 @@ function formatRequestCount(count: number): string {
 }
 
 function formatAssetSummary(summary: ReturnType<typeof summarizeAssets>): string {
-  return `${formatRequestCount(summary.requests)}, ${formatControlUiPerformanceBytes(summary.gzipBytes)} gzip, ${formatControlUiPerformanceBytes(summary.brotliBytes)} br`;
+  return `${formatRequestCount(summary.requests)}, ${formatControlUiPerformanceBytes(summary.gzipBytes)} gzip (${summary.gzipBytes} B), ${formatControlUiPerformanceBytes(summary.brotliBytes)} br, ${summary.rawBytes} B raw`;
+}
+
+function controlUiPerformanceWarnings(
+  metrics: ReturnType<typeof collectControlUiPerformanceMetrics>,
+  budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS>,
+): string[] {
+  const warnings: string[] = [];
+  if (metrics.startup.css.gzipBytes > CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES) {
+    warnings.push(
+      `startup CSS gzip is above the ${CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES} B advisory target; remaining hard-ceiling headroom: ${budgets.startupCssGzipBytes - metrics.startup.css.gzipBytes} B`,
+    );
+  }
+  const largestCssHeadroom = budgets.largestCssGzipBytes - metrics.largest.css.gzipBytes;
+  if (largestCssHeadroom < CONTROL_UI_CSS_GZIP_GROWTH_BYTES) {
+    warnings.push(`largest CSS gzip has ${largestCssHeadroom} B of hard-ceiling headroom`);
+  }
+  return warnings;
 }
 
 function formatViolation(violation: ControlUiPerformanceBudgetViolation): string {
@@ -240,6 +395,7 @@ export function formatControlUiPerformanceReport(
   budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS> = CONTROL_UI_PERFORMANCE_BUDGETS,
   startupBudgetBaseline: Readonly<ControlUiStartupBudgetBaseline> | null = null,
   startupJsTolerance: number = CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
+  baseMetrics: ReturnType<typeof collectControlUiPerformanceMetrics> | null = null,
 ): string {
   const startupJsLimits = resolveControlUiStartupJsGzipLimits(
     budgets,
@@ -251,9 +407,11 @@ export function formatControlUiPerformanceReport(
     budgets,
     startupBudgetBaseline,
     startupJsTolerance,
+    baseMetrics,
   );
   const lines = [
     "Control UI performance:",
+    `  measurement: shipped gzip sidecars; Node ${process.version}`,
     `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupJsLimits.enforcementLimit)} gzip / ${startupJsLimits.enforcementLimit} B)`,
   ];
   if (startupBudgetBaseline) {
@@ -262,19 +420,51 @@ export function formatControlUiPerformanceReport(
     );
   }
   lines.push(
-    `  startup CSS: ${formatAssetSummary(metrics.startup.css)} (limits: ${formatRequestCount(budgets.startupCssRequests)}, ${formatControlUiPerformanceBytes(budgets.startupCssGzipBytes)} gzip)`,
-    `  largest JS: ${metrics.largest.js.file}, ${formatControlUiPerformanceBytes(metrics.largest.js.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestJsGzipBytes)})`,
-    `  largest CSS: ${metrics.largest.css.file}, ${formatControlUiPerformanceBytes(metrics.largest.css.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestCssGzipBytes)})`,
+    `  startup CSS: ${formatAssetSummary(metrics.startup.css)} (limits: ${formatRequestCount(budgets.startupCssRequests)}, advisory target ${CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES} B, hard ceiling ${budgets.startupCssGzipBytes} B; headroom ${budgets.startupCssGzipBytes - metrics.startup.css.gzipBytes} B)`,
+    `  largest ordinary JS: ${metrics.largest.js.file}, ${formatControlUiPerformanceBytes(metrics.largest.js.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestJsGzipBytes)})`,
+    `  largest CSS: ${metrics.largest.css.file}, ${metrics.largest.css.gzipBytes} B gzip (hard ceiling ${budgets.largestCssGzipBytes} B; headroom ${budgets.largestCssGzipBytes - metrics.largest.css.gzipBytes} B)`,
     `  all JS: ${formatAssetSummary(metrics.total.js)}`,
     `  all CSS: ${formatAssetSummary(metrics.total.css)}`,
   );
+  if (baseMetrics) {
+    for (const area of ["startup", "largest"] as const) {
+      const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
+      lines.push(
+        `  ${area} CSS gzip vs base: ${baseMetrics[area].css.gzipBytes} B -> ${metrics[area].css.gzipBytes} B (${growth >= 0 ? "+" : ""}${growth} B; growth below ${CONTROL_UI_CSS_GZIP_GROWTH_BYTES} B allowed)`,
+      );
+    }
+  }
+  for (const warning of controlUiPerformanceWarnings(metrics, budgets)) {
+    lines.push(`  warning: ${warning}`);
+  }
+  if (metrics.mermaidRenderer.length > 0) {
+    lines.push(
+      `  isolated Mermaid JS: ${formatAssetSummary(summarizeAssets(metrics.mermaidRenderer))} (limits: 1 deferred asset, ${formatControlUiPerformanceBytes(MERMAID_RENDERER_GZIP_BYTES)} gzip; forbidden at startup)`,
+    );
+  }
+  if (metrics.localeCatalogs.length > 0) {
+    const localeGroups = collectControlUiLocaleAssetGroups(metrics.localeCatalogs);
+    const largestLocalePair = localeGroups.toSorted(
+      (left, right) =>
+        summarizeAssets([...right.base, ...right.configHints]).gzipBytes -
+          summarizeAssets([...left.base, ...left.configHints]).gzipBytes ||
+        left.locale.localeCompare(right.locale),
+    )[0]!;
+    const largestLocalePairSummary = summarizeAssets([
+      ...largestLocalePair.base,
+      ...largestLocalePair.configHints,
+    ]);
+    lines.push(
+      `  locale catalog JS: ${formatAssetSummary(summarizeAssets(metrics.localeCatalogs))} (largest pair: ${largestLocalePair.locale}, ${formatControlUiPerformanceBytes(largestLocalePairSummary.gzipBytes)} gzip; limits: 1 base + 1 config-hint asset per locale, ${formatControlUiPerformanceBytes(CONTROL_UI_LOCALE_GZIP_BYTES)} combined; forbidden at startup)`,
+    );
+  }
   if (
     startupBudgetBaseline &&
     metrics.startup.js.gzipBytes + STARTUP_JS_BASELINE_RATCHET_BYTES <
       startupBudgetBaseline.startupJsGzipBytes
   ) {
     lines.push(
-      `  hint: startup JS gzip is more than ${STARTUP_JS_BASELINE_RATCHET_BYTES} B below the ${startupBudgetBaseline.startupJsGzipBytes} B baseline; lower it with node --import tsx scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"`,
+      `  hint: startup JS gzip is more than ${STARTUP_JS_BASELINE_RATCHET_BYTES} B below the ${startupBudgetBaseline.startupJsGzipBytes} B baseline; lower it with ${baselineUpdateCommand()}`,
     );
   }
   if (violations.length > 0) {
@@ -287,7 +477,7 @@ export function formatControlUiPerformanceReport(
 }
 
 function baselineUpdateCommand(): string {
-  return 'node --import tsx scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
+  return 'node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
 }
 
 function isIsoDate(value: string): boolean {
@@ -362,24 +552,42 @@ export function runControlUiPerformanceCheck(
   distDir: string,
   budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS> = CONTROL_UI_PERFORMANCE_BUDGETS,
   baselinePath = DEFAULT_STARTUP_BUDGET_BASELINE_PATH,
+  baseDistDir?: string,
 ) {
   const startupBudgetBaseline = readControlUiStartupBudgetBaseline(baselinePath);
   const metrics = collectControlUiPerformanceMetrics(distDir);
-  const violations = evaluateControlUiPerformanceBudgets(metrics, budgets, startupBudgetBaseline);
-  const report = formatControlUiPerformanceReport(metrics, budgets, startupBudgetBaseline);
+  const baseMetrics = baseDistDir ? collectControlUiPerformanceMetrics(baseDistDir) : null;
+  const violations = evaluateControlUiPerformanceBudgets(
+    metrics,
+    budgets,
+    startupBudgetBaseline,
+    undefined,
+    baseMetrics,
+  );
+  const report = formatControlUiPerformanceReport(
+    metrics,
+    budgets,
+    startupBudgetBaseline,
+    undefined,
+    baseMetrics,
+  );
   return {
     metrics,
+    baseMetrics,
     budgets,
     startupBudgetBaseline,
     startupJsTolerance: CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
     startupJsBuildVariance: CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES,
     violations,
+    warnings: controlUiPerformanceWarnings(metrics, budgets),
     report,
   };
 }
 
 function main(argv: string[] = process.argv.slice(2)): void {
   let json = false;
+  let reportOnly = false;
+  let baseDistDir: string | undefined;
   let updateBaseline = false;
   let reason: string | undefined;
   let startupJsBytes: number | undefined;
@@ -387,6 +595,14 @@ function main(argv: string[] = process.argv.slice(2)): void {
     const arg = argv[index];
     if (arg === "--json") {
       json = true;
+    } else if (arg === "--report-only") {
+      reportOnly = true;
+    } else if (arg === "--base-dist") {
+      const value = argv[++index];
+      if (!value || value.startsWith("--")) {
+        throw new Error("--base-dist requires a directory");
+      }
+      baseDistDir = path.resolve(value);
     } else if (arg === "--update-baseline") {
       updateBaseline = true;
     } else if (arg === "--reason") {
@@ -418,6 +634,9 @@ function main(argv: string[] = process.argv.slice(2)): void {
   if (json && updateBaseline) {
     throw new Error("--json cannot be combined with --update-baseline");
   }
+  if (updateBaseline && (reportOnly || baseDistDir)) {
+    throw new Error("--report-only and --base-dist cannot be combined with --update-baseline");
+  }
   const distDir = path.resolve(SCRIPT_DIR, "../dist/control-ui");
   if (updateBaseline) {
     if (startupJsBytes !== undefined) {
@@ -438,13 +657,13 @@ function main(argv: string[] = process.argv.slice(2)): void {
     );
     return;
   }
-  const result = runControlUiPerformanceCheck(distDir);
+  const result = runControlUiPerformanceCheck(distDir, undefined, undefined, baseDistDir);
   if (json) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } else {
     process.stdout.write(`${result.report}\n`);
   }
-  if (result.violations.length > 0) {
+  if (!reportOnly && result.violations.length > 0) {
     process.exitCode = 1;
   }
 }

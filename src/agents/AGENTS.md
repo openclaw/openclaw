@@ -1,9 +1,8 @@
-<!-- Agent test performance notes for keeping expensive runtime imports out of focused tests. -->
+# Agent Runtime And Tests
 
-# Agents Test Performance
-
-Agent tests are often import-bound. Treat slow test files as architecture
-signals, not just runner noise.
+This directory owns agent assembly, run authority, and their focused tests.
+Agent tests are often import-bound; treat slow files as architecture signals,
+not just runner noise.
 
 ## Guardrails
 
@@ -24,12 +23,31 @@ signals, not just runner noise.
   normalization deterministic and runtime-free. Add explicit parser coverage for
   channel-specific prefixes instead of loading a channel plugin just to classify
   a target.
+- Prepared model/tool selection follows the plugin owner's
+  [availability and selection contract](../plugins/AGENTS.md#availability-and-selection).
+  Keep network discovery outside repeated selection; this does not forbid the
+  model or tool request that the user actually asked to execute.
 - If moving coverage out of a slow integration test, preserve the exact
   production composition in a named helper and test that helper. Do not remove
   the behavior proof just because the old proof was slow.
 - Avoid broad `importOriginal()` partial mocks and module resets in hot agent
   tests. Use explicit mock factories, one-time imports, and reset only the
   state the test mutates.
+
+## Client Capability Scope
+
+- Tools that act through an attached client derive availability from the current
+  connection/session capability contract. Backend process flags describe the
+  host, not what a remote client supports; one backend can serve different clients.
+- Keep client-dependent capability caches within their connection/session
+  lifecycle. Process-stable provider metadata can be shared; a cached answer for
+  one client's capabilities cannot select another client's tool set.
+- Availability is not authorization. Preserve server validation, tool grants,
+  and live execution authority. Backend-owned tools that produce portable
+  artifacts do not require a client merely because the UI can display the result.
+- Verify differing clients on one backend and a supported remote client without
+  a backend-local UI flag. Retired client capabilities must not survive through
+  a cached tool selection.
 
 ## Run Authority
 

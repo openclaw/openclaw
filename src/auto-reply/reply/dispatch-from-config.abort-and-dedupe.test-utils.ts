@@ -16,11 +16,13 @@ import {
   acpMocks,
   agentEventMocks,
   createDispatcher,
+  createPluginBindingRecord,
   diagnosticMocks,
   emptyConfig,
   hookMocks,
   internalHookMocks,
   messageAuditMocks,
+  mockPluginBinding,
   mocks,
   replyMediaPathMocks,
   sessionBindingMocks,
@@ -187,7 +189,6 @@ describe("dispatchReplyFromConfig", () => {
         cfg: { ...emptyConfig, diagnostics: { enabled: true } },
         dispatcher: createDispatcher(),
         replyOptions: { abortSignal: abort.signal },
-        usePublishedModelRuntime: true,
       }),
     );
     try {
@@ -464,23 +465,17 @@ describe("dispatchReplyFromConfig", () => {
       handled: true,
       aborted: true,
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBinding({
       bindingId: "binding-fast-abort",
       targetSessionKey: "plugin-binding:test:fast-abort",
-      targetKind: "session",
       conversation: {
         channel: "telegram",
         accountId: "default",
         conversationId: "direct:stop-hook",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      pluginId: "test-plugin",
+      pluginRoot: "/tmp/test-plugin",
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -499,7 +494,11 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledOnce();
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledOnce();
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-fast-abort");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-fast-abort",
+      undefined,
+      expect.objectContaining({ channel: "telegram", accountId: "default" }),
+    );
   });
 
   it("fast-resolves /approve before acquiring the active session operation", async () => {
@@ -1008,24 +1007,19 @@ describe("dispatchReplyFromConfig", () => {
         parentConversationId?: string;
       }) =>
         ref.channel === "discord" && ref.accountId === "work" && ref.conversationId === "thread-1"
-          ? ({
+          ? createPluginBindingRecord({
               bindingId: "plugin:work:thread-1",
               targetSessionKey: "plugin-binding:missing-plugin",
-              targetKind: "session",
               conversation: {
                 channel: "discord",
                 accountId: "work",
                 conversationId: "thread-1",
               },
-              status: "active",
               boundAt: Date.now(),
-              metadata: {
-                pluginBindingOwner: "plugin",
-                pluginId: "missing-plugin",
-                pluginRoot: "/plugins/missing-plugin",
-                pluginName: "Missing Plugin",
-              },
-            } satisfies SessionBindingRecord)
+              pluginId: "missing-plugin",
+              pluginRoot: "/plugins/missing-plugin",
+              pluginName: "Missing Plugin",
+            })
           : null,
     );
 
@@ -1176,7 +1170,6 @@ describe("dispatchReplyFromConfig", () => {
         cfg,
         dispatcher,
         replyResolver,
-        usePublishedModelRuntime: true,
       });
     } finally {
       preparedLoader.mockRestore();
@@ -1189,12 +1182,20 @@ describe("dispatchReplyFromConfig", () => {
       accountId: "default",
       conversationId: "C123",
     });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-acp-current");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-acp-current",
+      undefined,
+      boundConversationBinding.conversation,
+    );
     expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith({
+      agentId: "main",
       storePath: sourceStorePath,
       sessionKey: sourceSessionKey,
       readConsistency: "latest",
     });
+    expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "opencode", sessionKey: sourceSessionKey }),
+    );
     expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
       expect.objectContaining({
         storePath: targetStorePath,
@@ -1415,7 +1416,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = emptyConfig;
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
       AccountId: "default",
@@ -1549,7 +1549,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = emptyConfig;
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
       AccountId: "default",
@@ -1845,8 +1844,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
       CommandBody: "hello",

@@ -1,52 +1,24 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { PresenceViewer } from "../../lib/presence-users.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+import { SESSION_NAVIGATION_KEY_PARAM } from "../../lib/sessions/route-navigation.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { loadChatRoute } from "../chat/route-loader.ts";
+import { renderDashboards } from "../dashboards/view.ts";
+import { props, row } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
 
-function row(
-  key: string,
-  owner: { id: string; label?: string },
-  updatedAt: number,
-  overrides: Partial<GatewaySessionRow> = {},
-) {
-  const actor = { type: "human" as const, ...owner };
-  return {
-    key,
-    kind: "direct",
-    displayName: key,
-    updatedAt,
-    createdActor: actor,
-    owner: { actor },
-    ...overrides,
-  } satisfies GatewaySessionRow;
-}
-
-function props(overrides: Partial<Parameters<typeof renderSessionActivityView>[0]> = {}) {
-  return {
-    context: {
-      basePath: "",
-      navigate: vi.fn(),
-      gateway: { snapshot: { hello: null } },
-      agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-      agentSelection: { state: { selectedId: "main" } },
-      sessions: { state: { result: { sessions: [] } } },
-    } as unknown as ApplicationContext,
-    filters: { personId: null, query: "", time: "7d" as const },
-    presenceViewers: [] as PresenceViewer[],
-    retainedIdentity: null,
-    rows: [] as GatewaySessionRow[],
-    expandedAutomationDays: new Set<string>(),
-    onAutomationDayToggle: vi.fn(),
-    onFiltersChange: vi.fn(),
-    ...overrides,
-  };
-}
-
 describe("session activity semantics", () => {
+  afterEach(() => {
+    setAvatarGatewayOrigin(null);
+    vi.restoreAllMocks();
+  });
   beforeEach(() => {
     document.body.innerHTML = "";
   });
@@ -59,6 +31,315 @@ describe("session activity semantics", () => {
 
     expect(container.querySelectorAll("main")).toHaveLength(0);
   });
+
+  it.each(["missing", "stale"])(
+    "opens the displayed Activity rows when the sidebar is %s",
+    (sidebar) => {
+      const rows = (["chat", "dashboard"] as const).map((face, index) =>
+        row(
+          `agent:research:${face}:12345678-90ab-cdef-1234-567890abcde${index}`,
+          { id: "owner" },
+          Date.now(),
+          { boardFace: face, displayName: `Research ${face}` },
+        ),
+      );
+      const input = props({ rows });
+      input.context = {
+        ...input.context,
+        basePath: "/control",
+        agentSelection: { state: { selectedId: "other" } },
+        sessions: {
+          state: {
+            agentId: "other",
+            result: {
+              sessions:
+                sidebar === "missing"
+                  ? []
+                  : rows.map((session) => ({ ...session, displayName: "Old title" })),
+            },
+          },
+        },
+      } as unknown as ApplicationContext;
+      const container = document.createElement("div");
+      document.body.append(container);
+
+      render(renderSessionActivityView(input), container);
+
+      const links = container.querySelectorAll<HTMLAnchorElement>("[data-activity-session]");
+      expect(links).toHaveLength(rows.length);
+      for (const [index, session] of rows.entries()) {
+        const link = links[index]!;
+        const pathname = `/control/${session.boardFace}/research/research-${session.boardFace}-12345678`;
+        expect(link.getAttribute("href")).toBe(pathname);
+        link.click();
+        expect(input.context.navigate).toHaveBeenLastCalledWith(session.boardFace, {
+          pathname,
+          search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(session.key)}`,
+        });
+      }
+    },
+  );
+
+  it.each([
+    ["workspace", "/control/chat/research", undefined],
+    ["global", "/control/chat/research", undefined],
+    [
+      "catalog:native:gateway%3Alocal:Thread-1",
+      "/control/chat/research",
+      "?catalog=native&host=gateway%3Alocal&thread=Thread-1",
+    ],
+  ] as const)(
+    "preserves configured main and selected-agent routing for %s",
+    (key, pathname, search) => {
+      const input = props({ rows: [row(key, { id: "owner" }, Date.now())] });
+      input.context = {
+        ...input.context,
+        basePath: "/control",
+        agents: {
+          state: {
+            agentsList: {
+              defaultId: "main",
+              mainKey: "workspace",
+              scope: key === "global" ? "global" : "per-sender",
+            },
+          },
+        },
+        agentSelection: { state: { selectedId: "research" } },
+      } as unknown as ApplicationContext;
+      const container = document.createElement("div");
+      document.body.append(container);
+
+      render(renderSessionActivityView(input), container);
+
+      const link = container.querySelector<HTMLAnchorElement>("[data-activity-session]")!;
+      expect(link.getAttribute("href")).toBe(`${pathname}${search ?? ""}`);
+      link.click();
+      expect(input.context.navigate).toHaveBeenCalledWith(
+        "chat",
+        search ? { pathname, search } : { pathname },
+      );
+    },
+  );
+
+  it.each(
+    (["activity", "dashboards"] as const).flatMap((surface) =>
+      (
+        [
+          ["unknown", false, null],
+          ["unknown", true, null],
+          ["global", false, null],
+          ["global", true, "global"],
+          ["agent:qa-writer:global", false, "agent:qa-writer:global"],
+        ] as const
+      ).map(([key, globalScope, expectedKey]) => ({ surface, key, globalScope, expectedKey })),
+    ),
+  )(
+    "$surface preserves $key identity with global scope $globalScope",
+    async ({ surface, key, globalScope, expectedKey }) => {
+      const session = row(key, { id: "owner" }, Date.now(), {
+        agentId: "qa-writer",
+        displayName: "Stored session",
+      });
+      const input = props({ rows: [session] });
+      const agentsList = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: globalScope ? "global" : "per-sender",
+      } as const;
+      const request = vi.fn(async () => {
+        throw new Error(
+          "An exact Home or qualified literal open must not discover another session",
+        );
+      });
+      input.context = {
+        ...input.context,
+        agents: { state: { agentsList: { ...agentsList, agents: [] } } },
+        gateway: {
+          ...input.context.gateway,
+          snapshot: {
+            ...input.context.gateway.snapshot,
+            phase: "connected",
+            client: createTestGatewayClient(request),
+          },
+        },
+      } as unknown as ApplicationContext;
+      const container = document.createElement("div");
+      document.body.append(container);
+      render(
+        surface === "activity"
+          ? renderSessionActivityView(input)
+          : renderDashboards({
+              result: input.result!,
+              error: null,
+              basePath: "",
+              fallbackAgentId: "main",
+              mainKey: "main",
+              globalScope,
+            }),
+        container,
+      );
+      const item = container.querySelector<HTMLElement>(
+        surface === "activity" ? "[data-activity-session]" : ".dashboard-card__main",
+      )!;
+      expect(item.textContent).toContain("Stored session");
+      if (!expectedKey) {
+        expect(item.hasAttribute("href")).toBe(false);
+        item.click();
+        expect(input.context.navigate).not.toHaveBeenCalled();
+        return;
+      }
+      const href = item.getAttribute("href")!;
+      const loaded = await loadChatRoute(
+        input.context,
+        { pathname: href, search: "", hash: "" },
+        surface === "activity" ? "chat" : "dashboard",
+        new AbortController().signal,
+      );
+      expect(loaded).toMatchObject({ kind: "session" });
+      if (!("kind" in loaded) || loaded.kind !== "session") {
+        throw new Error("Expected a loaded session");
+      }
+      expect(resolveUiConversationIdentity({ agentsList }, loaded.sessionKey)).toEqual({
+        sessionKey: expectedKey,
+        agentId: "qa-writer",
+      });
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("renders agent-owned sessions and profile pictures without making agents or channels people", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: {
+          "content-type": url.endsWith("/avatar/research") ? "image/jpeg" : "image/png",
+        },
+      });
+    });
+    // Identify each image by its content type, not the order concurrent fetches finish.
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob) =>
+      "type" in blob && blob.type === "image/png" ? "blob:human" : "blob:agent",
+    );
+    const agent = {
+      type: "agent" as const,
+      id: "research",
+      identity: { type: "agent" as const, id: "research" },
+      label: "Research",
+      avatarUrl: "/avatar/research",
+    };
+    const human = {
+      type: "human" as const,
+      id: "person",
+      identity: { type: "profile" as const, id: "person" },
+      label: "Person",
+      avatarUrl: "/api/users/person/avatar",
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const channel = {
+      ...human,
+      identity: { type: "legacy" as const, actorType: "human", source: "channel", id: "person" },
+    };
+    const rows = [
+      row("Human session", human, Date.now(), { owner: { actor: human } }),
+      row("Agent session", agent, Date.now() - 1, {
+        owner: { actor: agent },
+        createdActor: agent,
+      }),
+      row("Unattributed session", agent, Date.now() - 2, {
+        owner: undefined,
+        createdActor: undefined,
+        agentId: "research",
+      }),
+      row("Channel session", channel, Date.now() - 3, {
+        owner: { actor: channel },
+        createdActor: channel,
+      }),
+    ];
+    render(
+      renderSessionActivityView(
+        props({
+          rows,
+          result: {
+            ts: 1,
+            path: "",
+            count: rows.length,
+            sessions: rows,
+            defaults: { model: null, modelProvider: null, contextTokens: null },
+            people: [
+              {
+                identity: human.identity,
+                label: human.label,
+                avatarUrl: human.avatarUrl,
+                sessionCount: 1,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector('[data-activity-session="Human session"] img')?.getAttribute("src"),
+      ).toBe("blob:human");
+      expect(
+        container.querySelector('[data-activity-session="Agent session"] img')?.getAttribute("src"),
+      ).toBe("blob:agent");
+      expect(
+        container.querySelector('[data-activity-person="person"] img')?.getAttribute("src"),
+      ).toBe("blob:human");
+      expect(container.querySelector('[data-activity-person="research"]')).toBeNull();
+      expect(container.querySelector('[data-activity-session="Channel session"] img')).toBeNull();
+      expect(
+        container
+          .querySelector('[data-activity-session="Unattributed session"] img')
+          ?.getAttribute("src"),
+      ).toBe("blob:agent");
+    });
+  });
+
+  it("keeps human attribution beside the session agent's configured avatar and name", async () => {
+    const context = createContext(
+      createGateway(createTestGatewayClient(vi.fn(async () => ({})))),
+      createSessions("main", []),
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "research", name: "Research partner", identity: { emoji: "🔬" } }],
+      },
+    );
+    const container = createApplicationContextProvider(context);
+    document.body.append(container);
+    render(
+      renderSessionActivityView(
+        props({
+          context,
+          rows: [
+            row("agent:research:review", { id: "person", label: "Alex Morgan" }, Date.now(), {
+              channel: "discord",
+            }),
+          ],
+        }),
+      ),
+      container,
+    );
+
+    await vi.waitFor(() => {
+      const session = container.querySelector('[data-activity-session="agent:research:review"]');
+      expect(session?.textContent).toContain("Alex Morgan");
+      expect(session?.textContent).toContain("Channel: discord");
+      expect(session?.textContent).not.toContain("Agent:");
+      expect(
+        session?.querySelector('[aria-label="Research partner (agent:research)"]'),
+      ).not.toBeNull();
+      expect(session?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
+        "🔬",
+      );
+    });
+  });
 });
 
 describe("session activity people filter", () => {
@@ -66,7 +347,7 @@ describe("session activity people filter", () => {
     document.body.innerHTML = "";
   });
 
-  it("separates raw fallback identities and maps presence dots by exact viewer id", () => {
+  it("uses the server people facet, excludes raw identities, and maps presence by exact profile id", () => {
     const now = Date.now();
     const container = document.createElement("div");
     document.body.append(container);
@@ -83,6 +364,7 @@ describe("session activity people filter", () => {
           presenceViewers: [
             {
               id: "online",
+              identity: { type: "profile", id: "online" },
               name: "Online person",
               watchedSessions: [],
               entries: [{ instanceId: "online-device", user: { id: "online" }, ts: now }],
@@ -101,45 +383,146 @@ describe("session activity people filter", () => {
     ).toBeNull();
     expect(
       container.querySelector('[data-activity-person="offline"] .activity-feed__last-active'),
-    ).not.toBeNull();
-    const unresolved = container.querySelector("[data-activity-unresolved]");
-    expect(unresolved?.textContent).toContain("14759118…");
-    expect(unresolved?.textContent).not.toContain("147591189530201337");
-    expect(unresolved?.querySelector('[data-activity-person="explicit-id"]')).toBeNull();
+    ).toBeNull();
+    expect(container.querySelector('[data-activity-person="147591189530201337"]')).toBeNull();
+    expect(container.querySelector('[data-activity-person="explicit-id"]')).toBeNull();
+    expect(
+      container
+        .querySelector('[data-activity-person="offline"] .activity-feed__people-count')
+        ?.textContent?.trim(),
+    ).toBe("1");
   });
 
-  it("shows the client IP and self-reported time zone on the device row", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(
-      renderSessionActivityView(
-        props({
-          filters: { personId: "online", query: "", time: "7d" },
-          retainedIdentity: {
+  it.each([false, true])(
+    "keeps online identity details and only known watched sessions in recency order (facet present: %s)",
+    (hasFacet) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const input = props({
+        filters: { personId: "online", query: "", time: "7d" },
+        rows: [
+          row("agent:main:first", { id: "online" }, 10),
+          row("agent:main:second", { id: "online" }, 20),
+          row("agent:main:unwatched", { id: "online" }, 30),
+        ],
+        presenceViewers: [
+          {
             id: "online",
-            name: "Online person",
-            watchedSessions: [],
+            identity: { type: "profile", id: "online" },
+            email: "online@example.test",
+            watchedSessions: ["agent:main:first", "agent:main:second", "missing"],
             entries: [
               {
-                host: "openclaw-control-ui",
+                host: "Alice's Mac",
                 platform: "Win32",
                 deviceFamily: "Mac16,6",
                 ip: "203.0.113.7",
                 timeZone: "Europe/Vienna",
-                ts: Date.now(),
+                lastInputSeconds: 30,
+                ts: 10,
               },
+              { host: "Alice's phone", ts: 20 },
             ],
           },
-        }),
-      ),
-      container,
-    );
+        ],
+      });
+      if (!hasFacet) {
+        input.result!.people = [];
+      }
+      render(renderSessionActivityView(input), container);
+      const identity = container.querySelector('[data-activity-identity="online"]');
+      // A sparse online identity wins as a whole, without borrowing the facet's label.
+      expect(identity?.querySelector("h2")?.textContent).toBe("online@example.test");
+      expect(identity?.textContent).toContain("Online");
+      expect(
+        [...container.querySelectorAll(".activity-feed__device-name")].map((device) =>
+          device.textContent?.trim(),
+        ),
+      ).toEqual(["Alice's Mac", "Alice's phone"]);
+      const device = identity?.querySelector(".activity-feed__device")?.textContent;
+      expect(device).toContain("203.0.113.7");
+      expect(device).toContain("Europe/Vienna");
+      expect(
+        [...container.querySelectorAll(".activity-feed__viewing-list [data-activity-session]")].map(
+          (session) => session.getAttribute("data-activity-session"),
+        ),
+      ).toEqual(["agent:main:second", "agent:main:first"]);
+    },
+  );
 
-    const device = container.querySelector(".activity-feed__device")?.textContent;
-    expect(device).toContain("203.0.113.7");
-    expect(device).toContain("Europe/Vienna");
-  });
+  it.each(["offline", "unknown", "Offline"])(
+    "resolves the selected %s identity only from an exact server profile facet",
+    (personId) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const input = props({
+        filters: { personId, query: "", time: "7d" },
+        rows: [
+          row("Visible session", { id: personId, label: "Row actor" }, 10, {
+            participants: [{ identity: { type: "profile", id: personId }, label: "Preview actor" }],
+          }),
+        ],
+      });
+      render(renderSessionActivityView({ ...input, result: undefined, loading: true }), container);
+      expect(container.querySelector(".activity-feed__not-found")).toBeNull();
+      expect(
+        container.querySelector('.activity-feed__loading [role="status"]')?.textContent,
+      ).toContain("Loading");
+
+      render(renderSessionActivityView(input), container);
+      if (personId === "offline") {
+        const identity = container.querySelector('[data-activity-identity="offline"]');
+        expect(identity?.querySelector("h2")?.textContent).toBe("Offline person");
+        expect(identity?.textContent).toContain("Offline");
+        expect(identity?.querySelector(".activity-feed__viewing-list")).toBeNull();
+      } else {
+        expect(container.querySelector(".activity-feed__not-found")).not.toBeNull();
+        expect(container.querySelector("[data-activity-identity]")).toBeNull();
+        expect(container.querySelector("[data-activity-session]")).toBeNull();
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "never joins raw presence into a profile Activity page (profile online: %s)",
+    (online) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const input = props({
+        filters: { personId: "online", query: "", time: "7d" },
+        rows: [row("raw-watch", { id: "online" }, 10)],
+        presenceViewers: [
+          ...(online
+            ? [
+                {
+                  id: "online",
+                  identity: { type: "profile" as const, id: "online" },
+                  name: "Profile person",
+                  watchedSessions: [],
+                  entries: [{ host: "Profile device", ts: 1 }],
+                },
+              ]
+            : []),
+          {
+            id: "online",
+            name: "Raw collider",
+            watchedSessions: ["raw-watch"],
+            entries: [{ host: "Raw device", ts: 1 }],
+          },
+        ],
+      });
+      render(renderSessionActivityView(input), container);
+      const identity = container.querySelector("[data-activity-identity]")!;
+      expect(identity.querySelector("h2")?.textContent).toBe(
+        online ? "Profile person" : "Online person",
+      );
+      expect(identity.textContent).not.toContain("Raw device");
+      expect(identity.querySelector(".activity-feed__viewing-list")).toBeNull();
+      expect(
+        container.querySelectorAll(".activity-feed__people-row .activity-feed__presence-dot"),
+      ).toHaveLength(online ? 1 : 0);
+    },
+  );
 
   it("selecting Everyone clears the person while preserving the other filters", () => {
     const onFiltersChange = vi.fn();
@@ -149,7 +532,6 @@ describe("session activity people filter", () => {
       renderSessionActivityView(
         props({
           filters: { personId: "online", query: "release", time: "30d" },
-          retainedIdentity: { id: "online", name: "Online person", watchedSessions: [] },
           rows: [row("Release session", { id: "online", label: "Online person" }, Date.now())],
           onFiltersChange,
         }),
@@ -223,7 +605,14 @@ describe("session activity automation grouping", () => {
       { filters: { personId: null, query: "Automation", time: "7d" as const } },
       {
         filters: { personId: "owner", query: "", time: "7d" as const },
-        retainedIdentity: { id: "owner", name: "Owner", watchedSessions: [] },
+        presenceViewers: [
+          {
+            id: "owner",
+            identity: { type: "profile" as const, id: "owner" },
+            name: "Owner",
+            watchedSessions: [],
+          },
+        ],
       },
     ]) {
       render(

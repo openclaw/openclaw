@@ -406,7 +406,9 @@ describe("plugin lifecycle resource sampler", () => {
         },
       );
 
-      expect(waitForNonEmptyPath(readyFile, 1000)).toBe(true);
+      // Nested shell startup is not the latency under test; the prompt-exit clock
+      // below starts after readiness, so give startup the phase timeout budget.
+      expect(waitForNonEmptyPath(readyFile, 5000)).toBe(true);
       const started = Date.now();
       result.kill("SIGTERM");
       const close = await waitForChildClose(result, 5000);
@@ -445,7 +447,9 @@ describe("plugin lifecycle resource sampler", () => {
         },
       );
 
-      expect(waitForNonEmptyPath(readyFile, 1000)).toBe(true);
+      // Nested shell startup is not the latency under test; the prompt-exit clock
+      // below starts after readiness, so give startup the phase timeout budget.
+      expect(waitForNonEmptyPath(readyFile, 5000)).toBe(true);
       const started = Date.now();
       result.kill("SIGTERM");
       const close = await waitForChildClose(result, 5000);

@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronJob } from "../cron/types.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
-  bumpSessionAutomationVersion,
+  invalidateSessionAutomationIndex,
   claimSessionAutomationEpoch,
   registerSessionAutomationSource,
   sessionHasAutomation,
@@ -31,7 +32,7 @@ describe("session automation index", () => {
     expect(sessionHasAutomation("agent:main:main", cfg)).toBe(false);
   });
 
-  test("version bumps invalidate the memo after in-place job mutations", () => {
+  test("owner publications invalidate the memo after in-place job mutations", () => {
     const jobs = [job({ id: "a" })];
     registerSessionAutomationSource({
       getJobs: () => jobs,
@@ -39,7 +40,7 @@ describe("session automation index", () => {
     });
     expect(sessionHasAutomation("agent:main:cron:a", cfg)).toBe(true);
     (jobs[0] as { enabled: boolean }).enabled = false;
-    bumpSessionAutomationVersion();
+    invalidateSessionAutomationIndex();
     expect(sessionHasAutomation("agent:main:cron:a", cfg)).toBe(false);
   });
 
@@ -62,24 +63,34 @@ describe("session automation index", () => {
   });
 
   test("stale services cannot clobber or clear a replacement registration", () => {
-    const staleEpoch = claimSessionAutomationEpoch();
-    const staleSource = {
-      getJobs: () => [job({ id: "stale" })],
-      getDefaultAgentId: () => "main",
-    };
-    const freshEpoch = claimSessionAutomationEpoch();
-    const freshSource = {
-      getJobs: () => [job({ id: "fresh" })],
-      getDefaultAgentId: () => "main",
-    };
-    registerSessionAutomationSource(freshSource, freshEpoch);
-    // Config-reload race: the older service's start resolves late.
-    registerSessionAutomationSource(staleSource, staleEpoch);
-    expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(true);
-    expect(sessionHasAutomation("agent:main:cron:stale", cfg)).toBe(false);
-    unregisterSessionAutomationSource(staleSource);
-    expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(true);
-    unregisterSessionAutomationSource(freshSource);
-    expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(false);
+    const changes: unknown[] = [];
+    const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
+    try {
+      const staleEpoch = claimSessionAutomationEpoch();
+      const staleSource = {
+        getJobs: () => [job({ id: "stale" })],
+        getDefaultAgentId: () => "main",
+      };
+      const freshEpoch = claimSessionAutomationEpoch();
+      const freshSource = {
+        getJobs: () => [job({ id: "fresh" })],
+        getDefaultAgentId: () => "main",
+      };
+      registerSessionAutomationSource(freshSource, freshEpoch);
+      // Config-reload race: the older service's start resolves late.
+      registerSessionAutomationSource(staleSource, staleEpoch);
+      expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(true);
+      expect(sessionHasAutomation("agent:main:cron:stale", cfg)).toBe(false);
+      unregisterSessionAutomationSource(staleSource);
+      expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(true);
+      unregisterSessionAutomationSource(freshSource);
+      expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(false);
+      invalidateSessionAutomationIndex();
+      expect(changes).toEqual(
+        Array.from({ length: 3 }, () => ({ all: true, scope: "automation" })),
+      );
+    } finally {
+      unsubscribe();
+    }
   });
 });

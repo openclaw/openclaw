@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
-import crypto from "node:crypto";
 import { responsesPromptObserver } from "@openclaw/ai/internal/openai";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -22,8 +22,6 @@ const providerPromptStates = resolveGlobalSingleton(
   PROVIDER_PROMPT_STATES_KEY,
   () => new Map<string, ProviderPromptState>(),
 );
-
-const digest = (serialized: string) => crypto.createHash("sha256").update(serialized).digest("hex");
 
 /** Returns run-local retry state; restarts and new run ids intentionally have no baseline. */
 export function getProviderPromptState(runId: string): ProviderPromptState {
@@ -51,8 +49,8 @@ function snapshotProviderPrompt(params: {
   });
   const serialized = stableStringify(params.payload);
   return {
-    scopeDigest: digest(scope),
-    digest: digest(serialized),
+    scopeDigest: sha256Hex(scope),
+    digest: sha256Hex(serialized),
     byteWeight: Buffer.byteLength(serialized),
   };
 }

@@ -512,6 +512,88 @@ describe("device-pair /pair qr", () => {
 });
 
 describe("device-pair /pair default setup code", () => {
+  describe("trusted-proxy setup", () => {
+    const config: OpenClawPluginApi["config"] = {
+      gateway: {
+        auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-forwarded-user" } },
+      },
+    };
+
+    beforeEach(() => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    });
+    afterEach(() => vi.unstubAllEnvs());
+
+    it.each([
+      { scopes: ["operator.admin"], expected: FULL_SETUP_REQUEST },
+      { scopes: INTERNAL_SETUP_SCOPES, expected: LIMITED_SETUP_REQUEST },
+    ])("preserves issuer grants for $scopes", async ({ scopes, expected }) => {
+      const text = requireText(await runDefaultSetup({ config }, { gatewayClientScopes: scopes }));
+      expect(text).toContain("Auth: trusted-proxy");
+      expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledExactlyOnceWith(expected);
+    });
+
+    it.each([
+      { scopes: ["operator.read"], message: PAIRING_REQUIRED },
+      { scopes: INTERNAL_PAIRING_SCOPES, message: TALK_SECRETS_REQUIRED },
+      { scopes: undefined, message: PAIRING_REQUIRED },
+    ])("rejects unauthorized setup from $scopes", async ({ scopes, message }) => {
+      expect(await runDefaultSetup({ config }, { gatewayClientScopes: scopes })).toEqual({
+        text: message,
+      });
+      expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])(
+      "preserves external command-owner authority (%s)",
+      async (senderIsOwner) => {
+        const result = await runDefaultSetup(
+          { config },
+          {
+            channel: "discord",
+            gatewayClientScopes: undefined,
+            senderIsOwner,
+          },
+        );
+        if (senderIsOwner) {
+          expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledExactlyOnceWith(
+            FULL_SETUP_REQUEST,
+          );
+          expect(requireText(result)).toContain("Auth: trusted-proxy");
+        } else {
+          expect(result).toEqual({ text: PAIRING_REQUIRED });
+          expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+        }
+      },
+    );
+
+    it("keeps plaintext LAN handoff limited and rejects public plaintext", async () => {
+      const text = requireText(
+        await runDefaultSetup(
+          { config, pluginConfig: { publicUrl: "ws://192.168.1.20:18789" } },
+          { gatewayClientScopes: ["operator.admin"] },
+        ),
+      );
+      expect(text).toContain("Access: limited");
+      expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledExactlyOnceWith(
+        LIMITED_SETUP_REQUEST,
+      );
+      pluginApiMocks.issueDeviceBootstrapToken.mockClear();
+      await expectSetupRejected(
+        { config, pluginConfig: { publicUrl: "ws://gateway.example.test" } },
+        SECURE_URL_REQUIRED,
+      );
+    });
+
+    it("still rejects unauthenticated gateways", async () => {
+      await expectSetupRejected(
+        { config: { gateway: { auth: { mode: "none" } } } },
+        "Gateway auth is not configured",
+      );
+    });
+  });
+
   it.each`
     toString                                                                                                        | context                                                                                                   | text
     ${exactTestTitle("rejects setup code issuance for internal gateway callers without operator.pairing")}          | ${{ channel: "webchat", gatewayClientScopes: ["operator.write"] }}                                        | ${PAIRING_REQUIRED}

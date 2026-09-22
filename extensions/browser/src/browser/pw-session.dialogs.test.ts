@@ -4,6 +4,7 @@ import type { Dialog, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pwAi } from "./pw-ai.js";
 import { armObservedDialogResponseOnPage } from "./pw-session.js";
+import { reconcileRemoteDialogAfterActionSettled } from "./pw-tools-core.interactions.navigation.js";
 
 const {
   createObservedDialogAbortSignalForPage,
@@ -78,6 +79,7 @@ describe("observed browser dialogs", () => {
 
     expect(dialog.accept).toHaveBeenCalledWith("yes");
     expect(closed.closedBy).toBe("agent");
+    expect(closed).not.toHaveProperty("dialog");
     expect(getObservedBrowserStateForPage(page).dialogs.pending).toEqual([]);
     expect(getObservedBrowserStateForPage(page).dialogs.recent).toMatchObject([
       { id: "d1", closedBy: "agent" },
@@ -262,11 +264,45 @@ describe("observed browser dialogs", () => {
     ensurePageState(page);
     emit("dialog", createDialog({ type: "confirm", message: "Continue?" }));
 
-    const state = markObservedDialogsHandledRemotelyForPage(page);
+    const state = markObservedDialogsHandledRemotelyForPage(
+      page,
+      getObservedBrowserStateForPage(page).dialogs.pending,
+    );
 
     expect(state.dialogs.pending).toEqual([]);
     expect(state.dialogs.recent).toMatchObject([
       { id: "d1", type: "confirm", message: "Continue?", closedBy: "remote" },
     ]);
   });
+
+  it.each(["agent", "remote"] as const)(
+    "keeps a newer dialog pending after the interrupted dialog was handled by %s",
+    async (closedBy) => {
+      const { page, emit } = createPageHarness();
+      const observed = createObservedDialogAbortSignalForPage({ page });
+      emit("dialog", createDialog({ message: "First" }));
+      if (closedBy === "agent") {
+        await respondToObservedDialogOnPage({ page, dialogId: "d1", accept: true });
+      }
+      const next = createDialog({ message: "Second" });
+      emit("dialog", next);
+
+      reconcileRemoteDialogAfterActionSettled(page, observed.signal);
+
+      expect(getObservedBrowserStateForPage(page).dialogs).toMatchObject({
+        pending: [{ id: "d2", message: "Second" }],
+        recent: [{ id: "d1", closedBy }],
+      });
+      await respondToObservedDialogOnPage({ page, dialogId: "d2", accept: false });
+      expect(next.dismiss).toHaveBeenCalledOnce();
+      expect(getObservedBrowserStateForPage(page).dialogs).toMatchObject({
+        pending: [],
+        recent: [
+          { id: "d1", closedBy },
+          { id: "d2", closedBy: "agent" },
+        ],
+      });
+      observed.cleanup();
+    },
+  );
 });

@@ -1,6 +1,6 @@
 // Legacy context engine wraps pre-plugin context behavior behind the pluggable interface.
 import { delegateCompactionToRuntime } from "./delegate.js";
-import { CONTEXT_ENGINE_HOST_PARAMS } from "./registry.js";
+import { CONTEXT_ENGINE_HOST_PARAMS } from "./registry-contract.js";
 import type { AssembleResult, ContextEngine, ContextEngineInfo } from "./types.js";
 
 /**
@@ -34,7 +34,7 @@ export class LegacyContextEngine implements ContextEngine {
     };
   }
 
-  compact(params: Parameters<ContextEngine["compact"]>[0]) {
-    return delegateCompactionToRuntime(params);
-  }
+  // Preserve the canonical delegate identity so the host knows the built-in
+  // runtime, rather than this engine wrapper, owns the compaction watchdog.
+  readonly compact = delegateCompactionToRuntime;
 }

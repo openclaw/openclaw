@@ -1,3 +1,4 @@
+import { normalizeTypeBoxValidationErrors } from "@openclaw/normalization-core/json-schema";
 import type { Static, TSchema } from "typebox";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import type { ValidationError } from "./validation-errors.js";
@@ -40,7 +41,7 @@ export function lazyCompile<T = unknown>(
     }
     const current = getCompiled();
     const valid = current.Check(data);
-    errors = valid ? null : ([...current.Errors(data)] as ValidationError[]);
+    errors = valid ? null : normalizeTypeBoxValidationErrors([...current.Errors(data)]);
     return valid;
   }) as ProtocolValidator<T>;
 

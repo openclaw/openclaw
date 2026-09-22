@@ -1,9 +1,13 @@
 import { t } from "../../i18n/index.ts";
-import { formatDurationCompact, formatRelativeTimestamp } from "../../lib/format.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { formatDurationCompact } from "../../lib/format-duration.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 
-const MAX_PLACE_MENU_FACTS = 4;
+registerNewSessionSetupEnglish();
+
+export const MAX_PLACE_MENU_FACTS = 4;
 const CAPABILITY_FACT_KEYS = {
   camera: "newSession.capabilityCamera",
   location: "newSession.capabilityLocation",
@@ -55,14 +59,6 @@ export function environmentMenuFacts(
       })
     : lifecycle;
   const facts = priorityFact ? [priorityFact] : [];
-  if (environment?.workerSlots) {
-    facts.push(
-      t("newSession.workerSlots", {
-        available: String(environment.workerSlots.available),
-        total: String(environment.workerSlots.total),
-      }),
-    );
-  }
   if (environment?.platform) {
     facts.push(prettifyPlatform(environment.platform));
   }
@@ -80,4 +76,16 @@ export function environmentMenuFacts(
     }
   }
   return facts;
+}
+
+export function environmentCapabilityLabels(capabilities: readonly string[] = []): string[] {
+  return [
+    ...new Set(
+      capabilities.flatMap((capability) => {
+        const family = capability.split(".", 1)[0]?.toLowerCase();
+        const key = Object.entries(CAPABILITY_FACT_KEYS).find(([name]) => name === family)?.[1];
+        return key ? [t(key)] : [];
+      }),
+    ),
+  ];
 }

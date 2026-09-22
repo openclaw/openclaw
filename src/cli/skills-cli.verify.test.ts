@@ -47,6 +47,11 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
+vi.mock("./one-shot-exit.js", () => ({
+  exitCliAfterOutput: (runtime: typeof mocks.defaultRuntime, exitCode: number) =>
+    runtime.exit(exitCode),
+}));
+
 vi.mock("../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils.js")>()),
   CONFIG_DIR: "/tmp/openclaw-config",

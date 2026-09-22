@@ -8,8 +8,8 @@ github_output="${3:-}"
 
 package_json="${source_root}/package.json"
 package_lock="${source_root}/package-lock.json"
-expected_lock_sha256="7a1aaa3017353437cd8908c50034d6c1f54899c9c9d92f289b06ccb26532848a"
-expected_vercel_integrity="sha512-oLctNaFB5bptskV4gioZQ6Ac4E0fDbKKU/q/JX1H+lz7IWgsTgKafwxvfJHJiCANEH5syl7a9H1IxxGN7Dp8dg=="
+expected_lock_sha256="a094a59287570aa124a65eb208739a5f4b89b7e8ffe768a3ac38842dd2e2dc85"
+expected_vercel_integrity="sha512-sBxGOvWru8BFdCaqlRhtARTAWDL4FV+Q8APcN63lnOEryTXRce1z3DBWzaakpsts+uF1Sy9MdrTft0zPOWpGuA=="
 test -f "${package_json}"
 test -f "${package_lock}"
 if [[ -e "${destination}" || -L "${destination}" ]]; then
@@ -53,17 +53,21 @@ vercel_version="$(
   VERCEL_CLI_ROOT="${destination}" \
     node -p "require(require('node:path').join(process.env.VERCEL_CLI_ROOT, 'node_modules/vercel/package.json')).version"
 )"
-[[ "${vercel_version}" == "59.1.4" ]] || {
+[[ "${vercel_version}" == "59.13.1" ]] || {
   echo "Pinned Vercel CLI version mismatch: ${vercel_version}" >&2
   exit 1
 }
 test -x "${destination}/node_modules/.bin/vercel"
 vercel_cli="${destination}/node_modules/.bin/vercel"
+# Use Sandbox directly: Vercel's sandbox wrapper overwrites failed remote exits.
+test -x "${destination}/node_modules/.bin/sandbox"
+sandbox_cli="${destination}/node_modules/.bin/sandbox"
 
 echo "Materialized vercel@${vercel_version} from lock ${lock_sha256}."
 if [[ -n "${github_output}" ]]; then
   {
     echo "cli=${vercel_cli}"
+    echo "sandbox_cli=${sandbox_cli}"
     echo "integrity=${vercel_integrity}"
     echo "lock_sha256=${lock_sha256}"
     echo "version=${vercel_version}"

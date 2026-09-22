@@ -1,14 +1,11 @@
-export { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createEmptyPluginRegistry,
   withPluginRuntimeRegistryScope,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-export { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 // Telegram tests cover bot native commands.session meta plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, vi } from "vitest";
@@ -20,7 +17,6 @@ import {
   createTelegramPrivateCommandContext,
   type NativeCommandTestParams,
 } from "./bot-native-commands.fixture-test-support.js";
-export { runWithTelegramUpdateProcessingFrame } from "./bot-processing-outcome.js";
 
 // Shared executor test harness; each importing suite resets the state before use.
 
@@ -30,13 +26,9 @@ type EnsureConfiguredBindingRouteReadyFn =
   typeof import("openclaw/plugin-sdk/conversation-runtime").ensureConfiguredBindingRouteReady;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
-export type DispatchReplyWithBufferedBlockDispatcherParams =
-  Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
   ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
 >;
-type DispatchChannelInboundTurnFn =
-  typeof import("openclaw/plugin-sdk/channel-inbound").dispatchChannelInboundTurn;
 type ResolveCommandArgMenuFn =
   typeof import("openclaw/plugin-sdk/command-auth-native").resolveCommandArgMenu;
 type DeliverRepliesFn = typeof import("./bot/delivery.js").deliverReplies;
@@ -44,7 +36,7 @@ type LoadModelCatalogFn = typeof import("openclaw/plugin-sdk/agent-runtime").loa
 type ResolveDefaultModelForAgentFn =
   typeof import("openclaw/plugin-sdk/agent-runtime").resolveDefaultModelForAgent;
 
-export const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
+const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
   queuedFinal: false,
   counts: {} as DispatchReplyWithBufferedBlockDispatcherResult["counts"],
 };
@@ -61,9 +53,7 @@ const persistentBindingMocks = vi.hoisted(() => ({
 const sessionMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn(),
   sessionStoreEntries: vi.fn(),
-  recordSessionMetaFromInbound: vi.fn(),
   resolveStorePath: vi.fn(),
-  updateSessionStoreEntry: vi.fn(),
 }));
 const commandAuthMocks = vi.hoisted(() => ({
   resolveCommandArgMenu: vi.fn<ResolveCommandArgMenuFn>(),
@@ -90,56 +80,6 @@ const replyMocks = vi.hoisted(() => ({
 const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn<DeliverRepliesFn>(async () => ({ delivered: true })),
 }));
-export const dispatchChannelInboundTurnMock = vi.fn<DispatchChannelInboundTurnFn>(async (plan) => {
-  const recordTask = sessionMocks.recordSessionMetaFromInbound({
-    storePath: sessionMocks.resolveStorePath(plan.cfg.session?.store, {
-      agentId: plan.route.agentId,
-    }),
-    sessionKey: plan.record?.sessionKey ?? plan.ctxPayload.SessionKey ?? plan.route.sessionKey,
-    ctx: plan.ctxPayload,
-  });
-  const trackedRecordTask = Promise.resolve(recordTask).catch((error: unknown) =>
-    plan.record?.onRecordError?.(error),
-  );
-  plan.record?.trackSessionMetaTask?.(trackedRecordTask);
-  await plan.afterRecord?.();
-  const deliver = async (
-    payload: Parameters<
-      DispatchReplyWithBufferedBlockDispatcherParams["dispatcherOptions"]["deliver"]
-    >[0],
-    info: Parameters<
-      DispatchReplyWithBufferedBlockDispatcherParams["dispatcherOptions"]["deliver"]
-    >[1],
-  ) => {
-    const providerInfo = {
-      ...info,
-      onPlatformSendDispatch: async () => undefined,
-    };
-    const result =
-      "deliverWithProviderMessageSending" in plan.delivery
-        ? await plan.delivery.deliverWithProviderMessageSending(payload, providerInfo)
-        : await plan.delivery.deliver(payload, info);
-    await plan.delivery.onDelivered?.(payload, info, result);
-    return result;
-  };
-  const dispatchResult = await replyMocks.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: plan.ctxPayload,
-    cfg: plan.cfg,
-    dispatcherOptions: {
-      ...plan.dispatcherOptions,
-      deliver,
-      onError: plan.delivery.onError,
-    },
-    replyOptions: plan.replyOptions,
-  });
-  return {
-    admission: { kind: "dispatch" },
-    dispatched: true,
-    ctxPayload: plan.ctxPayload,
-    routeSessionKey: plan.route.sessionKey,
-    dispatchResult,
-  };
-});
 const sessionBindingMocks = vi.hoisted(() => ({
   resolveByConversation: vi.fn<
     (ref: unknown) => { bindingId: string; targetSessionKey: string } | null
@@ -222,7 +162,6 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
     getSessionEntry: sessionMocks.getSessionEntry,
     sessionStoreEntries: sessionMocks.sessionStoreEntries,
     resolveStorePath: sessionMocks.resolveStorePath,
-    updateSessionStoreEntry: sessionMocks.updateSessionStoreEntry,
   };
 });
 vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
@@ -251,14 +190,9 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
 vi.mock("./bot-native-commands.runtime.js", () => {
   return {
     ensureConfiguredBindingRouteReady: persistentBindingMocks.ensureConfiguredBindingRouteReady,
-    finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
     getAgentScopedMediaLocalRoots,
     getSessionEntry: sessionMocks.getSessionEntry,
     resolveChunkMode,
-    resolveThreadSessionKeys,
-    dispatchChannelInboundTurn: dispatchChannelInboundTurnMock as unknown as NonNullable<
-      TelegramNativeCommandDeps["dispatchChannelInboundTurn"]
-    >,
   };
 });
 vi.mock("./bot/delivery.js", () => ({
@@ -268,9 +202,9 @@ vi.mock("./bot/delivery.replies.js", () => ({
   deliverReplies: deliveryMocks.deliverReplies,
 }));
 
-export let activePluginRegistry: ReturnType<typeof createEmptyPluginRegistry>;
+let activePluginRegistry: ReturnType<typeof createEmptyPluginRegistry>;
 
-type TelegramCommandHandler = (ctx: unknown) => Promise<void>;
+type TelegramCommandHandler = (ctx: unknown, next?: () => Promise<void>) => Promise<void>;
 type TelegramPluginCommandSpecs = Array<{
   name: string;
   description: string;
@@ -278,46 +212,9 @@ type TelegramPluginCommandSpecs = Array<{
 }>;
 type TelegramLoginFlow = NonNullable<TelegramNativeCommandDeps["runModelsAuthLoginFlow"]>;
 
-export function registerAndResolveStatusHandler(params: {
-  cfg: OpenClawConfig;
-  dispatchReplyFromConfig?: NativeCommandTestParams["opts"]["dispatchReplyFromConfig"];
-  runtimeCfg?: OpenClawConfig;
-  allowFrom?: string[];
-  groupAllowFrom?: string[];
-  storeAllowFrom?: string[];
-  telegramCfg?: NativeCommandTestParams["telegramCfg"];
-  resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
-}): {
-  handler: TelegramCommandHandler;
-  sendMessage: ReturnType<typeof vi.fn>;
-} {
-  const {
-    cfg,
-    dispatchReplyFromConfig,
-    runtimeCfg,
-    allowFrom,
-    groupAllowFrom,
-    storeAllowFrom,
-    telegramCfg,
-    resolveTelegramGroupConfig,
-  } = params;
-  return registerAndResolveCommandHandlerBase({
-    commandName: "status",
-    cfg,
-    dispatchReplyFromConfig,
-    runtimeCfg,
-    allowFrom: allowFrom ?? ["*"],
-    groupAllowFrom: groupAllowFrom ?? [],
-    storeAllowFrom,
-    telegramCfg,
-    resolveTelegramGroupConfig,
-  });
-}
-
 function registerAndResolveCommandHandlerBase(params: {
   commandName: string;
   cfg: OpenClawConfig;
-  dispatchReplyFromConfig?: NativeCommandTestParams["opts"]["dispatchReplyFromConfig"];
   runtimeCfg?: OpenClawConfig;
   allowFrom: string[];
   groupAllowFrom: string[];
@@ -333,7 +230,6 @@ function registerAndResolveCommandHandlerBase(params: {
   const {
     commandName,
     cfg,
-    dispatchReplyFromConfig,
     runtimeCfg,
     allowFrom,
     groupAllowFrom,
@@ -350,9 +246,6 @@ function registerAndResolveCommandHandlerBase(params: {
   const telegramDeps: TelegramNativeCommandDeps = {
     getRuntimeConfig: vi.fn(() => commandRuntimeCfg),
     readChannelAllowFromStore: vi.fn(async () => storeAllowFrom ?? []),
-    dispatchChannelInboundTurn: dispatchChannelInboundTurnMock as unknown as NonNullable<
-      TelegramNativeCommandDeps["dispatchChannelInboundTurn"]
-    >,
     listSkillCommandsForAgents: vi.fn(() => []),
     syncTelegramMenuCommands: vi.fn(),
     sendMessageTelegram: vi.fn(async (_to, text) => {
@@ -383,7 +276,7 @@ function registerAndResolveCommandHandlerBase(params: {
           }),
         } as unknown as NativeCommandTestParams["bot"],
         cfg,
-        opts: { token: "token", dispatchReplyFromConfig },
+        opts: { token: "token" },
         allowFrom,
         groupAllowFrom,
         telegramCfg,
@@ -438,26 +331,14 @@ export function registerAndResolveCommandHandler(params: {
   });
 }
 
-export function requireValue<T>(value: T | null | undefined, label: string): T {
+function requireValue<T>(value: T | null | undefined, label: string): T {
   if (value == null) {
     throw new Error(`expected ${label}`);
   }
   return value;
 }
 
-export const requireRecord = createRequireRecord("record", "expected-label-object");
-
-export function firstMockArg(
-  mockFn: ReturnType<typeof vi.fn>,
-  label: string,
-  callIndex = 0,
-): unknown {
-  const call = mockFn.mock.calls.at(callIndex);
-  if (!call) {
-    throw new Error(`expected ${label} call ${callIndex}`);
-  }
-  return call.at(0);
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 export function expectRecordFields(
   value: unknown,
@@ -499,19 +380,6 @@ export function expectSendMessageCall(params: {
     requireRecord(options.reply_markup, `${params.label} reply markup`);
   }
   return options;
-}
-
-export function expectUnauthorizedNewCommandBlocked(sendMessage: ReturnType<typeof vi.fn>) {
-  expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-  expect(persistentBindingMocks.resolveConfiguredBindingRoute).not.toHaveBeenCalled();
-  expect(persistentBindingMocks.ensureConfiguredBindingRouteReady).not.toHaveBeenCalled();
-  expectSendMessageCall({
-    sendMessage,
-    chatId: -1001234567890,
-    text: "You are not authorized to use this command.",
-    optionFields: { message_thread_id: 42 },
-    label: "unauthorized /new",
-  });
 }
 
 export function resetSessionMetaMocks() {
@@ -558,22 +426,12 @@ export function resetSessionMetaMocks() {
     ({ storePath, sessionKey }: { storePath: string; sessionKey: string }) =>
       sessionMocks.sessionStoreEntries(storePath)[sessionKey],
   );
-  sessionMocks.updateSessionStoreEntry.mockClear().mockImplementation(async (params) => {
-    const current = sessionMocks.sessionStoreEntries(params.storePath)[params.sessionKey];
-    if (!current) {
-      return null;
-    }
-    const patch = await params.update({ ...current });
-    return patch ? { ...current, ...patch } : current;
-  });
-  sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
   sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
   pluginRuntimeMocks.executePluginCommand.mockClear().mockResolvedValue({ text: "ok" });
   activePluginRegistry = createEmptyPluginRegistry();
   replyMocks.dispatchReplyWithBufferedBlockDispatcher
     .mockClear()
     .mockResolvedValue(dispatchReplyResult);
-  dispatchChannelInboundTurnMock.mockClear();
   sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
   sessionBindingMocks.touch.mockReset();
   deliveryMocks.deliverReplies.mockClear().mockResolvedValue({ delivered: true });
@@ -582,5 +440,5 @@ export function resetSessionMetaMocks() {
 activePluginRegistry = createEmptyPluginRegistry();
 const { registerTelegramNativeCommands } = await import("./bot-native-commands.js");
 resetSessionMetaMocks();
-const warmStatusHandler = registerAndResolveStatusHandler({ cfg: {} });
-await warmStatusHandler.handler(createTelegramPrivateCommandContext());
+const warmHandler = registerAndResolveCommandHandler({ commandName: "think", cfg: {} });
+await warmHandler.handler(createTelegramPrivateCommandContext({ match: "high" }), async () => {});

@@ -2,17 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import {
-  isPrimarySessionTranscriptFileName,
-  parseUsageCountedSessionIdFromFileName,
-} from "../config/sessions/artifacts.js";
+import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
+import { isToolCallContentType } from "../chat/tool-content.js";
+import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
-import { estimateUsageCost } from "../utils/usage-format.js";
 import {
   isUsageCostRollupFresh,
   readUsageCostRollups,
@@ -31,10 +27,7 @@ import {
 import {
   computeUsageTokenTotals,
   createUsageCostResolver,
-  extractCostBreakdown,
-  parseTimestamp,
-  parseUsageCostTranscriptEntry,
-  shouldRecomputeRecordedZeroCost,
+  parseUsageCostTranscriptEntryAsync,
 } from "./session-cost-usage-pricing.js";
 import { createUsageDayKeyFormatter } from "./session-cost-usage-projection.js";
 import { buildSessionCostSummaryFromRollup } from "./session-cost-usage-rollup.js";
@@ -57,7 +50,6 @@ export async function discoverAllSessions(params: {
   agentId: string;
   startMs?: number;
   endMs?: number;
-  includeFirstUserMessage?: boolean;
 }): Promise<DiscoveredSession[]> {
   const files = await listUsageCountedTranscriptStats(params.agentId, {
     minMtimeMs: params.startMs,
@@ -67,52 +59,12 @@ export async function discoverAllSessions(params: {
 
   for (const file of files) {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
-    const filePath = file.filePath;
-    const fileName = path.basename(filePath);
-    const sqliteMarker = parseSqliteSessionFileMarker(filePath);
-
-    const sessionId = sqliteMarker?.sessionId ?? parseUsageCountedSessionIdFromFileName(fileName);
+    const { sourcePath: sessionFile, sessionId } = file;
     if (!sessionId) {
       continue;
     }
-    const isPrimaryTranscript = sqliteMarker ? true : isPrimarySessionTranscriptFileName(fileName);
-
-    // Try to read first user message for label extraction
-    let firstUserMessage: string | undefined;
-    if (params.includeFirstUserMessage !== false) {
-      try {
-        for await (const parsed of readTranscriptRecords(filePath)) {
-          try {
-            const message = parsed.message as Record<string, unknown> | undefined;
-            if (message?.role === "user") {
-              const content = message.content;
-              if (typeof content === "string") {
-                firstUserMessage = truncateUtf16Safe(content, 100);
-              } else if (Array.isArray(content)) {
-                for (const block of content) {
-                  if (
-                    typeof block === "object" &&
-                    block &&
-                    (block as Record<string, unknown>).type === "text"
-                  ) {
-                    const text = (block as Record<string, unknown>).text;
-                    if (typeof text === "string") {
-                      firstUserMessage = truncateUtf16Safe(text, 100);
-                    }
-                    break;
-                  }
-                }
-              }
-              break; // Found first user message
-            }
-          } catch {
-            // Skip malformed lines
-          }
-        }
-      } catch {
-        // Ignore read errors
-      }
-    }
+    const isPrimaryTranscript =
+      file.kind === "sqlite" || isPrimarySessionTranscriptFileName(path.basename(sessionFile));
 
     const existing = discovered.get(sessionId);
     const existingIsPrimary = existing
@@ -126,21 +78,16 @@ export async function discoverAllSessions(params: {
     if (shouldReplace) {
       discovered.set(sessionId, {
         sessionId,
-        sessionFile: filePath,
+        sessionFile,
         mtime: file.mtimeMs,
-        firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
       });
-      continue;
-    }
-
-    if (!existing.firstUserMessage && firstUserMessage) {
-      existing.firstUserMessage = firstUserMessage;
-      discovered.set(sessionId, existing);
     }
   }
 
   // Sort by mtime descending (most recent first)
-  return Array.from(discovered.values()).toSorted((a, b) => b.mtime - a.mtime);
+  const sessions = Array.from(discovered.values());
+  sessions.sort((a, b) => b.mtime - a.mtime);
+  return sessions;
 }
 
 export async function loadSessionCostSummary(params: {
@@ -189,10 +136,10 @@ export async function loadSessionCostSummary(params: {
   if (!currentFile) {
     return null;
   }
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
-  const stored = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath).get(
-    currentFile.filePath,
-  );
+  const pricingFingerprint = await resolveUsageCostPricingFingerprint(params.config, agentDir);
+  const stored = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, {
+    filePaths: [currentFile.filePath],
+  }).get(currentFile.filePath);
   if (!stored || !isUsageCostRollupFresh({ stored, file: currentFile })) {
     return null;
   }
@@ -230,12 +177,12 @@ export async function loadSessionUsageTimeSeries(params: {
     }
   }
 
-  const points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
+  let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
 
   for await (const record of readTranscriptRecords(sessionFile)) {
-    const entry = parseUsageCostTranscriptEntry(record, resolveCost);
+    const entry = await parseUsageCostTranscriptEntryAsync(record, resolveCost, params.config);
     const timestamp = entry?.timestamp?.getTime();
     if (!entry?.usage || !timestamp) {
       continue;
@@ -254,65 +201,51 @@ export async function loadSessionUsageTimeSeries(params: {
     });
   }
 
-  // Sort by timestamp
+  points.sort((a, b) => a.timestamp - b.timestamp);
+
+  const maxPoints = params.maxPoints ?? 100;
+  if (points.length > maxPoints) {
+    const step = Math.ceil(points.length / maxPoints);
+    const downsampled: typeof points = [];
+    let bucket: (typeof points)[number] | undefined;
+    let bucketSize = 0;
+    for (const point of points) {
+      if (!bucket || bucketSize === step) {
+        bucket = {
+          timestamp: point.timestamp,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: 0,
+        };
+        downsampled.push(bucket);
+        bucketSize = 0;
+      }
+      bucket.timestamp = point.timestamp;
+      bucket.input += point.input;
+      bucket.output += point.output;
+      bucket.cacheRead += point.cacheRead;
+      bucket.cacheWrite += point.cacheWrite;
+      bucket.totalTokens += point.totalTokens;
+      bucket.cost += point.cost;
+      bucketSize += 1;
+    }
+    points = downsampled;
+  }
+
+  // Accumulate after sampling to preserve the bucket-based floating-point sums.
   let cumulativeTokens = 0;
   let cumulativeCost = 0;
-  const sortedPoints: SessionUsageTimePoint[] = points
-    .toSorted((a, b) => a.timestamp - b.timestamp)
-    .map((point) => {
+  return {
+    sessionId: params.sessionId,
+    points: points.map((point) => {
       cumulativeTokens += point.totalTokens;
       cumulativeCost += point.cost;
       return Object.assign(point, { cumulativeTokens, cumulativeCost });
-    });
-
-  // Optionally downsample if too many points
-  const maxPoints = params.maxPoints ?? 100;
-  if (sortedPoints.length > maxPoints) {
-    const step = Math.ceil(sortedPoints.length / maxPoints);
-    const downsampled: SessionUsageTimePoint[] = [];
-    let downsampledCumulativeTokens = 0;
-    let downsampledCumulativeCost = 0;
-    for (let i = 0; i < sortedPoints.length; i += step) {
-      const bucket = sortedPoints.slice(i, i + step);
-      const bucketLast = bucket[bucket.length - 1];
-      if (!bucketLast) {
-        continue;
-      }
-
-      let bucketInput = 0;
-      let bucketOutput = 0;
-      let bucketCacheRead = 0;
-      let bucketCacheWrite = 0;
-      let bucketTotalTokens = 0;
-      let bucketCost = 0;
-      for (const point of bucket) {
-        bucketInput += point.input;
-        bucketOutput += point.output;
-        bucketCacheRead += point.cacheRead;
-        bucketCacheWrite += point.cacheWrite;
-        bucketTotalTokens += point.totalTokens;
-        bucketCost += point.cost;
-      }
-
-      downsampledCumulativeTokens += bucketTotalTokens;
-      downsampledCumulativeCost += bucketCost;
-
-      downsampled.push({
-        timestamp: bucketLast.timestamp,
-        input: bucketInput,
-        output: bucketOutput,
-        cacheRead: bucketCacheRead,
-        cacheWrite: bucketCacheWrite,
-        totalTokens: bucketTotalTokens,
-        cost: bucketCost,
-        cumulativeTokens: downsampledCumulativeTokens,
-        cumulativeCost: downsampledCumulativeCost,
-      });
-    }
-    return { sessionId: params.sessionId, points: downsampled };
-  }
-
-  return { sessionId: params.sessionId, points: sortedPoints };
+    }),
+  };
 }
 
 export async function loadSessionLogs(params: {
@@ -344,16 +277,24 @@ export async function loadSessionLogs(params: {
   const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
 
   for await (const parsed of readTranscriptRecordsBestEffort(sessionFile)) {
+    let role: SessionLogEntry["role"];
+    let content: string;
     try {
       const message = parsed.message as Record<string, unknown> | undefined;
       if (!message) {
         continue;
       }
 
-      const role = message.role as string | undefined;
-      if (role !== "user" && role !== "assistant" && role !== "tool" && role !== "toolResult") {
+      const recordRole = message.role as string | undefined;
+      if (
+        recordRole !== "user" &&
+        recordRole !== "assistant" &&
+        recordRole !== "tool" &&
+        recordRole !== "toolResult"
+      ) {
         continue;
       }
+      role = recordRole;
 
       const contentParts: string[] = [];
       const rawToolName = message.toolName ?? message.tool_name ?? message.name ?? message.tool;
@@ -378,7 +319,7 @@ export async function loadSessionLogs(params: {
             if (b.type === "text" && typeof b.text === "string") {
               return b.text;
             }
-            if (b.type === "tool_use") {
+            if (isToolCallContentType(normalizeOptionalString(b.type))) {
               const name = typeof b.name === "string" ? b.name : "unknown";
               return `[Tool: ${name}]`;
             }
@@ -413,14 +354,11 @@ export async function loadSessionLogs(params: {
         }
       }
 
-      let content = contentParts.join("\n").trim();
-      if (!content) {
-        continue;
-      }
-      content = stripInboundMetadata(content);
-      if (role === "user") {
-        content = stripMessageIdHints(stripEnvelope(content)).trim();
-      }
+      const rawText = contentParts.join("\n");
+      content =
+        role === "user"
+          ? stripUserEnvelopeForDisplay(rawText).trim()
+          : stripInboundMetadata(rawText.trim());
       if (!content) {
         continue;
       }
@@ -430,65 +368,28 @@ export async function loadSessionLogs(params: {
       if (content.length > maxLen) {
         content = truncateUtf16Safe(content, maxLen) + "…";
       }
-
-      // Get timestamp
-      // Keep detail logs on the usage-summary timestamp path, including nested
-      // fallback; direct Date parsing can leak NaN as null through Gateway JSON.
-      const timestamp = parseTimestamp(parsed)?.getTime() ?? 0;
-
-      // Get usage for assistant messages
-      let tokens: number | undefined;
-      let cost: number | undefined;
-      if (role === "assistant") {
-        const usageRaw = message.usage as Record<string, unknown> | undefined;
-        const usage = normalizeUsage(usageRaw);
-        if (usage) {
-          tokens =
-            usage.total ??
-            (usage.input ?? 0) +
-              (usage.output ?? 0) +
-              (usage.cacheRead ?? 0) +
-              (usage.cacheWrite ?? 0);
-          const breakdown = extractCostBreakdown(usageRaw);
-          const costConfig = resolveCost({
-            provider:
-              (typeof message.provider === "string" ? message.provider : undefined) ??
-              (typeof parsed.provider === "string" ? parsed.provider : undefined),
-            model:
-              (typeof message.model === "string" ? message.model : undefined) ??
-              (typeof parsed.model === "string" ? parsed.model : undefined),
-          });
-          if (
-            breakdown?.total !== undefined &&
-            !shouldRecomputeRecordedZeroCost({
-              usage,
-              cost: costConfig,
-              costBreakdown: breakdown,
-              costTotal: breakdown.total,
-            })
-          ) {
-            cost = breakdown.total;
-          } else {
-            cost = estimateUsageCost({ usage, cost: costConfig });
-          }
-        }
-      }
-
-      logs.push({
-        timestamp,
-        role,
-        content,
-        tokens,
-        cost,
-      });
-      // Timestamps can arrive out of order, so keep a bounded sorted window instead
-      // of relying on transcript append order or retaining the whole file.
-      if (boundedLimit && logs.length > retentionLimit) {
-        logs.sort((a, b) => a.timestamp - b.timestamp);
-        logs.splice(0, logs.length - limit);
-      }
     } catch {
-      // Ignore malformed lines
+      // Ignore malformed records.
+      continue;
+    }
+
+    // Logs share pricing and timestamp interpretation with summaries and charts.
+    // Recomputing here can turn unknown prices into zero or ignore tiered rates.
+    const entry = await parseUsageCostTranscriptEntryAsync(parsed, resolveCost, params.config);
+    const usage = role === "assistant" ? entry?.usage : undefined;
+
+    logs.push({
+      timestamp: entry?.timestamp?.getTime() ?? 0,
+      role,
+      content,
+      tokens: usage ? computeUsageTokenTotals(usage).totalTokens : undefined,
+      cost: usage ? entry?.costTotal : undefined,
+    });
+    // Timestamps can arrive out of order, so keep a bounded sorted window instead
+    // of relying on transcript append order or retaining the whole file.
+    if (boundedLimit && logs.length > retentionLimit) {
+      logs.sort((a, b) => a.timestamp - b.timestamp);
+      logs.splice(0, logs.length - limit);
     }
   }
 

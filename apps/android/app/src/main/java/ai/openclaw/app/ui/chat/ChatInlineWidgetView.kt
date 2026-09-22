@@ -40,6 +40,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,6 +56,9 @@ import androidx.webkit.ProfileStore
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -71,6 +75,27 @@ private const val INLINE_WIDGET_FETCH_TIMEOUT_SECONDS = 8L
 private const val HTTP_HEADER_ACCEPT = "Accept"
 private const val HTTP_HEADER_CACHE_CONTROL = "Cache-Control"
 
+// Socket closure may block and must finish after the widget's composition is gone.
+private val inlineWidgetCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+internal fun closeWidgetClientAsync(client: OkHttpClient) {
+  inlineWidgetCleanupScope.launch {
+    client.dispatcher.cancelAll()
+    client.connectionPool.evictAll()
+  }
+}
+
+internal fun hasWidgetResourcePolicy(contentSecurityPolicy: String?): Boolean {
+  val directives =
+    contentSecurityPolicy
+      ?.split(';')
+      ?.map { it.trim().lowercase(Locale.US).split(Regex("\\s+")) }
+      ?: return false
+  val defaultSource = directives.firstOrNull { it.firstOrNull() == "default-src" }?.drop(1)
+  val sandbox = directives.firstOrNull { it.firstOrNull() == "sandbox" }?.drop(1)
+  return defaultSource == listOf("'none'") && sandbox == listOf("allow-scripts")
+}
+
 @Composable
 internal fun ChatInlineWidget(
   preview: ChatWidgetPreview,
@@ -79,7 +104,7 @@ internal fun ChatInlineWidget(
 ) {
   var resolvedResource by remember(preview.path) { mutableStateOf<ChatWidgetResource?>(null) }
   var unavailable by remember(preview.path) { mutableStateOf(false) }
-  var recoveryAttempts by remember(preview.path) { mutableStateOf(0) }
+  var recoveryAttempts by remember(preview.path) { mutableIntStateOf(0) }
   var refreshInFlight by remember(preview.path) { mutableStateOf(false) }
   var refreshRequestId by remember(preview.path) { mutableStateOf<UUID?>(null) }
   var exportMenuExpanded by remember(preview.path) { mutableStateOf(false) }
@@ -225,16 +250,20 @@ internal fun ChatInlineWidget(
           }
         }
       }
-      unavailable || resolvedResource != null ->
+
+      unavailable || resolvedResource != null -> {
         Text(
           text = nativeString("Widget unavailable"),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
         )
-      else ->
+      }
+
+      else -> {
         Box(modifier = Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.Center) {
           CircularProgressIndicator(color = ClawTheme.colors.textMuted)
         }
+      }
     }
   }
 }
@@ -342,15 +371,18 @@ private class InlineWidgetWebViewClient(
   private val onFailure: () -> Unit,
   private val onRendererGone: () -> Unit,
 ) : WebViewClient() {
-  private val pinnedClient = resource.tlsFingerprintSha256?.let(::buildPinnedWidgetClient)
-  private var released = false
+  private val documentClient = buildWidgetClient(resource.tlsFingerprintSha256)
+
+  @Volatile private var allowsStaticResources = false
+
+  @Volatile private var released = false
 
   fun release(view: WebView) {
     if (released) return
     released = true
     view.setOnLongClickListener(null)
     view.stopLoading()
-    closePinnedClient()
+    closeDocumentClient()
     view.removeAllViews()
     view.destroy()
   }
@@ -362,14 +394,14 @@ private class InlineWidgetWebViewClient(
     // A renderer-less WebView is unusable. Remove and destroy it before
     // starting asynchronous route recovery; onRelease becomes a no-op.
     (view.parent as? ViewGroup)?.removeView(view)
-    closePinnedClient()
+    closeDocumentClient()
     view.destroy()
     return true
   }
 
-  private fun closePinnedClient() {
-    pinnedClient?.dispatcher?.cancelAll()
-    pinnedClient?.connectionPool?.evictAll()
+  private fun closeDocumentClient() {
+    allowsStaticResources = false
+    documentClient?.let(::closeWidgetClientAsync)
   }
 
   override fun onPageCommitVisible(
@@ -392,16 +424,27 @@ private class InlineWidgetWebViewClient(
     view: WebView,
     request: WebResourceRequest,
   ): WebResourceResponse? {
+    if (released) return blockedWidgetResponse()
     val scheme = request.url.scheme?.lowercase()
     if (scheme != "http" && scheme != "https") return null
+    if (!request.isForMainFrame) {
+      // The document's Gateway-authored CSP decides which static origins and resource types may load.
+      return if (allowsStaticResources && scheme == "https" && request.method.equals("GET", ignoreCase = true)) {
+        null
+      } else {
+        blockedWidgetResponse()
+      }
+    }
     val allowed =
-      request.isForMainFrame &&
-        request.method.equals("GET", ignoreCase = true) &&
+      request.method.equals("GET", ignoreCase = true) &&
         sameDocument(resource.url, request.url.toString())
     if (!allowed) return blockedWidgetResponse()
-    if (resource.tlsFingerprintSha256 == null) return null
-    if (scheme != "https" || pinnedClient == null) return failedWidgetResponse()
-    return fetchPinnedWidgetDocument(client = pinnedClient, url = request.url.toString())
+    allowsStaticResources = false
+    if (documentClient == null || (resource.tlsFingerprintSha256 != null && scheme != "https")) return failedWidgetResponse()
+    val response = fetchWidgetDocument(client = documentClient, url = request.url.toString())
+    if (released) return blockedWidgetResponse()
+    allowsStaticResources = hasWidgetResourcePolicy(response.responseHeaders?.get("Content-Security-Policy"))
+    return response
   }
 
   override fun onReceivedError(
@@ -429,22 +472,23 @@ private class InlineWidgetWebViewClient(
   }
 }
 
-private fun buildPinnedWidgetClient(rawFingerprint: String): OkHttpClient? {
-  val fingerprint = normalizeGatewayTlsFingerprint(rawFingerprint)
-  if (fingerprint.length != 64) return null
-  val tls =
-    buildGatewayTlsConfig(
-      GatewayTlsParams(
-        required = true,
-        expectedFingerprint = fingerprint,
-        allowTOFU = false,
-        stableId = "inline-widget",
-      ),
-    ) ?: return null
-  return OkHttpClient
-    .Builder()
-    .sslSocketFactory(tls.sslSocketFactory, tls.trustManager)
-    .hostnameVerifier(tls.hostnameVerifier)
+private fun buildWidgetClient(rawFingerprint: String?): OkHttpClient? {
+  val builder = OkHttpClient.Builder()
+  if (rawFingerprint != null) {
+    val fingerprint = normalizeGatewayTlsFingerprint(rawFingerprint)
+    if (fingerprint.length != 64) return null
+    val tls =
+      buildGatewayTlsConfig(
+        GatewayTlsParams(
+          required = true,
+          expectedFingerprint = fingerprint,
+          allowTOFU = false,
+          stableId = "inline-widget",
+        ),
+      ) ?: return null
+    builder.sslSocketFactory(tls.sslSocketFactory, tls.trustManager).hostnameVerifier(tls.hostnameVerifier)
+  }
+  return builder
     .followRedirects(false)
     .followSslRedirects(false)
     .retryOnConnectionFailure(false)
@@ -453,7 +497,7 @@ private fun buildPinnedWidgetClient(rawFingerprint: String): OkHttpClient? {
     .build()
 }
 
-private fun fetchPinnedWidgetDocument(
+private fun fetchWidgetDocument(
   client: OkHttpClient,
   url: String,
 ): WebResourceResponse =

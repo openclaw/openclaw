@@ -5,3 +5,7 @@ import {
 
 export type { SessionTranscriptInstance } from "./session-accessor.sqlite-contract.js";
 export { listSessionEntriesByStatus, listSessionTranscriptInstances };
+export {
+  findSessionTranscriptArchiveEventReadOnly,
+  listSessionTranscriptArchivesReadOnly,
+} from "./session-accessor.sqlite-history.js";

@@ -14,10 +14,13 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/memory-overview.css";
 import type { MemoryEngineSelection } from "./memory-schema.ts";
 import { selectedEngineId } from "./memory-schema.ts";
+
+registerSettingsEnglish();
 
 export type MemoryOverviewStatus =
   | { kind: "idle" | "loading" }
@@ -101,15 +104,19 @@ function renderHero(props: MemoryOverviewProps) {
         <h2>${headline}</h2>
         <p class=${error ? "memory-overview__hero-error" : ""}>${description}</p>
         <div class="memory-overview__hero-actions">
-          ${off
-            ? html`<button class="btn btn--sm" @click=${() => props.onNavigate("settings")}>
-                ${t("memoryPage.overview.hero.openSettings")}
-              </button>`
-            : html`<button class="btn btn--sm" @click=${props.onRefresh}>
-                ${props.status.kind === "error"
-                  ? t("memoryPage.overview.hero.retry")
-                  : t("memoryPage.overview.hero.refresh")}
-              </button>`}
+          ${
+            off
+              ? html`<button class="btn btn--sm" @click=${() => props.onNavigate("settings")}>
+                  ${t("memoryPage.overview.hero.openSettings")}
+                </button>`
+              : html`<button class="btn btn--sm" @click=${props.onRefresh}>
+                  ${
+                    props.status.kind === "error"
+                      ? t("memoryPage.overview.hero.retry")
+                      : t("memoryPage.overview.hero.refresh")
+                  }
+                </button>`
+          }
         </div>
       </div>
     </section>
@@ -229,41 +236,47 @@ function renderEngineHealth(payload: DoctorMemoryStatusPayload, props: MemoryOve
             : payload.embedding.error,
         control: html`
           ${renderSettingsStatus({ kind: embeddingKind, label: embeddingLabel })}
-          ${notChecked
-            ? html`<button
-                type="button"
-                class="btn btn--sm"
-                ?disabled=${props.probingEmbeddings}
-                @click=${props.onProbeEmbeddings}
-              >
-                ${props.probingEmbeddings
-                  ? t("memoryPage.overview.health.testing")
-                  : t("memoryPage.overview.health.test")}
-              </button>`
-            : nothing}
+          ${
+            notChecked
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm"
+                  ?disabled=${props.probingEmbeddings}
+                  @click=${props.onProbeEmbeddings}
+                >
+                  ${
+                    props.probingEmbeddings
+                      ? t("memoryPage.overview.health.testing")
+                      : t("memoryPage.overview.health.test")
+                  }
+                </button>`
+              : nothing
+          }
         `,
       })}
-      ${payload.embeddingRuntime
-        ? renderSettingsRow({
-            title: t("memoryPage.overview.health.runtime"),
-            description: payload.embeddingRuntime.loadError,
-            control: renderSettingsValue(
-              [
-                payload.embeddingRuntime.engine,
-                payload.embeddingRuntime.backend,
-                payload.embeddingRuntime.buildInfo,
-                payload.embeddingRuntime.model?.id,
-                payload.embeddingRuntime.endpoints
-                  ? Object.entries(payload.embeddingRuntime.endpoints)
-                      .map(([name, state]) => `${name}=${state}`)
-                      .join(" ")
-                  : undefined,
-              ]
-                .filter(Boolean)
-                .join(" · "),
-            ),
-          })
-        : nothing}
+      ${
+        payload.embeddingRuntime
+          ? renderSettingsRow({
+              title: t("memoryPage.overview.health.runtime"),
+              description: payload.embeddingRuntime.loadError,
+              control: renderSettingsValue(
+                [
+                  payload.embeddingRuntime.engine,
+                  payload.embeddingRuntime.backend,
+                  payload.embeddingRuntime.buildInfo,
+                  payload.embeddingRuntime.model?.id,
+                  payload.embeddingRuntime.endpoints
+                    ? Object.entries(payload.embeddingRuntime.endpoints)
+                        .map(([name, state]) => `${name}=${state}`)
+                        .join(" ")
+                    : undefined,
+                ]
+                  .filter(Boolean)
+                  .join(" · "),
+              ),
+            })
+          : nothing
+      }
     `,
   );
 }

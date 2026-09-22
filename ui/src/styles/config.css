@@ -8,46 +8,6 @@
    chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
    pieces layered on top of the settings primitives. */
 
-/* Mode Toggle */
-.config-mode-toggle {
-  display: flex;
-  padding: 3px;
-  background: var(--bg-elevated);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  gap: 1px;
-}
-
-:root[data-theme-mode="light"] .config-mode-toggle {
-  background: white;
-}
-
-.config-mode-toggle__btn {
-  flex: 1;
-  padding: 6px 12px;
-  border: none;
-  border-radius: calc(var(--radius-md) - 3px);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
-
-.config-mode-toggle__btn:hover:not(.active) {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.config-mode-toggle__btn.active {
-  background: var(--primary);
-  color: var(--primary-foreground);
-  box-shadow: 0 1px 3px var(--accent-subtle);
-}
-
 /* ===========================================
    Lead column (toolbar / banner / nav above the form)
    =========================================== */
@@ -63,6 +23,12 @@
   gap: var(--space-3);
 }
 
+.session-source__icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
 /* Toolbar: mode toggle / section tabs */
 .config-toolbar {
   display: flex;
@@ -70,12 +36,6 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-3);
-}
-
-.config-show-advanced.active {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  background: var(--accent-subtle);
 }
 
 /* Raw mode file operations (open / discard / save) */
@@ -144,7 +104,7 @@
 }
 
 .config-diff[open] .config-diff__chevron {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .config-diff__content {
@@ -209,6 +169,17 @@
    the first section. Keep one spacing owner. */
 .config-lead + .config-content {
   padding-top: 0;
+}
+
+/* Tabs sit between the route introduction and the active section. Remove the
+   generic lead inset; the workspace gap plus 4px content inset then matches
+   the 24px introduction-to-tabs rhythm. */
+.config-lead:has(.config-sections-hub-tabs) {
+  padding-top: 0;
+}
+
+.config-lead:has(.config-sections-hub-tabs) + .config-content {
+  padding-top: var(--space-1);
 }
 
 .config-content > .settings-page {
@@ -388,6 +359,34 @@
   --theme-chip-accent-2: #8fd6a5;
 }
 
+.settings-theme-card--crt,
+.settings-accent-theme--crt {
+  --theme-chip-bg: #090a09;
+  --theme-chip-accent: #e8e8e8;
+  --theme-chip-accent-2: #ffcf5c;
+}
+
+.settings-theme-card--manuscript,
+.settings-accent-theme--manuscript {
+  --theme-chip-bg: #211e18;
+  --theme-chip-accent: #8fa8e0;
+  --theme-chip-accent-2: #cfa85e;
+}
+
+.settings-theme-card--rose,
+.settings-accent-theme--rose {
+  --theme-chip-bg: #191724;
+  --theme-chip-accent: #ebbcba;
+  --theme-chip-accent-2: #f6c177;
+}
+
+.settings-theme-card--miami,
+.settings-accent-theme--miami {
+  --theme-chip-bg: #140f1e;
+  --theme-chip-accent: #f472b6;
+  --theme-chip-accent-2: #5fd7e8;
+}
+
 :root[data-theme-mode="light"] :is(.settings-theme-card--claw, .settings-accent-theme--claw) {
   --theme-chip-bg: #faf9f7;
   --theme-chip-accent: #bd4531;
@@ -430,6 +429,31 @@
   --theme-chip-bg: #f4f7f4;
   --theme-chip-accent: #10693a;
   --theme-chip-accent-2: #2f6b47;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--crt, .settings-accent-theme--crt) {
+  --theme-chip-bg: #f5f5f4;
+  --theme-chip-accent: #1f1f1f;
+  --theme-chip-accent-2: #7a5d10;
+}
+
+:root[data-theme-mode="light"]
+  :is(.settings-theme-card--manuscript, .settings-accent-theme--manuscript) {
+  --theme-chip-bg: #f6f1e4;
+  --theme-chip-accent: #31549b;
+  --theme-chip-accent-2: #7d6118;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--rose, .settings-accent-theme--rose) {
+  --theme-chip-bg: #faf4ed;
+  --theme-chip-accent: #9c4f66;
+  --theme-chip-accent-2: #286983;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--miami, .settings-accent-theme--miami) {
+  --theme-chip-bg: #f7f3f6;
+  --theme-chip-accent: #b0246f;
+  --theme-chip-accent-2: #0f6f7d;
 }
 /* stylelint-enable color-no-hex */
 
@@ -525,6 +549,18 @@
   height: 15px;
 }
 
+.settings-accent-swatch__reset {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--theme-chip-bg);
+}
+
+.settings-accent-swatch__reset svg {
+  width: 16px;
+  height: 16px;
+}
+
 @media (forced-colors: active) {
   .settings-accent-swatch__picker {
     color: CanvasText;
@@ -569,7 +605,6 @@
   color: var(--accent);
   font-size: 12px;
   font-weight: 600;
-  text-decoration: none;
 }
 
 .settings-theme-import__external:hover {
@@ -853,33 +888,6 @@
   background: var(--bg-hover);
 }
 
-.cfg-object[open] > .cfg-object__summary .cfg-object__chevron {
-  transform: rotate(180deg);
-}
-
-/* Hint tags (searchable via tag: filters). */
-.cfg-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.cfg-tag {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  padding: 2px 8px;
-  font-size: 12px; /* was 11px */
-  color: var(--muted);
-  background: var(--bg-elevated);
-  white-space: nowrap;
-}
-
-:root[data-theme-mode="light"] .cfg-tag {
-  background: white;
-}
-
 @media (hover: none) and (pointer: coarse) {
   .settings-theme-import__input,
   .config-raw-field textarea {
@@ -917,7 +925,7 @@
    of which tab is active so its title and actions do not jump by one space. */
 .shell--settings .content:has(.memory-page) .content-header.hub-page-header {
   max-width: 1120px;
-  padding-inline: var(--space-4);
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
 }
 
 .memory-page__panel .settings-page,
@@ -1000,12 +1008,6 @@
   color: var(--danger);
 }
 
-.mcp-server-loading {
-  padding: var(--space-4);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
 /* Advanced Settings accordion navigation, rendered by view.ts. */
 .config-accordion-nav {
   margin-bottom: 20px;
@@ -1062,7 +1064,7 @@
 }
 
 .config-accordion-group__chevron--open {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .config-accordion-group__items {

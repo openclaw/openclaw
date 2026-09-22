@@ -1,3 +1,5 @@
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { callGateway } from "./call.js";
 import type {
   GatewayInstanceAgentDispatchOptions,
   GatewayRecoveryRuntime,
@@ -55,4 +57,55 @@ export async function dispatchGatewayLifecycleMethod<T = unknown>(
     throw new Error(`Gateway instance lifecycle dispatch unavailable for ${method}`);
   }
   return await runtime.dispatchAgent<T>(agentParams, timeoutMs, dispatchOptions);
+}
+
+/** Capture the lifecycle owner without retaining a completed tool invocation's authority. */
+export function bindGatewayLifecycleRequest(
+  explicitResolver?: GatewayContextResolver,
+): typeof callGateway {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  const resolver = explicitResolver ?? scope?.resolveGatewayContext;
+  const context = resolver ? resolver() : scope?.context;
+  const runtime = context?.recoveryRuntime;
+  const hosted = context?.localEmbedded !== true && Boolean(resolver || context);
+  return async <T>(request: Parameters<typeof callGateway>[0]): Promise<T> => {
+    const assertCurrent = () => {
+      if (hosted && (!runtime || (resolver && resolver() !== context))) {
+        throw new Error(`Gateway instance lifecycle dispatch unavailable for ${request.method}`);
+      }
+      request.assertDispatchCurrent?.();
+    };
+    assertCurrent();
+    if (!hosted || request.url?.trim() || request.token?.trim() || request.password?.trim()) {
+      const { callGateway } = await import("./call.js");
+      return await callGateway<T>(request);
+    }
+    if (!runtime) {
+      throw new Error(`Gateway instance lifecycle dispatch unavailable for ${request.method}`);
+    }
+    const timeoutMs = request.timeoutMs === null ? undefined : (request.timeoutMs ?? 10_000);
+    let result: T;
+    if (request.method === "agent.wait") {
+      result = await runtime.waitForAgent<T>(
+        // SAFETY: the instance-owned wait facade validates AgentWaitParams before execution.
+        request.params as import("../../packages/gateway-protocol/src/index.js").AgentWaitParams,
+        timeoutMs,
+        request.signal,
+      );
+    } else if (
+      request.method === "chat.history" ||
+      request.method === "chat.abort" ||
+      request.method === "sessions.delete"
+    ) {
+      result = await runtime.dispatchSessionMethod<T>(request.method, request.params, {
+        timeoutMs,
+        signal: request.signal,
+        assertCurrent,
+      });
+    } else {
+      throw new Error(`Gateway lifecycle principal cannot dispatch ${request.method}`);
+    }
+    assertCurrent();
+    return result;
+  };
 }

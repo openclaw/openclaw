@@ -1,6 +1,20 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { performance } from "node:perf_hooks";
+import { createDeferredCore } from "../../shared/deferred.js";
+
+export type SessionCatalogListTiming = {
+  admittedAt?: number;
+  settledAt?: number;
+  continuationWaitMs?: number;
+  admittedStepMs?: number;
+  stepCount?: number;
+};
+
 type QueuedProviderList = {
   start: () => void;
 };
+
+type ProviderListStep<T> = { done: false } | { done: true; value: T };
 
 class SessionCatalogListBusyError extends Error {
   readonly code = "catalog_busy";
@@ -27,32 +41,112 @@ export class SessionCatalogListAdmission {
     }
   }
 
-  run<T>(task: () => Promise<T>): Promise<T> {
-    if (this.active < this.maxConcurrent) {
-      return this.start(task);
-    }
-    if (this.queue.length >= this.maxQueued) {
-      return Promise.reject(new SessionCatalogListBusyError(this.maxConcurrent, this.maxQueued));
-    }
-    return new Promise<T>((resolve, reject) => {
-      this.queue.push({
-        start: () => {
-          void this.start(task).then(resolve, reject);
-        },
-      });
-    });
+  async run<T>(
+    task: () => Promise<T>,
+    signal?: AbortSignal,
+    timing?: SessionCatalogListTiming,
+  ): Promise<T> {
+    return await this.runSteps(async () => ({ done: true, value: await task() }), signal, timing);
   }
 
-  private async start<T>(task: () => Promise<T>): Promise<T> {
-    this.active += 1;
-    try {
-      return await task();
-    } finally {
-      // Release before draining so every settlement, including rejection, hands
-      // exactly one slot to the oldest waiter instead of leaking capacity.
-      this.active -= 1;
-      this.drain();
+  async runSteps<T>(
+    step: () => Promise<ProviderListStep<T>>,
+    signal?: AbortSignal,
+    timing?: SessionCatalogListTiming,
+  ): Promise<T> {
+    signal?.throwIfAborted();
+    if (this.active >= this.maxConcurrent && this.queue.length >= this.maxQueued) {
+      throw new SessionCatalogListBusyError(this.maxConcurrent, this.maxQueued);
     }
+    // Even an immediate first step may later resume from another caller's drain.
+    const runInAsyncContext = AsyncLocalStorage.snapshot();
+    const completion = createDeferredCore<T>();
+    let continuationQueuedAt: number | undefined;
+    const finishQueueWait = (now: number) => {
+      if (continuationQueuedAt !== undefined && timing) {
+        timing.continuationWaitMs = (timing.continuationWaitMs ?? 0) + now - continuationQueuedAt;
+      }
+      continuationQueuedAt = undefined;
+    };
+    const onAbort = () => {
+      const index = this.queue.indexOf(entry);
+      if (index < 0) {
+        return;
+      }
+      this.queue.splice(index, 1);
+      signal?.removeEventListener("abort", onAbort);
+      const now = performance.now();
+      finishQueueWait(now);
+      if (timing?.admittedAt !== undefined) {
+        timing.settledAt = now;
+      }
+      completion.reject(signal?.reason);
+    };
+    const enqueue = () => {
+      this.queue.push(entry);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) {
+        onAbort();
+      }
+    };
+    const entry: QueuedProviderList = {
+      start: () => {
+        signal?.removeEventListener("abort", onAbort);
+        void runInAsyncContext(async () => {
+          const startedAt = performance.now();
+          finishQueueWait(startedAt);
+          this.active += 1;
+          if (timing) {
+            timing.admittedAt ??= startedAt;
+            timing.stepCount = (timing.stepCount ?? 0) + 1;
+          }
+          let continued = false;
+          try {
+            signal?.throwIfAborted();
+            const result = await step();
+            if (result.done) {
+              completion.resolve(result.value);
+            } else {
+              signal?.throwIfAborted();
+              continued = true;
+            }
+          } catch (error) {
+            completion.reject(error);
+          } finally {
+            const settledAt = performance.now();
+            if (timing) {
+              timing.admittedStepMs = (timing.admittedStepMs ?? 0) + settledAt - startedAt;
+              if (!continued) {
+                timing.settledAt = settledAt;
+              }
+            }
+            this.active -= 1;
+            if (continued) {
+              if (timing) {
+                timing.continuationWaitMs ??= 0;
+              }
+              // Reserve the accepted continuation before the next caller runs:
+              // its synchronous arrivals cannot take this operation's queue place.
+              const next = this.queue.shift();
+              if (next) {
+                continuationQueuedAt = settledAt;
+                enqueue();
+                next.start();
+              } else {
+                entry.start();
+              }
+            }
+            this.drain();
+          }
+        });
+      },
+    };
+    if (this.active < this.maxConcurrent) {
+      entry.start();
+    } else {
+      enqueue();
+    }
+    return await completion.promise;
   }
 
   private drain(): void {

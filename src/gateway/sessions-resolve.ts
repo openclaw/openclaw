@@ -17,21 +17,20 @@ import {
 import { listAgentIds } from "../agents/agent-scope.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import { hasOperatorBoundary } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { createSessionListEntryFilter } from "./session-sharing.js";
-import {
-  buildGatewaySessionInfo,
-  filterAndSortSessionEntries,
-  listSessionsFromStore,
-  loadCombinedSessionStoreForGatewayCore,
-  resolveDeletedAgentIdFromSessionKey,
-  resolveGatewaySessionStoreTargetWithStore,
-} from "./session-utils.js";
+import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
+import { authorizeIncognitoSessionTarget } from "./session-sharing-policy.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
+import { resolveGatewaySessionDisplayName } from "./session-utils-display.js";
+import { filterAndSortSessionEntries, prepareSessionRowSelection } from "./session-utils-list.js";
+import { resolveDeletedAgentIdFromSessionKey } from "./session-utils-store.js";
 
 export type SessionsResolveResult =
   | ({ ok: true } & SessionsResolveCandidate)
@@ -63,9 +62,9 @@ function validateSessionAgentExists(
   cfg: OpenClawConfig,
   key: string,
   entry?: SessionEntry | null,
-  options?: { acpMetadataSessionKey?: string | null },
+  acpMeta?: SessionEntry["acp"] | null,
 ): SessionsResolveResult | null {
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, key, entry, options);
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, key, entry, { acpMeta });
   if (deletedAgentId === null) {
     return null;
   }
@@ -78,101 +77,60 @@ function validateSessionAgentExists(
   };
 }
 
-function isResolvedSessionKeyVisible(params: {
-  cfg: OpenClawConfig;
-  p: SessionsResolveParams;
-  store: Record<string, SessionEntry>;
-  key: string;
-}) {
-  if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
-    return true;
-  }
-  return filterAndSortSessionEntries({
-    cfg: params.cfg,
-    store: params.store,
-    now: Date.now(),
-    opts: resolveSessionVisibilityFilterOptions(params.p),
-  }).some(([key]) => key === params.key);
-}
-
-function findVisibleSessionIdMatches(params: {
-  cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  p: SessionsResolveParams;
-  sessionId: string;
-  entryFilter?: (key: string, entry: SessionEntry) => boolean;
-}): Array<[string, SessionEntry]> {
-  return filterAndSortSessionEntries({
-    cfg: params.cfg,
-    store: params.store,
-    now: Date.now(),
-    opts: resolveSessionVisibilityFilterOptions(params.p),
-  }).filter(
-    ([key, entry]) =>
-      (params.entryFilter?.(key, entry) ?? true) &&
-      (entry?.sessionId === params.sessionId || key === params.sessionId),
-  );
-}
-
 function normalizeShortSessionId(shortId: string): string | null {
   return SHORT_SESSION_ID_RE.test(shortId) ? shortId.toLowerCase() : null;
 }
 
-function findVisibleShortIdMatches(params: {
-  cfg: OpenClawConfig;
-  storePath: string;
-  store: Record<string, SessionEntry>;
-  p: SessionsResolveParams;
-  shortId: string;
-  entryFilter?: (key: string, entry: SessionEntry) => boolean;
-}): SessionsResolveCandidate[] {
-  const now = Date.now();
-  const entries = filterAndSortSessionEntries({
-    cfg: params.cfg,
-    store: params.store,
-    now,
-    opts: { ...resolveSessionVisibilityFilterOptions(params.p), archived: "all" },
-  });
-  return entries.flatMap(([key, entry]) => {
-    if (params.entryFilter && !params.entryFilter(key, entry)) {
-      return [];
-    }
-    const uuid = parseAgentSessionKey(key)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
-    if (!uuid?.toLowerCase().replaceAll("-", "").startsWith(params.shortId)) {
-      return [];
-    }
-    if (resolveDeletedAgentIdFromSessionKey(params.cfg, key, entry) !== null) {
-      return [];
-    }
-    const row = buildGatewaySessionInfo({
-      cfg: params.cfg,
-      storePath: params.storePath,
-      store: params.store,
-      key,
-      entry,
-      now,
-    });
-    return [
-      {
-        key,
-        agentId: expectDefined(
-          row.agentId ?? parseAgentSessionKey(key)?.agentId ?? params.p.agentId,
-          "short-id session agent",
-        ),
-        ...(row.displayName ? { displayName: row.displayName } : {}),
-        ...(row.boardFace ? { boardFace: row.boardFace } : {}),
-      },
-    ];
-  });
+function sessionResolveCandidate(
+  key: string,
+  entry: SessionEntry,
+  agentId: string,
+): SessionsResolveCandidate {
+  const displayName = resolveGatewaySessionDisplayName(key, entry);
+  return {
+    key,
+    agentId: normalizeAgentId(agentId),
+    ...(displayName ? { displayName } : {}),
+    ...(entry.boardFace ? { boardFace: entry.boardFace } : {}),
+    ...(entry.boardPresentation ? { boardPresentation: entry.boardPresentation } : {}),
+  };
 }
 
 export async function resolveSessionKeyFromResolveParams(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
+  projection: SessionRowProjection;
   p: SessionsResolveParams;
 }): Promise<SessionsResolveResult> {
-  const { cfg, client, p } = params;
-  const entryFilter = createSessionListEntryFilter({ client, cfg });
+  const { client, p, projection } = params;
+  do {
+    await projection.ensureMaterialized();
+  } while (projection.needsMaterialization);
+  const { cfg } = projection.state;
+  const { sharing } = prepareProjectedSessionPresentation(projection, client);
+  const { entryFilter } = sharing;
+  const prepare = (agentId = p.agentId, configuredAgentsOnly = false) =>
+    prepareSessionRowSelection(projection, {
+      ...resolveSessionVisibilityFilterOptions(p),
+      agentId,
+      configuredAgentsOnly,
+    });
+  const agentCheck = (key: string, entry: SessionEntry | undefined, agentId?: string) => {
+    const row = agentId ? projection.describe({ agentId, key }) : prepare().getTarget(key);
+    return validateSessionAgentExists(
+      cfg,
+      key,
+      entry,
+      row?.materialized.source.thinkingProjection.acpMeta ?? null,
+    );
+  };
+  const sessionIdMatches = (agentId?: string) =>
+    filterAndSortSessionEntries({
+      ...prepare(agentId),
+      entryFilter,
+    }).filter(
+      ([candidateKey, entry]) => entry.sessionId === sessionId || candidateKey === sessionId,
+    );
 
   const key = normalizeOptionalString(p.key) ?? "";
   const hasKey = key.length > 0;
@@ -181,6 +139,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
   const hasLabel = (normalizeOptionalString(p.label) ?? "").length > 0;
   const rawShortId = normalizeOptionalString(p.shortId) ?? "";
   const hasShortId = rawShortId.length > 0;
+  const hasReference = p.reference !== undefined;
   const hasSlugHint = p.slugHint !== undefined;
   if (hasSlugHint && !hasShortId) {
     return {
@@ -188,13 +147,15 @@ export async function resolveSessionKeyFromResolveParams(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, "slugHint requires shortId"),
     };
   }
-  const selectionCount = [hasKey, hasSessionId, hasLabel, hasShortId].filter(Boolean).length;
+  const selectionCount = [hasKey, hasSessionId, hasLabel, hasShortId, hasReference].filter(
+    Boolean,
+  ).length;
   if (selectionCount > 1) {
     return {
       ok: false,
       error: errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "Provide either key, sessionId, label, or shortId (not multiple)",
+        "Provide either key, sessionId, label, shortId, or reference (not multiple)",
       ),
     };
   }
@@ -203,9 +164,59 @@ export async function resolveSessionKeyFromResolveParams(params: {
       ok: false,
       error: errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "Either key, sessionId, label, or shortId is required",
+        "Either key, sessionId, label, shortId, or reference is required",
       ),
     };
+  }
+
+  if (p.reference) {
+    const referenceKey = normalizeSessionKeyPreservingOpaquePeerIds(p.reference.key);
+    const parsed = parseAgentSessionKey(referenceKey);
+    const sameAgent = !p.agentId || !parsed || parsed.agentId === normalizeAgentId(p.agentId);
+    const exactKey = sameAgent
+      ? resolveSessionStoreKey({ cfg, sessionKey: referenceKey, storeAgentId: p.agentId })
+      : referenceKey;
+    const prepared = prepare(p.agentId, true);
+    // URL references are discovery, including exact keys. Keep hidden rows out
+    // before choosing a winner; the separate key selector retains its read contract.
+    const entries = filterAndSortSessionEntries({
+      ...prepared,
+      entryFilter,
+      opts: { ...resolveSessionVisibilityFilterOptions(p), archived: "all" },
+    }).filter(
+      ([candidateKey, entry]) =>
+        agentCheck(candidateKey, entry, prepared.getTarget(candidateKey)?.agentId) === null,
+    );
+    const candidate = ([candidateKey, entry]: [string, SessionEntry]) =>
+      sessionResolveCandidate(
+        candidateKey,
+        entry,
+        expectDefined(prepared.getTarget(candidateKey), "reference session agent").agentId,
+      );
+    const exact = entries.find(
+      ([candidateKey]) => normalizeSessionKeyPreservingOpaquePeerIds(candidateKey) === exactKey,
+    );
+    if (exact) {
+      return { ok: true, ...candidate(exact) };
+    }
+    const slug = normalizeOptionalString(p.reference.slug);
+    const matches = slug
+      ? entries
+          .filter(
+            ([candidateKey, entry]) =>
+              SESSION_UUID_SUFFIX_RE.test(parseAgentSessionKey(candidateKey)?.rest ?? "") &&
+              controlUiSessionSlug(resolveGatewaySessionDisplayName(candidateKey, entry)) === slug,
+          )
+          .slice(0, 10)
+          .map(candidate)
+      : [];
+    if (matches.length > 1) {
+      return { ok: true, ambiguous: true, candidates: matches };
+    }
+    const selected = matches[0];
+    return selected
+      ? { ok: true, ...selected }
+      : noSessionFoundResult({ p, message: `No session found: ${p.reference.key}` });
   }
 
   if (hasKey) {
@@ -215,33 +226,29 @@ export async function resolveSessionKeyFromResolveParams(params: {
     if (!requestedAgent.ok) {
       return requestedAgent;
     }
-    const target = resolveGatewaySessionStoreTargetWithStore({
-      cfg,
-      key,
-      clone: false,
-      ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
-    });
-    const store = target.store;
-    const entry = store[target.canonicalKey];
-    if (entry) {
+    if (authorizeIncognitoSessionTarget({ client, sessionKey: key, target: null })) {
+      return noSessionFoundResult({ p, message: `No session found: ${key}` });
+    }
+    const target = projection.describe({ agentId: requestedAgent.agentId, key });
+    if (target?.entry) {
+      const { entry } = target;
+      const spawnedBy = typeof p.spawnedBy === "string" && p.spawnedBy.trim().length > 0;
       if (
-        (hasOperatorBoundary(client, cfg) && entryFilter?.(target.canonicalKey, entry) === false) ||
-        !isResolvedSessionKeyVisible({
-          cfg,
-          p,
-          store,
-          key: target.canonicalKey,
-        })
+        (hasOperatorBoundary(client, cfg) && entryFilter?.(target.key, entry) === false) ||
+        (spawnedBy &&
+          !filterAndSortSessionEntries({ ...prepare(requestedAgent.agentId) }).some(
+            ([candidate]) => candidate === target.key,
+          ))
       ) {
         return noSessionFoundResult({ p, message: `No session found: ${key}` });
       }
-      const agentCheck = validateSessionAgentExists(cfg, target.canonicalKey, entry, {
-        acpMetadataSessionKey: target.canonicalKey,
-      });
-      if (agentCheck) {
-        return agentCheck;
-      }
-      return { ok: true, key: target.canonicalKey, agentId: requestedAgent.agentId };
+      return (
+        agentCheck(target.key, entry, target.agentId) ?? {
+          ok: true,
+          key: target.key,
+          agentId: requestedAgent.agentId,
+        }
+      );
     }
     return noSessionFoundResult({ p, message: `No session found: ${key}` });
   }
@@ -253,14 +260,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
         { agentId: string; entry: SessionEntry; key: string }
       >();
       for (const agentId of listAgentIds(cfg)) {
-        const loaded = loadCombinedSessionStoreForGatewayCore(cfg, { agentId });
-        const agentMatches = findVisibleSessionIdMatches({
-          cfg,
-          store: loaded.store,
-          p: { ...p, agentId },
-          sessionId,
-          entryFilter,
-        });
+        const agentMatches = sessionIdMatches(agentId);
         const agentSelection = resolveSessionIdMatchSelection(agentMatches, sessionId);
         if (agentSelection.kind === "ambiguous") {
           return {
@@ -298,13 +298,13 @@ export async function resolveSessionKeyFromResolveParams(params: {
       }
       const ownerTaggedMatch = ownerTaggedMatches.values().next().value;
       if (ownerTaggedMatch) {
-        const agentCheck = validateSessionAgentExists(
-          cfg,
+        const check = agentCheck(
           ownerTaggedMatch.key,
           ownerTaggedMatch.entry,
+          ownerTaggedMatch.agentId,
         );
         return (
-          agentCheck ?? {
+          check ?? {
             ok: true,
             key: ownerTaggedMatch.key,
             agentId: ownerTaggedMatch.agentId,
@@ -312,8 +312,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
         );
       }
     }
-    const { store } = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: p.agentId });
-    const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId, entryFilter });
+    const matches = sessionIdMatches(p.agentId);
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
       return noSessionFoundResult({ p, message: `No session found: ${sessionId}` });
@@ -336,11 +335,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       }
       selectedAgentId = resolvedOwner.agentId;
     }
-    const agentCheckSessionId = validateSessionAgentExists(
-      cfg,
-      selection.sessionKey,
-      selectedEntry,
-    );
+    const agentCheckSessionId = agentCheck(selection.sessionKey, selectedEntry, selectedAgentId);
     if (agentCheckSessionId) {
       return agentCheckSessionId;
     }
@@ -358,16 +353,22 @@ export async function resolveSessionKeyFromResolveParams(params: {
         ),
       };
     }
-    const { storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, {
-      agentId: p.agentId,
-    });
-    const matches = findVisibleShortIdMatches({
-      cfg,
-      storePath,
-      store,
-      p,
-      shortId,
-      entryFilter,
+    const prepared = prepare();
+    const matches = filterAndSortSessionEntries({
+      ...prepared,
+      opts: { ...prepared.opts, archived: "all" },
+      entryFilter: (candidateKey, entry) => {
+        const uuid = parseAgentSessionKey(candidateKey)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
+        return Boolean(
+          uuid?.toLowerCase().replaceAll("-", "").startsWith(shortId) &&
+          (entryFilter?.(candidateKey, entry) ?? true),
+        );
+      },
+    }).flatMap(([candidateKey, entry]) => {
+      const target = prepared.getTarget(candidateKey);
+      return target && !agentCheck(candidateKey, entry, target.agentId)
+        ? [sessionResolveCandidate(candidateKey, entry, target.agentId)]
+        : [];
     });
     const slugHint = normalizeOptionalString(p.slugHint);
     const slugMatches = slugHint
@@ -394,30 +395,24 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: p.agentId });
-  const list = listSessionsFromStore({
-    cfg,
-    ...(entryFilter ? { entryFilter } : {}),
-    storePath,
-    store,
-    lightweightListRows: true,
+  const prepared = prepare();
+  const matches = filterAndSortSessionEntries({
+    ...prepared,
+    entryFilter,
     opts: {
-      includeGlobal: p.includeGlobal === true,
-      includeUnknown: p.includeUnknown === true,
+      ...resolveSessionVisibilityFilterOptions(p),
       label: parsedLabel.label,
-      agentId: p.agentId,
-      spawnedBy: p.spawnedBy,
       limit: 2,
     },
   });
-  if (list.sessions.length === 0) {
+  if (matches.length === 0) {
     return noSessionFoundResult({
       p,
       message: `No session found with label: ${parsedLabel.label}`,
     });
   }
-  if (list.sessions.length > 1) {
-    const keys = list.sessions.map((session) => session.key).join(", ");
+  if (matches.length > 1) {
+    const keys = matches.map(([matchKey]) => matchKey).join(", ");
     return {
       ok: false,
       error: errorShape(
@@ -427,19 +422,14 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const labelKey = expectDefined(list.sessions[0], "sessions entry at 0").key;
-  const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey]);
+  const [labelKey, labelEntry] = expectDefined(matches[0], "label session match at 0");
+  const agentCheckLabel = agentCheck(labelKey, labelEntry, prepared.getTarget(labelKey)?.agentId);
   if (agentCheckLabel) {
     return agentCheckLabel;
   }
   return {
     ok: true,
     key: labelKey,
-    agentId: expectDefined(
-      expectDefined(list.sessions[0], "sessions entry at 0").agentId ??
-        parseAgentSessionKey(labelKey)?.agentId ??
-        p.agentId,
-      "label session agent",
-    ),
+    agentId: expectDefined(prepared.getTarget(labelKey), "label session agent").agentId,
   };
 }

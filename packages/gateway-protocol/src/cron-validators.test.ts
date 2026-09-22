@@ -12,7 +12,7 @@ import {
   validateCronRunsParams,
   validateCronUpdateParams,
 } from "./index.js";
-import { CronJobSchema, CronRunLogEntrySchema } from "./schema/cron.js";
+import { CronAddResultSchema, CronJobSchema, CronRunLogEntrySchema } from "./schema/cron.js";
 
 /**
  * Cron validator regressions for public scheduler RPC payloads.
@@ -47,6 +47,27 @@ function expectCases(
 describe("cron protocol validators", () => {
   it("accepts minimal add params", () => {
     expectCases(validateCronAddParams, true, [minimalAddParams]);
+  });
+
+  it("accepts create results with a dry-run delivery preview", () => {
+    const job = {
+      ...minimalAddParams,
+      id: "job-1",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      state: {},
+    };
+    const deliveryPreview = {
+      label: "announce -> last",
+      detail: "last -> no route, will fail-closed",
+    };
+    expect(Value.Check(CronAddResultSchema, job)).toBe(true);
+    expect(Value.Check(CronAddResultSchema, { ...job, deliveryPreview })).toBe(true);
+    expect(Value.Check(CronAddResultSchema, { created: true, job, deliveryPreview })).toBe(true);
+    expect(
+      Value.Check(CronAddResultSchema, { ...job, deliveryPreview: { label: "announce" } }),
+    ).toBe(false);
   });
 
   it("reports auto-disable state without accepting it in writable patches", () => {
@@ -468,5 +489,32 @@ describe("cron protocol validators", () => {
       { scope: "all", agentId: "" },
       { scope: "job", statuses: [] },
     ]);
+  });
+});
+
+describe("cron timeout protocol contract", () => {
+  it.each([
+    { kind: "agentTurn", message: "Synthetic reminder" },
+    { kind: "command", argv: ["printf", "synthetic-proof"] },
+    { kind: "script", script: "return { output: 'synthetic-proof' };" },
+  ])("accepts null only in $kind timeout updates", (payload) => {
+    const create = add({ sessionTarget: "isolated", payload });
+    for (const timeout of [{}, { timeoutSeconds: 15 }, { timeoutSeconds: null }]) {
+      const candidatePayload = { ...payload, ...timeout };
+      expect(validateCronUpdateParams(update({ payload: candidatePayload }))).toBe(true);
+      const stored = { ...create, payload: candidatePayload };
+      const numericOrAbsent = timeout.timeoutSeconds !== null;
+      expect(validateCronAddParams(stored)).toBe(numericOrAbsent);
+      expect(
+        Value.Check(CronJobSchema, {
+          ...stored,
+          id: "timeout-job",
+          enabled: true,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          state: {},
+        }),
+      ).toBe(numericOrAbsent);
+    }
   });
 });

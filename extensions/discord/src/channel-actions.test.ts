@@ -4,6 +4,44 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 
+function expectedScopedDiscordActionsWithoutPolls(): string[] {
+  return [
+    "send",
+    "react",
+    "reactions",
+    "emoji-list",
+    "upload-file",
+    "read",
+    "edit",
+    "delete",
+    "pin",
+    "unpin",
+    "list-pins",
+    "permissions",
+    "thread-create",
+    "thread-list",
+    "thread-reply",
+    "search",
+    "sticker",
+    "member-info",
+    "role-info",
+    "emoji-upload",
+    "sticker-upload",
+    "channel-info",
+    "channel-list",
+    "channel-create",
+    "channel-edit",
+    "channel-delete",
+    "channel-move",
+    "category-create",
+    "category-edit",
+    "category-delete",
+    "voice-status",
+    "event-list",
+    "event-create",
+  ];
+}
+
 const handleDiscordMessageActionMock = vi.hoisted(() =>
   vi.fn(async () => ({ content: [], details: { ok: true } })),
 );
@@ -199,41 +237,7 @@ describe("discordMessageActions", () => {
       accountId: "ops",
     });
 
-    expect(discovery?.actions).toEqual([
-      "send",
-      "react",
-      "reactions",
-      "emoji-list",
-      "upload-file",
-      "read",
-      "edit",
-      "delete",
-      "pin",
-      "unpin",
-      "list-pins",
-      "permissions",
-      "thread-create",
-      "thread-list",
-      "thread-reply",
-      "search",
-      "sticker",
-      "member-info",
-      "role-info",
-      "emoji-upload",
-      "sticker-upload",
-      "channel-info",
-      "channel-list",
-      "channel-create",
-      "channel-edit",
-      "channel-delete",
-      "channel-move",
-      "category-create",
-      "category-edit",
-      "category-delete",
-      "voice-status",
-      "event-list",
-      "event-create",
-    ]);
+    expect(discovery?.actions).toEqual(expectedScopedDiscordActionsWithoutPolls());
   });
 
   it("honors account-scoped action gates during discovery", () => {
@@ -300,41 +304,7 @@ describe("discordMessageActions", () => {
       "event-list",
       "event-create",
     ]);
-    expect(workDiscovery?.actions).toEqual([
-      "send",
-      "react",
-      "reactions",
-      "emoji-list",
-      "upload-file",
-      "read",
-      "edit",
-      "delete",
-      "pin",
-      "unpin",
-      "list-pins",
-      "permissions",
-      "thread-create",
-      "thread-list",
-      "thread-reply",
-      "search",
-      "sticker",
-      "member-info",
-      "role-info",
-      "emoji-upload",
-      "sticker-upload",
-      "channel-info",
-      "channel-list",
-      "channel-create",
-      "channel-edit",
-      "channel-delete",
-      "channel-move",
-      "category-create",
-      "category-edit",
-      "category-delete",
-      "voice-status",
-      "event-list",
-      "event-create",
-    ]);
+    expect(workDiscovery?.actions).toEqual(expectedScopedDiscordActionsWithoutPolls());
     expect(schemaForAction(defaultDiscovery, "send")).toMatchObject({
       actions: ["send"],
       properties: {
@@ -456,6 +426,76 @@ describe("discordMessageActions", () => {
         args: { action: "threadReply", channelId: "   " },
       }),
     ).toBeNull();
+  });
+
+  it("proves only the exact current Discord thread-reply target", () => {
+    const spec = discordMessageActions.messageActionTargetAliases?.["thread-reply"];
+
+    expect(spec?.resolveDeliveryTarget?.({ args: { threadId: "123456" } })).toBe("channel:123456");
+    for (const args of [
+      { target: "123456" },
+      { to: "123456" },
+      { channelId: "123456" },
+      { target: "channel:123456" },
+      { threadId: "123456", target: "parent" },
+      { threadId: "123456", to: "parent" },
+      { threadId: "123456", channelId: "parent" },
+    ]) {
+      expect(spec?.resolveDeliveryTarget?.({ args })).toBeUndefined();
+    }
+    for (const args of [
+      { threadId: "123456" },
+      { target: "123456" },
+      { to: "123456" },
+      { channelId: "123456" },
+      { target: "channel:123456" },
+      { to: "channel:123456" },
+      { channelId: "123456" },
+    ]) {
+      expect(
+        spec?.matchesCurrentConversation?.({
+          args,
+          accountId: "default",
+          toolContext: {
+            currentChannelProvider: "discord",
+            currentChannelId: "123456",
+            currentMessagingTarget: "channel:123456",
+          },
+        }),
+      ).toBe(true);
+    }
+    expect(
+      spec?.matchesCurrentConversation?.({
+        args: { threadId: "123456", target: "channel:999999", to: "channel:999999" },
+        accountId: "default",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "123456",
+          currentMessagingTarget: "channel:123456",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      spec?.matchesCurrentConversation?.({
+        args: { threadId: "999999" },
+        accountId: "default",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "123456",
+          currentMessagingTarget: "channel:123456",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      spec?.matchesCurrentConversation?.({
+        args: {},
+        accountId: "default",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "123456",
+        },
+      }),
+    ).toBe(false);
   });
 
   it("prepares Discord send payload channel data for durable core delivery", async () => {

@@ -11,13 +11,26 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionKeyFromResolveParams as resolveSessionKeyFromResolveParamsWithClient } from "./sessions-resolve.js";
 
 type ResolveParams = Parameters<typeof resolveSessionKeyFromResolveParamsWithClient>[0];
 
-const resolveSessionKeyFromResolveParams = (
-  params: Omit<ResolveParams, "client"> & { client?: ResolveParams["client"] },
-) => resolveSessionKeyFromResolveParamsWithClient({ client: null, ...params });
+const projections = new Map<OpenClawConfig, Promise<SessionRowProjection>>();
+const resolveSessionKeyFromResolveParams = async (
+  params: Omit<ResolveParams, "client" | "projection"> & { client?: ResolveParams["client"] },
+) => {
+  let pending = projections.get(params.cfg);
+  if (!pending) {
+    pending = createSessionRowProjection({ cfg: params.cfg });
+    projections.set(params.cfg, pending);
+  }
+  return resolveSessionKeyFromResolveParamsWithClient({
+    client: null,
+    ...params,
+    projection: await pending,
+  });
+};
 
 describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   const freshUpdatedAt = () => Date.now();
@@ -35,6 +48,10 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       try {
         return await fn(ctx);
       } finally {
+        for (const pending of projections.values()) {
+          (await pending).dispose();
+        }
+        projections.clear();
         closeSessionSqliteDatabasesForTest();
       }
     });

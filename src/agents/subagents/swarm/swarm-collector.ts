@@ -3,10 +3,8 @@ import { consumeSwarmStructuredOutput } from "../../tools/structured-output-tool
 import { ensureCompletionState } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { updateSubagentArchiveAtMs } from "../registry/subagent-registry-helpers.js";
-import type {
-  SubagentRunRecord,
-  SwarmCollectorStatus,
-} from "../registry/subagent-registry.types.js";
+import type { SwarmCollectorStatus } from "../registry/subagent-registry-read.types.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { loadSubagentSessionEntry } from "../registry/subagent-session-reconciliation.js";
 
 function resolveStatus(
@@ -64,15 +62,11 @@ export function updateSwarmCollectorCompletion(
         }
       : undefined;
   const resolvedStatus = resolveStatus(entry, captured?.structured !== undefined);
-  const next = {
+  entry.collectorCompletion = {
     status: schemaError && resolvedStatus === "done" ? ("failed" as const) : resolvedStatus,
     ...(captured?.structured !== undefined ? { structured: captured.structured } : {}),
     ...(schemaError ? { schemaError } : {}),
     ...(usage ? { usage } : {}),
   };
-  if (JSON.stringify(entry.collectorCompletion) === JSON.stringify(next)) {
-    return false;
-  }
-  entry.collectorCompletion = next;
   return true;
 }

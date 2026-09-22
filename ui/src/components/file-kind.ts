@@ -152,9 +152,8 @@ function shortestUniqueSuffixDepth(root: SuffixTrieNode, segments: readonly stri
  */
 export function shortestFileLabels(paths: readonly string[]): Map<string, string> {
   const unique = [...new Set(paths)];
-  const segmentsByPath = new Map(
-    unique.map((path) => [path, path.split(PATH_SEPARATOR_RE).filter(Boolean)]),
-  );
+  // The leading empty segment distinguishes absolute paths from matching relative paths.
+  const segmentsByPath = new Map(unique.map((path) => [path, path.split(PATH_SEPARATOR_RE)]));
   const suffixTrie: SuffixTrieNode = { pathCount: 0, children: new Map() };
   for (const segments of segmentsByPath.values()) {
     insertReversedSegments(suffixTrie, segments);

@@ -85,7 +85,7 @@ afterEach(() => {
 });
 
 describe("copyBundledPluginMetadata", () => {
-  it("copies plugin manifests, package metadata, and local skill directories", () => {
+  it("copies plugin metadata, activity artwork, and skills without replacing runtime assets", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-meta-");
     const pluginDir = createPlugin(repoRoot, {
       id: "acpx",
@@ -99,6 +99,18 @@ describe("copyBundledPluginMetadata", () => {
       "# ACP Router\n",
       "utf8",
     );
+    fs.mkdirSync(path.join(pluginDir, "assets"), { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "assets", "icon.png"), Buffer.from("package icon"));
+    const activityIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"/>';
+    fs.writeFileSync(path.join(pluginDir, "assets", "activity.svg"), activityIcon);
+    fs.mkdirSync(path.join(pluginDir, "assets", "activity"));
+    fs.writeFileSync(path.join(pluginDir, "assets", "activity", "acp_status.svg"), activityIcon);
+    fs.writeFileSync(path.join(pluginDir, "assets", "activity", "notes.txt"), "not artwork");
+    fs.writeFileSync(path.join(pluginDir, "assets", "activity", "bad name.svg"), activityIcon);
+    const distAssetsDir = path.join(bundledPluginDir(repoRoot, "acpx"), "assets");
+    fs.mkdirSync(path.join(distAssetsDir, "activity"), { recursive: true });
+    fs.writeFileSync(path.join(distAssetsDir, "activity", "retired.svg"), "stale");
+    fs.writeFileSync(path.join(distAssetsDir, "runtime.js"), "keep runtime asset");
 
     copyBundledPluginMetadata({ repoRoot });
 
@@ -112,8 +124,69 @@ describe("copyBundledPluginMetadata", () => {
       ),
     ).toContain("ACP Router");
     expectBundledSkills(repoRoot, "acpx", ["./skills"]);
+    expect(
+      fs.readFileSync(path.join(repoRoot, "dist", "extensions", "acpx", "assets", "icon.png")),
+    ).toEqual(Buffer.from("package icon"));
+    expect(fs.readFileSync(path.join(distAssetsDir, "activity.svg"), "utf8")).toBe(activityIcon);
+    expect(fs.readdirSync(path.join(distAssetsDir, "activity"))).toEqual(["acp_status.svg"]);
+    expect(fs.readFileSync(path.join(distAssetsDir, "activity", "acp_status.svg"), "utf8")).toBe(
+      activityIcon,
+    );
+    expect(fs.readFileSync(path.join(distAssetsDir, "runtime.js"), "utf8")).toBe(
+      "keep runtime asset",
+    );
     const packageJson = readBundledPackageJson(repoRoot, "acpx");
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
+  });
+
+  it("ignores non-file icons and removes retired activity artwork", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-invalid-icon-");
+    const pluginDir = createPlugin(repoRoot, {
+      id: "acpx",
+      packageName: "@openclaw/acpx",
+      packageOpenClaw: { extensions: ["./index.ts"] },
+    });
+    const iconPaths = ["assets/icon.png", "assets/activity.svg"];
+    const staleIconPaths = [...iconPaths, "assets/activity/retired.svg"].map((relativePath) =>
+      path.join(bundledPluginDir(repoRoot, "acpx"), relativePath),
+    );
+    for (const relativePath of iconPaths) {
+      fs.mkdirSync(path.join(pluginDir, relativePath), { recursive: true });
+    }
+    for (const staleIconPath of staleIconPaths) {
+      fs.mkdirSync(path.dirname(staleIconPath), { recursive: true });
+      fs.writeFileSync(staleIconPath, "stale");
+    }
+
+    expect(() => copyBundledPluginMetadata({ repoRoot })).not.toThrow();
+    for (const staleIconPath of staleIconPaths) {
+      expect(fs.existsSync(staleIconPath)).toBe(false);
+    }
+  });
+
+  it("omits oversized tool artwork directories while retaining the default activity icon", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-activity-limit-");
+    const pluginDir = createPlugin(repoRoot, {
+      id: "acpx",
+      packageName: "@openclaw/acpx",
+      packageOpenClaw: { extensions: ["./index.ts"] },
+    });
+    const sourceToolsDir = path.join(pluginDir, "assets", "activity");
+    fs.mkdirSync(sourceToolsDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "assets", "activity.svg"), "default activity");
+    for (let index = 0; index < 129; index += 1) {
+      fs.writeFileSync(path.join(sourceToolsDir, `tool_${index}.svg`), "tool activity");
+    }
+    const distAssetsDir = path.join(bundledPluginDir(repoRoot, "acpx"), "assets");
+    fs.mkdirSync(path.join(distAssetsDir, "activity"), { recursive: true });
+    fs.writeFileSync(path.join(distAssetsDir, "activity", "stale.svg"), "stale");
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(path.join(distAssetsDir, "activity"))).toBe(false);
+    expect(fs.readFileSync(path.join(distAssetsDir, "activity.svg"), "utf8")).toBe(
+      "default activity",
+    );
   });
 
   it("copies generated bundled channel config schemas into dist manifests", () => {
@@ -269,7 +342,7 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "tlon", "bundled-skills"))).toBe(
       false,
     );
-    expect(fs.existsSync(staleNodeModulesDir)).toBe(true);
+    expect(fs.existsSync(staleNodeModulesDir)).toBe(false);
   });
 
   it("retries transient skill copy races from concurrent runtime postbuilds", () => {
@@ -401,34 +474,52 @@ describe("copyBundledPluginMetadata", () => {
       packageName: "@openclaw/acpx-plugin",
       packageOpenClaw: { extensions: ["./index.ts"] },
       env: excludeOptionalEnv,
+      seedStaleDist: true,
       expectedExists: false,
     },
     {
-      name: "removes externalized optional plugin metadata from the core dist",
+      name: "omits external-only metadata without a publishable source-checkout build",
       pluginId: "whatsapp",
       packageName: "@openclaw/whatsapp",
       packageOpenClaw: {
         extensions: ["./index.ts"],
+        build: { bundledDist: false },
         install: { npmSpec: "@openclaw/whatsapp" },
       },
       env: {},
+      seedStaleDist: false,
       expectedExists: false,
     },
-  ] as const)("$name", ({ pluginId, packageName, packageOpenClaw, env, expectedExists }) => {
-    const repoRoot = makeRepoRoot(`openclaw-bundled-plugin-${pluginId}-`);
-    createPlugin(repoRoot, {
-      id: pluginId,
-      packageName,
-      packageOpenClaw,
-    });
+  ] as const)(
+    "$name",
+    ({ pluginId, packageName, packageOpenClaw, env, seedStaleDist, expectedExists }) => {
+      const repoRoot = makeRepoRoot(`openclaw-bundled-plugin-${pluginId}-`);
+      createPlugin(repoRoot, {
+        id: pluginId,
+        packageName,
+        packageOpenClaw,
+      });
+      if (seedStaleDist) {
+        const staleDistDir = path.join(repoRoot, "dist", "extensions", pluginId);
+        fs.mkdirSync(staleDistDir, { recursive: true });
+        fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {};\n", "utf8");
+      }
 
-    copyBundledPluginMetadataWithEnv({ repoRoot, env });
+      copyBundledPluginMetadataWithEnv({ repoRoot, env });
 
-    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", pluginId))).toBe(expectedExists);
-  });
+      expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", pluginId))).toBe(
+        expectedExists,
+      );
+    },
+  );
 
   it("removes build-excluded bundled plugin metadata", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-excluded-meta-");
+    createPlugin(repoRoot, {
+      id: "selected",
+      packageName: "@openclaw/selected",
+      packageOpenClaw: { extensions: ["./index.ts"] },
+    });
     createPlugin(repoRoot, {
       id: "whatsapp",
       packageName: "@openclaw/whatsapp",
@@ -441,9 +532,15 @@ describe("copyBundledPluginMetadata", () => {
     fs.mkdirSync(staleDistDir, { recursive: true });
     fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {}\n", "utf8");
 
-    copyBundledPluginMetadata({ repoRoot });
+    copyBundledPluginMetadata({
+      repoRoot,
+      env: { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "selected" },
+    });
 
     expect(fs.existsSync(staleDistDir)).toBe(false);
+    expect(readBundledPackageJson(repoRoot, "selected").openclaw?.extensions).toEqual([
+      "./index.js",
+    ]);
   });
 
   it("preserves isolated source-checkout output for an external plugin", () => {

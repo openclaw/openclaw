@@ -1,5 +1,6 @@
 import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import {
   MCP_APP_VIEW_EXPIRED_EVENT,
@@ -77,14 +78,6 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
 
 const { McpAppView } = await import("./mcp-app-view.ts");
 type McpAppViewElement = InstanceType<typeof McpAppView>;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
-}
 
 const MCP_APP_VIEW_ELEMENT_NAME = `test-mcp-app-view-${crypto.randomUUID()}`;
 

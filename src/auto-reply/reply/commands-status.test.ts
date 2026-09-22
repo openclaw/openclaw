@@ -5,7 +5,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
-import { saveAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -19,7 +19,9 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import * as logger from "../../logger.js";
 import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
+import * as statusText from "../../status/status-text.js";
 import {
   completeTaskRunByRunIdCore,
   createQueuedTaskRunCore,
@@ -58,24 +60,20 @@ type StatusPluginHealthSnapshot =
   import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
 
 const pluginHealthRuntimeMock = vi.hoisted(() => ({
-  collectInstalledPluginHealthSnapshot: vi.fn(
-    async (): Promise<StatusPluginHealthSnapshot> => ({
-      plugins: [],
-      diagnostics: [],
-      contextEngineQuarantines: [],
-      runtimeToolQuarantines: [],
-      channelPluginFailures: [],
-    }),
-  ),
-  collectRuntimePluginHealthSnapshot: vi.fn(
-    (): StatusPluginHealthSnapshot => ({
-      plugins: [],
-      diagnostics: [],
-      contextEngineQuarantines: [],
-      runtimeToolQuarantines: [],
-      channelPluginFailures: [],
-    }),
-  ),
+  collectInstalledPluginHealthSnapshot: vi.fn(async (): Promise<StatusPluginHealthSnapshot> => ({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
+  })),
+  collectRuntimePluginHealthSnapshot: vi.fn((): StatusPluginHealthSnapshot => ({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
+  })),
 }));
 
 vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
@@ -123,11 +121,44 @@ const codexStatusModel: ModelDefinitionConfig = {
   maxTokens: 128_000,
 };
 
-async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: boolean }) {
-  const commandParams = buildCommandTestParams("/status", baseCfg);
+type StatusTextParams = Parameters<typeof buildStatusText>[0];
+
+function createStatusSessionParams(statusChannel = "mobilechat") {
+  return {
+    sessionKey: "agent:main:main",
+    parentSessionKey: "agent:main:main",
+    sessionScope: "per-sender",
+    statusChannel,
+  } satisfies Partial<StatusTextParams>;
+}
+
+function createStatusDisplayParams(
+  resolvedFastMode = false,
+  resolveDefaultThinkingLevel: StatusTextParams["resolveDefaultThinkingLevel"] = async () =>
+    undefined,
+) {
+  return {
+    resolvedFastMode,
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel,
+    isGroup: false,
+    defaultGroupActivation: () => "mention",
+  } satisfies Partial<StatusTextParams>;
+}
+
+async function buildStatusReplyForTest(params: {
+  sessionKey?: string;
+  agentId?: string;
+  cfg?: OpenClawConfig;
+  verbose?: boolean;
+}) {
+  const cfg = params.cfg ?? baseCfg;
+  const commandParams = buildCommandTestParams("/status", cfg);
   const sessionKey = params.sessionKey ?? commandParams.sessionKey;
   return await buildStatusReply({
-    cfg: baseCfg,
+    cfg,
+    agentId: params.agentId,
     command: commandParams.command,
     sessionEntry: commandParams.sessionEntry,
     sessionKey,
@@ -250,6 +281,7 @@ async function writeTranscriptUsageLog(params: {
     cacheWrite: number;
     totalTokens: number;
   };
+  model?: string;
 }) {
   const storePath = path.join(
     params.dir,
@@ -271,7 +303,7 @@ async function writeTranscriptUsageLog(params: {
         {
           message: {
             role: "assistant",
-            model: "claude-opus-4-5",
+            model: params.model ?? "claude-opus-4-5",
             usage: params.usage,
           },
         },
@@ -466,6 +498,45 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toMatch(/📌 Tasks: 2 active · 2 total · (subagent|cron) · /);
   });
 
+  it.each(["research", "ops"])("isolates global task status for %s", async (agentId) => {
+    for (const requesterAgentId of ["research", "ops", undefined]) {
+      const executorAgentId = requesterAgentId === "research" ? "ops" : "research";
+      createRunningTaskRunCore({
+        runtime: "cli",
+        requesterSessionKey: "global",
+        requesterAgentId,
+        agentId: executorAgentId,
+        childSessionKey: `agent:${executorAgentId}:subagent:${requesterAgentId ?? "unknown"}`,
+        runId: `global-status-task-${requesterAgentId ?? "unknown"}`,
+        task: `${requesterAgentId ?? "unknown"} private task`,
+      });
+    }
+
+    const reply = await buildStatusReplyForTest({
+      sessionKey: "global",
+      agentId,
+      cfg: {
+        ...baseCfg,
+        session: { scope: "global" },
+        agents: {
+          ownership: "explicit",
+          entries: {
+            research: { sandbox: { mode: "all" } },
+            ops: { sandbox: { mode: "off" } },
+          },
+        },
+      },
+    });
+
+    expect(reply?.text).toContain("📌 Tasks: 1 active · 1 total");
+    expect(reply?.text).toContain(`${agentId} private task`);
+    expect(reply?.text).not.toContain(
+      `${agentId === "research" ? "ops" : "research"} private task`,
+    );
+    expect(reply?.text).not.toContain("unknown private task");
+    expect(reply?.text).toContain(`Execution: ${agentId === "research" ? "docker/all" : "direct"}`);
+  });
+
   it("hides stale completed task rows from the session task line", async () => {
     createRunningTaskRunCore({
       runtime: "subagent",
@@ -655,24 +726,157 @@ describe("buildStatusReply subagent summary", () => {
           totalTokens: 3,
           contextTokens: 32_000,
         },
-        sessionKey: "agent:main:main",
-        parentSessionKey: "agent:main:main",
-        sessionScope: "per-sender",
-        statusChannel: "mobilechat",
+        ...createStatusSessionParams(),
         provider: "anthropic",
         model: "claude-opus-4-5",
         contextTokens: 32_000,
-        resolvedFastMode: false,
-        resolvedVerboseLevel: "off",
-        resolvedReasoningLevel: "off",
-        resolveDefaultThinkingLevel: async () => undefined,
-        isGroup: false,
-        defaultGroupActivation: () => "mention",
+        ...createStatusDisplayParams(),
         modelAuthOverride: "api-key",
         activeModelAuthOverride: "api-key",
       });
 
       expect(normalizeTestText(text)).toContain("Context: 1.0k/200k");
+    });
+  });
+
+  it("uses a prepared context window in ordinary /status text and presentation", async () => {
+    const commandParams = buildCommandTestParams("/status", baseCfg);
+    const reply = await buildStatusReply({
+      cfg: baseCfg,
+      command: commandParams.command,
+      sessionEntry: {
+        sessionId: "sess-status-prepared-context",
+        updatedAt: 0,
+        totalTokens: 45_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+      sessionKey: commandParams.sessionKey,
+      parentSessionKey: commandParams.sessionKey,
+      sessionScope: commandParams.sessionScope,
+      storePath: commandParams.storePath,
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      contextTokens: 1_000_000,
+      thinkingCatalog: [
+        {
+          provider: "deepseek",
+          id: "deepseek-v4-flash",
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+        },
+      ],
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+    const table = reply?.presentation?.blocks.find((block) => block.type === "table");
+
+    expect(normalizeTestText(reply?.text ?? "")).toContain("Context: 45k/1.0m");
+    expect(table?.type === "table" ? table.rows : []).toContainEqual([
+      "📚 Context",
+      expect.stringContaining("45k/1.0m"),
+    ]);
+  });
+
+  it.each([
+    {
+      name: "binds a bare transcript model to its prepared provider entry",
+      sessionId: "sess-status-recovered-bare-model-context",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      transcriptModel: "small-model",
+      thinkingCatalog: [
+        {
+          provider: "deepseek",
+          id: "deepseek-v4-flash",
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+        },
+        {
+          provider: "deepseek",
+          id: "small-model",
+          contextWindow: 128_000,
+          contextTokens: 128_000,
+        },
+      ],
+      expectedContext: "Context: 45k/128k",
+      rejectedContext: "Context: 45k/1.0m",
+    },
+    {
+      name: "binds a qualified transcript model to its exact prepared entry",
+      sessionId: "sess-status-recovered-qualified-model-context",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      transcriptModel: "deepseek/deepseek-v4-flash",
+      thinkingCatalog: [
+        {
+          provider: "deepseek",
+          id: "deepseek-v4-flash",
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+        },
+      ],
+      expectedContext: "Context: 45k/1.0m",
+      rejectedContext: "Context: 45k/200k",
+    },
+    {
+      name: "keeps a cross-route qualified transcript model unbound",
+      sessionId: "sess-status-recovered-cross-route-model-context",
+      provider: "openrouter",
+      model: "google/gemini-2.5-pro",
+      transcriptModel: "google/gemini-2.5-pro",
+      thinkingCatalog: [
+        {
+          provider: "openrouter",
+          id: "google/gemini-2.5-pro",
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+        },
+      ],
+      expectedContext: "Context: 45k/200k",
+      rejectedContext: "Context: 45k/1.0m",
+    },
+  ])("$name", async (testCase) => {
+    await withTempHome(async (dir) => {
+      await writeTranscriptUsageLog({
+        dir,
+        agentId: "main",
+        sessionId: testCase.sessionId,
+        model: testCase.transcriptModel,
+        usage: {
+          input: 45_000,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 45_000,
+        },
+      });
+
+      const text = await buildStatusText({
+        cfg: baseCfg,
+        sessionEntry: {
+          sessionId: testCase.sessionId,
+          updatedAt: 0,
+          modelSelectionLocked: true,
+        },
+        ...createStatusSessionParams(),
+        provider: testCase.provider,
+        model: testCase.model,
+        contextTokens: 1_000_000,
+        thinkingCatalog: testCase.thinkingCatalog,
+        ...createStatusDisplayParams(),
+        modelAuthOverride: "api-key",
+        activeModelAuthOverride: "api-key",
+      });
+
+      expect(normalizeTestText(text)).toContain(testCase.expectedContext);
+      expect(normalizeTestText(text)).not.toContain(testCase.rejectedContext);
     });
   });
 
@@ -717,19 +921,11 @@ describe("buildStatusReply subagent summary", () => {
         totalTokensFresh: true,
         totalTokensVersion: 1 as const,
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "ollama-cloud",
       model: "deepseek-v4-pro",
       contextTokens: 262_144,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
@@ -753,19 +949,11 @@ describe("buildStatusReply subagent summary", () => {
         updatedAt: 0,
         contextTokens: 32_000,
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "anthropic",
       model: "claude-opus-4-5",
       contextTokens: 32_000,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
@@ -795,20 +983,12 @@ describe("buildStatusReply subagent summary", () => {
         updatedAt: 0,
         contextTokens: 32_000,
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       workspaceDir: "/tmp/status-plugin-health-workspace",
       provider: "anthropic",
       model: "claude-opus-4-5",
       contextTokens: 32_000,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
@@ -854,19 +1034,11 @@ describe("buildStatusReply subagent summary", () => {
         updatedAt: 0,
         fastMode: true,
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "openai",
       model: "gpt-5.4",
       contextTokens: 32_000,
-      resolvedFastMode: true,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(true),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
@@ -933,19 +1105,11 @@ describe("buildStatusReply subagent summary", () => {
             sessionId: "sess-status-codex-oauth",
             updatedAt: 0,
           },
-          sessionKey: "agent:main:main",
-          parentSessionKey: "agent:main:main",
-          sessionScope: "per-sender" as const,
-          statusChannel: "mobilechat",
+          ...createStatusSessionParams(),
           provider: "openai",
           model: "gpt-5.5",
           contextTokens: 32_000,
-          resolvedFastMode: false,
-          resolvedVerboseLevel: "off" as const,
-          resolvedReasoningLevel: "off" as const,
-          resolveDefaultThinkingLevel: async () => undefined,
-          isGroup: false,
-          defaultGroupActivation: () => "mention" as const,
+          ...createStatusDisplayParams(),
         };
 
         const codexText = await buildStatusText({
@@ -995,7 +1159,7 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("uses the Codex app-server account before OpenAI env labels on Codex harness status", async () => {
+  it("does not read a legacy native credential file from an SDK status render", async () => {
     registerStatusCodexHarness();
 
     await withTempHome(
@@ -1028,26 +1192,18 @@ describe("buildStatusReply subagent summary", () => {
             sessionId: "sess-status-codex-home-oauth",
             updatedAt: 0,
           },
-          sessionKey: "agent:main:main",
-          parentSessionKey: "agent:main:main",
-          sessionScope: "per-sender",
-          statusChannel: "mobilechat",
+          ...createStatusSessionParams(),
           provider: "openai",
           model: "gpt-5.5",
           contextTokens: 32_000,
-          resolvedFastMode: false,
-          resolvedVerboseLevel: "off",
-          resolvedReasoningLevel: "off",
-          resolveDefaultThinkingLevel: async () => undefined,
-          isGroup: false,
-          defaultGroupActivation: () => "mention",
+          ...createStatusDisplayParams(),
         });
 
         const normalized = normalizeTestText(text);
         expect(normalized).toContain("Model: openai/gpt-5.5");
         expect(normalized).toContain("Runtime: OpenAI Codex");
-        expect(normalized).toContain("oauth (codex-cli)");
-        expect(normalized).not.toContain("api-key (env: OPENAI_API_KEY)");
+        expect(normalized).not.toContain("oauth (codex-cli)");
+        expect(normalized).toContain("api-key (env: OPENAI_API_KEY)");
       },
       {
         env: {
@@ -1105,19 +1261,11 @@ describe("buildStatusReply subagent summary", () => {
             sessionId: "sess-status-bare-codex-oauth",
             updatedAt: 0,
           },
-          sessionKey: "agent:main:main",
-          parentSessionKey: "agent:main:main",
-          sessionScope: "per-sender",
-          statusChannel: "mobilechat",
+          ...createStatusSessionParams(),
           provider: "codex",
           model: "gpt-5.5",
           contextTokens: 32_000,
-          resolvedFastMode: false,
-          resolvedVerboseLevel: "off",
-          resolvedReasoningLevel: "off",
-          resolveDefaultThinkingLevel: async () => undefined,
-          isGroup: false,
-          defaultGroupActivation: () => "mention",
+          ...createStatusDisplayParams(),
         });
 
         const normalized = normalizeTestText(text);
@@ -1183,19 +1331,11 @@ describe("buildStatusReply subagent summary", () => {
             updatedAt: 0,
             authProfileOverride: "work",
           },
-          sessionKey: "agent:main:main",
-          parentSessionKey: "agent:main:main",
-          sessionScope: "per-sender",
-          statusChannel: "mobilechat",
+          ...createStatusSessionParams(),
           provider: "openai",
           model: "gpt-5.5",
           contextTokens: 32_000,
-          resolvedFastMode: false,
-          resolvedVerboseLevel: "off",
-          resolvedReasoningLevel: "off",
-          resolveDefaultThinkingLevel: async () => undefined,
-          isGroup: false,
-          defaultGroupActivation: () => "mention",
+          ...createStatusDisplayParams(),
           modelAuthOverride: "oauth",
           activeModelAuthOverride: "oauth",
         });
@@ -1257,19 +1397,11 @@ describe("buildStatusReply subagent summary", () => {
           sessionId: "sess-status-codex-no-profile",
           updatedAt: 0,
         },
-        sessionKey: "agent:main:main",
-        parentSessionKey: "agent:main:main",
-        sessionScope: "per-sender",
-        statusChannel: "mobilechat",
+        ...createStatusSessionParams(),
         provider: "openai",
         model: "gpt-5.5",
         contextTokens: 32_000,
-        resolvedFastMode: false,
-        resolvedVerboseLevel: "off",
-        resolvedReasoningLevel: "off",
-        resolveDefaultThinkingLevel: async () => undefined,
-        isGroup: false,
-        defaultGroupActivation: () => "mention",
+        ...createStatusDisplayParams(),
       });
 
       expect(normalizeTestText(text)).toContain("Usage: 5h 84% left");
@@ -1317,19 +1449,11 @@ describe("buildStatusReply subagent summary", () => {
             updatedAt: 0,
             authProfileOverride: "anthropic:work",
           },
-          sessionKey: "agent:main:main",
-          parentSessionKey: "agent:main:main",
-          sessionScope: "per-sender",
-          statusChannel: "mobilechat",
+          ...createStatusSessionParams(),
           provider: "openai",
           model: "gpt-5.5",
           contextTokens: 32_000,
-          resolvedFastMode: false,
-          resolvedVerboseLevel: "off",
-          resolvedReasoningLevel: "off",
-          resolveDefaultThinkingLevel: async () => undefined,
-          isGroup: false,
-          defaultGroupActivation: () => "mention",
+          ...createStatusDisplayParams(),
         });
 
         const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
@@ -1408,19 +1532,11 @@ describe("buildStatusReply subagent summary", () => {
         totalTokensVersion: 1 as const,
         contextTokens: 1_048_576,
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "xiaomi",
       model: "mimo-v2-flash",
       contextTokens: 1_048_576,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
@@ -1475,19 +1591,11 @@ describe("buildStatusReply subagent summary", () => {
         totalTokensVersion: 1,
         contextTokens: 1_048_576,
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "xiaomi",
       model: "mimo-v2-flash",
       contextTokens: 123_456,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
@@ -1518,19 +1626,11 @@ describe("buildStatusReply subagent summary", () => {
         sessionId: "sess-status-deepseek-usage",
         updatedAt: 0,
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "deepseek",
       model: "deepseek-v4-pro",
       contextTokens: 1_000_000,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
@@ -1566,19 +1666,11 @@ describe("buildStatusReply subagent summary", () => {
         sessionId: "sess-status-openrouter-billing",
         updatedAt: 0,
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "openrouter",
       model: "openai/gpt-5.4",
       contextTokens: 1_000_000,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
@@ -1629,19 +1721,11 @@ describe("buildStatusReply subagent summary", () => {
         providerOverride: "openai",
         modelOverride: "gpt-5.5",
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "telegram",
+      ...createStatusSessionParams("telegram"),
       provider: "deepseek",
       model: "deepseek-v4-flash",
       contextTokens: 1_000_000,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "oauth (openai:status)",
       activeModelAuthOverride: "oauth (openai:status)",
     });
@@ -1703,19 +1787,11 @@ describe("buildStatusReply subagent summary", () => {
         modelProvider: "deepseek",
         model: "deepseek-v4-flash",
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "telegram",
+      ...createStatusSessionParams("telegram"),
       provider: "deepseek",
       model: "deepseek-v4-flash",
       contextTokens: 1_000_000,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "oauth (openai:status)",
       activeModelAuthOverride: "api-key",
     });
@@ -1790,19 +1866,11 @@ describe("buildStatusReply subagent summary", () => {
             updatedAt: 0,
             modelOverride: "openai/gpt-5.5",
           },
-          sessionKey: "agent:main:main",
-          parentSessionKey: "agent:main:main",
-          sessionScope: "per-sender",
-          statusChannel: "telegram",
+          ...createStatusSessionParams("telegram"),
           provider: "deepseek",
           model: "deepseek-v4-flash",
           contextTokens: 1_000_000,
-          resolvedFastMode: false,
-          resolvedVerboseLevel: "off",
-          resolvedReasoningLevel: "off",
-          resolveDefaultThinkingLevel: async () => undefined,
-          isGroup: false,
-          defaultGroupActivation: () => "mention",
+          ...createStatusDisplayParams(),
         });
 
         const normalized = normalizeTestText(text);
@@ -1870,20 +1938,12 @@ describe("buildStatusReply subagent summary", () => {
             sessionId: "sess-status-openai-agent-codex-oauth",
             updatedAt: 0,
           },
-          sessionKey: "agent:main:main",
-          parentSessionKey: "agent:main:main",
-          sessionScope: "per-sender",
-          statusChannel: "mobilechat",
+          ...createStatusSessionParams(),
           provider: "openai",
           model: "gpt-5.5",
           contextTokens: 32_000,
           resolvedHarness: "openclaw",
-          resolvedFastMode: false,
-          resolvedVerboseLevel: "off",
-          resolvedReasoningLevel: "off",
-          resolveDefaultThinkingLevel: async () => undefined,
-          isGroup: false,
-          defaultGroupActivation: () => "mention",
+          ...createStatusDisplayParams(),
         });
 
         const normalized = normalizeTestText(text);
@@ -1911,20 +1971,12 @@ describe("buildStatusReply subagent summary", () => {
             sessionId: "sess-status-claude-cli-oauth",
             updatedAt: 0,
           },
-          sessionKey: "agent:main:main",
-          parentSessionKey: "agent:main:main",
-          sessionScope: "per-sender",
-          statusChannel: "mobilechat",
+          ...createStatusSessionParams(),
           provider: "anthropic",
           model: "claude-opus-4-7",
           contextTokens: 32_000,
           resolvedHarness: "claude-cli",
-          resolvedFastMode: false,
-          resolvedVerboseLevel: "off",
-          resolvedReasoningLevel: "off",
-          resolveDefaultThinkingLevel: async () => undefined,
-          isGroup: false,
-          defaultGroupActivation: () => "mention",
+          ...createStatusDisplayParams(),
         });
 
         const normalized = normalizeTestText(text);
@@ -1964,20 +2016,12 @@ describe("buildStatusReply subagent summary", () => {
           reason: "selected model unavailable",
         },
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "anthropic",
       model: "claude-opus-4-7",
       contextTokens: 32_000,
       resolvedHarness: "claude-cli",
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "api-key (env: ANTHROPIC_API_KEY)",
       activeModelAuthOverride: "native (claude-cli)",
     });
@@ -2016,18 +2060,10 @@ describe("buildStatusReply subagent summary", () => {
         totalTokensFresh: true,
         totalTokensVersion: 1,
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "openai",
       model: "gpt-5.5",
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "oauth",
       activeModelAuthOverride: "oauth",
     });
@@ -2065,18 +2101,10 @@ describe("buildStatusReply subagent summary", () => {
         totalTokensVersion: 1,
         contextTokens: 400_000,
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "openai",
       model: "gpt-5.5",
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "oauth",
       activeModelAuthOverride: "oauth",
     });
@@ -2139,20 +2167,12 @@ describe("buildStatusReply subagent summary", () => {
               sessionId: "sess-status-workspace-auth",
               updatedAt: 0,
             },
-            sessionKey: "agent:main:main",
-            parentSessionKey: "agent:main:main",
-            sessionScope: "per-sender",
-            statusChannel: "mobilechat",
+            ...createStatusSessionParams(),
             workspaceDir,
             provider: "anthropic",
             model: "claude-opus-4-5",
             contextTokens: 32_000,
-            resolvedFastMode: false,
-            resolvedVerboseLevel: "off",
-            resolvedReasoningLevel: "off",
-            resolveDefaultThinkingLevel: async () => undefined,
-            isGroup: false,
-            defaultGroupActivation: () => "mention",
+            ...createStatusDisplayParams(),
           });
 
           expect(normalizeTestText(text)).toContain("workspace status credentials");
@@ -2182,19 +2202,11 @@ describe("buildStatusReply subagent summary", () => {
         agentRuntimeOverride: "openclaw",
         agentHarnessId: "codex",
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "openai",
       model: "gpt-5.4",
       contextTokens: 32_000,
-      resolvedFastMode: true,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(true),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
@@ -2215,20 +2227,12 @@ describe("buildStatusReply subagent summary", () => {
         thinkingLevel: "ultra",
         agentRuntimeOverride: "codex",
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "openai",
       model: "gpt-5.6-luna",
       contextTokens: 32_000,
       resolvedThinkLevel: "ultra",
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => "ultra",
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(false, async () => "ultra"),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
@@ -2251,20 +2255,12 @@ describe("buildStatusReply subagent summary", () => {
         updatedAt: 0,
         thinkingLevel: "off",
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "moonshot",
       model: "kimi-k3",
       contextTokens: 262_144,
       resolvedThinkLevel: "off",
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
@@ -2295,38 +2291,54 @@ describe("buildStatusReply subagent summary", () => {
         updatedAt: 0,
         agentHarnessId: "openclaw",
       },
-      sessionKey: "agent:main:main",
-      parentSessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      statusChannel: "mobilechat",
+      ...createStatusSessionParams(),
       provider: "openai",
       model: "gpt-5.4",
       contextTokens: 32_000,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
+      ...createStatusDisplayParams(),
       modelAuthOverride: "oauth",
       activeModelAuthOverride: "oauth",
     });
 
     expect(normalizeTestText(text)).toContain("Runtime: OpenAI Codex");
+    expect(normalizeTestText(text)).toContain("previous runtime: OpenClaw Default");
+  });
+
+  it("labels a divergent locked harness as an active session pin in /status", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-locked-agent",
+        updatedAt: 0,
+        agentHarnessId: "openclaw",
+        modelSelectionLocked: true,
+      },
+      ...createStatusSessionParams(),
+      provider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 32_000,
+      ...createStatusDisplayParams(),
+      modelAuthOverride: "oauth",
+      activeModelAuthOverride: "oauth",
+      resolvedHarness: "codex",
+    });
+
+    expect(normalizeTestText(text)).toContain(
+      "Runtime: OpenAI Codex (session pin: OpenClaw Default)",
+    );
   });
 });
 
 describe("buildStatusReply error handling", () => {
   afterEach(() => {
-    vi.doUnmock("../../logger.js");
-    vi.doUnmock("../../status/status-text.js");
-    vi.resetModules();
     vi.restoreAllMocks();
   });
 
-  async function runStatusReply(fn: typeof buildStatusReply) {
+  async function runStatusReply() {
     const commandParams = buildCommandTestParams("/status", baseCfg);
-    return await fn({
+    return await buildStatusReply({
       cfg: baseCfg,
       command: commandParams.command,
       sessionEntry: commandParams.sessionEntry,
@@ -2351,22 +2363,11 @@ describe("buildStatusReply error handling", () => {
   }
 
   it("delivers a fixed generic reply and logs details when status rendering throws", async () => {
-    // commands-status re-exports buildStatusText, so the mock must keep that
-    // binding while prod calls buildStatusReplyParts. logError stays mocked so
-    // containment diagnostics never leak into test stderr.
-    vi.doMock("../../logger.js", async (importOriginal) => ({
-      ...(await importOriginal<object>()),
-      logError: vi.fn(),
-    }));
-    vi.doMock("../../status/status-text.js", () => ({
-      buildStatusReplyParts: vi.fn(() => Promise.reject(new Error("Unexpected rendering error"))),
-      buildStatusText: vi.fn(() => Promise.reject(new Error("Unexpected rendering error"))),
-    }));
-
-    vi.resetModules();
-    const { buildStatusReply: freshBuildStatusReply } = await import("./commands-status.js");
-    const { logError } = await import("../../logger.js");
-    const reply = await runStatusReply(freshBuildStatusReply);
+    const logError = vi.spyOn(logger, "logError").mockImplementation(() => {});
+    vi.spyOn(statusText, "buildStatusReplyParts").mockRejectedValue(
+      new Error("Unexpected rendering error"),
+    );
+    const reply = await runStatusReply();
 
     // Exact object equality also pins that no stale presentation or internal
     // error text reaches the channel; diagnostics belong to the log sink only.
@@ -2380,14 +2381,11 @@ describe("buildStatusReply error handling", () => {
       tone: "info" as const,
       blocks: [{ type: "text" as const, text: "plain status" }, { type: "divider" as const }],
     };
-    vi.doMock("../../status/status-text.js", () => ({
-      buildStatusReplyParts: vi.fn(() => Promise.resolve({ text: "plain status", presentation })),
-      buildStatusText: vi.fn(() => Promise.resolve("plain status")),
-    }));
-
-    vi.resetModules();
-    const { buildStatusReply: freshBuildStatusReply } = await import("./commands-status.js");
-    const reply = await runStatusReply(freshBuildStatusReply);
+    vi.spyOn(statusText, "buildStatusReplyParts").mockResolvedValue({
+      text: "plain status",
+      presentation,
+    });
+    const reply = await runStatusReply();
 
     expect(reply).toMatchObject({
       text: "plain status",
@@ -2397,15 +2395,7 @@ describe("buildStatusReply error handling", () => {
   });
 
   it("returns a generic reply and logs details when plugin health collection fails", async () => {
-    vi.doMock("../../logger.js", async (importOriginal) => ({
-      ...(await importOriginal<object>()),
-      logError: vi.fn(),
-    }));
-
-    vi.resetModules();
-    const { buildStatusPluginsReply: freshBuildStatusPluginsReply } =
-      await import("./commands-status.js");
-    const { logError } = await import("../../logger.js");
+    const logError = vi.spyOn(logger, "logError").mockImplementation(() => {});
     pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockRejectedValueOnce(
       new Error("Cannot find module 'internal/path'"),
     );
@@ -2414,7 +2404,7 @@ describe("buildStatusReply error handling", () => {
       ...baseCfg,
       commands: { text: true, plugins: true },
     });
-    const reply = await freshBuildStatusPluginsReply({
+    const reply = await buildStatusPluginsReply({
       cfg: commandParams.cfg,
       command: commandParams.command,
       workspaceDir: commandParams.workspaceDir,

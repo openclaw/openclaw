@@ -4,7 +4,6 @@ import {
   getLatestGeneratedMediaTaskAdmissionIdForSessionKey,
   listActiveGeneratedMediaTaskIdsForSessionKey,
 } from "./generated-media-task-activity.js";
-import { isTerminalTaskStatus } from "./task-executor-policy.js";
 // Filters task status visibility by requester, owner, and flow scope.
 import {
   findTaskByRunId,
@@ -12,9 +11,9 @@ import {
   listTaskRecords,
   listTaskRecordsUnsorted,
   listTasksForAgentId,
-  listTasksForSessionKey,
+  listTasksForRelatedSessionKey,
 } from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
 const GENERATED_MEDIA_TASK_KINDS = new Set([
   "image_generation",
@@ -40,12 +39,15 @@ export function getTaskSessionLookupByIdForStatus(
     : undefined;
 }
 
-export function listTasksForSessionKeyForStatus(sessionKey: string): TaskRecord[] {
-  return listTasksForSessionKey(sessionKey);
+export function listTasksForSessionKeyForStatus(
+  sessionKey: string,
+  sessionAgentId?: string,
+): TaskRecord[] {
+  return listTasksForRelatedSessionKey(sessionKey, sessionAgentId);
 }
 
 export function listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey: string): TaskRecord[] {
-  return listTaskRecords().filter(
+  return listTaskRecords(
     (task) => task.requesterSessionKey === sessionKey || task.ownerKey === sessionKey,
   );
 }

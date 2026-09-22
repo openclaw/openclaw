@@ -90,10 +90,7 @@ describe("Discord forum outbound payload ownership", () => {
         mediaCount += 1;
         response = { id: `media${mediaCount}`, channel_id: route.split("/")[2] };
       }
-      return new Response(JSON.stringify(response), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json(response);
     });
     const rest = new RequestClient("discord-fixture-token", { fetch, queueRequests: false });
     const readFile = vi.fn(async () => Buffer.from("forum attachment"));
@@ -244,6 +241,62 @@ describe("Discord forum outbound payload ownership", () => {
     try {
       await expect(delivery.run()).rejects.toThrow(
         "Discord components are not supported in forum-style channels",
+      );
+      expect(delivery.requests.filter((request) => request.startsWith("POST"))).toEqual([]);
+    } finally {
+      globalFetch.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      label: "classic component overrides",
+      components: { blocks: [{ type: "file", file: "attachment://declared.txt" }] },
+    },
+    {
+      label: "matching Components V2 overrides",
+      components: {
+        container: { accentColor: 0x123456 },
+        blocks: [{ type: "file", file: "attachment://first.txt" }],
+      },
+    },
+  ])("applies $label only to the first media upload", async ({ components }) => {
+    const delivery = createForumDelivery({
+      channelType: ChannelType.GuildText,
+      channelData: { components, filename: " first.txt " },
+    });
+    const globalFetch = vi.spyOn(globalThis, "fetch").mockImplementation(delivery.fetch);
+    try {
+      await delivery.run();
+
+      const filenames = delivery.fetch.mock.calls.flatMap(([, init]) => {
+        if (!(init?.body instanceof FormData)) {
+          return [];
+        }
+        const file = init.body.get("files[0]");
+        return file && typeof file !== "string" ? [file.name] : [];
+      });
+      expect(filenames).toEqual(["first.txt", "package.json"]);
+    } finally {
+      globalFetch.mockRestore();
+    }
+  });
+
+  it("rejects a conflicting Components V2 filename before uploading", async () => {
+    const delivery = createForumDelivery({
+      channelType: ChannelType.GuildText,
+      channelData: {
+        filename: "other.txt",
+        components: {
+          container: { accentColor: 0x123456 },
+          blocks: [{ type: "file", file: "attachment://declared.txt" }],
+        },
+      },
+    });
+    const globalFetch = vi.spyOn(globalThis, "fetch").mockImplementation(delivery.fetch);
+    try {
+      await expect(delivery.run()).rejects.toThrow(
+        'Component file block expects attachment "declared.txt", but the uploaded file is "other.txt"',
       );
       expect(delivery.requests.filter((request) => request.startsWith("POST"))).toEqual([]);
     } finally {

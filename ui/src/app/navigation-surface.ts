@@ -16,13 +16,14 @@ type AppSidebarElement = HTMLElement & { dismissTransientMenus(): boolean };
 type SidebarAttentionElement = HTMLElement & { dismissPanel(): boolean };
 
 export function dismissNavigationTransientSurfaces(host: HTMLElement): boolean {
+  // Unupgraded elements cannot own transient UI; navigation must not wait for their imports.
   const dismissedPanel = [
-    ...host.querySelectorAll<SidebarAttentionElement>("openclaw-sidebar-attention"),
+    ...host.querySelectorAll<SidebarAttentionElement>("openclaw-sidebar-attention:defined"),
   ]
     .map((attention) => attention.dismissPanel())
     .some((dismissed) => dismissed);
   const dismissedMenu = host
-    .querySelector<AppSidebarElement>("openclaw-app-sidebar")
+    .querySelector<AppSidebarElement>("openclaw-app-sidebar:defined")
     ?.dismissTransientMenus();
   return dismissedMenu === true || dismissedPanel;
 }
@@ -77,7 +78,8 @@ export function handleNavDrawerKeydown(
   } else if (
     isCommandPaletteShortcut(event) ||
     isTerminalPanelShortcut(event) ||
-    matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
+    matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event) ||
+    matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat, event)
   ) {
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -88,7 +90,7 @@ export function moveToastToNavDrawer(host: HTMLElement): void {
   const drawer = host.querySelector<HTMLElement>(".shell-nav");
   const toastHost = host.querySelector<HTMLElement>("openclaw-toast-host");
   if (drawer && toastHost && toastHost.parentElement !== drawer) {
-    drawer.moveBefore(toastHost, null);
+    drawer.append(toastHost);
   }
 }
 
@@ -96,7 +98,7 @@ export function restoreToastFromNavDrawer(host: HTMLElement): void {
   const shell = host.querySelector<HTMLElement>(".shell");
   const toastHost = host.querySelector<HTMLElement>("openclaw-toast-host");
   if (shell && toastHost?.parentElement?.classList.contains("shell-nav")) {
-    shell.moveBefore(toastHost, null);
+    shell.append(toastHost);
   }
 }
 
@@ -121,14 +123,10 @@ export function floatingSidebarAttentionVisible(params: {
   navigationSurfaceHidden: boolean;
   mobileNavLayout: boolean;
   onboarding: boolean;
-  settingsTakeover?: boolean;
   compact?: boolean;
 }): boolean {
-  // Mobile keeps attention in its drawer except during onboarding. Settings
-  // replaces that drawer/sidebar entirely, so both need the floating copy.
   const attentionNeedsFloating =
-    params.settingsTakeover ||
-    (params.navigationSurfaceHidden && (!params.mobileNavLayout || params.onboarding));
+    params.navigationSurfaceHidden && !params.mobileNavLayout && !params.onboarding;
   return attentionNeedsFloating && !params.compact;
 }
 
@@ -136,19 +134,23 @@ export function renderFloatingUpdateCard(params: {
   navigationSurfaceHidden: boolean;
   mobileNavLayout: boolean;
   onboarding: boolean;
-  settingsTakeover?: boolean;
   compact?: boolean;
   updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
   updateSchedule?: ApplicationContext["overlays"]["snapshot"]["updateSchedule"];
   heldUpdateCampaignId?: string | null;
   updateBusy: boolean;
+  updateRun?: ApplicationContext["overlays"]["snapshot"]["updateRun"];
+  updateRunAcknowledged?: boolean;
+  connected?: boolean;
+  onAcknowledge?: () => void;
+  onCheckStatus?: () => Promise<boolean>;
   statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
   canUpdate?: boolean;
   canHoldUpdate?: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
-  onRefresh: () => void;
+  onRefresh: () => Promise<boolean>;
   onHoldUpdate?: () => Promise<boolean>;
   onReviewUpdate?: () => void;
   onNavigate?: (routeId: NavigationRouteId) => void;
@@ -159,28 +161,37 @@ export function renderFloatingUpdateCard(params: {
   if (!showAttention && !showUpdateCard) {
     return nothing;
   }
-  return html`${showAttention
-    ? html`<openclaw-sidebar-attention
-        class="sidebar-attention--floating"
-        .onNavigate=${params.onNavigate}
-        .onOpenApprovals=${params.onOpenApprovals}
-      ></openclaw-sidebar-attention>`
-    : nothing}${showUpdateCard
-    ? html`<openclaw-sidebar-update-card
-        class="sidebar-update-card--floating"
-        .updateAvailable=${params.updateAvailable}
-        .updateSchedule=${params.updateSchedule ?? null}
-        .heldUpdateCampaignId=${params.heldUpdateCampaignId ?? null}
-        .updateBusy=${params.updateBusy}
-        .statusBanner=${params.statusBanner ?? null}
-        .watchUpdateProgress=${params.watchUpdateProgress}
-        .canUpdate=${params.canUpdate ?? false}
-        .canHoldUpdate=${params.canHoldUpdate ?? false}
-        .onUpdate=${params.onUpdate}
-        .refreshRequired=${params.refreshRequired}
-        .onRefresh=${params.onRefresh}
-        .onHoldUpdate=${params.onHoldUpdate ?? (async () => false)}
-        .onReviewUpdate=${params.onReviewUpdate ?? (() => undefined)}
-      ></openclaw-sidebar-update-card>`
-    : nothing}`;
+  return html`${
+    showAttention
+      ? html`<openclaw-sidebar-attention
+          class="sidebar-attention--floating"
+          .onNavigate=${params.onNavigate}
+          .onOpenApprovals=${params.onOpenApprovals}
+        ></openclaw-sidebar-attention>`
+      : nothing
+  }${
+    showUpdateCard
+      ? html`<openclaw-sidebar-update-card
+          class="sidebar-update-card--floating"
+          .updateAvailable=${params.updateAvailable}
+          .updateSchedule=${params.updateSchedule ?? null}
+          .heldUpdateCampaignId=${params.heldUpdateCampaignId ?? null}
+          .updateBusy=${params.updateBusy}
+          .updateRun=${params.updateRun ?? null}
+          .updateRunAcknowledged=${params.updateRunAcknowledged ?? false}
+          .connected=${params.connected ?? false}
+          .onAcknowledge=${params.onAcknowledge}
+          .onCheckStatus=${params.onCheckStatus}
+          .statusBanner=${params.statusBanner ?? null}
+          .watchUpdateProgress=${params.watchUpdateProgress}
+          .canUpdate=${params.canUpdate ?? false}
+          .canHoldUpdate=${params.canHoldUpdate ?? false}
+          .onUpdate=${params.onUpdate}
+          .refreshRequired=${params.refreshRequired}
+          .onRefresh=${params.onRefresh}
+          .onHoldUpdate=${params.onHoldUpdate ?? (async () => false)}
+          .onReviewUpdate=${params.onReviewUpdate ?? (() => undefined)}
+        ></openclaw-sidebar-update-card>`
+      : nothing
+  }`;
 }

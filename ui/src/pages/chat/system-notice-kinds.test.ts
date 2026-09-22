@@ -15,6 +15,15 @@ describe("resolveSystemNoticeKind", () => {
     );
   });
 
+  it("resolves Claude CLI task notifications as collapsed mid-run notices", () => {
+    expect(resolveSystemNoticeKind("claude_cli_task_notification")).toEqual({
+      icon: "cpu",
+      labelKey: "chat.systemNotice.claudeCliTaskNotification.label",
+      collapsedBody: true,
+      startsTurn: false,
+    });
+  });
+
   it.each([
     undefined,
     "heartbeat",

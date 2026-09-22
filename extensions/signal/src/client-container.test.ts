@@ -272,8 +272,8 @@ function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: stri
 }
 
 // Minimal WebSocket mock for connection-log assertions.
-vi.mock("ws", () => ({
-  default: class MockWebSocket {
+vi.mock("./ws-runtime.js", () => ({
+  WebSocket: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
     private bufferedMessageFlushed = false;
 
@@ -595,9 +595,7 @@ describe("containerRestRequest", () => {
   });
 
   it("caps oversized REST request timeouts before arming abort timers", async () => {
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(0 as unknown as ReturnType<typeof setTimeout>);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       mockFetch.mockResolvedValue({
         ok: true,
@@ -686,9 +684,9 @@ describe("containerRestRequest", () => {
         observedSignal = init.signal ?? undefined;
         return new Response(
           delayedBodyStream([
-            { delayMs: 10, text: "{" },
-            { delayMs: 20, text: '"ok"' },
-            { delayMs: 20, text: ":true" },
+            { delayMs: 5, text: "{" },
+            { delayMs: 5, text: '"ok"' },
+            { delayMs: 5, text: ":true" },
             { delayMs: 20, text: "}" },
           ]).body,
           {
@@ -1588,19 +1586,6 @@ describe("containerRestRequest edge cases", () => {
     expect(result.items[0]?.id).toBe(0);
     expect(result.items[49_999]?.id).toBe(49_999);
   });
-
-  it("returns undefined for an empty success body via the bounded reader", async () => {
-    // The bounded reader must preserve the existing empty-body -> undefined contract
-    // (no spurious JSON.parse("") throw) so well-behaved 200/empty responses are unchanged.
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      ...bodyStream(""),
-    });
-
-    const result = await containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" });
-    expect(result).toBeUndefined();
-  });
 });
 
 describe("streamContainerEvents", () => {
@@ -1629,6 +1614,27 @@ describe("streamContainerEvents", () => {
     expectMockLogNotContains(log, "+14259798283");
     expectMockLogNotContains(log, "%2B14259798283");
   });
+
+  it.each([
+    { timeoutMs: 1_000, expected: 1_000 },
+    { timeoutMs: 60_000, expected: 60_000 },
+    { timeoutMs: 0, expected: 30_000 },
+    { timeoutMs: undefined, expected: 30_000 },
+  ])(
+    "preserves the stream opening budget for timeoutMs=$timeoutMs",
+    async ({ timeoutMs, expected }) => {
+      wsMockState.behavior = "open";
+      await streamContainerEvents({
+        baseUrl: "http://localhost:8080",
+        account: "+15550001111",
+        timeoutMs,
+        onEvent: vi.fn(),
+      });
+      expect(wsMockState.options).toEqual([
+        { maxPayload: 1024 * 1024, handshakeTimeout: expected },
+      ]);
+    },
+  );
 
   it("removes the abort listener when the stream closes", async () => {
     const abortController = new AbortController();

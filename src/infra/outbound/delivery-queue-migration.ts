@@ -190,7 +190,7 @@ async function prepareLegacyEntryCheckpoint(params: {
     leaseTimer.unref();
     try {
       preparedBatch = await prepareOutboundPayloadBatch(preparationParams, {
-        onBeforeFirstModifier: () => {
+        onBeforeFirstModifier: async () => {
           if (leaseLost) {
             throw new Error(`Legacy delivery ${params.entry.id} preparation lease was lost`);
           }

@@ -23,5 +23,6 @@ export async function dispatchBrowserControlRequest(
     throw new Error("browser control disabled");
   }
   const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
+  await req.assertCurrent?.();
   return await dispatcher.dispatch(req);
 }

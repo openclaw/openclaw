@@ -20,7 +20,12 @@ import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "../claws/types.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import { formatClawDiagnostics, logClawExperimentalWarning } from "./claws-cli-output.js";
+import {
+  emitClawFailure,
+  formatClawDiagnostics,
+  logClawAgentConfiguration,
+  logClawExperimentalWarning,
+} from "./claws-cli-output.js";
 import type {
   ClawsBuildOptions,
   ClawsCreateOptions,
@@ -47,22 +52,18 @@ function reportProjectError(
 ): void {
   const code = error instanceof ClawProjectError ? error.code : fallbackCode;
   const message = error instanceof Error ? error.message : String(error);
-  if (json) {
-    writeRuntimeJson(runtime, {
-      schemaVersion,
-      stability: CLAW_OUTPUT_STABILITY,
-      ok: false,
-      error: { code, message },
-    });
-  } else {
-    runtime.error(message);
-  }
-  runtime.exit(1);
+  emitClawFailure(runtime, json, message, {
+    schemaVersion,
+    stability: CLAW_OUTPUT_STABILITY,
+    ok: false,
+    error: { code, message },
+  });
 }
 
 function logDevPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   runtime.log(`Agent: ${plan.agent.finalId}`);
   runtime.log(`Workspace: ${plan.agent.workspace}`);
+  logClawAgentConfiguration(plan, runtime);
   runtime.log(`Actions: ${plan.summary.totalActions}`);
   runtime.log(`Capability escalations: ${plan.capabilityChanges.length}`);
   runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
@@ -107,6 +108,7 @@ async function prepareDev(projectPath: string, opts: ClawsDevOptions): Promise<P
         },
         diagnostics: result.diagnostics,
         context: {
+          config,
           ...(opts.agentId ? { agentId: opts.agentId } : {}),
           ...(opts.workspace ? { workspace: opts.workspace } : {}),
           existingAgentIds,
@@ -168,18 +170,13 @@ export async function runClawsValidateCommand(
   assertExperimentalClawsEnabled();
   const result = await validateClawProject(projectPath);
   if (!result.ok) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        schemaVersion: CLAW_PROJECT_RESULT_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        ok: false,
-        root: result.root,
-        diagnostics: result.diagnostics,
-      });
-    } else {
-      runtime.error(formatClawDiagnostics(result.diagnostics));
-    }
-    runtime.exit(1);
+    emitClawFailure(runtime, opts.json, formatClawDiagnostics(result.diagnostics), {
+      schemaVersion: CLAW_PROJECT_RESULT_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      ok: false,
+      root: result.root,
+      diagnostics: result.diagnostics,
+    });
     return;
   }
   if (opts.json) {

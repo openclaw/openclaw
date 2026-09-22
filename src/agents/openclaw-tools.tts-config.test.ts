@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import type { MediaGenerateToolOptions } from "./tools/media-generate-background.js";
 
 const mocks = vi.hoisted(() => {
   // Stub every non-TTS tool so this suite isolates TTS option plumbing.
@@ -18,6 +19,13 @@ const mocks = vi.hoisted(() => {
 
   return {
     stubTool,
+    backgroundMediaTool: (name: string, options?: MediaGenerateToolOptions): AnyAgentTool => ({
+      ...stubTool(name),
+      execute: async () => {
+        await options?.onAsyncTaskStarted?.("Media generation started.");
+        return { content: [{ type: "text", text: "Background task started." }], details: {} };
+      },
+    }),
     createCronToolOptions: vi.fn(),
     createTranscriptsToolOptions: vi.fn(),
     createSessionStatusToolOptions: vi.fn(),
@@ -57,9 +65,9 @@ vi.mock("./tools/gateway-tool.js", () => ({
 }));
 
 vi.mock("./tools/image-generate-tool.js", () => ({
-  createImageGenerateTool: (options: unknown) => {
+  createImageGenerateTool: (options?: MediaGenerateToolOptions) => {
     mocks.createImageGenerateToolOptions(options);
-    return mocks.stubTool("image_generate");
+    return mocks.backgroundMediaTool("image_generate", options);
   },
 }));
 
@@ -72,9 +80,9 @@ vi.mock("./tools/message-tool-execution.js", () => ({
 }));
 
 vi.mock("./tools/music-generate-tool.js", () => ({
-  createMusicGenerateTool: (options: unknown) => {
+  createMusicGenerateTool: (options?: MediaGenerateToolOptions) => {
     mocks.createMusicGenerateToolOptions(options);
-    return mocks.stubTool("music_generate");
+    return mocks.backgroundMediaTool("music_generate", options);
   },
 }));
 
@@ -125,9 +133,9 @@ vi.mock("./tools/transcripts-tool.js", () => ({
 }));
 
 vi.mock("./tools/video-generate-tool.js", () => ({
-  createVideoGenerateTool: (options: unknown) => {
+  createVideoGenerateTool: (options?: MediaGenerateToolOptions) => {
     mocks.createVideoGenerateToolOptions(options);
-    return mocks.stubTool("video_generate");
+    return mocks.backgroundMediaTool("video_generate", options);
   },
 }));
 
@@ -376,6 +384,37 @@ describe("createOpenClawTools media generation session wiring", () => {
     mocks.createVideoGenerateToolOptions.mockClear();
   });
 
+  it.each(["image_generate", "music_generate", "video_generate"])(
+    "does not yield when %s starts background work",
+    async (name) => {
+      const onYield = vi.fn();
+      const tools = createOpenClawTools({
+        config: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                image: { primary: "image-owner/model" },
+                music: { primary: "music-owner/model" },
+                video: { primary: "video-owner/model" },
+              },
+            },
+          },
+        },
+        agentSessionKey: "agent:main:subagent:media-child",
+        disableMessageTool: true,
+        disablePluginTools: true,
+        onYield,
+      });
+      const tool = tools.find((candidate) => candidate.name === name);
+      expect(tool).toBeDefined();
+      await tool?.execute("media-start", {});
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(onYield).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses the isolated cron run key for background media completions", () => {
     const config = {
       agents: {
@@ -401,7 +440,6 @@ describe("createOpenClawTools media generation session wiring", () => {
     expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({
         agentSessionKey: "agent:main:cron:daily-media:run:run-123",
-        onAsyncTaskStarted: undefined,
       }),
     );
     expect(mocks.createVideoGenerateToolOptions).toHaveBeenCalledWith(

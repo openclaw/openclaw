@@ -513,7 +513,7 @@ export function registerModalLifecycleHandler(params: {
     params.trackEvent?.();
     const typedBody = body as SlackModalBody;
     await emitSlackModalLifecycleEvent({
-      ctx: params.ctx,
+      ctx: await params.ctx.readRuntimeContext(),
       body: typedBody,
       eventScope,
       teamId: args.context.teamId,

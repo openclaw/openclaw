@@ -10,8 +10,10 @@ import {
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
+import { createTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readMessageIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 // Keep supplied-key probes below SQLite's conservative variable ceiling.
@@ -81,6 +83,7 @@ function readTranscriptMirrorFactsInSnapshot(
     idempotencyKeys: readonly string[];
   },
 ): TranscriptMirrorFacts {
+  assertSessionTranscriptHot(database.db, resolved.sessionId);
   const idempotencyKeys = [...new Set(params.idempotencyKeys)];
   const fallbackEvents = loadTranscriptEventsForMirrorFallback(database, resolved.sessionId);
   if (fallbackEvents !== undefined) {
@@ -93,6 +96,7 @@ function readTranscriptMirrorFactsInSnapshot(
     existingIdempotencyKeys: new Set(),
     messagesByIdempotencyKey: new Map(),
   };
+  let anchorsReady: boolean | undefined;
   for (
     let offset = 0;
     offset < idempotencyKeys.length;
@@ -108,7 +112,23 @@ function readTranscriptMirrorFactsInSnapshot(
             .onRef("event.session_id", "=", "identity.session_id")
             .onRef("event.seq", "=", "identity.seq"),
         )
-        .select(["identity.event_id", "identity.message_idempotency_key", "event.event_json"])
+        .leftJoin("session_transcript_active_events as active", (join) =>
+          join
+            .onRef("active.session_id", "=", "identity.session_id")
+            .onRef("active.event_seq", "=", "identity.seq"),
+        )
+        .leftJoin("transcript_rewrite_watermarks as rewrite", (join) =>
+          join.onRef("rewrite.session_id", "=", "identity.session_id"),
+        )
+        .select([
+          "identity.event_id",
+          "identity.message_idempotency_key",
+          "identity.seq",
+          "identity.parent_id",
+          "event.event_json",
+          "active.message_position",
+          "rewrite.generation",
+        ])
         .where("identity.session_id", "=", resolved.sessionId)
         .where("identity.message_idempotency_key", "in", batch)
         .orderBy("identity.seq", "asc"),
@@ -119,11 +139,15 @@ function readTranscriptMirrorFactsInSnapshot(
         continue;
       }
       facts.existingIdempotencyKeys.add(idempotencyKey);
-      const anchor = readActiveTranscriptEntryAnchorInTransaction({
-        database,
-        resolved,
-        entryId: row.event_id,
-      });
+      anchorsReady ??= !sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId);
+      const anchor = anchorsReady
+        ? createTranscriptEntryAnchor({
+            database,
+            resolved,
+            entryId: row.event_id,
+            row,
+          })
+        : undefined;
       if (anchor) {
         facts.anchorsByIdempotencyKey.set(idempotencyKey, anchor);
       }

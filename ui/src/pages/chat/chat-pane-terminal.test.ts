@@ -5,8 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { openSlot } from "./sidebar-layout.ts";
@@ -25,7 +24,10 @@ describe("chat pane terminal action", () => {
     "closes terminal continuation after a %s ownership change",
     async (change) => {
       const client = { gatewayUrl: "wss://gateway.example/control" } as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const { pane, state } = createTestChatPane({
+        client,
+        sessions: createSessionCapabilityFixture(),
+      });
       const row = {
         key: "bare-session",
         agentId: "row-agent",
@@ -43,6 +45,7 @@ describe("chat pane terminal action", () => {
             false,
             undefined,
             false,
+            null,
           ),
           container,
         );
@@ -89,7 +92,10 @@ describe("chat pane terminal action", () => {
     const client = {
       gatewayUrl: "wss://gateway.example/control?route=alpha",
     } as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     const row = {
       key: "main",
       agentId: "alpha",
@@ -106,6 +112,7 @@ describe("chat pane terminal action", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );
@@ -122,7 +129,10 @@ describe("chat pane terminal action", () => {
 
   it("exposes the terminal as a side-panel tab only when available", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     const session = {
       key: state.sessionKey,
       kind: "direct",
@@ -144,6 +154,7 @@ describe("chat pane terminal action", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -166,7 +177,10 @@ describe("chat pane terminal action", () => {
 
   it("exposes Desktop as a side-panel action only for observable session targets", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     const localSession = {
       key: state.sessionKey,
       kind: "direct",
@@ -182,6 +196,7 @@ describe("chat pane terminal action", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -208,6 +223,7 @@ describe("chat pane terminal action", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -233,17 +249,6 @@ describe("chat pane terminal action", () => {
           name: "node",
           session: { ...localSession, execNode: "  paired-node  " },
         },
-        {
-          name: "reclaimed",
-          session: {
-            ...localSession,
-            execNode: " reclaimed-node ",
-            placement: {
-              state: "reclaimed",
-              environmentId: "former-worker",
-            } as GatewaySessionRow["placement"],
-          },
-        },
       ];
       for (const testCase of targetCases) {
         renderDesktopHeader(testCase.session);
@@ -257,13 +262,18 @@ describe("chat pane terminal action", () => {
         onToggleDesktop.mockClear();
       }
 
-      renderDesktopHeader({
-        ...localSession,
-        execNode: "must-not-fall-back",
-        placement: { state: "requested" } as GatewaySessionRow["placement"],
-      });
-      expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
-      expect(panelActionIds()).not.toContain("desktop");
+      for (const placement of [
+        { state: "requested" },
+        { state: "reclaimed", environmentId: "former-worker" },
+      ]) {
+        renderDesktopHeader({
+          ...localSession,
+          execNode: "must-not-fall-back",
+          placement: placement as GatewaySessionRow["placement"],
+        });
+        expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
+        expect(panelActionIds()).not.toContain("desktop");
+      }
 
       renderDesktopHeader(undefined);
       expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
@@ -277,7 +287,10 @@ describe("chat pane terminal action", () => {
 
   it("keeps Browser and Tasks reachable in the topbar", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     const session = {
       key: state.sessionKey,
       kind: "direct",
@@ -298,6 +311,7 @@ describe("chat pane terminal action", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -325,6 +339,7 @@ describe("chat pane terminal action", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );

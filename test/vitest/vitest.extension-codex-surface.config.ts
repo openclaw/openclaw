@@ -1,5 +1,6 @@
 // Vitest extension codex surface config wires the extension codex surface test shard.
 import { codexExtensionTestRoots } from "./vitest.extension-codex-paths.mjs";
+import { databaseWorkerExtensionTestFiles } from "./vitest.extension-database-workers-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 function createExtensionCodexSurfaceVitestConfig(
@@ -10,7 +11,10 @@ function createExtensionCodexSurfaceVitestConfig(
     {
       dir: "extensions",
       env,
-      exclude: ["extensions/codex/src/app-server/**/*.test.ts"],
+      exclude: [
+        "extensions/codex/src/app-server/**/*.test.ts",
+        ...databaseWorkerExtensionTestFiles,
+      ],
       fileParallelism: false,
       name: "extension-codex-surface",
       passWithNoTests: true,

@@ -8,7 +8,6 @@ const websocketState = vi.hoisted(() => ({
   }>,
   clients: [] as Array<{ apiKey?: string }>,
   options: [] as Array<{ headers?: Record<string, string> }>,
-  requests: [] as Array<Record<string, unknown>>,
   responseBatches: [] as Array<Array<Record<string, unknown>>>,
 }));
 
@@ -25,8 +24,7 @@ vi.mock("openai/resources/responses/ws.js", () => ({
       websocketState.options.push(options);
     }
 
-    send(request: Record<string, unknown>) {
-      websocketState.requests.push(request);
+    send() {
       this.events = websocketState.responseBatches.shift() ?? [];
     }
 
@@ -98,18 +96,11 @@ function completion(responseId: string, output: Array<Record<string, unknown>> =
   };
 }
 
-async function consume(stream: AsyncIterable<unknown>): Promise<unknown[]> {
-  const events: unknown[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
-}
-
 async function consumeResponse(response: ReturnType<typeof createOpenAIResponsesWebSocketStream>) {
-  const events = await consume(response.stream);
+  for await (const event of response.stream) {
+    void event;
+  }
   response.finish();
-  return events;
 }
 
 function createStream(request: Record<string, unknown>, overrides: { sessionId?: string } = {}) {
@@ -127,7 +118,6 @@ describe("native OpenAI Responses WebSocket transport", () => {
     websocketState.instances.length = 0;
     websocketState.clients.length = 0;
     websocketState.options.length = 0;
-    websocketState.requests.length = 0;
     websocketState.responseBatches.length = 0;
     configureAiTransportHost(initialHost);
   });
@@ -300,10 +290,10 @@ describe("native OpenAI Responses WebSocket transport", () => {
 
   it.each([
     {
-      name: "tool schema change",
+      name: "tool choice change",
       mutate: (request: Record<string, unknown>) => ({
         ...request,
-        tools: [{ type: "function", name: "write", parameters: { type: "object" } }],
+        tool_choice: "none",
       }),
     },
     {

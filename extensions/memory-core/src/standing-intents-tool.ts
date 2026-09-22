@@ -210,7 +210,7 @@ export function createStandingIntentTool(options: {
           ["sender", "anyone"],
           "sender",
         );
-        const intent = createStandingIntent({
+        const intent = await createStandingIntent({
           agentId: options.agentId,
           description: trimRequiredString(
             params.description,
@@ -250,7 +250,7 @@ export function createStandingIntentTool(options: {
       }
       if (params.action === "list") {
         return jsonResult({
-          intents: listStandingIntents({
+          intents: await listStandingIntents({
             agentId: options.agentId,
             status: parseStatus(params.status),
           }),
@@ -258,7 +258,7 @@ export function createStandingIntentTool(options: {
       }
       if (params.action === "cancel") {
         const id = trimRequiredString(params.id, "id", 200);
-        const intent = cancelStandingIntent({ agentId: options.agentId, id });
+        const intent = await cancelStandingIntent({ agentId: options.agentId, id });
         return jsonResult({ cancelled: intent !== null, intent });
       }
       throw new Error("action must be create, list, or cancel");

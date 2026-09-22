@@ -8,7 +8,7 @@ describe("AppSidebar categorized child sessions", () => {
   it("promotes a categorized child loaded through the expanded-parent cache", async () => {
     const parentKey = "agent:main:parent";
     const categorizedKey = "agent:main:cached-categorized-child";
-    const ordinaryKey = "agent:main:cached-ordinary-child";
+    const ordinaryKey = "agent:main:subagent:cached-child";
     const archivedKey = "agent:main:cached-archived-child";
     const harness = createSessionsHarness("main", [parentKey]);
     const parent = harness.sessions.state.result?.sessions[0];
@@ -31,6 +31,7 @@ describe("AppSidebar categorized child sessions", () => {
         },
         {
           key: ordinaryKey,
+          category: "Research",
           kind: "direct",
           label: "Cached ordinary child",
           spawnedBy: parentKey,
@@ -65,13 +66,48 @@ describe("AppSidebar categorized child sessions", () => {
       ),
     ).not.toBeNull();
     expect(sidebar.querySelector(`[data-session-key="${archivedKey}"]`)).toBeNull();
+
+    harness.publishList({
+      result: {
+        ...harness.sessions.state.result!,
+        count: 2,
+        sessions: [
+          parent!,
+          {
+            key: categorizedKey,
+            kind: "direct",
+            label: "Current ordinary child",
+            spawnedBy: parentKey,
+            updatedAt: 4,
+          },
+        ],
+      },
+    });
+    await waitForFast(() => {
+      const rows = sidebar.querySelectorAll(`[data-session-key="${categorizedKey}"]`);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.textContent).toContain("Current ordinary child");
+      expect(rows[0]?.closest(`[data-session-tree="${parentKey}"]`)).not.toBeNull();
+    });
+    expect(sidebar.textContent).not.toContain("Cached categorized child");
+    expect(
+      sidebar.querySelector(
+        `[data-session-section="category:Research"] [data-session-key="${categorizedKey}"]`,
+      ),
+    ).toBeNull();
+    expect(
+      sidebar.querySelector(
+        `[data-session-tree="${parentKey}"] [data-session-key="${ordinaryKey}"]`,
+      ),
+    ).not.toBeNull();
+    expect(sidebar.querySelector(`[data-session-key="${archivedKey}"]`)).toBeNull();
   });
 
-  it("places a categorized child in its section while keeping ordinary siblings nested", async () => {
+  it("places a categorized dashboard child in its section while keeping categorized subagents nested", async () => {
     const harness = createSessionsHarness("main", [
       "agent:main:parent",
       "agent:main:categorized-child",
-      "agent:main:ordinary-child",
+      "agent:main:subagent:child",
       "agent:main:archived-child",
     ]);
     const result = harness.sessions.state.result;
@@ -83,7 +119,7 @@ describe("AppSidebar categorized child sessions", () => {
       label: "Parent task",
       childSessions: [
         "agent:main:categorized-child",
-        "agent:main:ordinary-child",
+        "agent:main:subagent:child",
         "agent:main:archived-child",
       ],
     });
@@ -92,9 +128,10 @@ describe("AppSidebar categorized child sessions", () => {
       label: "Categorized child",
       category: "Research",
     });
-    Object.assign(rowsByKey.get("agent:main:ordinary-child") ?? {}, {
+    Object.assign(rowsByKey.get("agent:main:subagent:child") ?? {}, {
       spawnedBy: "agent:main:parent",
-      label: "Ordinary child",
+      label: "Review child",
+      category: "Research",
     });
     Object.assign(rowsByKey.get("agent:main:archived-child") ?? {}, {
       spawnedBy: "agent:main:parent",
@@ -115,16 +152,20 @@ describe("AppSidebar categorized child sessions", () => {
       research?.querySelector('[data-session-key="agent:main:categorized-child"]')?.classList,
     ).not.toContain("sidebar-recent-session--child");
     expect(sidebar.querySelector('[data-session-key="agent:main:archived-child"]')).toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:subagent:child"]')).toBeNull();
 
     const parentTree = sidebar.querySelector('[data-session-tree="agent:main:parent"]');
     parentTree?.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
     await sidebar.updateComplete;
 
     expect(
-      parentTree?.querySelectorAll('[data-session-key="agent:main:ordinary-child"]'),
+      parentTree?.querySelectorAll('[data-session-key="agent:main:subagent:child"]'),
     ).toHaveLength(1);
     expect(
       parentTree?.querySelector('[data-session-key="agent:main:categorized-child"]'),
     ).toBeNull();
+    parentTree?.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-key="agent:main:subagent:child"]')).toBeNull();
   });
 });

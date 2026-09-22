@@ -6,10 +6,7 @@ import { fetchTelegramChatId, lookupTelegramChatId } from "./api-fetch.js";
 const TELEGRAM_GETCHAT_JSON_CAP_BYTES = 4 * 1024 * 1024;
 
 function getChatOkResponse(id: number | string): Response {
-  return new Response(JSON.stringify({ ok: true, result: { id } }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+  return Response.json({ ok: true, result: { id } });
 }
 
 function oversizedTelegramGetChatJsonResponse(onCancel: () => void): Response {

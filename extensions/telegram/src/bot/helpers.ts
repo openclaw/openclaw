@@ -581,6 +581,7 @@ export function resolveTelegramCommandAuthorization(params: {
   threadSpec: TelegramThreadSpec;
   senderId?: string;
   senderUsername?: string;
+  commandAuthorized?: boolean;
 }): CommandAuthorization {
   return resolveCommandAuthorization({
     ctx: {
@@ -596,7 +597,7 @@ export function resolveTelegramCommandAuthorization(params: {
       SenderUsername: params.senderUsername || undefined,
     },
     cfg: params.cfg,
-    commandAuthorized: false,
+    commandAuthorized: params.commandAuthorized ?? false,
   });
 }
 

@@ -1,4 +1,5 @@
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -94,5 +95,24 @@ describe("Claw runtime provenance cache", () => {
       knownAgentIds: new Set(["worker"]),
       ownershipUnknown: true,
     });
+  });
+
+  it("does not create WAL/SHM sidecar files when reading schema versions", () => {
+    const root = tempDirs.make("openclaw-claw-runtime-provenance-sidecar-");
+    const options = { env: { OPENCLAW_STATE_DIR: root } };
+    const database = openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+
+    initializeCachedClawInstallSchemaVersions(options);
+    expect(readCachedClawInstallSchemaVersions(options)).toMatchObject({
+      kind: "ready",
+      schemaVersions: new Map(),
+    });
+
+    const stateDir = join(root, "state");
+    expect(existsSync(join(stateDir, "openclaw.sqlite-wal"))).toBe(false);
+    expect(existsSync(join(stateDir, "openclaw.sqlite-shm"))).toBe(false);
+
+    rmSync(database.path);
   });
 });

@@ -35,11 +35,18 @@ export function extractCites(content: unknown): ParsedCite[] {
   const cites: ParsedCite[] = [];
 
   for (const verse of content) {
-    if (verse?.block?.cite && typeof verse.block.cite === "object") {
-      const cite = verse.block.cite;
+    const verseRecord = asNullableRecord(verse);
+    const block = asNullableRecord(verseRecord?.block);
+    const cite = asNullableRecord(block?.cite);
+    if (cite) {
+      const chan = asNullableRecord(cite.chan);
+      const group = readStringField(cite, "group");
+      const desk = asNullableRecord(cite.desk);
+      const bait = asNullableRecord(cite.bait);
 
-      if (cite.chan && typeof cite.chan === "object") {
-        const { nest, where } = cite.chan;
+      if (chan) {
+        const nest = readStringField(chan, "nest");
+        const where = readStringField(chan, "where");
         const whereMatch = where?.match(/\/msg\/(~[a-z-]+)\/(.+)/);
         cites.push({
           type: "chan",
@@ -48,16 +55,20 @@ export function extractCites(content: unknown): ParsedCite[] {
           author: whereMatch?.[1],
           postId: whereMatch?.[2],
         });
-      } else if (cite.group && typeof cite.group === "string") {
-        cites.push({ type: "group", group: cite.group });
-      } else if (cite.desk && typeof cite.desk === "object") {
-        cites.push({ type: "desk", flag: cite.desk.flag, where: cite.desk.where });
-      } else if (cite.bait && typeof cite.bait === "object") {
+      } else if (group) {
+        cites.push({ type: "group", group });
+      } else if (desk) {
+        cites.push({
+          type: "desk",
+          flag: readStringField(desk, "flag"),
+          where: readStringField(desk, "where"),
+        });
+      } else if (bait) {
         cites.push({
           type: "bait",
-          group: cite.bait.group,
-          nest: cite.bait.graph,
-          where: cite.bait.where,
+          group: readStringField(bait, "group"),
+          nest: readStringField(bait, "graph"),
+          where: readStringField(bait, "where"),
         });
       }
     }

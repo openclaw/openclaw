@@ -6,7 +6,7 @@ read_when:
   - Working on the plugin load pipeline or registry
   - Implementing provider runtime hooks or channel plugins
 title: "Plugin internals"
-sidebarTitle: "Internals"
+sidebarTitle: "Architecture"
 ---
 
 This is the **deep architecture reference** for the OpenClaw plugin system. For practical guides, start with one of the focused pages below.
@@ -114,7 +114,7 @@ OpenClaw's plugin system has four layers:
     Core decides whether a discovered plugin is enabled, disabled, blocked, or selected for an exclusive slot such as memory.
   </Step>
   <Step title="Runtime loading">
-    Native OpenClaw plugins are loaded in-process and register capabilities into a central registry. Packaged JavaScript loads through native `require`; third-party local source TypeScript is the emergency Jiti fallback. Compatible bundles are normalized into registry records without importing runtime code.
+    Native OpenClaw plugins are loaded in-process and register capabilities into a central registry. Managed instances load JavaScript through Node and compile TypeScript source when needed. Compatible bundles are normalized into registry records without importing runtime code.
   </Step>
   <Step title="Surface consumption">
     The rest of OpenClaw reads the registry to expose tools, channels, provider setup, hooks, HTTP routes, CLI commands, and services.
@@ -138,11 +138,17 @@ That split lets OpenClaw validate config, explain missing/disabled plugins, and 
 
 ### Plugin metadata snapshot and lookup table
 
-Gateway startup builds one `PluginMetadataSnapshot` for the current config snapshot. The snapshot is metadata-only: it stores the installed plugin index, manifest registry, manifest diagnostics, owner maps, a plugin id normalizer, and manifest records. It does not hold loaded plugin modules, provider SDKs, package contents, or runtime exports.
+One `PluginCache` starts on the first plugin metadata access, including CLI preflight before Gateway startup, and fills progressively as metadata and artifacts are needed. Gateway startup retains that owner and builds its immutable `PluginMetadataSnapshot`. The snapshot includes plugin metadata from all configured agent workspaces, including disabled plugins, with source precedence and workspace provenance preserved. It stores the installed plugin index, manifest registry, manifest diagnostics, owner maps, and a plugin id normalizer. Package contents and lazily loaded module exports belong to other typed views of the same cache, not the snapshot itself.
 
 Plugin-aware config validation, startup auto-enable, and Gateway plugin bootstrap consume that snapshot instead of rebuilding manifest/index metadata independently. `PluginLookUpTable` is derived from the same snapshot and adds the startup plugin plan for the current runtime config.
 
-After startup, Gateway keeps the current metadata snapshot as a replaceable runtime product. Repeated runtime provider discovery can borrow that snapshot instead of reconstructing the installed index and manifest registry for each provider-catalog pass. The snapshot is cleared or replaced on Gateway shutdown, config/plugin inventory changes, and installed index writes; callers fall back to the cold manifest/index path when no compatible current snapshot exists. Compatibility checks must include plugin discovery roots such as `plugins.load.paths` and the default agent workspace, because workspace plugins are part of the metadata scope.
+Channel setup catalogs retain the requested workspace and load-path scope, including raw plugin shadows, so trust filtering can select the appropriate installed alternative.
+
+After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing an account or an agent's run workspace does not invalidate it. Explicit plugin lifecycle operations prepare a new inventory for installs, updates, removals, source or manifest edits, and discovery-root changes before publishing it to the running Gateway.
+
+Model-id normalization policies are prepared with each snapshot or narrowed view. Model selection, catalogs, and runtime normalization carry that view forward instead of rebuilding policies from its plugin list. An empty view remains authoritative and cannot inherit policies from a broader process snapshot.
+
+Fleet model-runtime preparation captures one immutable config and authored-source view per build. Plugin argument handling, activation fingerprints, and agent lookups reuse those captured facts across agents. Dynamic model hooks still receive each agent's directory, workspace, and model registry. Preparation yields to the event loop between agents so Gateway requests can run during a large fleet build; config refresh creates a new capture. Existing installations need no configuration changes or migration.
 
 The snapshot and lookup table keep repeated startup decisions on the fast path:
 
@@ -154,11 +160,146 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 - plugin config schema and channel config schema validation
 - startup auto-enable decisions
 
-The safety boundary is snapshot replacement, not mutation. Rebuild the snapshot when config, plugin inventory, install records, or persisted index policy changes. Do not treat it as a broad mutable global registry, and do not keep unbounded historical snapshots. Runtime plugin loading remains separate from metadata snapshots so stale runtime state cannot be hidden behind a metadata cache.
+Startup and hot replacement share one prepared registry publisher. Replacement retains unchanged plugin instances and validates candidate metadata before draining affected services and channels. It stops and disposes the previous registration before registering its replacement, then publishes runtime methods and metadata together. Connected clients refresh their plugin capabilities after publication. If replacement fails before publication and cleanup succeeds, recovery registers captured previous code and configuration with fresh resource ownership. A failure after publication reports the committed generation. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
 
-The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): manifest and discovery metadata are fresh unless a caller holds an explicit snapshot, lookup table, or manifest registry for the current flow. Hidden metadata caches and wall-clock TTLs are not part of plugin loading. Only runtime loader, module, and dependency-artifact caches may persist after code or installed artifacts are actually loaded.
+A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then request `plugins.reload` through the admin Gateway API to load the repaired plugin.
 
-Some cold-path callers still reconstruct manifest registries directly from the persisted installed plugin index instead of receiving a Gateway `PluginLookUpTable`. That path now reconstructs the registry on demand; prefer passing the current lookup table or an explicit manifest registry through runtime flows when a caller already has one.
+Read-only model validation, effective tool inventory, and isolated model probes acquire their own registrations when they need executable provider or harness hooks. Concurrent callers share the prepared generation, and its lifecycle disposers run after the final borrower and any unfinished preparation or catalog work settle. Cancellation does not close a registration while its callback is still running. Process shutdown revokes these registry views before joining their remaining work and disposal. Catalog reads that need only metadata do not acquire these executable registrations.
+
+Each plugin service startup attempt owns one cleanup operation, including failed starts. Hot replacement observes candidate startup and service cleanup with five-second deadlines. Candidate startup failure rejects the replacement. Replacing a loaded plugin requires successful cleanup before another registration can acquire its resources; pending cleanup or a cleanup error can therefore reject replacement and prevent automatic recovery. A pending startup retains its resources until it finishes and its one stop operation settles. Plugin removal can report deferred cleanup; Gateway shutdown joins that work before releasing the plugin's resources. Disposal stops new registered calls while physical cleanup finishes. Service cleanup is not invoked a second time merely because an observer timed out. If a command catalog refresh also stopped unchanged channels, failed replacement resumes those healthy registrations while the failed plugin remains fenced.
+
+A later reload can retry after pending cleanup completes successfully, without capturing code from the disposed instance again. A timed-out admitted call also keeps retry blocked until that call finishes. If draining fails before disposal starts, the quiesced registration retains its original loader for the next reload's recovery capture; ordinary plugin calls remain closed. Rejected replacements and failed recovery registrations retain the same cleanup barrier. Recovery preserves existing error records as diagnostics without executing their code. It never substitutes current package files for an already retired registration whose captured source has been released.
+
+Gateway shutdown also joins actual harness, MCP, LSP, embedding, and media cleanup after their initial grace periods. When clearing the active registry, plugin host cleanup can advance to later hooks after a timeout, but registry resets and shared database closure wait for its actual completion. These waits preserve resources for cleanup; they do not restore a retired plugin's runtime authority.
+
+Executable CLI cleanup reports each disposer that exceeds five seconds and proceeds with later cleanup without canceling the pending work. On macOS with Node's system CA support enabled, automatic exit after command completion waits for this pending cleanup to finish. Explicit command exit requests and the update exit watchdog retain their bounded behavior.
+
+Standalone plugin and Codex supervision MCP stdio services retain their discovered registrations through accepted tool work, harness cleanup, and nested SDK provider lookups. Terminal shutdown cancels and joins handlers before releasing these registrations and awaiting their resource disposers. Transport-close and registration-disposal failures reach the serving caller. Programmatic servers created from supplied tools leave those resources with the caller; closing and reconnecting the same server does not dispose them.
+
+Hot registry publication does not wait for retired host cleanup; terminal shutdown also joins cleanup already started by earlier registry replacements before resetting shared state. Activation and rollback apply only to their captured registry version. An activation superseded by a lifecycle callback reports an error.
+
+The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway retains one cache generation, while explicit management operations use isolated generations of the same cache. There are no wall-clock TTLs for Gateway metadata.
+
+Install, update, registry refresh, and doctor flows may read fresh package metadata to validate their changes. A management snapshot or installed-index write alone does not replace the running Gateway's inventory: the Gateway lifecycle owner must prepare and publish it. Runtime flows use their selected snapshot or lookup table instead of falling back to cold management paths.
+
+### Runtime instance and source lifetime
+
+A managed runtime instance owns its module results, registered callables, and
+runtime-store slots. With Node's synchronous module hooks, it also owns a captured
+source artifact. Package plugins capture their package inputs when the instance
+is created. Standalone files capture their entry and statically known inputs
+without copying the surrounding workspace. Compiled bundled runtime and setup
+modules share the host's code identity; each inventory still owns its registered
+callbacks and cleanup. Replacing that compiled code requires a build and Gateway
+restart. Conditional package aliases retain their package metadata, and native
+Node conditions select the target from that captured metadata. Legacy packages
+without an exports map also prefetch their existing main or index entry as raw
+bytes; this can read a large native entry, but does not execute unselected code.
+The selected package's remaining body is captured before execution.
+Dependency links retain existing nested installation locations; hoisted dependencies
+link at the captured package root. Capture does not add `node_modules` beside
+individual source files, so native-addon loaders can still locate their package
+root and its build assets.
+
+After the existing runtime, setup, or executable-discovery checks admit an entry,
+its instance captures imported shared files and dependency modules on demand.
+Relative, absolute, and file-URL imports use captured files; TypeScript dependency
+entries compile in their own package scope. Metadata and install inspection remain
+confined and do not acquire executable shared inputs.
+
+Executable loading can follow a shared-module link by capturing its selected
+module separately. Cold source snapshots still reject links outside the plugin
+root, so deferred install batches and install-digest settlement require those
+inputs to be packaged as dependencies. Linked non-module resources outside the
+plugin root are not captured by this module-loading path.
+
+A first-demand `import()` or `require()` can observe later source edits; captured
+metadata and entry bytes remain unchanged. The initial source digest covers the
+creation-time capture; later inputs extend explicit source-current checks without
+changing that digest. Invalid optional package metadata fails only when selected.
+Module acquisition uses the instance's current admission, and disposal closes
+further capture.
+Runtime and setup retirement remove captured artifacts asynchronously and wait
+for removal to finish. Plugin callback deadlines do not end custody of those
+files; synchronous source inspection and failed capture still clean up before returning.
+
+Configured Gateway agents share one model-catalog worker per plugin-inventory
+lifetime. Agent and authentication facts belong to each task; plugin registrations
+and captured source remain with the shared inventory. Standalone hosts that supply
+their own environment retain an isolated catalog worker for that environment.
+
+Credential persistence publishes fresh shared-store ownership before credential
+discovery. Login and explicit auth refresh join the credential owner's publication
+instead of creating another catalog generation for the same change.
+
+Model-catalog workers keep their captured plugin files in a worker-owned directory.
+The parent removes any remaining captures after that worker exits,
+including cancellation and crashes. Files remain available while the worker is
+running, and retiring one worker does not remove another generation's captures.
+Cancellation releases compute capacity after the worker exits; terminal shutdown
+also waits for file cleanup. Failed file removal is reported as a cleanup warning.
+
+Loading metadata alone does not execute every plugin, and registration remains
+synchronous. Synchronously loaded TypeScript entries and their synchronous
+TypeScript imports retain Jiti's CommonJS compilation behavior, including `.mts`
+and `.mtsx` entries. Node evaluates the captured output. Keep top-level await out
+of synchronous entrypoints; start asynchronous work through lifecycle callbacks
+or a later dynamic import.
+
+Dynamic TypeScript imports preserve asynchronous CommonJS execution, including
+top-level await and `module.exports`, while source loaded from native JavaScript
+follows Node's module format. The first evaluation fixes that mode for the
+instance; resolving a module alone does not evaluate it. Source
+`import.meta.resolve` retains Jiti's optional parent URL and resolution options,
+including custom conditions and `try`. The one-argument resolver uses the
+source's directory and package scope.
+Entries loaded from captured source retain evaluation failures for their instance
+instead of retrying through another loader. Core-shipped JavaScript and libraries
+loaded outside a captured plugin instance keep their existing native/Jiti loading
+behavior.
+
+Managed TypeScript filename metadata (`import.meta.url`, `import.meta.filename`,
+`import.meta.dirname`, `__filename`, and `__dirname`) identifies the captured
+source so relative asset reads stay within that generation. Node executes compiled
+JavaScript from a separate directory; its module URLs and CommonJS cache keys can
+differ from the source filenames.
+
+Bun 1.4.2 uses its native/Jiti loader with a separate captured source artifact for
+each managed instance. Reload prepares fresh TypeScript entries and helpers while
+existing consumers retain their old instance. Disposal removes that instance's
+captured cache records and files without evicting its replacement or the host SDK.
+Native imports and Jiti imports retain their respective package conditions.
+
+Bun needs local package import/export targets to exist before native resolution.
+Selective captures therefore acquire existing files matched by those declarations,
+including conditional branches and wildcard targets, before evaluation. Unselected
+source remains raw bytes; its code and TypeScript configuration are not evaluated.
+This can read more files at startup than Node's demand-driven capture. Other
+deferred imports still acquire source on first use through the instance's current
+admission; already prepared modules need no new acquisition.
+
+When using Jiti's TypeScript path settings, keep the original tsconfig files and
+configuration dependencies available while the plugin is active. Loaded modules
+retain their selected path mappings; previously unvisited modules may read those
+configuration files on first use. Newly loaded instances select the current
+path settings.
+
+Registry retirement revokes managed execution separately from physical resource
+release. An acquired inspection can release its execution authority while a
+borrower still holds the underlying registration resources; the last physical
+claim owns their disposal. Bare SDK provider results retain their own instance
+consumer, so their callbacks remain usable until the owning SDK host closes.
+That host joins admitted callback work before releasing consumers and resources;
+releasing the inspection still prevents new borrows. Gateway shutdown keeps shared dependencies
+until the owners that still need them have joined. These ownership rules do not
+make native plugins a sandbox or automatically close plugin-created resources.
+See [Plugin lifecycle and cleanup](/plugins/sdk-runtime#plugin-lifecycle-and-cleanup)
+for the plugin author's cleanup contract.
+
+An admitted agent turn keeps its original context engine through accepted commit
+and engine disposal. Reload can report deferred cleanup while that turn finishes.
+Starting engine disposal closes its normal callbacks immediately; the engine's
+cleanup remains owned until it settles.
 
 ### Activation planning
 
@@ -196,6 +337,7 @@ Core passes runtime scope into that discovery step. Important fields include:
 
 - `accountId`
 - `currentChannelId`
+- `chatType` (`direct`, `group`, or `channel` when the inbound route establishes it)
 - `currentThreadTs`
 - `currentMessageId`
 - `sessionKey`
@@ -203,7 +345,7 @@ Core passes runtime scope into that discovery step. Important fields include:
 - `agentId`
 - trusted inbound `requesterSenderId`
 
-That matters for context-sensitive plugins. A channel can hide or expose message actions based on the active account, current room/thread/message, or trusted requester identity without hardcoding channel-specific branches in the core `message` tool.
+That matters for context-sensitive plugins. A channel can hide or expose message actions based on the active account, current room/thread/message, authoritative conversation type, or trusted requester identity without hardcoding channel-specific branches in the core `message` tool. Treat `chatType` as discovery scope supplied by the current inbound route, not something to infer again from an opaque channel id; it is absent when that route did not establish the conversation type.
 
 This is why embedded-runner routing changes are still plugin work: the runner is responsible for forwarding the current chat/session identity into the plugin discovery boundary so the shared `message` tool exposes the right channel-owned surface for the current turn.
 
@@ -369,7 +511,7 @@ That avoids baking one provider's video assumptions into core. The plugin owns t
 
 Video generation already uses that same sequence: core owns the typed capability contract and runtime helper, and vendor plugins register `api.registerVideoGenerationProvider(...)` implementations against it.
 
-Need a concrete rollout checklist? See [Capability Cookbook](/tools/capability-cookbook).
+Need a concrete rollout checklist? See [Adding capabilities](/plugins/adding-capabilities).
 
 ## Contracts and enforcement
 
@@ -433,7 +575,13 @@ Use allowlists and explicit install/load paths for non-bundled plugins. Treat wo
 For bundled workspace package names, keep the plugin id anchored in the npm name: `@openclaw/<id>` by default, or an approved typed suffix such as `-provider`, `-plugin`, `-speech`, `-sandbox`, or `-media-understanding` when the package intentionally exposes a narrower plugin role.
 
 <Note>
-**Trust note:** `plugins.allow` trusts **plugin ids**, not source provenance. A workspace plugin with the same id as a bundled plugin intentionally shadows the bundled copy when that workspace plugin is enabled/allowlisted. This is normal and useful for local development, patch testing, and hotfixes. Bundled-plugin trust is resolved from the source snapshot — the manifest and code on disk at load time — rather than from install metadata. A corrupted or substituted install record cannot silently widen a bundled plugin's trust surface beyond what the actual source claims.
+**Trust note:** `plugins.allow` permits **plugin ids** to load; it does not verify source provenance or choose which same-id copy loads. An auto-discovered workspace plugin does not shadow a bundled plugin merely because that id is enabled or allowlisted.
+
+For intentional local overrides, use `plugins.load.paths` to select the plugin path. Tracked global installs can also override ordinary bundled copies. On source installs, plugins built with the host retain priority over tracked globals, including when `OPENCLAW_DEV_SOURCE_ROOT` is unset. Matching package versions alone do not prove that a registry plugin matches a source build's SDK. See [Discovery precedence](/plugins/manifest/package-json#discovery-precedence-duplicate-plugin-ids) for the full order.
+
+A configured path or install record pointing to the host’s own bundled plugin tree retains bundled provenance, including source and compiled entries; a different local copy does not inherit trust from its name or allowlist entry. Checkout runners supply the development selector automatically, including for compiled plugins. See [development debugging](</help/debugging#dev-profile-%2B-dev-gateway-(--dev)>).
+
+Bundled-plugin trust is resolved from the source snapshot — the manifest and code on disk at load time — rather than from install metadata. A corrupted or substituted install record cannot silently widen a bundled plugin's trust surface beyond what the actual source claims.
 </Note>
 
 ## Export boundary
@@ -458,3 +606,5 @@ For the load pipeline, registry model, provider runtime hooks, Gateway HTTP rout
 - [Building plugins](/plugins/building-plugins)
 - [Plugin manifest](/plugins/manifest)
 - [Plugin SDK setup](/plugins/sdk-setup)
+- [Context engines](/concepts/context-engine)
+- [Plugin Runtime](/plugins/sdk-runtime) - the `api.runtime` helpers plugins call

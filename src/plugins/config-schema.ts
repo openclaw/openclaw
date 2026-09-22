@@ -1,9 +1,8 @@
 // Builds plugin config schemas from manifest metadata.
 import { z, type ZodTypeAny } from "zod";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
+import { parseJsonSchemaIssuePath, validateJsonSchemaValue } from "./schema-validator.js";
 import type { OpenClawPluginConfigSchema } from "./types.js";
 
 type Issue = { path: Array<string | number>; message: string };
@@ -11,10 +10,6 @@ type Issue = { path: Array<string | number>; message: string };
 type SafeParseResult =
   | { success: true; data?: unknown }
   | { success: false; error: { issues: Issue[] } };
-
-type ZodSchemaWithToJsonSchema = ZodTypeAny & {
-  toJSONSchema?: (params?: Record<string, unknown>) => unknown;
-};
 
 type BuildPluginConfigSchemaOptions = {
   /** @deprecated Declare top-level `uiHints` in `openclaw.plugin.json`. */
@@ -88,15 +83,6 @@ function normalizeJsonSchema(schema: unknown): unknown {
   return record;
 }
 
-function toIssuePath(path: string): Array<string | number> {
-  if (!path || path === "<root>") {
-    return [];
-  }
-  return path.split(".").map((segment) => {
-    return parseConfigPathArrayIndex(segment) ?? segment;
-  });
-}
-
 function safeParseJsonSchema(
   schema: JsonSchemaObject,
   cacheKey: string,
@@ -115,7 +101,7 @@ function safeParseJsonSchema(
     success: false,
     error: {
       issues: result.errors.map((issue) => ({
-        path: toIssuePath(issue.path),
+        path: parseJsonSchemaIssuePath(issue.path),
         message: issue.message,
       })),
     },
@@ -143,15 +129,15 @@ export function buildPluginConfigSchema(
   schema: ZodTypeAny,
   options?: BuildPluginConfigSchemaOptions,
 ): OpenClawPluginConfigSchema {
-  const schemaWithJson = schema as ZodSchemaWithToJsonSchema;
   const safeParse = options?.safeParse ?? ((value) => safeParseRuntimeSchema(schema, value));
-  if (typeof schemaWithJson.toJSONSchema === "function") {
+  if ("_zod" in schema) {
     return {
       safeParse,
       ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
       // Normalize generated schema so plugin consumers see a stable draft-07-ish shape.
       jsonSchema: normalizeJsonSchema(
-        schemaWithJson.toJSONSchema({
+        // Plugin roots can contain newer SDK schemas; the host must own their conversion context.
+        z.toJSONSchema(schema, {
           target: "draft-07",
           io: "input",
           unrepresentable: "any",

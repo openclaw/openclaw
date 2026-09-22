@@ -3,6 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
  * Channel health monitor regression tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelId, ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
@@ -11,10 +12,11 @@ import type { ChannelManager } from "./server-channels.js";
 function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
   return {
     getRuntimeSnapshot: vi.fn(() => ({ channels: {}, channelAccounts: {} })),
-    getPluginCommandCatalogAccounts: vi.fn(() => new Map()),
+    pauseChannelStarts: vi.fn(() => () => {}),
     startChannels: vi.fn(async () => {}),
-    startChannel: vi.fn(async () => {}),
+    startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
+    releaseChannelRouteHandoffs: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
     recoverAutostartSuppression: vi.fn(async () => false),
@@ -22,6 +24,7 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
+    isAccountListed: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
     isAutoRestartScheduled: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
@@ -70,6 +73,14 @@ function startDefaultMonitor(
     ...overrides,
     timing: { monitorStartupGraceMs: 0, ...overrides.timing },
   });
+}
+
+function markRestartPending(account: Partial<ChannelAccountSnapshot>) {
+  account.running = false;
+  account.connected = false;
+  account.restartPending = true;
+  account.reconnectAttempts = 0;
+  return new Map();
 }
 
 async function startAndRunCheck(
@@ -632,12 +643,7 @@ describe("channel-health-monitor", () => {
         },
       },
       {
-        startChannel: vi.fn(async () => {
-          account.running = false;
-          account.connected = false;
-          account.restartPending = true;
-          account.reconnectAttempts = 0;
-        }),
+        startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
     const monitor = await startAndRunCheck(manager);
@@ -661,12 +667,7 @@ describe("channel-health-monitor", () => {
       },
       {
         // Every start attempt leaves the account stuck in pending restart.
-        startChannel: vi.fn(async () => {
-          account.running = false;
-          account.connected = false;
-          account.restartPending = true;
-          account.reconnectAttempts = 0;
-        }),
+        startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
     const monitor = startDefaultMonitor(manager, {
@@ -692,12 +693,7 @@ describe("channel-health-monitor", () => {
         },
       },
       {
-        startChannel: vi.fn(async () => {
-          account.running = false;
-          account.connected = false;
-          account.restartPending = true;
-          account.reconnectAttempts = 0;
-        }),
+        startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
     // The budgeted restart consumes the only hourly slot; the continuation that
@@ -718,12 +714,7 @@ describe("channel-health-monitor", () => {
         },
       },
       {
-        startChannel: vi.fn(async () => {
-          account.running = false;
-          account.connected = false;
-          account.restartPending = true;
-          account.reconnectAttempts = 0;
-        }),
+        startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
     const monitor = await startAndRunCheck(manager, { cooldownCycles: 10 });
@@ -763,6 +754,7 @@ describe("channel-health-monitor", () => {
             account.connected = true;
             account.restartPending = false;
           }
+          return new Map();
         }),
       },
     );
@@ -879,6 +871,7 @@ describe("channel-health-monitor", () => {
       {
         startChannel: vi.fn(async () => {
           await startGate;
+          return new Map();
         }),
       },
     );
@@ -895,10 +888,7 @@ describe("channel-health-monitor", () => {
   it.each(["manual stop", "abort signal"] as const)(
     "does not resume an in-flight restart after %s",
     async (stopMode) => {
-      let releaseStop: (() => void) | undefined;
-      const stopGate = new Promise<void>((resolve) => {
-        releaseStop = resolve;
-      });
+      const { promise: stopGate, resolve: releaseStop } = createDeferred();
       const abort = new AbortController();
       const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
         stopChannel: vi.fn(async () => {
@@ -960,10 +950,7 @@ describe("channel-health-monitor", () => {
     { label: "replacement", shutdownAfterRetire: false, expectedStarts: 1 },
     { label: "replacement followed by shutdown", shutdownAfterRetire: true, expectedStarts: 0 },
   ])("coordinates the in-flight restart during $label", async (testCase) => {
-    let releaseStop: (() => void) | undefined;
-    const stopGate = new Promise<void>((resolve) => {
-      releaseStop = resolve;
-    });
+    const { promise: stopGate, resolve: releaseStop } = createDeferred();
     const staleAccount = disconnectedAccount(Date.now() - 300_000);
     const manager = createSnapshotManager(
       { slack: { first: staleAccount, second: staleAccount } },
@@ -992,10 +979,7 @@ describe("channel-health-monitor", () => {
   });
 
   it("bounds replacement handoff and abandons a late restart", async () => {
-    let releaseStop: (() => void) | undefined;
-    const stopGate = new Promise<void>((resolve) => {
-      releaseStop = resolve;
-    });
+    const { promise: stopGate, resolve: releaseStop } = createDeferred();
     const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
       stopChannel: vi.fn(async () => {
         await stopGate;

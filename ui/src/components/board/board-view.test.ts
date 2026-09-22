@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
@@ -8,8 +9,6 @@ import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
 import {
   boardWidget,
   callbacks,
-  deferred,
-  deferredValue,
   gatewayContext,
   mount,
   settleCells,
@@ -66,6 +65,10 @@ describe("openclaw-board-view", () => {
 
   it("bounds the wait for a sandbox proxy that never becomes ready", async () => {
     vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<!doctype html><p>Ready document</p>")),
+    );
     const frameLoadFailed = vi.fn(async () => undefined);
     const view = await mount({
       context: gatewayContext(null),
@@ -429,8 +432,46 @@ describe("openclaw-board-view", () => {
 
     view.activeTabId = "ops";
     const cells = await settleCells(view);
-    expect(cells).toHaveLength(1);
-    expect(cells[0]?.widget?.name).toBe("ops-only");
+    const visible = cells.filter((cell) => !cell.hidden);
+    expect(visible.map((cell) => cell.widget?.name)).toEqual(["ops-only"]);
+    for (const cell of cells.filter((candidate) => candidate.hidden)) {
+      expect(cell.active).toBe(false);
+      expect(cell.hasAttribute("inert")).toBe(true);
+    }
+  });
+
+  it("refreshes retained widgets and releases removed tabs without mounting unvisited tabs", async () => {
+    const view = await mount({ widgetFrameUrl: (name, revision) => `/${name}/${revision}` });
+    const first = view.querySelector("openclaw-board-widget-cell")!;
+    const frame = first.querySelector("iframe");
+    expect(view.querySelectorAll("openclaw-board-widget-cell")).toHaveLength(2);
+    view.activeTabId = "ops";
+    await settleCells(view);
+    const updated = snapshot({ revision: 2 });
+    updated.widgets[0]!.revision = 3;
+    view.snapshot = updated;
+    await settleCells(view);
+    expect(first.querySelector("iframe")).toBe(frame);
+    expect(frame?.getAttribute("src")).toBe("/alpha/3");
+    view.snapshot = {
+      ...view.snapshot,
+      tabs: view.snapshot.tabs.filter((tab) => tab.tabId !== "main"),
+    };
+    const remaining = await settleCells(view);
+    expect(first.isConnected).toBe(false);
+    expect(remaining.map((cell) => cell.widget?.name)).toEqual(["ops-only"]);
+  });
+
+  it("retires cached documents when the exact agent owner changes", async () => {
+    const view = await mount();
+    view.session = { agentId: "first-agent", sessionKey: "shared-display-key" };
+    const previous = await settleCells(view);
+    view.activeTabId = "ops";
+    await settleCells(view);
+    view.session = { agentId: "second-agent", sessionKey: "shared-display-key" };
+    const current = await settleCells(view);
+    expect(previous.every((cell) => !cell.isConnected)).toBe(true);
+    expect(current.map((cell) => cell.widget?.name)).toEqual(["ops-only"]);
   });
 
   it("hides the tab strip when the board has only one tab", async () => {
@@ -647,7 +688,7 @@ describe("openclaw-board-view", () => {
   it("does not schedule renewal when an in-flight MCP App load resolves after disconnect", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const pending = deferredValue<{
+    const pending = deferred<{
       status: "ready";
       viewId: string;
       expiresAtMs: number;
@@ -672,7 +713,7 @@ describe("openclaw-board-view", () => {
     expect(refreshWidgetAppView).not.toHaveBeenCalled();
   });
 
-  it("shows stale MCP Apps with retry and remove without breaking the board", async () => {
+  it("shows stale MCP Apps with retry and delete without breaking the board", async () => {
     if (!customElements.get("mcp-app-view")) {
       customElements.define("mcp-app-view", class extends HTMLElement {});
     }
@@ -698,7 +739,7 @@ describe("openclaw-board-view", () => {
     const buttons = view.querySelectorAll<HTMLButtonElement>(
       '[data-test-id="board-mcp-app-stale"] button',
     );
-    expect([...buttons].map((button) => button.textContent?.trim())).toEqual(["Retry", "Remove"]);
+    expect([...buttons].map((button) => button.textContent?.trim())).toEqual(["Retry", "Delete"]);
     buttons[1]?.click();
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_remove", name: "alpha" }]),

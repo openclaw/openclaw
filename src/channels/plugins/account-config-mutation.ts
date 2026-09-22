@@ -1,7 +1,13 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { resolveChannelAccountKey } from "../../routing/account-lookup.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   resolveChannelSetupExecutionAdapter,
@@ -12,7 +18,10 @@ import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
-export type ChannelAccountMutationPlugin = ChannelPlugin;
+export type ChannelAccountMutationPlugin = Pick<
+  ChannelPlugin,
+  "id" | "meta" | "config" | "setup" | "setupContract" | "gateway" | "lifecycle"
+>;
 
 type ChannelSetupExecutionAdapter = NonNullable<
   ReturnType<typeof resolveChannelSetupExecutionAdapter>
@@ -23,14 +32,17 @@ type ChannelAccountConfigurationError =
   | { kind: "invalid-input"; message: string };
 
 type PreparedChannelAccountConfiguration = {
-  plugin: ChannelPlugin;
+  plugin: ChannelAccountMutationPlugin;
   setup: ChannelSetupExecutionAdapter;
   applyAccountConfig: NonNullable<ChannelSetupExecutionAdapter["applyAccountConfig"]>;
   accountId: string;
   input: unknown;
 };
 
-function resolveMissingSetupEnvMessage(plugin: ChannelPlugin, input: unknown): string | undefined {
+function resolveMissingSetupEnvMessage(
+  plugin: ChannelAccountMutationPlugin,
+  input: unknown,
+): string | undefined {
   if (!plugin.setupContract || !isRecord(input) || input.useEnv !== true) {
     return undefined;
   }
@@ -54,7 +66,7 @@ function resolveMissingSetupEnvMessage(plugin: ChannelPlugin, input: unknown): s
 
 export async function prepareChannelAccountConfiguration(params: {
   cfg: OpenClawConfig;
-  plugin: ChannelPlugin;
+  plugin: ChannelAccountMutationPlugin;
   requestedAccountId?: string;
   resolveInput: () => unknown;
   runtime: RuntimeEnv;
@@ -79,12 +91,23 @@ export async function prepareChannelAccountConfiguration(params: {
     input = rawInput;
   }
 
+  const requestedAccountId =
+    params.requestedAccountId === undefined
+      ? undefined
+      : resolveChannelAccountKey(
+          undefined,
+          params.requestedAccountId,
+          params.plugin.id,
+          undefined,
+          undefined,
+          { allowMissing: true },
+        );
   const accountId =
     setup.resolveAccountId?.({
       cfg: params.cfg,
-      accountId: params.requestedAccountId,
+      accountId: requestedAccountId,
       input,
-    }) ?? normalizeAccountId(params.requestedAccountId);
+    }) ?? normalizeAccountId(requestedAccountId);
   if (setup.prepareAccountConfigInput) {
     await params.beforePersistentEffect?.();
     input = await setup.prepareAccountConfigInput({
@@ -169,54 +192,41 @@ export async function applyPreparedChannelAccountConfiguration(params: {
 
 type ChannelAccountRemovalAction = "delete" | "disable";
 
-type PreparedChannelAccountRemoval = {
-  plugin: ChannelPlugin;
-  action: ChannelAccountRemovalAction;
-  accountId: string;
-  accountKey: string;
-  shouldStopRuntime: boolean;
-};
+type ChannelAccountRemovalError =
+  | { kind: "unsupported-action"; action: ChannelAccountRemovalAction }
+  | { kind: "unknown-account"; action: ChannelAccountRemovalAction; accountIds: string[] }
+  | { kind: "nothing-to-remove"; action: "delete"; accountIds: string[] };
 
-type ChannelAccountRemovalError = {
-  kind: "unsupported-action";
-  action: ChannelAccountRemovalAction;
-};
-
-export function prepareChannelAccountRemoval(params: {
-  plugin: ChannelPlugin;
-  accountId?: string;
-  action: ChannelAccountRemovalAction;
-}): PreparedChannelAccountRemoval {
-  // normalizeAccountId maps omitted values to the literal default account, so
-  // the command's former nullish plugin-default fallback was unreachable.
-  const accountId = normalizeAccountId(params.accountId);
-  return {
-    plugin: params.plugin,
-    action: params.action,
-    accountId,
-    accountKey: accountId || DEFAULT_ACCOUNT_ID,
-    shouldStopRuntime: Boolean(
-      params.plugin.gateway?.startAccount || params.plugin.gateway?.logoutAccount,
-    ),
-  };
-}
-
-export async function applyPreparedChannelAccountRemoval(params: {
+export async function applyChannelAccountRemoval(params: {
   cfg: OpenClawConfig;
-  prepared: PreparedChannelAccountRemoval;
+  plugin: ChannelAccountMutationPlugin;
+  action: ChannelAccountRemovalAction;
+  accountId?: string;
   runtime: RuntimeEnv;
+  beforeRemoval?: () => Promise<void>;
 }): Promise<Result<{ nextConfig: OpenClawConfig }, ChannelAccountRemovalError>> {
-  const { accountId, action, plugin } = params.prepared;
-  // Capability validation stays in apply: callers must preserve the historical
-  // runtime-stop ordering before reporting an unsupported mutation.
+  const { action, plugin } = params;
+  const accountId = normalizeAccountId(params.accountId);
   if (action === "delete") {
     if (!plugin.config.deleteAccount) {
       return resultError({ kind: "unsupported-action", action });
     }
+    const accountIds = plugin.config.listAccountIds(params.cfg);
+    if (!accountIds.some((id) => normalizeOptionalAccountId(id) === accountId)) {
+      return resultError({ kind: "unknown-account", action, accountIds });
+    }
+    const previousConfigJson = JSON.stringify(params.cfg);
     const nextConfig = plugin.config.deleteAccount({
       cfg: { ...params.cfg },
       accountId,
     });
+    const nextConfigJson = JSON.stringify(nextConfig);
+    // The delete owner rejects invalid deletions. This comparison only detects
+    // no-op callbacks, including third-party adapters that return a fresh object.
+    if (isDeepStrictEqual(JSON.parse(previousConfigJson), JSON.parse(nextConfigJson))) {
+      return resultError({ kind: "nothing-to-remove", action, accountIds });
+    }
+    await params.beforeRemoval?.();
     await plugin.lifecycle?.onAccountRemoved?.({
       prevCfg: params.cfg,
       accountId,
@@ -228,11 +238,16 @@ export async function applyPreparedChannelAccountRemoval(params: {
   if (!plugin.config.setAccountEnabled) {
     return resultError({ kind: "unsupported-action", action });
   }
+  const accountIds = plugin.config.listAccountIds(params.cfg);
+  if (!accountIds.some((id) => normalizeOptionalAccountId(id) === accountId)) {
+    return resultError({ kind: "unknown-account", action, accountIds });
+  }
   const nextConfig = plugin.config.setAccountEnabled({
     cfg: { ...params.cfg },
     accountId,
     enabled: false,
   });
+  await params.beforeRemoval?.();
   await plugin.lifecycle?.onAccountConfigChanged?.({
     prevCfg: params.cfg,
     nextCfg: nextConfig,

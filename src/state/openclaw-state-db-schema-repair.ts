@@ -3,7 +3,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   canRepairLegacyAuditEventsSchema,
   hasCanonicalAuditEventsSchema,
@@ -15,6 +14,7 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { resolveDatabasePath } from "./openclaw-state-db-maintenance.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   tableExists,
   tableHasColumn,
@@ -22,6 +22,7 @@ import {
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
+import { readStateSchemaMigrationVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
   hasRecognizedRetiredCommitmentsSchema,
@@ -167,6 +168,16 @@ export function migrateAgentDatabaseRelativePaths(
   const hasPath = db.prepare(
     "SELECT 1 FROM agent_databases WHERE agent_id = ? AND path = ? LIMIT 1",
   );
+  const retainNewerFacts = db.prepare(`
+    UPDATE agent_databases AS canonical
+       SET schema_version = source.schema_version,
+           last_seen_at = source.last_seen_at,
+           size_bytes = source.size_bytes
+      FROM agent_databases AS source
+     WHERE canonical.agent_id = ? AND canonical.path = ?
+       AND source.agent_id = canonical.agent_id AND source.path = ?
+       AND source.last_seen_at > canonical.last_seen_at
+  `);
   let relativized = 0;
   const reanchored: string[] = [];
   const deleted: string[] = [];
@@ -181,8 +192,15 @@ export function migrateAgentDatabaseRelativePaths(
     }
     const storedPath = resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath);
     if (!path.isAbsolute(storedPath)) {
-      updatePath.run(storedPath, agentId, registeredPath);
-      relativized += 1;
+      if (hasPath.get(agentId, storedPath)) {
+        // Namespace aliases can converge before the foreign-path repair pass.
+        retainNewerFacts.run(agentId, storedPath, registeredPath);
+        deletePath.run(agentId, registeredPath);
+        deleted.push(registeredPath);
+      } else {
+        updatePath.run(storedPath, agentId, registeredPath);
+        relativized += 1;
+      }
     }
   }
   const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
@@ -333,10 +351,19 @@ export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: stri
 }
 export function detectOpenClawStateDatabaseSchemaMigrations(
   options: OpenClawStateDatabaseOptions = {},
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): OpenClawStateDatabaseSchemaMigration[] {
   const pathname = resolveDatabasePath(options);
   if (!existsSync(pathname)) {
     return [];
+  }
+  if (behavior.artifactPreservingReadOnly) {
+    return (
+      withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+        ({ db }) => detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname),
+        { ...options, path: pathname },
+      ) ?? []
+    );
   }
   const db = openNodeSqliteDatabase(pathname, { readOnly: true });
   try {
@@ -357,7 +384,7 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   pathname: string,
 ): OpenClawStateDatabaseSchemaMigration[] {
   const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
-  const userVersion = readSqliteUserVersion(db);
+  const userVersion = readStateSchemaMigrationVersion(db);
   if (
     userVersion < RETIRED_COMMITMENTS_SCHEMA_VERSION &&
     tableExists(db, "commitments") &&
@@ -398,6 +425,31 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
       tableExists(db, "auth_profile_stores"))
   ) {
     migrations.push({ kind: "state-consolidation-v13", path: pathname });
+  }
+  if (userVersion < 14 && tableExists(db, "cron_jobs")) {
+    migrations.push({ kind: "creator-namespace-v14", path: pathname });
+  }
+  if (
+    userVersion < 15 &&
+    (tableHasColumn(db, "current_conversation_bindings", "target_agent_id") ||
+      tableHasColumn(db, "current_conversation_bindings", "target_session_id"))
+  ) {
+    migrations.push({ kind: "conversation-binding-targets-v15", path: pathname });
+  }
+  if (
+    userVersion < 16 &&
+    (tableHasColumn(db, "skill_workshop_proposals", "workspace_dir") ||
+      tableHasColumn(db, "skill_workshop_proposals", "claim_released_time") ||
+      tableHasColumn(db, "skill_workshop_collection_reviews", "workspace_dir"))
+  ) {
+    migrations.push({ kind: "skill-workshop-directory-ownership-v16", path: pathname });
+  }
+  if (
+    userVersion < 17 &&
+    tableExists(db, "worker_environments") &&
+    !tableHasColumn(db, "worker_environments", "preparation_consumed_at_ms")
+  ) {
+    migrations.push({ kind: "prepared-worker-ownership-v17", path: pathname });
   }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });

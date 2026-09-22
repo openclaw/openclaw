@@ -2,12 +2,17 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { writeConfigFile } from "../config/config.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
+import { respondToNodeShutdown } from "./node-shutdown.test-support.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./server/ws-connection/node-lifecycle-dispatch.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { installGatewayTestHooks, startServer, writeSessionStore } from "./test-helpers.js";
@@ -73,7 +78,10 @@ async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
       bootstrapReceipt: {
         bundleHash: RUNNER_BUNDLE_HASH,
         openclawVersion: "2026.8.19",
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ],
         installKind: "bundle",
       },
       credential: {
@@ -183,12 +191,11 @@ test.each([
   const url = `ws://127.0.0.1:${port}`;
   let operator: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
   let node: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-  let resolveInvokeFrame:
-    | ((frame: { id: string; nodeId: string; command: string }) => void)
-    | undefined;
-  const invokeFrame = new Promise<{ id: string; nodeId: string; command: string }>((resolve) => {
-    resolveInvokeFrame = resolve;
-  });
+  const { promise: invokeFrame, resolve: resolveInvokeFrame } = createDeferred<{
+    id: string;
+    nodeId: string;
+    command: string;
+  }>();
 
   try {
     operator = await connectGatewayClient({
@@ -219,17 +226,17 @@ test.each([
         resolveInvokeFrame?.(event.payload as { id: string; nodeId: string; command: string });
       },
     });
-    await vi.waitFor(async () => {
-      const listed = await operator?.request<{
-        nodes?: Array<{ nodeId?: string; connected?: boolean; commands?: string[] }>;
-      }>("node.list", {}, { timeoutMs: 10_000 });
-      expect(listed?.nodes?.find((entry) => entry.nodeId === pairedNode.identity.deviceId)).toEqual(
-        expect.objectContaining({
-          connected: true,
-          commands: ["camera.list"],
-        }),
-      );
-    });
+    const initialInventory = await operator.request<{
+      nodes?: Array<{ nodeId?: string; connected?: boolean; commands?: string[] }>;
+    }>("node.list", {}, { timeoutMs: 10_000 });
+    expect(
+      initialInventory.nodes?.find((entry) => entry.nodeId === pairedNode.identity.deviceId),
+    ).toEqual(
+      expect.objectContaining({
+        connected: true,
+        commands: ["camera.list"],
+      }),
+    );
 
     const invoked = operator.request<{
       ok: boolean;
@@ -368,12 +375,41 @@ test("publishes one runner-availability edge before the socket-close refresh", a
   let node: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
   let armed = false;
   let availabilityEvents = 0;
-  let resolveOffline!: (value: unknown) => void;
-  let rejectOffline!: (reason: unknown) => void;
-  const offlineRefresh = new Promise<unknown>((resolve, reject) => {
-    resolveOffline = resolve;
-    rejectOffline = reject;
-  });
+  const {
+    promise: offlineRefresh,
+    resolve: resolveOffline,
+    reject: rejectOffline,
+  } = createDeferred<unknown>();
+  const connectNode = () =>
+    connectGatewayClient({
+      url,
+      token: "secret",
+      role: "node",
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientDisplayName: "runner availability node",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      platform: "linux",
+      deviceFamily: "Linux",
+      scopes: [],
+      commands: [],
+      deviceIdentity: pairedNode.identity,
+      onEvent: (event) => {
+        if (event.event !== "node.invoke.request" || !event.payload || !node) {
+          return;
+        }
+        const frame = event.payload as {
+          id: string;
+          nodeId: string;
+          command: string;
+          paramsJSON: string;
+        };
+        const reply = respondToNodeShutdown(node, frame);
+        if (!reply) {
+          throw new Error(`unexpected node cleanup command: ${frame.command}`);
+        }
+        void reply.catch(() => undefined);
+      },
+    });
 
   try {
     operator = await connectGatewayClient({
@@ -401,19 +437,7 @@ test("publishes one runner-availability edge before the socket-close refresh", a
       },
     });
     await seedActiveDevicePlacement(pairedNode.identity.deviceId);
-    node = await connectGatewayClient({
-      url,
-      token: "secret",
-      role: "node",
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      clientDisplayName: "runner availability node",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      platform: "linux",
-      deviceFamily: "Linux",
-      scopes: [],
-      commands: [],
-      deviceIdentity: pairedNode.identity,
-    });
+    node = await connectNode();
     await node.request(
       "node.runnerInventory.update",
       {
@@ -446,11 +470,23 @@ test("publishes one runner-availability edge before the socket-close refresh", a
       readRunnerStatus(await operator.request("sessions.list", {}, { timeoutMs: 10_000 })),
     ).toBe("offline");
   } finally {
-    await Promise.allSettled([
-      ...(node ? [node.stopAndWait({ timeoutMs: 1_000 })] : []),
-      ...(operator ? [operator.stopAndWait({ timeoutMs: 1_000 })] : []),
-    ]);
-    await server.close();
+    try {
+      // The offline assertion retains a real worker owner. Reconnect only to acknowledge
+      // its physical cleanup; losing transport is not evidence that the worker stopped.
+      if (!node) {
+        node = await connectNode();
+      }
+      await node.request("node.runnerInventory.update", {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: { total: 1, available: 1 }, environmentSession: 1 },
+      });
+      await server.close();
+    } finally {
+      await Promise.allSettled([
+        ...(node ? [node.stopAndWait({ timeoutMs: 1_000 })] : []),
+        ...(operator ? [operator.stopAndWait({ timeoutMs: 1_000 })] : []),
+      ]);
+    }
   }
 });
 

@@ -2,12 +2,15 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import {
   buildGatewayDistEntrypointCandidates,
   findFirstAccessibleGatewayEntrypoint,
   isGatewayDistEntrypointPath,
 } from "./gateway-entrypoint.js";
+import { resolveGatewayHeapExecArgv } from "./gateway-heap.js";
+import type { GatewayServiceCommandConfig } from "./service-types.js";
 
 type GatewayProgramArgs = {
   programArguments: string[];
@@ -193,7 +196,7 @@ async function resolveCliProgramArguments(params: {
     throw new Error(
       params.runtime === "bun"
         ? "No supported Bun runtime was selected for the daemon. Install Bun 1.4 or newer with WAL-reset-safe node:sqlite, then retry."
-        : "No supported Node runtime was selected for the daemon. Install Node 24.15+ (recommended) or Node 22 LTS (22.22.3+), then retry.",
+        : `No supported Node runtime was selected for the daemon. Install Node ${SUPPORTED_NODE_VERSIONS}, then retry.`,
     );
   }
   const runtimePath = params.runtimePath;
@@ -219,19 +222,30 @@ async function resolveCliProgramArguments(params: {
 
 export async function resolveGatewayProgramArguments(params: {
   port: number;
+  allowUnconfigured?: boolean;
   dev?: boolean;
   runtime: GatewayDaemonRuntime;
   runtimePath?: string;
   wrapperPath?: string;
+  existingCommand?: GatewayServiceCommandConfig | null;
 }): Promise<GatewayProgramArgs> {
   const gatewayArgs = ["gateway", "--port", String(params.port)];
-  return resolveCliProgramArguments({
+  if (params.allowUnconfigured) {
+    gatewayArgs.push("--allow-unconfigured");
+  }
+  const result = await resolveCliProgramArguments({
     args: gatewayArgs,
     dev: params.dev,
     runtime: params.runtime,
     runtimePath: params.runtimePath,
     wrapperPath: params.wrapperPath,
   });
+  if (params.runtime === "node" && !params.wrapperPath?.trim()) {
+    // Size only the managed Gateway, before Node loads its entrypoint. Keeping
+    // automatic flags out of NODE_OPTIONS leaves ordinary spawned Node children alone.
+    result.programArguments.splice(1, 0, ...resolveGatewayHeapExecArgv(params.existingCommand));
+  }
+  return result;
 }
 
 export async function resolveNodeProgramArguments(params: {
@@ -243,9 +257,12 @@ export async function resolveNodeProgramArguments(params: {
   nodeId?: string;
   displayName?: string;
   installedAppsSharing?: boolean;
+  commands?: string[];
+  allCommands?: boolean;
   dev?: boolean;
   runtime: GatewayDaemonRuntime;
   runtimePath?: string;
+  wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
   const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
   if (params.tls === false && !params.tlsFingerprint) {
@@ -270,10 +287,16 @@ export async function resolveNodeProgramArguments(params: {
   if (params.installedAppsSharing !== undefined) {
     args.push(params.installedAppsSharing ? "--share-installed-apps" : "--no-share-installed-apps");
   }
+  if (params.allCommands) {
+    args.push("--all-commands");
+  } else if (params.commands !== undefined) {
+    args.push("--commands", params.commands.join(","));
+  }
   return resolveCliProgramArguments({
     args,
     dev: params.dev,
     runtime: params.runtime,
     runtimePath: params.runtimePath,
+    wrapperPath: params.wrapperPath,
   });
 }

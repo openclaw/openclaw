@@ -1,40 +1,93 @@
-// Narrow session/runtime facade re-exported for memory transcript helpers.
+// Session/runtime facade for memory transcript helpers.
 import path from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import {
+  readTranscriptExportSnapshotReadOnlySync,
+  readTranscriptStatsBatchReadOnlySync,
+  readTranscriptStatsSync as readAccessorTranscriptStatsSync,
+} from "../../../../src/config/sessions/session-accessor.js";
 
+export { readTranscriptStatsBatchReadOnlySync };
+export { readAccessorTranscriptStatsSync as readTranscriptStatsSync };
+export { readTranscriptExportSnapshotReadOnlySync };
+export { readRestoredSessionTranscript } from "../../../../src/config/sessions/session-cold-storage-read.js";
+export { SessionTranscriptColdError } from "../../../../src/config/sessions/session-cold-storage-state.js";
 export {
-  canonicalizeMainSessionAlias,
-  getRuntimeConfig,
-  HEARTBEAT_PROMPT,
+  listSessionEntriesCore,
+  listSessionEntriesReadOnly,
+} from "../../../../src/config/sessions/session-accessor.js";
+export { isIncognitoSessionKey } from "../../../../src/routing/session-key.js";
+export { isIncognitoOpenClawAgentSqlitePath } from "../../../../src/state/openclaw-agent-db.paths.js";
+export { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env-vars.js";
+
+/** Keep worker launch machinery behind the memory host's existing lazy runtime bridge. */
+export async function prepareSessionEntryInWorker(
+  ...args: Parameters<
+    typeof import("../../../../src/config/sessions/session-transcript-worker-runtime.js").prepareSessionEntryInWorker
+  >
+) {
+  const { prepareSessionEntryInWorker: prepare } =
+    await import("../../../../src/config/sessions/session-transcript-worker-runtime.js");
+  return prepare(...args);
+}
+
+export { resolveSessionAgentId } from "../../../../src/agents/agent-scope.js";
+export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
+export { isHeartbeatUserMessage } from "../../../../src/auto-reply/heartbeat-filter.js";
+export { HEARTBEAT_PROMPT } from "../../../../src/auto-reply/heartbeat.js";
+export { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+export {
   HEARTBEAT_TOKEN,
   SILENT_REPLY_TOKEN,
-  hasInterSessionUserProvenance,
-  isCompactionCheckpointTranscriptFileName,
-  isCronRunSessionKey,
-  isExecCompletionEvent,
-  isHeartbeatUserMessage,
-  isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
+} from "../../../../src/auto-reply/tokens.js";
+export {
+  getRuntimeConfig,
+  /** @deprecated Use getRuntimeConfig(), or pass the already loaded config through the call path. */
+  loadConfig,
+} from "../../../../src/config/config.js";
+export {
+  isCompactionCheckpointTranscriptFileName,
+  isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
-  loadTranscriptEventsSync,
-  listSessionEntries,
-  listSessionTranscriptInstances,
-  materializeSessionArchiveForRead,
-  onSessionTranscriptUpdate,
-  parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
-  readTranscriptContentRevisionSync,
-  readTranscriptStatsSync,
-  resolveStorePath,
-  resolveTranscriptSessionKeyBySessionId,
-  resolveSessionAgentId,
-  resolveSessionTranscriptsDirForAgent,
-  stripInboundMetadata,
-  stripInternalRuntimeContext,
-  type SessionEntry,
+} from "../../../../src/config/sessions/artifacts.js";
+export { materializeSessionArchiveForRead } from "../../../../src/config/sessions/archive-compression.js";
+export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/main-session.js";
+export {
+  listSessionTranscriptArchivesReadOnly,
+  listSessionTranscriptInstances,
   type SessionTranscriptInstance,
-} from "./openclaw-runtime.js";
+} from "../../../../src/config/sessions/session-history.js";
+export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
+export type { SessionEntry } from "../../../../src/config/sessions/types.js";
+export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
+export {
+  parseSqliteSessionFileMarker,
+  resolveStorePath,
+} from "../../../../src/plugin-sdk/session-store-runtime.js";
+export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
+export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
+export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 
+/** Returns an opaque revision that changes for every canonical transcript mutation. */
+export function readTranscriptContentRevisionSync(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+}): string {
+  const stats = readAccessorTranscriptStatsSync(params);
+  return [
+    "sqlite",
+    stats.maxSeq,
+    stats.sizeBytes,
+    stats.eventCount,
+    stats.lastMutationAtMs ?? "",
+    stats.lastObservedMutationAtMs ?? "",
+  ].join(":");
+}
 /** Extracts the agent id from a canonical `agents/<id>/sessions` directory path. */
 export function extractAgentIdFromSessionsDir(sessionsDir: string): string | null {
   const parts = path.normalize(path.resolve(sessionsDir)).split(path.sep).filter(Boolean);

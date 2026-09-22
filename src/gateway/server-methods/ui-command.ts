@@ -9,9 +9,10 @@ import {
   type UiCommandParams,
   validateUiCommandParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { GatewayRequestContextWithClientLookup } from "../server-request-context.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
@@ -19,7 +20,7 @@ export const uiCommandHandlers: GatewayRequestHandlers = {
   "ui.command": defineValidatedGatewayMethod(
     "ui.command",
     validateUiCommandParams,
-    ({ params: commandParams, respond, context }) => {
+    ({ params: commandParams, respond, context, client }) => {
       const commandSessionKey =
         "sessionKey" in commandParams.command
           ? commandParams.command.sessionKey
@@ -52,16 +53,35 @@ export const uiCommandHandlers: GatewayRequestHandlers = {
             ? { ...commandParams.command, sessionKey: canonicalSessionKey }
             : commandParams.command,
       };
-      const clientContext = context as GatewayRequestContextWithClientLookup;
-      // v1 intentionally fans out to every capable Control UI; session-targeted routing is out of scope.
+      const runtimeIdentity = client?.internal?.agentRuntimeIdentity;
+      const target = runtimeIdentity
+        ? runtimeIdentity.gatewayUiCommandTarget
+        : (getGatewayToolCallerIdentity()?.gatewayUiCommandTarget ??
+          captureGatewayUiCommandTarget(client));
+      // A session identifies what to open, never whose browser to move.
       const connIds =
-        clientContext.getClientConnIds?.(
-          (client) =>
-            client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
-            hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.UI_COMMANDS),
+        context.getClientConnIds?.(
+          (recipient) =>
+            target !== undefined &&
+            recipient.connId === target.connId &&
+            !recipient.invalidated &&
+            !recipient.connectionSignal?.aborted &&
+            (!target.profileId ||
+              recipient.authenticatedUserProfile?.profileId === target.profileId) &&
+            recipient.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
+            hasGatewayClientCap(recipient.connect.caps, GATEWAY_CLIENT_CAPS.UI_COMMANDS),
         ) ?? new Set<string>();
       if (connIds.size === 0) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "no ui client"));
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            target
+              ? "requesting Control UI is no longer connected; ask again from the open Control UI"
+              : "no requesting Control UI; ask from the Control UI to change its view",
+          ),
+        );
         return;
       }
 

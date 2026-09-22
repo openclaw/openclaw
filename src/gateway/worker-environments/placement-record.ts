@@ -1,4 +1,17 @@
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { WorkerSessionPlacementState } from "./placement-state.js";
+import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
+
+export const FORCED_WORKER_ABANDONMENT_ERROR =
+  "Worker result abandoned by forced operator teardown";
+
+export function isForceAbandonedWorkerPlacement(
+  placement: WorkerSessionPlacementRecord | undefined,
+): placement is Extract<WorkerSessionPlacementRecord, { state: "failed" }> {
+  return (
+    placement?.state === "failed" && placement.recoveryError === FORCED_WORKER_ABANDONMENT_ERROR
+  );
+}
 
 export type WorkerSessionPlacementIdentity = {
   sessionId: string;
@@ -81,12 +94,6 @@ export type PersistedTurnClaim =
       generation: number;
       ownerEpoch: number;
     };
-
-export type WorkerWorkspaceResultConflict = {
-  paths: string[];
-  stagedResultRef: string;
-  totalCount?: number;
-};
 
 type PersistedLocalTurnClaim = Extract<PersistedTurnClaim, { owner: "local" }>;
 
@@ -236,6 +243,18 @@ export type WorkerSessionPlacementRecord =
   | ReconcilingPlacementRecord
   | ReclaimedPlacementRecord
   | FailedPlacementRecord;
+
+export function reportPlacementTransition(
+  observer: ((placement: WorkerSessionPlacementRecord) => void) | undefined,
+  placement: WorkerSessionPlacementRecord,
+): void {
+  try {
+    sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey });
+    observer?.(placement);
+  } catch {
+    // Reporting cannot overturn the durable placement transition.
+  }
+}
 
 export function projectWorkerSessionTurnClaim(
   record: WorkerSessionPlacementRecord,

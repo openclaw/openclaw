@@ -1,6 +1,8 @@
 // Configures SQLite WAL and related pragmas for local stores.
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -8,7 +10,21 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasErrnoCode } from "./errno.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
-import { isSqliteLockError } from "./sqlite-transaction.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
+import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import {
+  createSqliteWalCheckpoint,
+  type SqliteWalCheckpointMode,
+  type SqliteWalCheckpointOptions,
+  type SqliteWalHealth,
+} from "./sqlite-wal-checkpoint.js";
+import {
+  cancelSqliteWalWriteAdmission,
+  createSqliteWalMaintenanceScheduler,
+} from "./sqlite-wal-write-admission.js";
+
+export type { SqliteWalHealth } from "./sqlite-wal-checkpoint.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
@@ -36,14 +52,19 @@ const CROSS_VM_FILESYSTEM_TYPES = new Set(["virtiofs", "fuse.virtiofs", "9p", "9
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 const PROC_SELF_FD_PATH = "/proc/self/fd";
+const SQLITE_WAL_SPLIT_BRAIN_FATAL_MESSAGE =
+  "SQLite WAL sidecar identity mismatch; terminating without SQLite cleanup";
 
 const log = createSubsystemLogger("infra/sqlite-wal");
+
+// Gateway bootstrap loads the database owner before admitting turns. Long-lived
+// maintenance timers must not retain the context of a turn that opens a database.
+export const runInSqliteMaintenanceContext = AsyncLocalStorage.snapshot();
 
 type IntervalHandle = ReturnType<typeof setInterval> & {
   unref?: () => void;
 };
 
-type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
 type SqliteFilesystemJournalPolicy = "rollback" | "unsupported" | "wal";
 type MountEntry = { mountPoint: string; fsType: string; source?: string };
 
@@ -58,20 +79,20 @@ type SqliteWalSplitBrainEvent = {
 };
 
 export type SqliteWalMaintenance = {
+  /** Last maintenance observation; reading it never checkpoints or probes storage. */
+  readonly health?: SqliteWalHealth;
   checkpoint: () => boolean;
   close: (options?: { checkpointMode?: SqliteWalCheckpointMode }) => boolean;
 };
 
 /** Options controlling WAL autocheckpoint and periodic checkpoint behavior. */
-export type SqliteWalMaintenanceOptions = {
+export type SqliteWalMaintenanceOptions = SqliteWalCheckpointOptions & {
   autoCheckpointPages?: number;
   busyTimeoutMs?: number;
   checkpointIntervalMs?: number;
   checkpointMode?: SqliteWalCheckpointMode;
-  databaseLabel?: string;
-  databasePath?: string;
-  onCheckpointError?: (error: unknown) => void;
-  onWalSplitBrain?: (event: SqliteWalSplitBrainEvent) => void;
+  /** Owner-held synchronous exclusion around maintenance writes, including periodic vacuum. */
+  runMaintenance?: (operation: () => boolean) => boolean;
 };
 
 export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
@@ -83,6 +104,11 @@ function configureSqliteBusyTimeout(db: DatabaseSync, busyTimeoutMs: number): nu
   const normalizedTimeoutMs = normalizeSqliteNonNegativeInteger(busyTimeoutMs, "busyTimeoutMs");
   db.exec(`PRAGMA busy_timeout = ${normalizedTimeoutMs};`);
   return normalizedTimeoutMs;
+}
+
+/** Restrict inspection connections without changing journal or persistence policy. */
+export function configureSqliteReadOnlyPragmas(db: DatabaseSync): void {
+  db.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
 }
 
 // auto_vacuum only takes effect when set before the first page is written.
@@ -351,15 +377,6 @@ function hasInMemoryMainDatabase(db: DatabaseSync): boolean {
   return main?.file === "";
 }
 
-function readCheckpointBusyResult(row: unknown): boolean {
-  if (!row || typeof row !== "object") {
-    return false;
-  }
-  const record = row as Record<string, unknown>;
-  const value = record.busy ?? Object.values(record)[0];
-  return value === 1 || value === 1n;
-}
-
 function statSqliteSidecarTarget(pathname: string): BigIntStats | undefined {
   try {
     return fs.statSync(pathname, { bigint: true });
@@ -451,6 +468,35 @@ function detectSqliteWalSplitBrain(databasePath: string): SqliteWalSplitBrainEve
   return undefined;
 }
 
+function terminateForSqliteWalSplitBrain(
+  splitBrain: SqliteWalSplitBrainEvent,
+  databaseLabel: string | undefined,
+): never {
+  try {
+    // Worker stderr has no fd; write to the process sink before fatal containment.
+    fs.writeSync(
+      2,
+      `${JSON.stringify({
+        level: "fatal",
+        subsystem: "infra/sqlite-wal",
+        message: SQLITE_WAL_SPLIT_BRAIN_FATAL_MESSAGE,
+        ...splitBrain,
+        databaseLabel,
+        pid: process.pid,
+      })}\n`,
+    );
+  } catch {
+    // Containment must proceed even when the diagnostic sink is unavailable.
+  }
+  // SIGKILL bypasses Node exit hooks that close SQLite caches. process.exit()
+  // would re-enter the exact stale-handle cleanup this containment prevents.
+  try {
+    process.kill(process.pid, "SIGKILL");
+  } finally {
+    process.abort();
+  }
+}
+
 function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintenanceOptions): void {
   const row = db.prepare("PRAGMA journal_mode = DELETE;").get();
   const journalMode = readJournalModeResult(row);
@@ -469,7 +515,7 @@ function enableWalJournalMode(
   retryTimeoutMs: number,
   options: SqliteWalMaintenanceOptions,
 ): boolean {
-  const deadline = Date.now() + retryTimeoutMs;
+  const deadline = performance.now() + retryTimeoutMs;
   let restoreBusyTimeout = false;
   try {
     while (true) {
@@ -490,7 +536,7 @@ function enableWalJournalMode(
           `${label}${location} could not enable WAL; SQLite kept journal_mode=${journalMode ?? "unknown"}.`,
         );
       } catch (error) {
-        const remainingMs = deadline - Date.now();
+        const remainingMs = Math.max(0, deadline - performance.now());
         if (!isSqliteLockError(error) || remainingMs <= 0) {
           throw error;
         }
@@ -583,19 +629,15 @@ export function configureSqliteWalMaintenance(
   let invalidated = false;
   let splitBrainDetectionEnabled = Boolean(tripwireDatabasePath);
   let splitBrainDetectionWarningLogged = false;
-
+  const checkpointOwner = createSqliteWalCheckpoint(
+    options,
+    DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES,
+  );
   const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
     try {
-      const row = db.prepare(`PRAGMA wal_checkpoint(${mode});`).get();
-      if (readCheckpointBusyResult(row)) {
-        const label = options.databaseLabel ?? "sqlite database";
-        const error = new Error(`${label} WAL checkpoint ${mode} remained busy`);
-        options.onCheckpointError?.(error);
-        return false;
-      }
-      return true;
+      return checkpointOwner.record(mode, db.prepare(`PRAGMA wal_checkpoint(${mode});`).get());
     } catch (error) {
-      options.onCheckpointError?.(error);
+      checkpointOwner.recordError(error);
       return false;
     }
   };
@@ -605,84 +647,103 @@ export function configureSqliteWalMaintenance(
   // the event loop have starved channel sockets in production (#83712).
   const runIncrementalVacuum = (): void => {
     try {
-      db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS});`);
+      // Page limits do not bound lock waits; service worker commit requests before taking the lock.
+      runSqliteImmediateTransactionSync(
+        db,
+        () => db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS});`),
+        {
+          busyTimeoutMs: options.busyTimeoutMs,
+          databaseLabel: options.databaseLabel ?? options.databasePath,
+          operationLabel: "incremental-vacuum",
+        },
+      );
     } catch (error) {
       options.onCheckpointError?.(error);
     }
   };
 
-  const checkpoint = (): boolean => !invalidated && runCheckpoint(checkpointMode);
+  const runMaintenance = (operation: () => boolean): boolean => {
+    if (invalidated) {
+      return false;
+    }
+    try {
+      return options.runMaintenance ? options.runMaintenance(operation) : operation();
+    } catch (error) {
+      checkpointOwner.recordError(error);
+      return false;
+    }
+  };
+  const checkpoint = (): boolean => runMaintenance(() => runCheckpoint(checkpointMode));
 
   let timer: IntervalHandle | null = null;
+  const maintain = createSqliteWalMaintenanceScheduler(
+    db,
+    () => {
+      // Admission may outlive this timer or its exact native connection.
+      if (!timer || invalidated) {
+        return;
+      }
+      runMaintenance(() => {
+        const checkpointed = runCheckpoint(periodicCheckpointMode);
+        runIncrementalVacuum();
+        return checkpointed;
+      });
+    },
+    (error) => checkpointOwner.recordError(error),
+  );
   if (timerIntervalMs > 0) {
-    timer = setInterval(() => {
-      if (tripwireDatabasePath && splitBrainDetectionEnabled) {
-        try {
-          const splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
-          if (splitBrain) {
-            invalidated = true;
-            if (timer) {
-              clearInterval(timer);
-              timer = null;
-            }
-            log.error("SQLite WAL sidecar identity mismatch", {
-              ...splitBrain,
-              databaseLabel: options.databaseLabel,
-            });
-            try {
-              options.onWalSplitBrain?.(splitBrain);
-            } catch (error) {
-              log.error("SQLite WAL split-brain hook failed", {
-                databaseLabel: options.databaseLabel,
-                databasePath: tripwireDatabasePath,
-                error: error instanceof Error ? error.message : String(error),
-              });
-            }
-            try {
-              if (db.isOpen) {
-                db.close();
-              }
-            } catch (error) {
-              log.error("SQLite WAL split-brain close failed", {
-                databaseLabel: options.databaseLabel,
-                databasePath: tripwireDatabasePath,
-                error: error instanceof Error ? error.message : String(error),
-              });
-            }
+    timer = runInSqliteMaintenanceContext(
+      () =>
+        setInterval(() => {
+          if (!timer || invalidated) {
             return;
           }
-        } catch (error) {
-          splitBrainDetectionEnabled = false;
-          if (!splitBrainDetectionWarningLogged) {
-            splitBrainDetectionWarningLogged = true;
-            log.warn("SQLite WAL split-brain detection disabled", {
-              databaseLabel: options.databaseLabel,
-              databasePath: tripwireDatabasePath,
-              error: error instanceof Error ? error.message : String(error),
-            });
+          if (tripwireDatabasePath && splitBrainDetectionEnabled) {
+            let splitBrain: SqliteWalSplitBrainEvent | undefined;
+            try {
+              splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
+            } catch (error) {
+              splitBrainDetectionEnabled = false;
+              if (!splitBrainDetectionWarningLogged) {
+                splitBrainDetectionWarningLogged = true;
+                log.warn("SQLite WAL split-brain detection disabled", {
+                  databaseLabel: options.databaseLabel,
+                  databasePath: tripwireDatabasePath,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+            if (splitBrain) {
+              invalidated = true;
+              if (timer) {
+                clearInterval(timer);
+                timer = null;
+              }
+              terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
+            }
           }
-        }
-      }
-      runCheckpoint(periodicCheckpointMode);
-      runIncrementalVacuum();
-    }, timerIntervalMs) as IntervalHandle;
+          maintain();
+        }, timerIntervalMs) as IntervalHandle,
+    );
     timer.unref?.();
   }
 
   return {
+    get health() {
+      return checkpointOwner.health;
+    },
     checkpoint,
     close: (closeOptions) => {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
+      clearInterval(timer ?? undefined);
+      timer = null;
+      cancelSqliteWalWriteAdmission(db);
       if (invalidated) {
         return false;
       }
       // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on
       // readers and has starved the event loop for seconds under fleet churn.
       // Orderly dispose/delete keeps TRUNCATE so sidecars are flushed for unlink.
-      return runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode);
+      return runMaintenance(() => runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode));
     },
   };
 }
@@ -713,11 +774,25 @@ export function configureSqliteConnectionPragmas(
 ): SqliteWalMaintenance {
   const { foreignKeys, synchronous, ...walOptions } = options;
   const maintenance = configureSqliteWalMaintenance(db, walOptions);
-  if (synchronous) {
-    db.exec(`PRAGMA synchronous = ${synchronous};`);
+  try {
+    if (synchronous) {
+      db.exec(`PRAGMA synchronous = ${synchronous};`);
+    }
+    if (foreignKeys) {
+      db.exec("PRAGMA foreign_keys = ON;");
+    }
+    return maintenance;
+  } catch (error) {
+    // The caller cannot dispose maintenance until this function returns it.
+    try {
+      maintenance.close();
+    } catch (closeError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, closeError],
+        "SQLite connection pragma configuration and WAL maintenance cleanup both failed.",
+        error,
+      );
+    }
+    throw error;
   }
-  if (foreignKeys) {
-    db.exec("PRAGMA foreign_keys = ON;");
-  }
-  return maintenance;
 }

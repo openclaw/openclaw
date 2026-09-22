@@ -1,7 +1,10 @@
 // Gateway HTTP test harness.
 // Builds fake requests/responses and dispatches them through Gateway HTTP servers.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { EventEmitter } from "node:events";
+import { IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { expect, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
@@ -73,11 +76,10 @@ export function createResponse(): {
 } {
   const setHeader = vi.fn();
   let body = "";
-  let resolveEnd!: () => void;
-  const ended = new Promise<void>((resolve) => {
-    resolveEnd = resolve;
-  });
+  const { promise: ended, resolve: resolveEnd } = createDeferred();
   const end = vi.fn((chunk?: unknown) => {
+    res.writableFinished = true;
+    res.emit("finish");
     if (typeof chunk === "string") {
       body = chunk;
       resolveEnd();
@@ -91,16 +93,18 @@ export function createResponse(): {
     body = JSON.stringify(chunk);
     resolveEnd();
   });
-  const res = {
+  const res = Object.assign(new EventEmitter(), {
+    req: new IncomingMessage(new Socket()),
+    writableFinished: false,
     headersSent: false,
     statusCode: 200,
     setHeader,
     removeHeader: vi.fn(),
     end,
-  } as unknown as ServerResponse;
-  responseEndPromises.set(res, ended);
+  });
+  responseEndPromises.set(res as unknown as ServerResponse, ended);
   return {
-    res,
+    res: res as unknown as ServerResponse,
     setHeader,
     end,
     getBody: () => body,
@@ -211,8 +215,9 @@ export function createHooksHandler(
       },
 ) {
   const options = typeof params === "string" ? { bindHost: params } : params;
+  const hooksConfig = createHooksConfig();
   return createHooksRequestHandler({
-    getHooksConfig: () => createHooksConfig(),
+    getHooksConfig: () => hooksConfig,
     bindHost: options.bindHost ?? "127.0.0.1",
     port: 18789,
     logHooks: {
@@ -222,8 +227,14 @@ export function createHooksHandler(
       error: vi.fn(),
     } as unknown as ReturnType<typeof createSubsystemLogger>,
     getClientIpConfig: options.getClientIpConfig,
-    dispatchWakeHook: options.dispatchWakeHook ?? (() => {}),
-    dispatchAgentHook: options.dispatchAgentHook ?? (() => ({ ok: true, runId: "run-1" })),
+    dispatchWakeHook: options.dispatchWakeHook ?? (() => ({ eventOutcome: "queued" })),
+    dispatchAgentHook:
+      options.dispatchAgentHook ??
+      (() => ({
+        ok: true,
+        runId: "run-1",
+        completion: Promise.resolve({ status: "ok", replyDisposition: "empty" }),
+      })),
   });
 }
 

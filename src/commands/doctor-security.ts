@@ -1,6 +1,7 @@
 /** Security warnings for gateway exposure, exec policy drift, channel DMs, and plaintext secrets. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
@@ -11,9 +12,11 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import { countObsoleteGeneratedExecApprovals } from "../infra/exec-approvals-generated-migration.js";
+import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import {
   loadExecApprovalsReadOnly,
   resolveExecApprovalsDisplayPath,
+  type ExecApprovalsFile,
   type ExecAsk,
   type ExecMode,
   type ExecSecurity,
@@ -56,12 +59,14 @@ function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): Secu
     pathHint: "agents.defaults.heartbeat.directPolicy",
   });
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const agent of agents) {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     maybeWarn({
       label: `Heartbeat agent "${agent.id}"`,
       heartbeat: agent.heartbeat,
-      pathHint: `heartbeat.directPolicy for agent "${agent.id}"`,
+      pathHint:
+        source.kind === "entries"
+          ? `agents.entries.${source.key}.heartbeat.directPolicy`
+          : `heartbeat.directPolicy for agent "${agent.id}"`,
     });
   }
 
@@ -92,9 +97,11 @@ function execAskRank(value: ExecAsk): number {
   throw new Error("Unsupported exec ask value");
 }
 
-function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectExecPolicyConflictWarnings(
+  cfg: OpenClawConfig,
+  approvals: ExecApprovalsFile,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const approvals = loadExecApprovalsReadOnly();
   const defaultRequestedSecuritySource = "OpenClaw default (full)";
   const defaultRequestedAskSource = "OpenClaw default (off)";
 
@@ -170,7 +177,7 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): SecurityAuditFi
         `Config: ${configParts.join(", ")}`,
         `Host: ${hostParts.join(", ")}`,
         `Effective host exec stays security="${snapshot.security.effective}" ask="${snapshot.ask.effective}" because the stricter side wins.`,
-        "Headless runs like isolated cron cannot answer approval prompts; align both files or enable Web UI, terminal UI, or chat exec approvals.",
+        "Headless runs like isolated cron cannot answer approval prompts; align both files, or keep the Control UI or a macOS/iOS/Android app connected so gateway automation runs can raise approval cards.",
         `Inspect with: ${formatCliCommand("openclaw approvals get --gateway")}`,
       ].join("\n"),
     });
@@ -194,9 +201,8 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): SecurityAuditFi
   return findings;
 }
 
-function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  void cfg;
-  const count = countObsoleteGeneratedExecApprovals(loadExecApprovalsReadOnly());
+function collectDurableExecApprovalWarnings(approvals: ExecApprovalsFile): SecurityAuditFinding[] {
+  const count = countObsoleteGeneratedExecApprovals(approvals);
   if (count === 0) {
     return [];
   }
@@ -303,10 +309,24 @@ export async function collectSecurityWarnings(
   }
 
   findings.push(...collectImplicitHeartbeatDirectPolicyWarnings(cfg));
-  findings.push(...collectExecPolicyConflictWarnings(cfg));
+  let approvals: ExecApprovalsFile | undefined;
+  try {
+    approvals = loadExecApprovalsReadOnly();
+  } catch (error) {
+    if (!(error instanceof ExecApprovalsMigrationRequiredError)) {
+      throw error;
+    }
+    // Preflight already reported why it preserved the legacy source.
+    // Skip only approval-dependent checks so the rest of Doctor can continue.
+  }
+  if (approvals) {
+    findings.push(...collectExecPolicyConflictWarnings(cfg, approvals));
+  }
   findings.push(...collectExecFilesystemPolicyWarnings(cfg));
   findings.push(...collectPlaintextConfigSecretWarnings(cfg));
-  findings.push(...collectDurableExecApprovalWarnings(cfg));
+  if (approvals) {
+    findings.push(...collectDurableExecApprovalWarnings(approvals));
+  }
 
   // Network exposure needs auth proof before doctor can treat non-loopback bind as intentional.
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -345,7 +365,7 @@ export async function collectSecurityWarnings(
   ];
 
   if (isExposed) {
-    if (!hasSharedSecret) {
+    if (!hasSharedSecret && resolvedAuth.mode !== "trusted-proxy") {
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
@@ -429,4 +449,5 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     lines.push(`- Run: ${formatCliCommand("openclaw security audit --deep")}`);
     note(lines.join("\n"), "Security");
   }
+  return findings;
 }

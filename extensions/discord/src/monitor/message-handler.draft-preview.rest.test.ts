@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import { RequestClient } from "../internal/discord.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 
-function createPreviewController(rest: RequestClient) {
+function createPreviewController(
+  rest: RequestClient,
+  mode: "partial" | "block" | "progress" = "progress",
+) {
   return createDiscordDraftPreviewController({
     cfg: {},
-    discordConfig: { streaming: { mode: "progress" } },
+    discordConfig: { streaming: { mode, progress: { label: false, toolProgress: true } } },
     accountId: "default",
     sourceRepliesAreToolOnly: false,
     textLimit: 2_000,
@@ -21,6 +24,74 @@ function createPreviewController(rest: RequestClient) {
 }
 
 describe("Discord draft preview REST lifecycle", () => {
+  it.each(["partial", "block", "progress"] as const)(
+    "publishes and retracts a short complete plan, then resumes in %s mode",
+    async (mode) => {
+      const visible = new Map<string, string>();
+      let nextId = 0;
+      const rest = new RequestClient("test-token", {
+        queueRequests: false,
+        fetch: async (input, init) => {
+          const url = new URL(input instanceof Request ? input.url : input);
+          const id = url.pathname.split("/").at(-1)!;
+          if (init?.method === "DELETE") {
+            visible.delete(id);
+            return new Response(null, { status: 204 });
+          }
+          if (typeof init?.body !== "string") {
+            throw new Error("Expected a serialized Discord message");
+          }
+          const body = JSON.parse(init.body) as { content: string };
+          const messageId = init.method === "POST" ? String(++nextId) : id;
+          visible.set(messageId, body.content);
+          return Response.json({ id: messageId });
+        },
+      });
+      const controller = createPreviewController(rest, mode);
+
+      await controller.pushPlanProgress([]);
+      expect(visible.size).toBe(0);
+      await controller.pushPlanProgress([{ step: "Check", status: "in_progress" }]);
+      await controller.flush();
+      expect([...visible.values()]).toEqual(["▸ Check"]);
+      await controller.pushPlanProgress([], { explanation: "Progress updated" });
+      await controller.flush();
+      expect([...visible.values()]).toEqual(["Progress updated"]);
+      await controller.pushPlanProgress([]);
+      expect(visible.size).toBe(0);
+      await controller.pushPlanProgress([{ step: "Retry", status: "pending" }]);
+      await controller.flush();
+      expect([...visible.values()]).toEqual(["▢ Retry"]);
+      controller.handleAssistantMessageBoundary();
+      await controller.pushItemEvent({
+        itemId: "card-rejected",
+        kind: "tool",
+        name: "progress_card",
+        phase: "end",
+        status: "blocked",
+        meta: '<progress aria-label="private detail"></progress>',
+      });
+      controller.handleAssistantMessageBoundary();
+      await controller.pushToolEvent({ toolCallId: "exec-1", name: "exec", phase: "start" });
+      await controller.flush();
+      expect(visible.size).toBe(1);
+      const withActivity = [...visible.values()][0];
+      expect(withActivity).toContain("▢ Retry");
+      expect(withActivity).toContain("blocked");
+      expect(withActivity).toContain("Exec");
+      expect(withActivity).not.toContain("private detail");
+      controller.handleAssistantMessageBoundary();
+      await controller.pushPlanProgress([]);
+      await controller.flush();
+      expect(visible.size).toBe(1);
+      const afterClear = [...visible.values()][0];
+      expect(afterClear).not.toContain("Retry");
+      expect(afterClear).toContain("blocked");
+      expect(afterClear).toContain("Exec");
+      await controller.cleanup();
+    },
+  );
+
   it("retains the progress draft after an error final is delivered", async () => {
     const requests: string[] = [];
     const rest = new RequestClient("test-token", {
@@ -29,7 +100,7 @@ describe("Discord draft preview REST lifecycle", () => {
         const url = new URL(input instanceof Request ? input.url : input);
         requests.push(`${init?.method ?? "GET"} ${url.pathname.replace("/api/v10", "")}`);
         if (init?.method === "POST") {
-          return Response.json({ id: "preview-error" });
+          return Response.json({ id: "999" });
         }
         return new Response(null, { status: 204 });
       },
@@ -65,7 +136,7 @@ describe("Discord draft preview REST lifecycle", () => {
         fetch: async (input, init) => {
           const url = new URL(input instanceof Request ? input.url : input);
           if (init?.method === "POST") {
-            const id = `preview-${++createdCount}`;
+            const id = String(++createdCount);
             if (typeof init.body !== "string") {
               throw new Error("Expected a serialized Discord JSON request body");
             }
@@ -99,8 +170,8 @@ describe("Discord draft preview REST lifecycle", () => {
         finishFirstCreate.resolve();
         await controller.flush();
 
-        expect(controller.draftStream?.messageId()).toBe("preview-2");
-        expect(visibleMessages.get("preview-2")).toBe("queued turn progress");
+        expect(controller.draftStream?.messageId()).toBe("2");
+        expect(visibleMessages.get("2")).toBe("queued turn progress");
         controller.markFinalReplyStarted();
         controller.markFinalReplyDelivered(false);
         await controller.cleanup();
@@ -111,12 +182,12 @@ describe("Discord draft preview REST lifecycle", () => {
       }
 
       if (deleteFailures === 2) {
-        expect(deletedIds).toEqual(["preview-1", "preview-1"]);
-        expect([...visibleMessages]).toEqual([["preview-1", "prior turn progress"]]);
+        expect(deletedIds).toEqual(["1", "1"]);
+        expect([...visibleMessages]).toEqual([["1", "prior turn progress"]]);
         await controller.cleanup();
       }
       expect([...visibleMessages]).toEqual([]);
-      expect(deletedIds.filter((id) => id === "preview-1")).toHaveLength(deleteFailures + 1);
+      expect(deletedIds.filter((id) => id === "1")).toHaveLength(deleteFailures + 1);
     },
   );
 });

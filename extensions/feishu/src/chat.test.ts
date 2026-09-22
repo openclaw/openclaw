@@ -501,9 +501,10 @@ describe("registerFeishuChatTools", () => {
     expect(chatMembersGetMock).toHaveBeenCalledTimes(1);
   });
 
-  it("skips registration when chat tool is disabled", () => {
-    const [, registerTool] = registerChatTool({ account: { tools: { chat: false } } });
-    expect(registerTool).not.toHaveBeenCalled();
+  it("does not expose the disabled chat tool", () => {
+    const [tool] = registerChatTool({ account: { tools: { chat: false } } });
+    expect(tool).toBeFalsy();
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
 
   it("preserves Feishu diagnostics from rejected member lookups", async () => {

@@ -1,10 +1,10 @@
-/** Tests process-wide caching for immutable bundled MCP config discovery. */
+import assert from "node:assert/strict";
+/** Tests live session MCP projections and launch config isolation. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 
 const mocks = vi.hoisted(() => ({
-  loadCount: 0,
   diagnostics: [] as Array<{ pluginId: string; message: string }>,
   prepareDataDirsByServer: {} as Record<string, { pluginId: string; dataDir: string }>,
 }));
@@ -14,7 +14,6 @@ vi.mock("./embedded-agent-mcp.js", () => ({
     cfg?: { mcp?: { servers?: Record<string, unknown> } };
     toolOverrides?: { mcpServers?: Record<string, boolean> };
   }) => {
-    mocks.loadCount += 1;
     const servers = Object.fromEntries(
       Object.entries(params.cfg?.mcp?.servers ?? {}).filter(
         ([name]) => params.toolOverrides?.mcpServers?.[name] !== false,
@@ -29,13 +28,40 @@ vi.mock("./embedded-agent-mcp.js", () => ({
 }));
 
 afterEach(() => {
-  mocks.loadCount = 0;
   mocks.diagnostics = [];
   mocks.prepareDataDirsByServer = {};
   clearPluginMetadataLifecycleCaches();
 });
 
-describe("session MCP config discovery cache", () => {
+describe("session MCP config projection", () => {
+  it("filters denied servers without renaming colliding survivors across config reloads", () => {
+    const cfg = {
+      mcp: { servers: { "alpha?": { command: "first" }, "alpha!": { command: "second" } } },
+    };
+    const params = { workspaceDir: "/policy-workspace", toolDenylist: ["alpha-__*"] };
+    const filtered = loadSessionMcpConfig({ ...params, cfg });
+    expect(Object.keys(filtered.loaded.mcpServers)).toEqual(["alpha!"]);
+    expect([...filtered.safeServerNamesByServer]).toEqual([
+      ["alpha?", "alpha-"],
+      ["alpha!", "alpha--2"],
+    ]);
+
+    const reloaded = loadSessionMcpConfig({
+      ...params,
+      cfg: {
+        mcp: {
+          servers: { ...cfg.mcp.servers, "alpha@": { command: "third" } },
+        },
+      },
+    });
+    expect(Object.keys(reloaded.loaded.mcpServers)).toEqual(["alpha!", "alpha@"]);
+    expect([...reloaded.safeServerNamesByServer]).toEqual([
+      ["alpha?", "alpha-"],
+      ["alpha!", "alpha--2"],
+      ["alpha@", "alpha--3"],
+    ]);
+  });
+
   it("keeps Agent Plugins launch ownership out of fingerprints and filtered partitions", () => {
     const cfg = {
       mcp: { servers: { alpha: { command: "alpha" }, beta: { command: "beta" } } },
@@ -66,7 +92,7 @@ describe("session MCP config discovery cache", () => {
     expect(changedOwnership.fingerprint).toBe(first.fingerprint);
   });
 
-  it("reuses immutable discovery across full and filtered catalog preparation", () => {
+  it("isolates full and filtered catalog preparation", () => {
     const cfg = {
       mcp: {
         servers: {
@@ -88,7 +114,6 @@ describe("session MCP config discovery cache", () => {
       includeServerNames: new Set(["alpha"]),
     });
 
-    expect(mocks.loadCount).toBe(1);
     expect(filteredAgain).not.toBe(filtered);
     expect(filteredAgain).toEqual(filtered);
     expect(Object.keys(full.loaded.mcpServers)).toEqual(["alpha", "beta"]);
@@ -96,10 +121,7 @@ describe("session MCP config discovery cache", () => {
     expect(filtered.fingerprint).not.toBe(full.fingerprint);
 
     const alpha = filtered.loaded.mcpServers.alpha;
-    expect(alpha).toBeDefined();
-    if (!alpha) {
-      throw new Error("expected filtered alpha server");
-    }
+    assert(alpha, "expected filtered alpha server");
     alpha.command = "mutated";
     const isolated = loadSessionMcpConfig({
       workspaceDir: "/reuse-workspace",
@@ -109,7 +131,7 @@ describe("session MCP config discovery cache", () => {
     expect(isolated.loaded.mcpServers.alpha).toEqual({ command: "alpha" });
   });
 
-  it("invalidates discovery when config, workspace, or manifest snapshot changes", () => {
+  it("reflects config changes in catalog fingerprints", () => {
     const firstConfig = { mcp: { servers: { alpha: { command: "alpha" } } } };
     const secondConfig = { mcp: { servers: { beta: { command: "beta" } } } };
     const firstRegistry = { plugins: [] };
@@ -136,11 +158,10 @@ describe("session MCP config discovery cache", () => {
       manifestRegistry: secondRegistry,
     });
 
-    expect(mocks.loadCount).toBe(4);
     expect(first.fingerprint).not.toBe(second.fingerprint);
   });
 
-  it("keeps process-wide discovery isolated across sessions on the same agent", () => {
+  it("isolates server overrides across sessions on the same agent", () => {
     const cfg = { mcp: { servers: { docs: { command: "docs" } } } };
     const disabled = loadSessionMcpConfig({
       workspaceDir: "/same-agent-workspace",
@@ -161,10 +182,9 @@ describe("session MCP config discovery cache", () => {
     expect(Object.keys(disabled.loaded.mcpServers)).toEqual([]);
     expect(Object.keys(enabled.loaded.mcpServers)).toEqual(["docs"]);
     expect(disabledAgain).toEqual(disabled);
-    expect(mocks.loadCount).toBe(2);
   });
 
-  it("snapshots nested config values at the cache boundary", () => {
+  it("isolates nested launch config values from later config mutations", () => {
     const cfg = {
       mcp: {
         servers: {
@@ -194,25 +214,18 @@ describe("session MCP config discovery cache", () => {
     });
   });
 
-  it("reloads discovery after plugin metadata lifecycle invalidation", () => {
-    const cfg = { mcp: { servers: { alpha: { command: "alpha" } } } };
-
-    loadSessionMcpConfig({ workspaceDir: "/reload-workspace", cfg });
-    clearPluginMetadataLifecycleCaches();
-    loadSessionMcpConfig({ workspaceDir: "/reload-workspace", cfg });
-
-    expect(mocks.loadCount).toBe(2);
-  });
-
-  it("retries discovery after a diagnostic result", () => {
+  it("reports the current metadata diagnostics", () => {
     const cfg = { mcp: { servers: { alpha: { command: "alpha" } } } };
     mocks.diagnostics = [{ pluginId: "example", message: "temporary read failure" }];
 
-    loadSessionMcpConfig({ workspaceDir: "/retry-workspace", cfg, logDiagnostics: false });
+    expect(
+      loadSessionMcpConfig({ workspaceDir: "/retry-workspace", cfg, logDiagnostics: false }).loaded
+        .diagnostics,
+    ).toEqual(mocks.diagnostics);
     mocks.diagnostics = [];
-    loadSessionMcpConfig({ workspaceDir: "/retry-workspace", cfg, logDiagnostics: false });
-    loadSessionMcpConfig({ workspaceDir: "/retry-workspace", cfg, logDiagnostics: false });
-
-    expect(mocks.loadCount).toBe(2);
+    expect(
+      loadSessionMcpConfig({ workspaceDir: "/retry-workspace", cfg, logDiagnostics: false }).loaded
+        .diagnostics,
+    ).toEqual([]);
   });
 });

@@ -164,9 +164,6 @@ function parseManagedFlowParams(
     : approvalId
       ? { approvalId: runnerParams.approvalId ?? approvalId }
       : null;
-  if (!credentialParams) {
-    throw new Error("token or approvalId required when using managed TaskFlow resume mode");
-  }
   if (approve === undefined) {
     throw new Error("approve required when using managed TaskFlow resume mode");
   }
@@ -228,7 +225,12 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       flowControllerId: Type.Optional(Type.String()),
       flowGoal: Type.Optional(Type.String()),
       flowStateJson: Type.Optional(Type.String()),
-      flowId: Type.Optional(Type.String()),
+      flowId: Type.Optional(
+        Type.String({
+          description:
+            "Managed flow to resume. Its saved approval checkpoint is used when token and approvalId are omitted.",
+        }),
+      ),
       flowExpectedRevision: optionalNonNegativeIntegerSchema(),
       flowCurrentStep: Type.Optional(Type.String()),
       flowWaitingStep: Type.Optional(Type.String()),
@@ -268,6 +270,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
         return resolveManagedFlowToolResult(
           await runManagedLobsterFlow({
             taskFlow: requireTaskFlowRuntime(taskFlow, "run"),
+            config: api.config,
             runner,
             runnerParams,
             controllerId: flowParams.controllerId,
@@ -282,6 +285,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
         return resolveManagedFlowToolResult(
           await resumeManagedLobsterFlow({
             taskFlow: requireTaskFlowRuntime(taskFlow, "resume"),
+            config: api.config,
             runner,
             runnerParams: flowParams.runnerParams,
             flowId: flowParams.flowId,

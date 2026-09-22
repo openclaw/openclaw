@@ -4,9 +4,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as commandRunner from "../../process/exec-runner.js";
+import * as commandSpawner from "../../process/exec-spawn.js";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { insertRegistryWorktree } from "./registry.js";
+import { killPidIfAlive, waitForPidFile } from "../../test-utils/process-tree.js";
+import { snapshotProvisionedFiles } from "./provisioned-files.js";
+import {
+  getRegistryWorktree,
+  getRegistryWorktreeProvisionedChunk,
+  getRegistryWorktreeProvisionedState,
+  insertRegistryWorktree,
+  insertRegistryWorktreeProvisionedChunk,
+} from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -22,6 +33,8 @@ async function initializeRepository(root: string, gitTemplate: string): Promise<
   await git(repo, "init", "-b", "main", `--template=${gitTemplate}`);
   await git(repo, "config", "user.name", "OpenClaw Test");
   await git(repo, "config", "user.email", "openclaw-test@example.invalid");
+  // The template is copied recursively; background maintenance can unlink files mid-copy.
+  await git(repo, "config", "maintenance.auto", "false");
   await fs.writeFile(path.join(repo, "README.md"), "base\n");
   await git(repo, "add", "README.md");
   await git(repo, "commit", "-m", "initial");
@@ -72,6 +85,197 @@ describe("ManagedWorktreeService provisioned state", () => {
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("reuses snapshot inventories while round-tripping Git and provisioned contents", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\nignored/\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "configure provisioned snapshot");
+    await fs.writeFile(path.join(repo, "settings.local"), "synthetic source\n");
+    const created = await service.create({ repoRoot: repo, name: "inventory", baseRef: "HEAD" });
+    await fs.writeFile(path.join(created.path, "README.md"), "edited tracked content\n");
+    await fs.writeFile(path.join(created.path, "untracked.txt"), "new content\n");
+    await fs.writeFile(path.join(created.path, "settings.local"), "synthetic local\n");
+    await fs.mkdir(path.join(created.path, "ignored"));
+    await fs.writeFile(path.join(created.path, "ignored", "cache.txt"), "rebuildable\n");
+    const commands = vi.spyOn(commandSpawner, "spawnCommandWithInvocation");
+    try {
+      await service.remove({ id: created.id, reason: "test" });
+      const broad = commands.mock.calls
+        .map(([argv]) => argv)
+        .filter((argv) => argv[0] === "git" && !argv.includes("--"));
+      expect(
+        broad.filter((argv) => argv.includes("ls-files") && !argv.includes("--others")).length,
+      ).toBeLessThanOrEqual(1);
+      expect(
+        broad.filter(
+          (argv) =>
+            argv.includes("ls-files") &&
+            argv.includes("--ignored") &&
+            argv.includes("--exclude-standard"),
+        ).length,
+      ).toBeLessThanOrEqual(1);
+      expect(
+        broad.filter((argv) => argv.includes("ls-tree") && argv.includes("-r")).length,
+      ).toBeLessThanOrEqual(2);
+    } finally {
+      commands.mockRestore();
+    }
+    const restored = await service.restore({ id: created.id });
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+      "edited tracked content\n",
+    );
+    expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(
+      "new content\n",
+    );
+    expect(await fs.readFile(path.join(restored.path, "settings.local"), "utf8")).toBe(
+      "synthetic local\n",
+    );
+    await expect(fs.stat(path.join(restored.path, "ignored", "cache.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("preserves the checkout when HEAD changes during snapshot preparation", async () => {
+    const created = await service.create({ repoRoot: repo, name: "head-change", baseRef: "HEAD" });
+    const runCommand = commandRunner.runCommandBuffersWithTimeout;
+    let changed = false;
+    const commands = vi
+      .spyOn(commandRunner, "runCommandBuffersWithTimeout")
+      .mockImplementation(async (...args) => {
+        if (args[0][0] === "git" && args[0].includes("read-tree") && !changed) {
+          changed = true;
+          await fs.writeFile(path.join(created.path, "later.txt"), "later commit\n");
+          await git(created.path, "add", "later.txt");
+          await git(created.path, "commit", "-m", "advance HEAD during preparation");
+        }
+        return await runCommand(...args);
+      });
+    try {
+      await expect(service.remove({ id: created.id, reason: "test" })).rejects.toThrow(
+        "HEAD changed",
+      );
+      expect(changed).toBe(true);
+      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+      expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
+      expect(await fs.readFile(path.join(created.path, "later.txt"), "utf8")).toBe(
+        "later commit\n",
+      );
+    } finally {
+      commands.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    "skips inventories for absent provisioned contents and restores their state (deleted=%s)",
+    async (deleted) => {
+      await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\nignored/\n");
+      await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
+      await git(repo, "add", ".gitignore", ".worktreeinclude");
+      await git(repo, "commit", "-m", "configure worktree provisioning");
+      if (deleted) {
+        await fs.writeFile(path.join(repo, ".env.local"), "synthetic provisioned bytes\n");
+      }
+      const created = await service.create({ repoRoot: repo, name: "absent", baseRef: "HEAD" });
+      const ledger = deleted ? [".env.local"] : [];
+      const expected = deleted ? [{ path: ".env.local", mode: null, chunks: 0 }] : [];
+      if (deleted) {
+        await fs.rm(path.join(created.path, ".env.local"));
+      }
+      await fs.writeFile(path.join(created.path, "README.md"), "preserved edit\n");
+      const oldChunk = { worktreeId: created.id, path: "old.local", chunkIndex: 0 };
+      const oldBytes = new TextEncoder().encode("old");
+      insertRegistryWorktreeProvisionedChunk(env, { ...oldChunk, data: oldBytes });
+      const guard = vi.fn();
+      const commands = vi.spyOn(commandSpawner, "spawnCommandWithInvocation");
+      try {
+        await expect(
+          snapshotProvisionedFiles(env, created.id, created.path, ledger, {
+            assertCurrent: () => {
+              throw new Error("authority changed");
+            },
+          }),
+        ).rejects.toThrow("authority changed");
+        expect(getRegistryWorktreeProvisionedChunk(env, oldChunk)).toEqual(oldBytes);
+        expect(
+          await snapshotProvisionedFiles(env, created.id, created.path, ledger, {
+            assertCurrent: guard,
+          }),
+        ).toEqual(expected);
+        expect(guard).toHaveBeenCalled();
+        expect(getRegistryWorktreeProvisionedChunk(env, oldChunk)).toBeUndefined();
+        expect(commands.mock.calls.length).toBe(0);
+      } finally {
+        commands.mockRestore();
+      }
+      const removed = await service.remove({ id: created.id, reason: "test" });
+      expect(removed.removed).toBe(true);
+      expect(getRegistryWorktreeProvisionedState(env, created.id)).toEqual(expected);
+      const restored = await service.restore({ id: created.id });
+      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+        "preserved edit\n",
+      );
+      await expect(fs.stat(path.join(restored.path, ".env.local"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  it("cancels and joins a parent provisioned-membership child before removal settles", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "configure provisioned cancellation");
+    await fs.writeFile(path.join(repo, "settings.local"), "synthetic provisioned bytes\n");
+    const created = await service.create({ repoRoot: repo, name: "cancelled", baseRef: "HEAD" });
+    const marker = path.join(root, "membership-child.pid");
+    const runCommand = commandRunner.runCommandWithTimeout;
+    let membershipStarted = false;
+    const commands = vi
+      .spyOn(commandRunner, "runCommandWithTimeout")
+      .mockImplementation(async (argv, options) => {
+        if (argv.includes("--literal-pathspecs") && argv.includes("--ignored")) {
+          membershipStarted = true;
+          // Use a real held child to exercise cancellation at the process boundary.
+          return await runCommand(
+            [
+              process.execPath,
+              "-e",
+              'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000);',
+              marker,
+            ],
+            options,
+          );
+        }
+        return await runCommand(argv, options);
+      });
+    const abort = new AbortController();
+    const pending = service.remove({ id: created.id, reason: "test", signal: abort.signal }).then(
+      () => false,
+      () => true,
+    );
+    let pid: number | undefined;
+    try {
+      pid = await waitForPidFile(marker);
+      expect(membershipStarted).toBe(true);
+      expect(isPidAlive(pid!)).toBe(true);
+      abort.abort(new Error("fixture membership cancelled"));
+      await vi.waitFor(() => expect(isPidAlive(pid!)).toBe(false), { timeout: 5_000 });
+      expect(await pending).toBe(true);
+      expect(isPidAlive(pid!)).toBe(false);
+      expect(await fs.readFile(path.join(created.path, "settings.local"), "utf8")).toBe(
+        "synthetic provisioned bytes\n",
+      );
+      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+      expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
+    } finally {
+      abort.abort();
+      killPidIfAlive(pid);
+      await pending;
+      commands.mockRestore();
+    }
+    expect((await service.remove({ id: created.id, reason: "retry" })).removed).toBe(true);
   });
 
   it("snapshots large provisioned files without buffering them in the service", async () => {
@@ -296,4 +500,184 @@ describe("ManagedWorktreeService provisioned state", () => {
       expect(await fs.readFile(restoredPath, "utf8")).toBe("local bytes\n");
     },
   );
+
+  it.each([
+    {
+      replacement: "file-to-directory",
+      originalPath: "entry",
+      replacementPath: "entry/child.txt",
+      snapshotPaths: ["README.md", "entry/child.txt"],
+      directory: true,
+      staged: false,
+    },
+    {
+      replacement: "directory-to-file",
+      originalPath: "entry/child.txt",
+      replacementPath: "entry",
+      snapshotPaths: ["README.md", "entry"],
+      directory: false,
+      staged: false,
+    },
+    {
+      replacement: "staged-file-to-directory",
+      originalPath: "entry",
+      replacementPath: "entry/child.txt",
+      snapshotPaths: ["README.md", "entry/child.txt"],
+      directory: true,
+      staged: true,
+    },
+    {
+      replacement: "staged-directory-to-file",
+      originalPath: "entry/child.txt",
+      replacementPath: "entry",
+      snapshotPaths: ["README.md", "entry"],
+      directory: false,
+      staged: true,
+    },
+  ])("round trips a tracked $replacement replacement", async (row) => {
+    const originalPath = path.join(repo, row.originalPath);
+    await fs.mkdir(path.dirname(originalPath), { recursive: true });
+    await fs.writeFile(originalPath, "original\n");
+    await git(repo, "add", row.originalPath);
+    await git(repo, "commit", "-m", "add original entry");
+    const created = await service.create({
+      repoRoot: repo,
+      name: row.replacement,
+      baseRef: "HEAD",
+    });
+    const originalHead = await git(created.path, "rev-parse", "HEAD");
+    await fs.rm(path.join(created.path, "entry"), { recursive: true });
+    const replacementPath = path.join(created.path, row.replacementPath);
+    await fs.mkdir(path.dirname(replacementPath), { recursive: true });
+    await fs.writeFile(replacementPath, "local replacement\n");
+    if (row.staged) {
+      await git(created.path, "add", "-A");
+    }
+
+    const removed = await service.remove({ id: created.id, reason: "test" });
+    expect(
+      (await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!)).split("\n"),
+    ).toEqual(row.snapshotPaths);
+    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    const restored = await service.restore({ id: created.id });
+
+    expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
+    expect((await fs.stat(path.join(restored.path, "entry"))).isDirectory()).toBe(row.directory);
+    expect(await fs.readFile(path.join(restored.path, row.replacementPath), "utf8")).toBe(
+      "local replacement\n",
+    );
+    expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
+  });
+
+  it("snapshots a missing file that reappears before the index update", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "reappearing-file",
+      baseRef: "HEAD",
+    });
+    const originalHead = await git(created.path, "rev-parse", "HEAD");
+    const localPath = path.join(created.path, "README.md");
+    await fs.rm(localPath);
+    const runCommand = commandRunner.runCommandBuffersWithTimeout;
+    let reappeared = false;
+    const commandSpy = vi.spyOn(commandRunner, "runCommandBuffersWithTimeout");
+    commandSpy.mockImplementation(async (...args) => {
+      const argv = args[0];
+      if (
+        argv[0] === "git" &&
+        argv.includes("update-index") &&
+        argv.includes("--add") &&
+        argv.includes("--remove") &&
+        argv.includes("--stdin")
+      ) {
+        expect(reappeared).toBe(false);
+        await expect(fs.stat(localPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await fs.writeFile(localPath, "reappeared contents\n");
+        reappeared = true;
+      }
+      return await runCommand(...args);
+    });
+
+    try {
+      const removed = await service.remove({ id: created.id, reason: "test" });
+      expect(reappeared).toBe(true);
+      expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe(
+        "reappeared contents",
+      );
+      await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+      const restored = await service.restore({ id: created.id });
+
+      expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
+      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+        "reappeared contents\n",
+      );
+      expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
+    } finally {
+      commandSpy.mockRestore();
+    }
+  });
+
+  it("snapshots a reappearing untracked child after its parent becomes a directory", async () => {
+    await fs.writeFile(path.join(repo, "entry"), "original file\n");
+    await git(repo, "add", "entry");
+    await git(repo, "commit", "-m", "add tracked parent");
+    const created = await service.create({
+      repoRoot: repo,
+      name: "reappearing-child",
+      baseRef: "HEAD",
+    });
+    const originalHead = await git(created.path, "rev-parse", "HEAD");
+    const parentPath = path.join(created.path, "entry");
+    const childPath = path.join(parentPath, "child.txt");
+    await fs.rm(parentPath);
+    await fs.mkdir(parentPath);
+    await fs.writeFile(childPath, "discovered child\n");
+    const runCommand = commandRunner.runCommandBuffersWithTimeout;
+    let disappeared = false;
+    let reappeared = false;
+    const commandSpy = vi.spyOn(commandRunner, "runCommandBuffersWithTimeout");
+    commandSpy.mockImplementation(async (...args) => {
+      const argv = args[0];
+      if (argv[0] === "git" && argv.includes("read-tree") && argv.at(-1) === originalHead) {
+        const result = await runCommand(...args);
+        expect(result.code).toBe(0);
+        expect(disappeared).toBe(false);
+        await fs.rm(childPath);
+        disappeared = true;
+        return result;
+      }
+      if (
+        argv[0] === "git" &&
+        argv.includes("update-index") &&
+        argv.includes("--add") &&
+        argv.includes("--remove") &&
+        argv.includes("--stdin")
+      ) {
+        expect(disappeared).toBe(true);
+        expect(reappeared).toBe(false);
+        await expect(fs.stat(childPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await fs.writeFile(childPath, "reappeared child\n");
+        reappeared = true;
+      }
+      return await runCommand(...args);
+    });
+
+    try {
+      const removed = await service.remove({ id: created.id, reason: "test" });
+      expect(reappeared).toBe(true);
+      expect(
+        (await git(repo, "ls-tree", "-r", "--name-only", removed.snapshotRef!)).split("\n"),
+      ).toEqual(["README.md", "entry/child.txt"]);
+      const restored = await service.restore({ id: created.id });
+
+      expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
+      expect((await fs.stat(path.join(restored.path, "entry"))).isDirectory()).toBe(true);
+      expect(await fs.readFile(path.join(restored.path, "entry", "child.txt"), "utf8")).toBe(
+        "reappeared child\n",
+      );
+      expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
+    } finally {
+      commandSpy.mockRestore();
+    }
+  });
 });

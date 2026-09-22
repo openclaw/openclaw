@@ -1,6 +1,7 @@
 // Discord tests cover gateway plugin plugin behavior.
 import { EventEmitter } from "node:events";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 import {
   fetchDiscordGatewayInfoWithTimeout,
@@ -94,11 +95,7 @@ describe("createDiscordGatewayPlugin", () => {
   function createPlugin(
     testing?: NonNullable<Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]>,
     discordConfig: Parameters<typeof createDiscordGatewayPlugin>[0]["discordConfig"] = {},
-    runtime: Parameters<typeof createDiscordGatewayPlugin>[0]["runtime"] = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    },
+    runtime: Parameters<typeof createDiscordGatewayPlugin>[0]["runtime"] = createRuntimeSpies(),
   ) {
     return createDiscordGatewayPlugin({
       discordConfig,
@@ -330,11 +327,7 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("logs Discord gateway websocket error and abnormal close details", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
     const plugin = createPlugin(
       {
         webSocketCtor: function WebSocketCtor() {
@@ -368,11 +361,7 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("keeps gateway close reason logs UTF-16 safe", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
     const plugin = createPlugin(
       {
         webSocketCtor: function WebSocketCtor() {

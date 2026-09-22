@@ -6,10 +6,22 @@ import { strokeIcon, toolIcons } from "./icons-tools.ts";
 // which carries the stroke presentation attributes inline (see icons-tools.ts).
 
 export const icons = {
+  github: svg`<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.17-.02-2.12-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.78 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.26 5.68.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .3.21.67.8.55A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>`,
+  repeat: strokeIcon(
+    svg`<path d="m17 2 4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>`,
+  ),
+  layers: strokeIcon(
+    svg`<path d="m12 3 10 5-10 5L2 8Z"/><path d="m2 12 10 5 10-5M2 16l10 5 10-5"/>`,
+  ),
   // Navigation icons
   messageSquare: strokeIcon(svg` <path
     d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
   />`),
+  messageSquarePlus: strokeIcon(svg` <path
+      d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+    />
+    <path d="M12 7v6" />
+    <path d="M9 10h6" />`),
   messageCircleOff: strokeIcon(svg` <path d="m2 2 20 20" />
     <path
       d="M4.93 4.929a10 10 0 0 0-1.938 11.412 2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 0 0 11.302-1.989"
@@ -36,6 +48,10 @@ export const icons = {
   circleX: strokeIcon(svg` <circle cx="12" cy="12" r="10" />
     <path d="m15 9-6 6" />
     <path d="m9 9 6 6" />`),
+  arrowLeftRight: strokeIcon(svg`<path d="m8 3-4 4 4 4" />
+    <path d="M4 7h16" />
+    <path d="m16 21 4-4-4-4" />
+    <path d="M20 17H4" />`),
   arrowUpRight: strokeIcon(svg` <path d="M7 17 17 7" />
     <path d="M7 7h10v10" />`),
   link: strokeIcon(svg` <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
@@ -246,6 +262,15 @@ export const icons = {
     />
     <path d="M12 9v4" />
     <path d="M12 17h.01" />`),
+  globeOff: strokeIcon(svg` <path
+      d="M10.114 4.462A14.5 14.5 0 0 1 12 2a10 10 0 0 1 9.313 13.643"
+    />
+    <path d="M15.557 15.556A14.5 14.5 0 0 1 12 22 10 10 0 0 1 4.929 4.929" />
+    <path d="M15.892 10.234A14.5 14.5 0 0 0 12 2a10 10 0 0 0-3.643.687" />
+    <path d="M17.656 12H22" />
+    <path d="M19.071 19.071A10 10 0 0 1 12 22 14.5 14.5 0 0 1 8.44 8.45" />
+    <path d="M2 12h10" />
+    <path d="m2 2 20 20" />`),
   hand: strokeIcon(svg` <path d="M18 11V6a2 2 0 0 0-4 0v5" />
     <path d="M14 10V4a2 2 0 0 0-4 0v6" />
     <path d="M10 10.5V6a2 2 0 0 0-4 0v8" />
@@ -278,10 +303,6 @@ export const icons = {
     <path d="M4 5v4" />
     <path d="M6 7H2" />
     <path d="M9 2v2" />`),
-  hourglass: strokeIcon(svg` <path d="M5 22h14" />
-    <path d="M5 2h14" />
-    <path d="M17 22v-4.2a4 4 0 0 0-1.2-2.8L12 11l-3.8 4A4 4 0 0 0 7 17.8V22" />
-    <path d="M7 2v4.2A4 4 0 0 0 8.2 9l3.8 4 3.8-4A4 4 0 0 0 17 6.2V2" />`),
   layoutComfortable: strokeIcon(svg` <rect width="16" height="5" x="4" y="4" rx="1.5" />
     <rect width="16" height="5" x="4" y="15" rx="1.5" />
     <line x1="7" x2="16" y1="7" y2="7" />
@@ -311,6 +332,8 @@ export const icons = {
   chevronUp: strokeIcon(svg`<path d="m18 15-6-6-6 6" />`),
   chevronsUpDown: strokeIcon(svg`<path d="m7 15 5 5 5-5" />
     <path d="m7 9 5-5 5 5" />`),
+  arrowRight: strokeIcon(svg` <path d="M5 12h14" />
+    <path d="m12 5 7 7-7 7" />`),
   arrowLeft: strokeIcon(svg` <path d="m12 19-7-7 7-7" />
     <path d="M19 12H5" />`),
   cornerDownLeft: strokeIcon(svg` <polyline points="9 10 4 15 9 20" />
@@ -321,6 +344,10 @@ export const icons = {
     <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />`),
   search: strokeIcon(svg` <circle cx="11" cy="11" r="8" />
     <path d="m21 21-4.3-4.3" />`),
+  wrapText: strokeIcon(svg` <path d="M3 6h18" />
+    <path d="M3 12h15a3 3 0 1 1 0 6h-4" />
+    <path d="m16 16-2 2 2 2" />
+    <path d="M3 18h7" />`),
   brain: strokeIcon(svg` <path
       d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"
     />

@@ -1,5 +1,5 @@
 // Gateway Bench Child script supports OpenClaw repository automation.
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import {
   inspectManagedProcessGroup,
   terminateManagedChild,
@@ -28,7 +28,7 @@ type StopChildOptions = {
 };
 
 export async function stopChild(
-  child: ChildProcessWithoutNullStreams,
+  child: ChildProcess,
   options: StopChildOptions = {},
 ): Promise<StopChildResult> {
   const teardownGraceMs = options.teardownGraceMs ?? TEARDOWN_GRACE_MS;
@@ -157,9 +157,10 @@ export async function stopChild(
   return { exitCode: null, exitedBeforeTeardown: false, signal: "SIGKILL" };
 }
 
-function releaseUnsettledChild(child: ChildProcessWithoutNullStreams): void {
-  child.stdin.destroy();
-  child.stdout.destroy();
-  child.stderr.destroy();
+function releaseUnsettledChild(child: ChildProcess): void {
+  child.stdin?.destroy();
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  child.channel?.unref();
   child.unref();
 }

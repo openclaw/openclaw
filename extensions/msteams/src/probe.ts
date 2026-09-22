@@ -109,7 +109,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
     let delegatedAuth: ProbeMSTeamsResult["delegatedAuth"];
     if (cfg?.delegatedAuth?.enabled) {
       try {
-        const tokens = loadDelegatedTokens();
+        const tokens = await loadDelegatedTokens();
         if (tokens) {
           const isExpired = !isFutureDateTimestampMs(tokens.expiresAt);
           delegatedAuth = {

@@ -1,7 +1,9 @@
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
+import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -54,6 +56,8 @@ export type ReplyBackendQueueMessageOptions = {
 export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
   /** Consumed by reply ownership and never forwarded to the active backend. */
   toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+  /** Composed into V2's final admission assertion after asynchronous preparation. */
+  assertCurrent?: () => void;
 };
 
 export type ReplyToolAuthorityRoute = Readonly<{
@@ -63,6 +67,8 @@ export type ReplyToolAuthorityRoute = Readonly<{
 
 /** Per-message authority facts projected against an active run's frozen owner state. */
 export type ReplyToolAuthorityOverlay = Readonly<{
+  permissionMode?: SessionEntry["permissionMode"];
+  toolOverrides?: SessionEntry["toolOverrides"];
   originatingChannel?: OriginatingChannelType;
   messageProvider?: string;
   chatType?: ChatType;
@@ -87,16 +93,17 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   traceAuthorized: boolean;
   approvalReviewerDeviceId?: string;
   clientCaps?: string[];
+  gatewayUiCommandTarget?: GatewayUiCommandTarget;
   toolBindings?: Readonly<Record<string, unknown>>;
 }>;
 
-export type ReplyToolAuthorityProjector = (
-  overlay: ReplyToolAuthorityOverlay,
-  route: ReplyToolAuthorityRoute,
-) => string;
+export type ReplyToolAuthoritySnapshot = Readonly<{
+  fingerprint(route?: ReplyToolAuthorityRoute): string;
+  project: (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => string;
+}>;
 
 export type ReplyBackendQueueMessageResult = {
-  /** Acceptance was irreversible, but the harness could not prove transcript commitment. */
+  /** Input is non-replayable, but its delivery or commitment could not be confirmed. */
   transcriptCommit: "unconfirmed";
   errorMessage: string;
 };
@@ -108,6 +115,29 @@ export type ReplyBackendMessageInjection = {
     text: string,
     options?: ReplyBackendQueueMessageOptions,
   ): Promise<void | ReplyBackendQueueMessageResult>;
+};
+
+/** V2 sinks invoke the host-owned, per-injection assertion at their final effect. */
+export type ReplyBackendMessageInjectionV2 = {
+  readonly version: 2;
+  isAvailable(): boolean;
+  queueMessage(
+    text: string,
+    options: ReplyBackendQueueMessageOptions | undefined,
+    assertCurrent: () => void,
+    authorityKind: "run" | "source-bound",
+  ): Promise<void | ReplyBackendQueueMessageResult>;
+  claimPendingUserInputAnswer?(
+    text: string,
+    options: ReplyBackendQueueMessageOptions | undefined,
+    assertCurrent: () => void,
+    authorityKind: "run" | "source-bound",
+  ): Promise<boolean>;
+  cancelPendingUserInput?(
+    resolvedBy: string,
+    assertCurrent: () => void,
+    authorityKind: "run" | "source-bound",
+  ): Promise<boolean>;
 };
 
 export type ReplyBackendHandle = {
@@ -126,6 +156,8 @@ export type ReplyBackendHandle = {
   cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
   cancel(reason?: ReplyBackendCancelReason): void;
   readonly messageInjection?: ReplyBackendMessageInjection;
+  /** V1 remains compatible with v2026.8.1; source-bound input requires V2. */
+  readonly messageInjectionV2?: ReplyBackendMessageInjectionV2;
   /** @deprecated Compatibility for shipped embedded handles. Use messageInjection. */
   isStreaming?: () => boolean;
   isStopped?: () => boolean;
@@ -146,6 +178,8 @@ export const replyMessageInjectionTargetOperation = Symbol("replyMessageInjectio
 export type ReplyMessageInjectionTarget = {
   readonly [replyMessageInjectionTargetOperation]: ReplyOperation;
   readonly runId?: string;
+  /** Channel source-turn identity of the owning run (see the registry's `sourceTurnByKey`). */
+  readonly sourceTurnId?: string;
 };
 
 export const replyRunInterruptTargetOperation = Symbol("replyRunInterruptTargetOperation");
@@ -162,7 +196,10 @@ type ReplyMessageInjectionRejectionReason =
   | "runtime_rejected";
 
 export type ReplyMessageInjectionOutcome =
+  | { status: "indeterminate"; errorMessage: string }
   | { status: "accepted"; result?: ReplyBackendQueueMessageResult }
+  /** Terminal authority failure; the separately recorded acceptance stays unchanged. */
+  | { status: "failed"; error: Error }
   | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
 
 export type ReplyMessageInjectionAttempt = {
@@ -175,6 +212,7 @@ export type ReplyMessageInjectionAttempt = {
 };
 
 type ReplyBackendQueueMessageMismatch =
+  | "input_visibility_mismatch"
   | "tool_authority_mismatch"
   | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
@@ -214,6 +252,8 @@ type ReplyOperationResult =
 export type ReplyOperation = {
   readonly key: ReplyRunKey;
   readonly sessionId: string;
+  /** Captured logical owner for session activity, including raw global keys. */
+  readonly agentId?: string;
   readonly turnKind: ReplyTurnKind;
   /** Gateway lifecycle that admitted this process-local owner. */
   readonly lifecycleGeneration?: string;
@@ -246,6 +286,8 @@ export type ReplyOperation = {
   readonly lastActivityAtMs: number;
   /** True when this operation has owned the supplied session ID. */
   hasOwnedSessionId(sessionId: string): boolean;
+  /** Capture lineage before a pending barrier outlives this operation's lane. */
+  captureOwnedSessionIds(): Set<string>;
   recordActivity(): void;
   setPhase(
     next:
@@ -267,23 +309,21 @@ export type ReplyOperation = {
   /** Mark this operation as an in-flight terminal-session recovery. */
   markTerminalRecovery(): void;
   markAcceptedSteeredInboundAudio(): void;
-  /** Bind provisional request authority before a concrete backend attempt attaches. */
-  bindToolAuthorityFingerprint(fingerprint: string): void;
-  /** Bind the active run's immutable authority projector for direct inbound steering. */
-  bindToolAuthorityProjector(projector: ReplyToolAuthorityProjector): void;
+  /** Freeze the complete caller policy before a concrete backend attempt attaches. */
+  bindToolAuthoritySnapshot(snapshot: ReplyToolAuthoritySnapshot): void;
   /** Project an inbound turn through the current concrete route; settled owners fail closed. */
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
-  /** Record the concrete candidate route; fallback attempts may replace it. */
-  bindToolAuthorityRoute(route: ReplyToolAuthorityRoute): void;
+  /** Prepare fingerprint and projection together for the final concrete attempt route. */
+  bindToolAuthorityRoute(route: ReplyToolAuthorityRoute): string;
   updateSessionId(nextSessionId: string): void;
   /**
    * Move this queued operation to another session key's run slot. Native command
    * turns admit under the slash SOURCE key; when the command continues into a full
    * agent turn it must own the TARGET session's slot so concurrent target inbounds
    * queue/steer instead of double-admitting. Throws ReplyRunAlreadyActiveError when
-   * the target slot is owned.
+   * the target slot is owned. Capture the selected agent even when a raw key stays unchanged.
    */
-  updateSessionKey(nextSessionKey: string): void;
+  updateSessionKey(nextSessionKey: string, agentId?: string): void;
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
   /** Reject later aborts after the backend has committed its terminal outcome. */
@@ -326,6 +366,9 @@ export type ReplyRunRegistry = {
   }): ReplyOperation;
   get(sessionKey: string): ReplyOperation | undefined;
   isActive(sessionKey: string): boolean;
+  /** Binds a source only while the exact operation still owns its run slot. */
+  bindSourceTurnId(operation: ReplyOperation, sourceTurnId: string): void;
+  getSourceTurnId(sessionKey: string): string | undefined;
   /** Captures the current direct owner without requiring client-supplied run identity. */
   resolveCurrentMessageInjectionTarget(sessionKey: string): ReplyMessageInjectionTarget | undefined;
   /** Captures the current direct owner for exact-instance interruption. */

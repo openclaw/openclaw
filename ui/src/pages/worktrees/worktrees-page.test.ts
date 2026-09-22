@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -30,16 +31,6 @@ type WorktreesPageTestElement = HTMLElement & {
   restore: (record: WorktreeRecord) => Promise<void>;
   gc: () => Promise<void>;
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 function worktree(id = "worktree-1"): WorktreeRecord {
   return {

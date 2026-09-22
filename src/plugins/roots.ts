@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 
 export type PluginSourceRoots = {
@@ -14,6 +15,7 @@ export type PluginSourceRoots = {
 type PluginCacheInputs = {
   roots: PluginSourceRoots;
   loadPaths: string[];
+  devSourceRoot: string | null;
 };
 
 export function resolvePluginSourceRoots(params: {
@@ -31,7 +33,7 @@ export function resolvePluginSourceRoots(params: {
 // Shared env-aware key inputs for plugin loader registry reuse.
 export function resolvePluginCacheInputs(params: {
   workspaceDir?: string;
-  loadPaths?: string[];
+  loadPaths?: readonly string[];
   env?: NodeJS.ProcessEnv;
 }): PluginCacheInputs {
   const env = params.env ?? process.env;
@@ -43,5 +45,5 @@ export function resolvePluginCacheInputs(params: {
   const loadPaths = normalizeStringEntries(
     (params.loadPaths ?? []).filter((entry): entry is string => typeof entry === "string"),
   ).map((entry) => resolveUserPath(entry, env));
-  return { roots, loadPaths };
+  return { roots, loadPaths, devSourceRoot: resolveOpenClawDevSourceRoot(env) };
 }

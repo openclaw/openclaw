@@ -3,7 +3,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import type { WizardSection } from "./configure.shared.js";
 import { CONFIGURE_WIZARD_SECTIONS, parseConfigureWizardSections } from "./configure.shared.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
@@ -43,26 +42,6 @@ function assertInteractiveConfigureTerminal(runtime: RuntimeEnv, interactive?: b
   return false;
 }
 
-async function configureCommand(runtime: RuntimeEnv = defaultRuntime, agentId?: string) {
-  // Presence, not truthiness: a supplied empty `--agent ""` must reach the wizard's strict
-  // validator instead of being dropped here and silently falling back to the default owner.
-  await runConfigureWizard(
-    { command: "configure", ...(agentId !== undefined ? { agentId } : {}) },
-    runtime,
-  );
-}
-
-async function configureCommandWithSections(
-  sections: WizardSection[],
-  runtime: RuntimeEnv = defaultRuntime,
-  agentId?: string,
-) {
-  await runConfigureWizard(
-    { command: "configure", sections, ...(agentId !== undefined ? { agentId } : {}) },
-    runtime,
-  );
-}
-
 /** Parse `--section` input and run the requested configure wizard sections. */
 export async function configureCommandFromSectionsArg(
   rawSections: unknown,
@@ -87,10 +66,13 @@ export async function configureCommandFromSectionsArg(
     return;
   }
 
-  if (sections.length === 0) {
-    await configureCommand(runtime, options?.agentId);
-    return;
-  }
-
-  await configureCommandWithSections(sections as never, runtime, options?.agentId);
+  // Omission opens the full chooser; an empty array means no selected changes to the runner.
+  await runConfigureWizard(
+    {
+      command: "configure",
+      ...(sections.length > 0 ? { sections } : {}),
+      ...(options?.agentId !== undefined ? { agentId: options.agentId } : {}),
+    },
+    runtime,
+  );
 }

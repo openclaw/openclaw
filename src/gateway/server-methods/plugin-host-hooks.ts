@@ -15,13 +15,20 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
-import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
+import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
+import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   validateJsonSchemaValue,
   type JsonSchemaValidationError,
   type JsonSchemaValue,
 } from "../../plugins/schema-validator.js";
-import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
+import {
+  listControlUiPluginDescriptors,
+  listControlUiPluginTabs,
+  listControlUiPluginWidgetKinds,
+} from "../control-ui-plugin-tabs.js";
+import { authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
+import { WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -47,7 +54,7 @@ function validatePluginSessionActionJsonFields(
 
 /** Gateway handlers for plugin-declared Control UI descriptors and session actions. */
 export const pluginHostHookHandlers: GatewayRequestHandlers = {
-  "plugins.uiDescriptors": ({ params, respond }) => {
+  "plugins.uiDescriptors": ({ params, respond, client, context }) => {
     if (
       !assertValidParams(
         params,
@@ -58,30 +65,30 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const registry = getActivePluginSessionExtensionRegistry();
-    const descriptors = (registry?.controlUiDescriptors ?? []).map((entry) => {
-      const descriptor: Record<string, unknown> = {
-        id: entry.descriptor.id,
-        pluginId: entry.pluginId,
-        pluginName: entry.pluginName,
-        surface: entry.descriptor.surface,
-        label: entry.descriptor.label,
-      };
-      if (entry.descriptor.description !== undefined) {
-        descriptor.description = entry.descriptor.description;
-      }
-      if (entry.descriptor.placement !== undefined) {
-        descriptor.placement = entry.descriptor.placement;
-      }
-      if (entry.descriptor.schema !== undefined) {
-        descriptor.schema = entry.descriptor.schema;
-      }
-      if (entry.descriptor.requiredScopes !== undefined) {
-        descriptor.requiredScopes = entry.descriptor.requiredScopes;
-      }
-      return descriptor;
-    });
-    const result = { ok: true, descriptors };
+    const methods = context.getGatewayMethodRegistry?.();
+    if (!methods) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "Gateway plugin capabilities are unavailable in this runtime.",
+        ),
+      );
+      return;
+    }
+    const scopes = client?.connect.scopes ?? [];
+    const result = {
+      ok: true,
+      generation: getPluginRegistryVersion(getPluginRegistryForContext()),
+      descriptors: listControlUiPluginDescriptors(scopes),
+      methods: methods.listAdvertisedMethods(),
+      controlUiTabs: listControlUiPluginTabs(scopes, {
+        requireGatewayAuthGrant: context.getRuntimeConfig().gateway?.auth?.mode !== "none",
+      }),
+      controlUiWidgetKinds: listControlUiPluginWidgetKinds(scopes),
+      pluginSurfaceUrls: client?.pluginSurfaceUrls ?? {},
+    };
     if (!validatePluginsUiDescriptorsResult(result)) {
       log.warn("invalid plugins.uiDescriptors result", {
         errors: validatePluginsUiDescriptorsResult.errors,
@@ -142,7 +149,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const registry = getActivePluginSessionExtensionRegistry();
+    const registry = getPluginRegistryForContext();
     const pluginLoaded = Boolean(
       registry?.plugins.some((plugin) => plugin.id === pluginId && plugin.status === "loaded"),
     );
@@ -161,18 +168,14 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       return;
     }
     const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-    const hasAdmin = scopes.includes(ADMIN_SCOPE);
     const requiredScopes =
       registration.action.requiredScopes && registration.action.requiredScopes.length > 0
         ? registration.action.requiredScopes
         : [WRITE_SCOPE];
-    // Plugin actions default to write access, while read-only actions can opt
-    // down. Admin bypasses all checks and write includes read for UI callers.
+    // Recheck the selected registration after async router admission, using the same
+    // scope implications so the two authorization gates cannot diverge.
     const missingScope = requiredScopes.find(
-      (scope) =>
-        !hasAdmin &&
-        !scopes.includes(scope) &&
-        !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE)),
+      (scope) => !authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
     );
     if (missingScope) {
       respond(false, undefined, missingScopeErrorShape({ missingScope, requiredScopes }));

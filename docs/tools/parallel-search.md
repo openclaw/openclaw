@@ -32,8 +32,10 @@ one explicitly; neither is auto-detected.
 
 ```bash
 openclaw plugins install @openclaw/parallel-plugin
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## API key (paid provider)
 
@@ -129,7 +131,7 @@ improves subsequent results. Max 1000 chars on `parallel`; the free
 
 <ParamField path="client_model" type="string">
 Optional identifier of the model making the call (e.g. `claude-opus-4-7`,
-`gpt-5.6-sol`), max 100 chars. Lets Parallel tailor default settings for your
+`gpt-6-astra`), max 100 chars. Lets Parallel tailor default settings for your
 model's capabilities. Pass the exact active model slug; do not shorten to a
 family alias.
 </ParamField>

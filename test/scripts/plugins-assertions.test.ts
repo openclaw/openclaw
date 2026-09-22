@@ -2,20 +2,24 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -66,32 +70,18 @@ function runAssertionAsync(args: string[], env: NodeJS.ProcessEnv) {
   );
 }
 
-function writeFixtureServerShims(binDir: string, pidPath: string): void {
+function writeFixtureServerShims(
+  binDir: string,
+  pidPath: string,
+  termAction: "exit 0" | ":" = "exit 0",
+): void {
   mkdirSync(binDir, { recursive: true });
   writeFileSync(
     path.join(binDir, "node"),
     [
       "#!/bin/bash",
       'printf "%s\\n" "$$" >"$OPENCLAW_TEST_FIXTURE_SERVER_PID"',
-      "trap 'exit 0' TERM",
-      "while true; do /bin/sleep 1; done",
-      "",
-    ].join("\n"),
-  );
-  writeFileSync(path.join(binDir, "sleep"), "#!/bin/bash\nexit 0\n");
-  chmodSync(path.join(binDir, "node"), 0o755);
-  chmodSync(path.join(binDir, "sleep"), 0o755);
-  writeFileSync(pidPath, "");
-}
-
-function writeStubbornFixtureServerShims(binDir: string, pidPath: string): void {
-  mkdirSync(binDir, { recursive: true });
-  writeFileSync(
-    path.join(binDir, "node"),
-    [
-      "#!/bin/bash",
-      'printf "%s\\n" "$$" >"$OPENCLAW_TEST_FIXTURE_SERVER_PID"',
-      "trap ':' TERM",
+      `trap '${termAction}' TERM`,
       "while true; do /bin/sleep 1; done",
       "",
     ].join("\n"),
@@ -296,14 +286,43 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
-  it.each(
-    (["capture", "logged"] as const).flatMap((mode) =>
+  it.each([
+    ...(["capture", "logged"] as const).flatMap((mode) =>
       [0, 23, 124].flatMap((status) =>
-        [false, true].map((traceEnabled) => ({ mode, status, traceEnabled })),
+        [false, true].map((traceEnabled) => ({
+          mode,
+          status,
+          traceEnabled,
+          traceValue: traceEnabled ? "1" : "0",
+          changeAfterSource: false,
+        })),
       ),
     ),
-  )(
-    "bounds $mode diagnostics with exit $status and lifecycle tracing $traceEnabled",
+    ...(
+      [
+        ["1", true],
+        ["true", true],
+        ["TRUE", true],
+        ["yes", true],
+        ["YES", true],
+        [undefined, false],
+        ["", false],
+        ["0", false],
+        ["True", false],
+        ["Yes", false],
+        ["on", false],
+        [" true ", false],
+        ["1 ", false],
+      ] as const
+    ).map(([traceValue, traceEnabled]) => ({
+      mode: "logged" as const,
+      status: 0,
+      traceEnabled,
+      traceValue,
+      changeAfterSource: true,
+    })),
+  ])(
+    "bounds $mode diagnostics with exit $status and lifecycle tracing $traceEnabled ($traceValue, changed after source: $changeAfterSource)",
     (testCase) => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-sweep-diagnostics-"));
       const outputFile = path.join(root, "plugins-git-inspect.json");
@@ -334,6 +353,13 @@ export OPENCLAW_PLUGINS_TMP_DIR="$SCRATCH_ROOT"
 export OPENCLAW_PLUGINS_CLI_TIMEOUT=1s
 export OPENCLAW_ENTRY=fixture-entry
 source scripts/e2e/lib/plugins/sweep.sh
+${
+  testCase.changeAfterSource
+    ? testCase.traceValue === undefined
+      ? "unset OPENCLAW_PLUGIN_LIFECYCLE_TRACE"
+      : `export OPENCLAW_PLUGIN_LIFECYCLE_TRACE=${shellQuote(testCase.traceValue)}`
+    : ""
+}
 umask 000
 openclaw_e2e_maybe_timeout() {
   local raw_stderr_file
@@ -363,7 +389,11 @@ ${command}
             CAPTURED_STDERR: capturedError,
             CAPTURE_STATUS: String(testCase.status),
             OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "192",
-            OPENCLAW_PLUGIN_LIFECYCLE_TRACE: testCase.traceEnabled ? "1" : "0",
+            OPENCLAW_PLUGIN_LIFECYCLE_TRACE: testCase.changeAfterSource
+              ? testCase.traceEnabled
+                ? "0"
+                : "1"
+              : testCase.traceValue,
             OUTPUT_FILE: outputFile,
             SCRATCH_ROOT: root,
           },
@@ -405,7 +435,7 @@ ${command}
         } else {
           expect(result.stderr).toBe("");
         }
-        if (testCase.traceEnabled) {
+        if (testCase.traceValue === "1") {
           expect(result.stderr).toContain("[plugins:lifecycle]");
         } else {
           expect(result.stderr).not.toContain("[plugins:lifecycle]");
@@ -480,6 +510,37 @@ ${command}
     }
   });
 
+  it("routes npm through both registry environment spellings after replacing a parent registry", () => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-routing-");
+    writeFileSync(path.join(root, "fixture.tgz"), "fixture package archive");
+    const result = runPluginsSweepShell(
+      `
+set -euo pipefail
+source scripts/e2e/lib/plugins/fixtures.sh
+unset NPM_CONFIG_REGISTRY npm_config_registry
+export NPM_CONFIG_REGISTRY=http://127.0.0.1:1 npm_config_registry=http://127.0.0.1:1
+start_npm_fixture_registry fixture-pkg 1.0.0 "$REGISTRY_ROOT/fixture.tgz" "$REGISTRY_ROOT"
+# Duplicate-case precedence depends on environment order; exercise each accepted spelling.
+registry_index=0
+for registry_key in NPM_CONFIG_REGISTRY npm_config_registry; do
+  env -u "$registry_key" npm view fixture-pkg@1.0.0 version --json --fetch-retries=0 --fetch-timeout=1000 --cache "$REGISTRY_ROOT/cache" > "$REGISTRY_ROOT/version-$registry_index.json"
+  registry_index=$((registry_index + 1))
+done
+`,
+      {
+        HOME: root,
+        REGISTRY_ROOT: root,
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    for (const index of [0, 1]) {
+      const version = JSON.parse(readFileSync(path.join(root, `version-${index}.json`), "utf8"));
+      // npm versions differ in scalar/array output; each command emits one complete JSON value.
+      expect(Array.isArray(version) ? version : [version]).toEqual(["1.0.0"]);
+    }
+  });
+
   it("cleans npm fixture registry children when readiness times out", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-fixture-cleanup-"));
     try {
@@ -490,28 +551,19 @@ ${command}
       mkdirSync(fixtureDir);
       writeFixtureServerShims(binDir, pidPath);
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "set +e",
-            `( set -e; trap 'printf caller-cleanup > ${shellQuote(cleanupPath)}' EXIT; start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)} )`,
-            'status="$?"',
-            "set -e",
-            '[ "$status" != "0" ]',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "set +e",
+          `( set -e; trap 'printf caller-cleanup > ${shellQuote(cleanupPath)}' EXIT; start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)} )`,
+          'status="$?"',
+          "set -e",
+          '[ "$status" != "0" ]',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -532,32 +584,23 @@ ${command}
       const fixtureDir = path.join(root, "fixture");
       const pidPath = path.join(root, "server.pid");
       mkdirSync(fixtureDir);
-      writeStubbornFixtureServerShims(binDir, pidPath);
+      writeFixtureServerShims(binDir, pidPath, ":");
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "set +e",
-            `( start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)} )`,
-            'status="$?"',
-            "set -e",
-            '[ "$status" != "0" ]',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "set +e",
+          `( start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)} )`,
+          'status="$?"',
+          "set -e",
+          '[ "$status" != "0" ]',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2",
-            OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: "0.05",
-            OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2",
+          OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: "0.05",
+          OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -571,30 +614,19 @@ ${command}
   });
 
   it("rejects invalid fixture stop attempts before cleanup polling", () => {
-    const result = spawnSync(
-      "/bin/bash",
+    const result = runPluginsSweepShell(
       [
-        "-c",
-        [
-          "set -euo pipefail",
-          "source scripts/e2e/lib/plugins/fixtures.sh",
-          "openclaw_plugins_signal_fixture_process() { echo signal; }",
-          "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
-          "set +e",
-          "openclaw_plugins_stop_fixture_process 12345",
-          'status="$?"',
-          "set -e",
-          'exit "$status"',
-        ].join("\n"),
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2x",
-        },
-      },
+        "set -euo pipefail",
+        "source scripts/e2e/lib/plugins/fixtures.sh",
+        "openclaw_plugins_signal_fixture_process() { echo signal; }",
+        "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
+        "set +e",
+        "openclaw_plugins_stop_fixture_process 12345",
+        'status="$?"',
+        "set -e",
+        'exit "$status"',
+      ].join("\n"),
+      { OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2x" },
     );
 
     expect(result.status).toBe(2);
@@ -604,30 +636,21 @@ ${command}
   });
 
   it("rejects invalid fixture stop intervals before cleanup polling", () => {
-    const result = spawnSync(
-      "/bin/bash",
+    const result = runPluginsSweepShell(
       [
-        "-c",
-        [
-          "set -euo pipefail",
-          "source scripts/e2e/lib/plugins/fixtures.sh",
-          "openclaw_plugins_signal_fixture_process() { echo signal; }",
-          "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
-          "set +e",
-          "openclaw_plugins_stop_fixture_process 12345",
-          'status="$?"',
-          "set -e",
-          'exit "$status"',
-        ].join("\n"),
-      ],
+        "set -euo pipefail",
+        "source scripts/e2e/lib/plugins/fixtures.sh",
+        "openclaw_plugins_signal_fixture_process() { echo signal; }",
+        "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
+        "set +e",
+        "openclaw_plugins_stop_fixture_process 12345",
+        'status="$?"',
+        "set -e",
+        'exit "$status"',
+      ].join("\n"),
       {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2",
-          OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: "soon",
-        },
+        OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2",
+        OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: "soon",
       },
     );
 
@@ -645,29 +668,20 @@ ${command}
       mkdirSync(fixtureDir);
       writeCrashingFixtureServerShim(binDir);
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "set +e",
-            `start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)}`,
-            'status="$?"',
-            "set -e",
-            'printf "status=%s\\n" "$status"',
-            '[ "$status" != "0" ]',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "set +e",
+          `start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)}`,
+          'status="$?"',
+          "set -e",
+          'printf "status=%s\\n" "$status"',
+          '[ "$status" != "0" ]',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "80",
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "80",
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -677,6 +691,161 @@ ${command}
       expect(result.stdout).not.toContain("DO_NOT_DUMP_PLUGIN_FIXTURE_PREFIX");
     } finally {
       rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    { initial: null, fault: "", label: "new destination" },
+    { initial: "", fault: "", label: "existing empty destination" },
+    { initial: "12345", fault: "", label: "existing port" },
+    { initial: null, fault: "write", label: "failed write" },
+    { initial: "12345", fault: "rename", label: "failed replacement" },
+  ])("publishes complete npm fixture port bytes: $label", async ({ initial, fault }) => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-publication-");
+    const registryScript = "scripts/e2e/lib/plugins/npm-registry-server.mjs";
+    // Docker and private observers copy this plain-Node closure without repository packages.
+    for (const file of [registryScript, "scripts/lib/bounded-response.mjs"]) {
+      mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      copyFileSync(file, path.join(root, file));
+    }
+    const portDir = path.join(root, "readiness");
+    mkdirSync(portDir);
+    const portFile = path.join(portDir, "port");
+    if (initial !== null) {
+      writeFileSync(portFile, initial);
+    }
+    const tarballPath = path.join(root, "fixture.tgz");
+    const archive = "fixture package archive";
+    writeFileSync(tarballPath, archive);
+    const preload = path.join(root, "publication-preload.mjs");
+    writeFileSync(
+      preload,
+      `import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+const portFile = process.argv[2];
+const fault = ${JSON.stringify(fault)};
+const probe = 'const fs = require("node:fs"); const file = process.argv[1]; process.stdout.write(JSON.stringify(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null));';
+function observe(phase, payload) {
+  const observed = JSON.parse(execFileSync(process.execPath, ["-e", probe, portFile], { encoding: "utf8" }));
+  fs.writeSync(1, JSON.stringify({ phase, payload, observed }) + "\\n");
+}
+const writeFile = fs.writeFileSync;
+fs.writeFileSync = (file, data, options) => {
+  if (path.dirname(file) !== path.dirname(portFile)) return writeFile(file, data, options);
+  const bytes = Buffer.from(data);
+  const fd = fs.openSync(file, options?.flag ?? "w", options?.mode);
+  try {
+    observe("opened", data);
+    fs.writeSync(fd, bytes, 0, 1);
+    observe("first-byte", data);
+    if (fault === "write") throw new Error("injected port write failure");
+    fs.writeSync(fd, bytes, 1, bytes.length - 1);
+  } finally {
+    fs.closeSync(fd);
+  }
+  observe("complete", data);
+  setImmediate(() => observe("ready", data));
+};
+const rename = fs.renameSync;
+fs.renameSync = (source, destination) => {
+  if (destination === portFile && fault === "rename") throw new Error("injected port rename failure");
+  return rename(source, destination);
+};
+`,
+    );
+    const nodeExecPath = resolveTestNodeExecPath();
+    const child = spawn(
+      nodeExecPath,
+      [
+        "--import",
+        pathToFileURL(preload).href,
+        registryScript,
+        portFile,
+        "fixture-pkg",
+        "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_PORT: "0",
+          OPENCLAW_NPM_REGISTRY_BIND_HOST: "127.0.0.1",
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: "",
+          OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL: "",
+          OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: "",
+          OPENCLAW_NPM_REGISTRY_DIST_TAGS: "",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const stderr = createBoundedChildOutput();
+    child.stderr.on("data", stderr.append);
+    child.on("error", (error) => stderr.append(error));
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
+    const timeout = setTimeout(() => child.kill("SIGKILL"), 2_000);
+    const lines = createInterface({ input: child.stdout });
+    const observations: Array<{ phase: string; payload: string; observed: string | null }> = [];
+    try {
+      for await (const line of lines) {
+        const observation = JSON.parse(line) as (typeof observations)[number];
+        observations.push(observation);
+        if (observation.phase === "ready") {
+          break;
+        }
+      }
+      expect(
+        observations.map(({ phase }) => phase),
+        stderr.text(),
+      ).toEqual(
+        fault === "write"
+          ? ["opened", "first-byte"]
+          : fault === "rename"
+            ? ["opened", "first-byte", "complete"]
+            : ["opened", "first-byte", "complete", "ready"],
+      );
+      for (const { phase, payload, observed } of observations) {
+        expect(payload).toMatch(/^[1-9][0-9]*$/u);
+        expect([initial, payload], `port file exposed incomplete bytes at ${phase}`).toContain(
+          observed,
+        );
+      }
+      if (fault) {
+        await closed;
+        expect(child.exitCode, stderr.text()).toBe(1);
+        expect(stderr.text()).toContain(`injected port ${fault} failure`);
+        expect(existsSync(portFile) ? readFileSync(portFile, "utf8") : null).toBe(initial);
+      } else {
+        const published = readFileSync(portFile, "utf8");
+        expect(observations.at(-1)).toEqual({
+          phase: "ready",
+          payload: published,
+          observed: published,
+        });
+        const metadata = await requestFixtureRegistry(Number(published), "/fixture-pkg");
+        expect(metadata.statusCode, stderr.text()).toBe(200);
+        const manifest = JSON.parse(metadata.body).versions["1.0.0"];
+        expect(manifest).toMatchObject({ name: "fixture-pkg", version: "1.0.0" });
+        const tarball = new URL(manifest.dist.tarball);
+        expect(tarball.origin).toBe(`http://127.0.0.1:${published}`);
+        const response = await requestFixtureRegistry(Number(published), tarball.pathname);
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toBe(archive);
+        expect(response.contentLength).toBe(String(Buffer.byteLength(archive)));
+      }
+      expect(readdirSync(portDir)).toEqual(initial !== null || !fault ? ["port"] : []);
+    } finally {
+      clearTimeout(timeout);
+      lines.close();
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await closed;
+      rmSync(root, { recursive: true, force: true });
+      expect(existsSync(root)).toBe(false);
     }
   });
 
@@ -731,11 +900,14 @@ ${command}
     }
   });
 
-  it("serves tarball dependencies using the request-visible registry origin", async () => {
+  it("serves drive-qualified tarball dependencies using the request-visible registry origin", async () => {
     const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-package-");
     const packageDir = path.join(root, "package");
     const portFile = path.join(root, "port");
-    const tarballPath = path.join(root, "openclaw.tgz");
+    // On POSIX, a relative D:/ path reproduces GNU tar's Windows remote-archive parsing.
+    const archiveDir = process.platform === "win32" ? root : "D:/packages";
+    const tarballPath = path.join(archiveDir, "openclaw.tgz");
+    mkdirSync(path.resolve(root, archiveDir), { recursive: true });
     mkdirSync(packageDir);
     writeJson(path.join(packageDir, "package.json"), {
       name: "openclaw",
@@ -748,7 +920,8 @@ ${command}
         "sqlite-vec": "0.1.7-alpha.2",
       },
     });
-    const packed = spawnSync("tar", ["-czf", tarballPath, "-C", root, "package"], {
+    const packed = spawnSync("tar", ["-czf", "openclaw.tgz", "-C", root, "package"], {
+      cwd: path.resolve(root, archiveDir),
       encoding: "utf8",
     });
     expect(packed.status, packed.stderr).toBe(0);
@@ -756,17 +929,19 @@ ${command}
     const child = spawn(
       process.execPath,
       [
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        path.resolve("scripts/e2e/lib/plugins/npm-registry-server.mjs"),
         portFile,
         "openclaw",
         "2026.7.1-beta.3",
         tarballPath,
       ],
       {
-        cwd: process.cwd(),
+        cwd: root,
         env: {
           ...process.env,
           OPENCLAW_NPM_REGISTRY_DIST_TAGS: "latest=0.0.0,beta=2026.7.1-beta.3",
+          // Fail locally if GNU tar mistakes the synthetic drive letter for a remote host.
+          TAR_OPTIONS: "--rsh-command=false",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -804,68 +979,110 @@ ${command}
     }
   });
 
-  it("recomputes proxied content length after fetch decodes the response", async () => {
-    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-proxy-");
-    const portFile = path.join(root, "port");
-    const tarballPath = path.join(root, "demo-plugin.tgz");
-    const upstreamBody = JSON.stringify({ payload: "x".repeat(1_000) });
-    const compressedBody = gzipSync(upstreamBody);
-    writeFileSync(tarballPath, "fixture package archive", "utf8");
+  it.each([false, true])(
+    "projects upstream tarballs per request origin without changing external URLs (merged=%s)",
+    async (merged) => {
+      const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-proxy-");
+      const portFile = path.join(root, "port");
+      const tarballPath = path.join(root, "demo-plugin.tgz");
+      const packageName = merged ? "@openclaw/demo-plugin-npm" : "upstream-package";
+      const externalTarball = "https://external.invalid/upstream-package.tgz";
+      let upstreamRequests = 0;
+      writeFileSync(tarballPath, "fixture package archive", "utf8");
 
-    const upstream = createServer((_request, response) => {
-      response.writeHead(200, {
-        "content-encoding": "gzip",
-        "content-length": String(compressedBody.length),
-        "content-type": "application/json",
+      const upstream = createServer((request, response) => {
+        upstreamRequests += 1;
+        const compressedBody = gzipSync(
+          JSON.stringify({
+            name: packageName,
+            payload: "x".repeat(1_000),
+            versions: {
+              "0.9.0": {
+                name: packageName,
+                version: "0.9.0",
+                dist: {
+                  tarball: `http://${request.headers.host}/upstream-package/-/package.tgz?download=1`,
+                },
+              },
+              "0.8.0": {
+                name: packageName,
+                version: "0.8.0",
+                dist: { tarball: externalTarball },
+              },
+            },
+          }),
+        );
+        response.writeHead(200, {
+          "content-encoding": "gzip",
+          "content-length": String(compressedBody.length),
+          "content-type": "application/json",
+        });
+        response.end(compressedBody);
       });
-      response.end(compressedBody);
-    });
-    await new Promise<void>((resolve) => {
-      upstream.listen(0, "127.0.0.1", resolve);
-    });
-    const upstreamAddress = upstream.address();
-    if (!upstreamAddress || typeof upstreamAddress === "string") {
-      throw new Error("expected upstream registry address");
-    }
+      await new Promise<void>((resolve) => {
+        upstream.listen(0, "127.0.0.1", resolve);
+      });
+      const upstreamAddress = upstream.address();
+      if (!upstreamAddress || typeof upstreamAddress === "string") {
+        throw new Error("expected upstream registry address");
+      }
 
-    const child = spawn(
-      process.execPath,
-      [
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-        portFile,
-        "@openclaw/demo-plugin-npm",
-        "1.0.0",
-        tarballPath,
-      ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+      const child = spawn(
+        process.execPath,
+        [
+          "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+          portFile,
+          "@openclaw/demo-plugin-npm",
+          "1.0.0",
+          tarballPath,
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+            OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: merged ? "1" : "",
+          },
+          stdio: ["ignore", "pipe", "pipe"],
         },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+      );
 
-    try {
-      const port = await waitForPortFile(portFile);
-      const response = await requestFixtureRegistry(port, "/upstream-package");
+      try {
+        const port = await waitForPortFile(portFile);
+        for (const host of [`192.0.2.2:${port}`, `192.0.2.3:${port}`]) {
+          const response = await requestFixtureRegistry(
+            port,
+            `/${encodeURIComponent(packageName)}`,
+            { host },
+          );
+          const metadata = JSON.parse(response.body);
 
-      expect(response.statusCode).toBe(200);
-      expect(response.body).toBe(upstreamBody);
-      expect(response.contentLength).toBe(String(Buffer.byteLength(upstreamBody)));
-    } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
+          expect(response.statusCode).toBe(200);
+          expect(metadata.versions["0.9.0"].dist.tarball).toBe(
+            `http://${host}/upstream-package/-/package.tgz?download=1`,
+          );
+          expect(metadata.versions["0.8.0"].dist.tarball).toBe(externalTarball);
+          if (merged) {
+            expect(new URL(metadata.versions["1.0.0"].dist.tarball).origin).toBe(`http://${host}`);
+          }
+          if (!merged) {
+            expect(response.contentLength).toBe(String(Buffer.byteLength(response.body)));
+          }
+        }
+        expect(upstreamRequests).toBe(merged ? 1 : 2);
+      } finally {
+        if (child.exitCode === null) {
+          child.kill();
+          await new Promise((resolve) => {
+            child.once("close", resolve);
+          });
+        }
+        await new Promise<void>((resolve) => {
+          upstream.close(() => resolve());
         });
       }
-      await new Promise<void>((resolve) => {
-        upstream.close(() => resolve());
-      });
-    }
-  });
+    },
+  );
 
   it("streams proxied npm tarballs without buffering a content length", async () => {
     const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-tarball-proxy-");
@@ -1218,28 +1435,19 @@ ${command}
       );
       chmodSync(path.join(binDir, "node"), 0o755);
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "set +e",
-            `start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)}`,
-            'status="$?"',
-            "set -e",
-            'exit "$status"',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "set +e",
+          `start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)}`,
+          'status="$?"',
+          "set -e",
+          'exit "$status"',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "64kb",
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "64kb",
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -1261,31 +1469,22 @@ ${command}
       mkdirSync(tmpDir);
       writeFixtureServerShims(binDir, pidPath);
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "source scripts/e2e/lib/plugins/clawhub.sh",
-            "set +e",
-            `( set -e; trap 'printf caller-cleanup > ${shellQuote(cleanupPath)}' EXIT; run_plugins_clawhub_scenario )`,
-            'status="$?"',
-            "set -e",
-            '[ "$status" != "0" ]',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "source scripts/e2e/lib/plugins/clawhub.sh",
+          "set +e",
+          `( set -e; trap 'printf caller-cleanup > ${shellQuote(cleanupPath)}' EXIT; run_plugins_clawhub_scenario )`,
+          'status="$?"',
+          "set -e",
+          '[ "$status" != "0" ]',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
-            OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
-            OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
+          OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
+          OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -1312,31 +1511,22 @@ ${command}
       );
       chmodSync(path.join(binDir, "node"), 0o755);
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "source scripts/e2e/lib/plugins/clawhub.sh",
-            "set +e",
-            "run_plugins_clawhub_scenario",
-            'status="$?"',
-            "set -e",
-            'exit "$status"',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "source scripts/e2e/lib/plugins/clawhub.sh",
+          "set +e",
+          "run_plugins_clawhub_scenario",
+          'status="$?"',
+          "set -e",
+          'exit "$status"',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "64kb",
-            OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
-            OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "64kb",
+          OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
+          OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -1356,32 +1546,23 @@ ${command}
       mkdirSync(tmpDir);
       writeCrashingFixtureServerShim(binDir);
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "source scripts/e2e/lib/plugins/clawhub.sh",
-            "set +e",
-            "run_plugins_clawhub_scenario",
-            'status="$?"',
-            "set -e",
-            'printf "status=%s\\n" "$status"',
-            '[ "$status" != "0" ]',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "source scripts/e2e/lib/plugins/clawhub.sh",
+          "set +e",
+          "run_plugins_clawhub_scenario",
+          'status="$?"',
+          "set -e",
+          'printf "status=%s\\n" "$status"',
+          '[ "$status" != "0" ]',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "80",
-            OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
-            OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "80",
+          OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
+          OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -1466,7 +1647,9 @@ ${command}
         env: {
           ...process.env,
           HOME: home,
+          OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
           OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
         },
       });
 
@@ -1489,6 +1672,9 @@ ${command}
       writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
         installRecords: {},
       });
+      writeJson(path.join(home, ".openclaw", "openclaw.json"), {
+        plugins: { entries: { "demo-plugin-tgz": { enabled: false } } },
+      });
 
       const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
         encoding: "utf8",
@@ -1501,6 +1687,157 @@ ${command}
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("managed install path still exists after uninstall");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("requires the resolved legacy profile before allowing the pre-marker uninstall contract", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
+    const home = path.join(root, "home");
+    const scratchRoot = path.join(root, "scratch");
+    const removedInstallPath = path.join(home, ".openclaw", "extensions", "demo-plugin-tgz");
+
+    try {
+      writeJson(path.join(scratchRoot, "plugins2-uninstalled.json"), { plugins: [] });
+      writeFileSync(
+        path.join(scratchRoot, "plugins2-install-path.txt"),
+        removedInstallPath,
+        "utf8",
+      );
+      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
+        installRecords: {},
+      });
+
+      const baseEnv = {
+        ...process.env,
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+      };
+      const current = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
+        encoding: "utf8",
+        env: baseEnv,
+      });
+      const rawFrozenAuthorization = spawnSync(
+        process.execPath,
+        [ASSERTIONS_SCRIPT, "plugin-tgz-removed"],
+        {
+          encoding: "utf8",
+          env: { ...baseEnv, OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1" },
+        },
+      );
+      const legacy = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
+        encoding: "utf8",
+        env: { ...baseEnv, OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: "legacy" },
+      });
+
+      expect(current.status).not.toBe(0);
+      expect(current.stderr).toContain("exact disabled uninstall marker missing");
+      expect(rawFrozenAuthorization.status).not.toBe(0);
+      expect(rawFrozenAuthorization.stderr).toContain("exact disabled uninstall marker missing");
+      expect(legacy.status).toBe(0);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps the legacy npm project cleanup assertion scoped to the resolved profile", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
+    const home = path.join(root, "home");
+    const scratchRoot = path.join(root, "scratch");
+    const npmProjectRoot = path.join(home, ".openclaw", "npm", "projects", "demo-plugin-npm");
+    const installPath = path.join(npmProjectRoot, "node_modules", "@openclaw", "demo-plugin-npm");
+    const dependencyPackagePath = path.join(
+      npmProjectRoot,
+      "node_modules",
+      "is-number",
+      "package.json",
+    );
+
+    try {
+      mkdirSync(npmProjectRoot, { recursive: true });
+      writeJson(path.join(scratchRoot, "plugins-npm-uninstalled.json"), { plugins: [] });
+      writeFileSync(path.join(scratchRoot, "plugins-npm-install-path.txt"), installPath, "utf8");
+      writeFileSync(
+        path.join(scratchRoot, "plugins-npm-dependency-path.txt"),
+        dependencyPackagePath,
+        "utf8",
+      );
+      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), { installRecords: {} });
+      writeJson(path.join(home, ".openclaw", "openclaw.json"), {
+        plugins: { entries: { "demo-plugin-npm": { enabled: false } } },
+      });
+
+      const baseEnv = {
+        ...process.env,
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "1000",
+        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+      };
+      const current = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-npm-removed"], {
+        encoding: "utf8",
+        env: baseEnv,
+      });
+      writeJson(path.join(home, ".openclaw", "openclaw.json"), { plugins: { entries: {} } });
+      const legacy = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-npm-removed"], {
+        encoding: "utf8",
+        env: { ...baseEnv, OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: "legacy" },
+      });
+
+      expect(current.status).not.toBe(0);
+      expect(current.stderr).toContain("npm managed project still exists after uninstall");
+      expect(legacy.status, legacy.stderr).toBe(0);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts a retained legacy npm listing only for the keep-files assertion", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
+    const home = path.join(root, "home");
+    const scratchRoot = path.join(root, "scratch");
+    const installPath = path.join(home, ".openclaw", "npm", "demo-plugin-npm");
+    const dependencyPackagePath = path.join(installPath, "node_modules", "is-number");
+
+    try {
+      mkdirSync(dependencyPackagePath, { recursive: true });
+      writeJson(path.join(scratchRoot, "plugins-npm-retained.json"), {
+        plugins: [{ id: "demo-plugin-npm", status: "disabled", enabled: false }],
+      });
+      writeFileSync(path.join(scratchRoot, "plugins-npm-install-path.txt"), installPath, "utf8");
+      writeFileSync(
+        path.join(scratchRoot, "plugins-npm-dependency-path.txt"),
+        dependencyPackagePath,
+        "utf8",
+      );
+      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
+        installRecords: {},
+      });
+      writeJson(path.join(home, ".openclaw", "openclaw.json"), { plugins: { entries: {} } });
+      const env = {
+        ...process.env,
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+      };
+
+      const current = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-npm-retained"], {
+        encoding: "utf8",
+        env,
+      });
+      const legacy = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-npm-retained"], {
+        encoding: "utf8",
+        env: { ...env, OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: "legacy" },
+      });
+
+      expect(current.status).not.toBe(0);
+      expect(current.stderr).toContain("still listed after uninstall");
+      expect(legacy.status, legacy.stderr).toBe(0);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -1540,14 +1877,114 @@ ${command}
     }
   });
 
-  it("rejects ClawHub install paths that resolve outside the managed extensions root", () => {
+  it.each([
+    {
+      name: "rejects ClawHub install paths that resolve outside the managed extensions root",
+      escaped: true,
+      recordOverrides: {},
+      errorPrefix: null,
+      pathError: false,
+    },
+    {
+      name: "accepts legacy ZIP without later ClawPack or npm fields",
+      recordOverrides: {},
+      errorPrefix: null,
+      pathError: false,
+    },
+    {
+      name: "rejects a legacy artifact with the wrong format before later metadata",
+      recordOverrides: { artifactFormat: "tgz" },
+      errorPrefix: "missing ClawHub legacy ZIP artifact metadata",
+      pathError: false,
+    },
+    {
+      name: "rejects a non-legacy artifact kind before ClawPack metadata",
+      recordOverrides: { artifactKind: "other" },
+      errorPrefix: "missing ClawHub artifact metadata",
+      pathError: false,
+    },
+    {
+      name: "rejects missing ClawPack metadata before npm metadata",
+      recordOverrides: { artifactKind: "npm-pack", artifactFormat: "tgz" },
+      errorPrefix: "missing ClawHub ClawPack metadata",
+      pathError: false,
+    },
+    {
+      name: "rejects a string ClawPack size",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: "0",
+      },
+      errorPrefix: "missing ClawHub ClawPack metadata",
+      pathError: false,
+    },
+    {
+      name: "accepts zero size before rejecting missing npm metadata",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: 0,
+      },
+      errorPrefix: "missing ClawHub npm artifact metadata",
+      pathError: false,
+    },
+    {
+      name: "accepts zero size and truthy non-string metadata with a real npm peer",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: { digest: 1 },
+        clawpackSize: 0,
+        npmIntegrity: 1,
+        npmShasum: true,
+        npmTarballName: ["package.tgz"],
+      },
+      errorPrefix: null,
+      pathError: false,
+    },
+    {
+      name: "rejects an empty install path before invalid metadata",
+      recordOverrides: { artifactFormat: "tgz", installPath: "" },
+      errorPrefix: null,
+      pathError: true,
+    },
+    {
+      name: "rejects a non-string install path before invalid metadata",
+      recordOverrides: { artifactFormat: "tgz", installPath: 42 },
+      errorPrefix: null,
+      pathError: true,
+    },
+  ])("$name", ({ escaped, recordOverrides, errorPrefix, pathError }) => {
     const root = autoCleanupTempDirs.make("openclaw-plugins-clawhub-path-");
     const home = path.join(root, "home");
     const scratchRoot = path.join(root, "scratch");
     const extensionsRoot = path.join(home, ".openclaw", "extensions");
-    const escapedInstallPath = `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`;
+    const installPath = escaped
+      ? `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`
+      : path.join(extensionsRoot, "openclaw-kitchen-sink-fixture");
     mkdirSync(extensionsRoot, { recursive: true });
-    mkdirSync(escapedInstallPath, { recursive: true });
+    mkdirSync(installPath, { recursive: true });
+    const record = {
+      artifactFormat: "zip",
+      artifactKind: "legacy-zip",
+      clawhubFamily: "code-plugin",
+      clawhubPackage: "@openclaw/kitchen-sink",
+      installPath,
+      source: "clawhub",
+      spec: "clawhub:@openclaw/kitchen-sink",
+      ...recordOverrides,
+    };
+    if (record.artifactKind === "npm-pack") {
+      mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
+      symlinkSync(
+        process.cwd(),
+        path.join(installPath, "node_modules", "openclaw"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
 
     writeJson(path.join(scratchRoot, "plugins-clawhub-installed.json"), {
       plugins: [{ id: "openclaw-kitchen-sink-fixture", status: "loaded" }],
@@ -1557,15 +1994,7 @@ ${command}
     });
     writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
       installRecords: {
-        "openclaw-kitchen-sink-fixture": {
-          artifactFormat: "zip",
-          artifactKind: "legacy-zip",
-          clawhubFamily: "code-plugin",
-          clawhubPackage: "@openclaw/kitchen-sink",
-          installPath: escapedInstallPath,
-          source: "clawhub",
-          spec: "clawhub:@openclaw/kitchen-sink",
-        },
+        "openclaw-kitchen-sink-fixture": record,
       },
     });
 
@@ -1576,12 +2005,28 @@ ${command}
         CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
         CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
         HOME: home,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
         OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
       },
     });
 
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("ClawHub install path resolved outside");
+    if (escaped) {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ClawHub install path resolved outside");
+    } else if (pathError) {
+      expect(result.status).toBe(1);
+      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+        "missing ClawHub install path for openclaw-kitchen-sink-fixture",
+      );
+    } else if (errorPrefix) {
+      expect(result.status).toBe(1);
+      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+        `${errorPrefix} for openclaw-kitchen-sink-fixture: ${JSON.stringify(record)}`,
+      );
+    } else {
+      expect(result.status, result.stderr).toBe(0);
+    }
   });
 
   it("times out stalled ClawHub package metadata requests", async () => {

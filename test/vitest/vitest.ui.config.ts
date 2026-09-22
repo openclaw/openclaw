@@ -4,15 +4,21 @@ import { controlUiLocaleModulesPlugin } from "../../ui/config/control-ui-locales
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { jsdomOptimizedDeps } from "./vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "./vitest.ui-isolated-paths.mjs";
+import {
+  controlUiE2eTestGlobs,
+  controlUiTestGlobs,
+  uiNodeDrivenBrowserTestFiles,
+  uiTimingTestFiles,
+} from "./vitest.ui-paths.mjs";
 
 // Explicit nameable return type: inference reaches vite-internal names (TS4058/TS4082).
-export function createUiVitestConfig(
-  env?: Record<string, string | undefined>,
-  options?: { includePatterns?: string[]; name?: string },
-): ViteUserConfig {
-  const includePatterns = options?.includePatterns ?? ["ui/src/**/*.test.ts"];
+export function createUiVitestConfig(env?: Record<string, string | undefined>): ViteUserConfig {
+  const includePatterns = [
+    ...controlUiTestGlobs.map((pattern) => pattern.replace("*.test.ts", "!(*.browser).test.ts")),
+    ...uiNodeDrivenBrowserTestFiles,
+  ];
   // Isolated files must never enter the shared module graph, including scoped runs.
-  const exclude = ["ui/src/**/*.e2e.test.ts", ...uiIsolatedTestFiles];
+  const exclude = [...controlUiE2eTestGlobs, ...uiIsolatedTestFiles, ...uiTimingTestFiles];
   const config = createScopedVitestConfig(includePatterns, {
     deps: jsdomOptimizedDeps,
     environment: "jsdom",
@@ -20,8 +26,9 @@ export function createUiVitestConfig(
     exclude,
     excludeUnitFastTests: false,
     includeOpenClawRuntimeSetup: false,
+    intersectIncludeFile: true,
     isolate: false,
-    name: options?.name ?? "ui",
+    name: "ui",
     setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
     useNonIsolatedRunner: true,
   });

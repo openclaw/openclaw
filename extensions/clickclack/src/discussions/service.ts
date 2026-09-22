@@ -73,7 +73,7 @@ export class ClickClackDiscussionService {
   readonly #runtime: PluginRuntime;
   readonly #store: ClickClackDiscussionBindingStore;
   readonly #clientFactory: (account: ResolvedClickClackAccount) => ClickClackClient;
-  readonly #installationId: string;
+  #installationId: string | undefined;
   readonly #bindingGenerationFactory: () => string;
   readonly #detachedBindings: DetachedDiscussionBindingRetention;
   readonly #timersEnabled: boolean;
@@ -100,7 +100,7 @@ export class ClickClackDiscussionService {
     this.#clientFactory =
       options.clientFactory ??
       ((account) => createClickClackClient({ baseUrl: account.apiEndpoint, token: account.token }));
-    this.#installationId = options.installationId ?? getClickClackDiscussionInstallationId(runtime);
+    this.#installationId = options.installationId;
     this.#bindingGenerationFactory = options.bindingGenerationFactory ?? randomUUID;
     this.#detachedBindings = new DetachedDiscussionBindingRetention({
       runtime,
@@ -182,6 +182,7 @@ export class ClickClackDiscussionService {
 
   async open(sessionKey: string): Promise<SessionDiscussionInfo> {
     return await this.#withSessionLock(sessionKey, async () => {
+      this.#installationId ??= await getClickClackDiscussionInstallationId(this.#runtime);
       const accounts = discussionAccounts(this.#currentConfig());
       if (accounts.length > 1) {
         throw new Error("ClickClack discussions require exactly one enabled discussion account");
@@ -641,7 +642,7 @@ export class ClickClackDiscussionService {
     // Without a gateway-event subscription (no broadcaster in this process),
     // bindings fall back to the interval poll or renames would never reconcile.
     const needsBindingPoll =
-      this.#unsubscribeSessionsChanged === undefined && this.#store.entries().length > 0;
+      this.#unsubscribeSessionsChanged === undefined && this.#store.count() > 0;
     if (this.#closed || (!hasPendingOpens && !needsBindingPoll)) {
       if (this.#timer) {
         clearInterval(this.#timer);

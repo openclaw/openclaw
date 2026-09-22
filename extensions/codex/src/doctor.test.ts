@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { HealthCheck, OpenClawConfig } from "openclaw/plugin-sdk/health";
+import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import {
@@ -73,7 +74,7 @@ function managedDeps(version = CODEX_APP_SERVER_VERSION) {
   };
 }
 
-function createCheck(deps: ReturnType<typeof managedDeps>) {
+function createCheck(deps: Parameters<typeof registerCodexManagedAppServerDoctorChecks>[1]) {
   let check: HealthCheck | undefined;
   registerCodexManagedAppServerDoctorChecks(
     {
@@ -136,6 +137,95 @@ describe("managed Codex doctor check", () => {
     ]);
   });
 
+  it.each(["failed", "mismatched"])(
+    "reports a %s version probe as a warning during update finalization",
+    async (failure) => {
+      const deps = managedDeps("0.146.0");
+      if (failure === "failed") {
+        deps.runVersionCommand.mockRejectedValueOnce(new Error("probe failed"));
+      }
+      const check = createCheck(deps);
+
+      await expect(
+        check.detect({
+          ...context(config()),
+          mode: "fix",
+          env: { OPENCLAW_UPDATE_POST_CORE: "1" },
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
+          severity: "warning",
+          fixHint: expect.stringContaining("after restart"),
+        }),
+      ]);
+    },
+  );
+
+  it("keeps an explicitly selected candidate lint check strict during an update", async () => {
+    const check = createCheck(managedDeps("0.146.0"));
+
+    await expect(
+      check.detect({
+        ...context(config()),
+        env: { OPENCLAW_UPDATE_POST_CORE: "1" },
+      }),
+    ).resolves.toEqual([expect.objectContaining({ severity: "error" })]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "bounds a successful probe whose detached descendant retains its output pipes",
+    async () => {
+      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-orphan-"));
+      const pidPath = path.join(directory, "orphan.pid");
+      try {
+        const command = path.join(directory, "codex");
+        await fs.writeFile(
+          command,
+          `#!${process.execPath}
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const orphan = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 10000)"], {
+  detached: true,
+  stdio: ["ignore", 1, 2],
+});
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(orphan.pid));
+orphan.unref();
+console.log("codex-cli ${CODEX_APP_SERVER_VERSION}");
+`,
+          { mode: 0o755 },
+        );
+        const check = createCheck({
+          ...managedDeps(),
+          resolveNativeCommand: () => command,
+          runVersionCommand: undefined,
+        });
+        const startedAt = performance.now();
+        const findings = await check.detect({
+          ...context(config()),
+          mode: "fix",
+          env: { OPENCLAW_UPDATE_POST_CORE: "1" },
+        });
+
+        expect(performance.now() - startedAt).toBeLessThan(7_000);
+        expect(findings).toEqual([
+          expect.objectContaining({
+            checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
+            severity: "warning",
+            message: expect.stringContaining("version check failed:"),
+          }),
+        ]);
+      } finally {
+        const orphanPid = Number(await fs.readFile(pidPath, "utf8").catch(() => ""));
+        if (orphanPid > 0) {
+          killProcessTree(orphanPid, { force: true, detached: true });
+        }
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
   it("reports a missing managed launcher before execution", async () => {
     const deps = managedDeps();
     deps.resolveStartOptions.mockRejectedValueOnce(new Error("managed launcher missing"));
@@ -165,20 +255,43 @@ describe("managed Codex doctor check", () => {
     expect(deps.runVersionCommand).not.toHaveBeenCalled();
   });
 
-  it("reports a bounded version command failure", async () => {
-    const deps = managedDeps();
-    deps.runVersionCommand.mockRejectedValueOnce(new Error("timed out after 5000 ms"));
-    const check = createCheck(deps);
+  it.skipIf(process.platform === "win32")(
+    "bounds a native version probe that ignores SIGTERM",
+    async () => {
+      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-version-"));
+      try {
+        const command = path.join(directory, "codex");
+        await fs.writeFile(
+          command,
+          `#!${process.execPath}
+process.on("SIGTERM", () => {});
+setTimeout(() => process.exit(0), 10_000);
+`,
+          { mode: 0o755 },
+        );
+        const check = createCheck({
+          ...managedDeps(),
+          resolveNativeCommand: () => command,
+          runVersionCommand: undefined,
+        });
+        const startedAt = performance.now();
+        const findings = await check.detect(context(config()));
 
-    await expect(check.detect(context(config()))).resolves.toEqual([
-      expect.objectContaining({
-        checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-        path: "/candidate/plugin/codex-native",
-        message: "Managed Codex app-server version check failed: timed out after 5000 ms",
-        requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within 5000 ms`,
-      }),
-    ]);
-  });
+        expect(performance.now() - startedAt).toBeLessThan(7_000);
+        expect(findings).toEqual([
+          expect.objectContaining({
+            checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
+            path: command,
+            message: expect.stringContaining("Managed Codex app-server version check failed:"),
+            requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within 5000 ms`,
+          }),
+        ]);
+      } finally {
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
 
   it.each([
     ["custom command", { command: "/operator/codex" }],

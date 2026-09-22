@@ -15,7 +15,36 @@ describe("appendUsageLine", () => {
     ]);
   });
 
-  it("prices response usage for the selected agent in an explicit fleet", () => {
+  const completeUsage = { input: 1_000_000, output: 0 };
+  it.each<
+    [
+      name: string,
+      usage: Parameters<typeof resolveResponseUsageLine>[0]["usage"],
+      tiered: boolean,
+      expected: string | undefined,
+    ]
+  >([
+    ["costless flat-price runtime", completeUsage, false, "est $1.00"],
+    ["priced tool loop", { ...completeUsage, cost: { total: 0.25 } }, true, "est $0.25"],
+    ["explicit zero total", { ...completeUsage, cost: { total: 0 } }, true, "est $0.0000"],
+    ["incomplete tiered cost", completeUsage, true, undefined],
+    ["input-only usage without a price", { input: 1_000_000 }, false, undefined],
+    ["output-only usage without a price", { output: 50 }, false, undefined],
+    [
+      "partial usage with a recorded price",
+      { input: 1000, cost: { total: 0.25 } },
+      true,
+      "est $0.25",
+    ],
+    ["partial usage with a recorded zero", { output: 50, cost: { total: 0 } }, true, "est $0.0000"],
+    [
+      "cost-only positive total",
+      { cost: { total: 0.25 } },
+      true,
+      "Usage: ? in / ? out · est $0.25",
+    ],
+    ["cost-only zero total", { cost: { total: 0 } }, true, "Usage: ? in / ? out · est $0.0000"],
+  ])("formats %s for the selected agent in an explicit fleet", (_name, usage, tiered, expected) => {
     const line = resolveResponseUsageLine({
       config: {
         agents: {
@@ -33,7 +62,19 @@ describe("appendUsageLine", () => {
                   name: "Priced",
                   reasoning: false,
                   input: ["text"],
-                  cost: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  cost: {
+                    input: 1,
+                    output: 2,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    ...(tiered
+                      ? {
+                          tieredPricing: [
+                            { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
+                          ],
+                        }
+                      : {}),
+                  },
                   contextWindow: 1,
                   maxTokens: 1,
                 },
@@ -43,12 +84,27 @@ describe("appendUsageLine", () => {
         },
       } as OpenClawConfig,
       agentDir: "/tmp/openclaw-main-agent",
-      usage: { input: 1_000_000, output: 0 },
+      usage,
       provider: "fixture",
       model: "priced",
     });
 
-    expect(line).toContain("est $1");
+    expect(line).toContain("Usage:");
+    if (expected) {
+      expect(line).toContain(expected);
+    } else {
+      expect(line).not.toContain("est $");
+    }
+  });
+
+  it.each(["off", "tokens"] as const)("hides cost-only usage in %s mode", (mode) => {
+    expect(
+      resolveResponseUsageLine({
+        config: { messages: { responseUsage: mode } },
+        agentDir: "/tmp/openclaw-main-agent",
+        usage: { cost: { total: 0.25 } },
+      }),
+    ).toBeUndefined();
   });
 
   it("preserves reply payload metadata when appending usage text", () => {

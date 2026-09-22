@@ -1,7 +1,8 @@
-// ACPX tests cover index plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginHookReplyDispatchResult } from "./runtime-api.js";
 import setupPlugin from "./setup-api.js";
 
 const { createAcpxRuntimeServiceMock, tryDispatchAcpReplyHookMock } = vi.hoisted(() => ({
@@ -67,25 +68,7 @@ describe("acpx plugin", () => {
     expect(openKeyedStore).toHaveBeenCalledWith({ namespace: "test", maxEntries: 1 });
     expect(api.registerService).toHaveBeenCalledWith(service);
     expect(api.on).toHaveBeenCalledWith("reply_dispatch", expect.any(Function), {
-      timeoutMs: 120_000,
-    });
-  });
-
-  it("uses configured ACPX timeout for reply_dispatch hook registration", () => {
-    const service = { id: "acpx-service", start: vi.fn() };
-    createAcpxRuntimeServiceMock.mockReturnValue(service);
-
-    const api = createTestPluginApi({
-      pluginConfig: { timeoutSeconds: 180 },
-      runtime: { state: { openKeyedStore: vi.fn() } } as never,
-      registerService: vi.fn(),
-      on: vi.fn(),
-    });
-
-    plugin.register(api);
-
-    expect(api.on).toHaveBeenCalledWith("reply_dispatch", expect.any(Function), {
-      timeoutMs: 180_000,
+      eligibleDispatchKinds: ["acp"],
     });
   });
 
@@ -151,81 +134,99 @@ describe("acpx plugin", () => {
       queuedFinal: true,
       counts: { tool: 1, block: 0, final: 1 },
     });
-    expect(tryDispatchAcpReplyHookMock).toHaveBeenCalledWith(event, {
-      ...ctx,
-      abortSignal: expect.any(AbortSignal),
-    });
+    expect(tryDispatchAcpReplyHookMock).toHaveBeenCalledWith(event, ctx);
   });
 
-  it("aborts the ACP reply_dispatch runtime path at the configured timeout", async () => {
-    vi.useFakeTimers();
-    try {
-      const service = { id: "acpx-service", start: vi.fn() };
-      createAcpxRuntimeServiceMock.mockReturnValue(service);
-      const observedAbortStates: boolean[] = [];
-      tryDispatchAcpReplyHookMock.mockImplementation(async (_event, hookCtx) => {
-        const abortSignal = (hookCtx as { abortSignal?: AbortSignal }).abortSignal;
-        if (!abortSignal) {
-          throw new Error("expected ACPX hook abort signal");
-        }
-        observedAbortStates.push(abortSignal.aborted);
-        await new Promise<void>((resolve) => {
-          abortSignal.addEventListener("abort", () => resolve(), { once: true });
-        });
-        observedAbortStates.push(abortSignal.aborted);
-        return {
+  it.each([
+    { timeoutSeconds: undefined, finish: "complete" },
+    { timeoutSeconds: 180, finish: "complete" },
+    { timeoutSeconds: undefined, finish: "cancel" },
+    { timeoutSeconds: 180, finish: "cancel" },
+  ])(
+    "keeps the ACP turn alive beyond operation timeout $timeoutSeconds until $finish",
+    async ({ timeoutSeconds, finish }) => {
+      vi.useFakeTimers();
+      try {
+        const service = { id: "acpx-service", start: vi.fn() };
+        createAcpxRuntimeServiceMock.mockReturnValue(service);
+        const turn = createDeferred<PluginHookReplyDispatchResult>();
+        const completed = {
           handled: true,
           queuedFinal: true,
           counts: { tool: 0, block: 0, final: 1 },
         };
-      });
+        const cancelled = {
+          handled: true,
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 0 },
+        };
+        tryDispatchAcpReplyHookMock.mockImplementation(
+          async (_event, hookCtx: { abortSignal?: AbortSignal }) => {
+            const onAbort = () => turn.resolve(cancelled);
+            hookCtx.abortSignal?.addEventListener("abort", onAbort, { once: true });
+            try {
+              return await turn.promise;
+            } finally {
+              hookCtx.abortSignal?.removeEventListener("abort", onAbort);
+            }
+          },
+        );
 
-      const on = vi.fn();
-      const api = createTestPluginApi({
-        pluginConfig: { timeoutSeconds: 0.001 },
-        runtime: { state: { openKeyedStore: vi.fn() } } as never,
-        registerService: vi.fn(),
-        on,
-      });
+        const on = vi.fn();
+        const api = createTestPluginApi({
+          pluginConfig: timeoutSeconds === undefined ? {} : { timeoutSeconds },
+          runtime: { state: { openKeyedStore: vi.fn() } } as never,
+          registerService: vi.fn(),
+          on,
+        });
 
-      plugin.register(api);
+        plugin.register(api);
 
-      const hook = on.mock.calls.find(([hookName]) => hookName === "reply_dispatch")?.[1];
-      if (!hook) {
-        throw new Error("expected reply_dispatch hook to be registered");
+        const registration = on.mock.calls.find(([hookName]) => hookName === "reply_dispatch");
+        const hook = registration?.[1];
+        if (!hook) {
+          throw new Error("expected reply_dispatch hook to be registered");
+        }
+
+        const controller = new AbortController();
+        const run = hook(
+          {
+            ctx: { raw: "reply ctx" },
+            runId: "run-1",
+            sessionKey: "agent:test:session",
+            inboundAudio: false,
+            shouldRouteToOriginating: false,
+            shouldSendToolSummaries: true,
+            shouldSendFullToolDetails: false,
+            sendPolicy: "allow",
+          },
+          {
+            cfg: {},
+            abortSignal: controller.signal,
+            dispatcher: { dispatch: vi.fn(), getQueuedCounts: vi.fn(), getFailedCounts: vi.fn() },
+            recordProcessed: vi.fn(),
+            markIdle: vi.fn(),
+          },
+        );
+        let settled = false;
+        void run.then(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync((timeoutSeconds ?? 120) * 1000 + 10_000);
+
+        expect(settled).toBe(false);
+        expect(registration?.[2]?.timeoutMs).toBeUndefined();
+        if (finish === "cancel") {
+          controller.abort();
+        } else {
+          turn.resolve(completed);
+        }
+        await expect(run).resolves.toEqual(finish === "cancel" ? cancelled : completed);
+      } finally {
+        vi.useRealTimers();
       }
-
-      const run = hook(
-        {
-          ctx: { raw: "reply ctx" },
-          runId: "run-1",
-          sessionKey: "agent:test:session",
-          inboundAudio: false,
-          shouldRouteToOriginating: false,
-          shouldSendToolSummaries: true,
-          shouldSendFullToolDetails: false,
-          sendPolicy: "allow",
-        },
-        {
-          cfg: {},
-          dispatcher: { dispatch: vi.fn(), getQueuedCounts: vi.fn(), getFailedCounts: vi.fn() },
-          recordProcessed: vi.fn(),
-          markIdle: vi.fn(),
-        },
-      );
-
-      await vi.advanceTimersByTimeAsync(1);
-
-      await expect(run).resolves.toEqual({
-        handled: true,
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-      });
-      expect(observedAbortStates).toEqual([false, true]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("declares setup auto-enable reasons for ACPX-owned ACP config", () => {
     const probe = registerAcpxAutoEnableProbe();

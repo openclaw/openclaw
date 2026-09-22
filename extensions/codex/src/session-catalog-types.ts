@@ -7,9 +7,14 @@ import type {
   CodexThreadListResponse,
   CodexThreadTurnsListParams,
   CodexThreadTurnsListResponse,
+  CodexThreadItemsListParams,
+  CodexThreadItemsListResponse,
 } from "./app-server/protocol.js";
+import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
 
 export type CodexCatalogHome = {
+  /** Revalidate discovery before a new operation captures its source. */
+  assertCurrent(): void;
   sourceHomeId: string;
   hostId: string;
   label: string;
@@ -46,6 +51,8 @@ export type CodexSessionCatalogSession = {
 
 export type CodexSessionCatalogPage = {
   sessions: CodexSessionCatalogSession[];
+  /** Internal logical scan count; one page when omitted. */
+  scannedPages?: number;
   /** Internal provenance filtered before this page reaches the provider catalog. */
   managedThreads?: Array<{ threadId: string; rolloutPath?: string }>;
   nextCursor?: string;
@@ -57,29 +64,57 @@ export type CodexSessionCatalogPageParams = {
   limit?: number;
   searchTerm?: string;
   cwd?: string;
-  /** Bypasses the brief list memo after a specific thread lookup misses. */
-  forceRefresh?: boolean;
 };
 
 export type CodexSessionCatalogControl = {
+  /** Available only inside the exact physical client's pinned catalog lease. */
+  forkContext?: {
+    client: import("./app-server/client.js").CodexAppServerClient;
+    appServer: CodexAppServerRuntimeOptions;
+    pluginConfig: unknown;
+    agentDir: string;
+    localSessionsRoot?: string;
+  };
+  /** Retire only this pinned physical client, preserving unrelated active leases. */
+  retireConnection?: () => void;
   clientId?: string;
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
-  listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
+  listPage(
+    params: CodexSessionCatalogPageParams,
+    diagnostics?: CodexCatalogPageDiagnostics | null,
+    options?: {
+      /** The caller is filling a page begun at the head, rather than an older discovery cursor. */
+      headWalk?: boolean;
+      /** Remaining logical pages in the caller's combined search and exclusion scan. */
+      maxScanPages?: number;
+    },
+  ): Promise<CodexSessionCatalogPage>;
+  requireEligibleThread(threadId: string): Promise<CodexThread>;
   listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
   listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  forkThread(params: CodexThreadForkParams): Promise<CodexThreadForkResponse>;
+  listItemPage(params: CodexThreadItemsListParams): Promise<CodexThreadItemsListResponse>;
+  forkThread(
+    params: CodexThreadForkParams,
+    assertCurrent?: () => void,
+  ): Promise<CodexThreadForkResponse>;
   readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
-  archiveThread(threadId: string): Promise<void>;
+  archiveThread(threadId: string, assertCurrent?: () => void): Promise<void>;
 };
 
 export type CodexSessionCatalogControlFactory = {
   forRequest(agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl;
-  homesForAgent(agentId: string): readonly CodexCatalogHome[];
+  /** Native default, with the shipped agent selector retained for explicitly configured sources. */
+  forNode(agentId?: string): Promise<{
+    control: CodexSessionCatalogControl;
+    sourceHomeId: string;
+    codexHome: string;
+  }>;
+  homesForAgent(agentId: string): Promise<readonly CodexCatalogHome[]>;
   forUpstream(
     agentId: string,
     connectionFingerprint: string,
-  ): CodexSessionCatalogControl | undefined;
+  ): Promise<CodexSessionCatalogControl | undefined>;
 };
 
 export type CodexSessionCatalogError = {
@@ -95,6 +130,7 @@ export type CodexSessionCatalogHost = {
   nodeId?: string;
   canContinueCodex?: boolean;
   canOpenTerminalCodex?: boolean;
+  canStartTerminal?: boolean;
   sessions: CodexSessionCatalogSession[];
   nextCursor?: string;
   backwardsCursor?: string;
@@ -109,9 +145,8 @@ export type CodexSessionTranscriptPage = {
   hostId: string;
   label: string;
   threadId: string;
-  items: import("./app-server/protocol.js").CodexThreadItem[];
+  items: import("openclaw/plugin-sdk/session-catalog").SessionCatalogTranscriptItem[];
   nextCursor?: string;
-  backwardsCursor?: string;
 };
 
 export type CodexSessionCatalogParams = {

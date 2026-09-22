@@ -3,28 +3,25 @@ import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentIds } from "../agents/agent-scope.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
-import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createChannelSetupTransaction } from "../flows/channel-setup.js";
+import { createChannelSetupHooks } from "../flows/channel-setup.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
-import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
-import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { writeWizardConfigFile } from "../wizard/setup.shared.js";
+import { createConfigureAgentTargetResolver, validateConfigureAgentId } from "./configure.agent.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -46,9 +43,8 @@ import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommandNonExiting } from "./health.js";
 import {
+  applyOnboardingWorkspace,
   ensureOnboardingAgentWorkspace,
-  resolveOnboardingAgentTarget,
-  resolveSystemAgentOnboardingTarget,
 } from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
@@ -66,12 +62,11 @@ import { setupSkills } from "./onboard-skills.js";
 import type { OnboardMode } from "./onboard-types.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
-type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js");
 type GatewayHealthCheckOutcome = "succeeded" | "failed" | "skipped";
 
 const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 
-const setupPluginConfigModuleLoader = createLazyImportLoader<SetupPluginConfigModule>(
+const loadSetupPluginConfigModule = createLazyPromise(
   () => import("../wizard/setup.plugin-config.js"),
 );
 
@@ -80,10 +75,6 @@ function validateGatewayPortInput(value: unknown): string | undefined {
     return formatPortRangeHint();
   }
   return undefined;
-}
-
-function loadSetupPluginConfigModule(): Promise<SetupPluginConfigModule> {
-  return setupPluginConfigModuleLoader.load();
 }
 
 async function runGatewayHealthCheck(params: {
@@ -162,6 +153,7 @@ async function runGatewayHealthCheck(params: {
   try {
     const gatewayProbe = await waitForGatewayReachable({
       url: wsUrl,
+      ...(probeMode === "remote" ? { config: params.cfg, originScopedDeviceAuth: true } : {}),
       token,
       password,
       ...(params.daemonSetupOutcome === "succeeded"
@@ -484,29 +476,7 @@ export async function runConfigureWizard(
       }
     }
 
-    // Resolve --agent before any branch can return. The remote-gateway path exits below without
-    // reaching setup-target resolution, so validating there let an unknown selector be accepted
-    // and ignored. Strict normalization is required: normalizeAgentId falls back to the default
-    // agent, which would silently retarget setup at the wrong owner.
-    const requestedAgentId = ((): string | undefined => {
-      const supplied = opts.agentId;
-      if (supplied === undefined) {
-        return undefined;
-      }
-      const normalized = normalizeAgentIdStrict(supplied);
-      if (!normalized.ok) {
-        throw new Error(
-          `Invalid --agent "${supplied}". Agent ids are lowercase letters, digits, and dashes.`,
-        );
-      }
-      const configured = listAgentIds(baseConfig);
-      if (!configured.includes(normalized.value)) {
-        throw new Error(
-          `Unknown agent "${supplied}". Configured agents: ${configured.join(", ") || "(none)"}.`,
-        );
-      }
-      return normalized.value;
-    })();
+    const requestedAgentId = validateConfigureAgentId(baseConfig, opts.agentId);
 
     const selectedSections = opts.sections;
     const shouldPromptGatewayRunMode =
@@ -543,7 +513,8 @@ export async function runConfigureWizard(
             });
             return probeGatewayReachable({
               url: remoteUrl,
-              ...(baseConfig.gateway?.remote?.edgeAuth ? { config: baseConfig } : {}),
+              config: baseConfig,
+              originScopedDeviceAuth: true,
               token: remoteProbeAuth.auth.token,
               ...(remoteProbeAuth.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
               timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
@@ -591,12 +562,12 @@ export async function runConfigureWizard(
         command: opts.command,
         mode: metadataMode,
       });
-      const committed = await commitConfigWithPendingPluginInstalls({
-        nextConfig: remoteConfig,
+      const committed = await writeWizardConfigFile(remoteConfig, {
+        mergeBase: baseConfig,
         ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
         writeOptions: configWriteOwnership,
       });
-      remoteConfig = committed.config;
+      remoteConfig = committed.nextConfig;
       logConfigUpdated(runtime);
       if (selectedSections?.includes("health")) {
         const healthCheckOutcome = await runGatewayHealthCheck({
@@ -629,23 +600,17 @@ export async function runConfigureWizard(
         },
       };
     }
-    // `--agent` is the operator's explicit owner and outranks both defaults below. Without it,
-    // an explicit multi-agent roster with no System Agent has no sole owner, so the wizard used
-    // to abort with AgentSelectionRequiredError naming a flag that did not exist.
-    // Configure keeps legacy default-owner semantics; only explicit fleets opt into
-    // the System Agent target used unconditionally by setup and recovery callers.
-    const resolveSetupTarget = () =>
-      requestedAgentId
-        ? resolveOnboardingAgentTarget(nextConfig, requestedAgentId)
-        : nextConfig.agents?.ownership === "explicit"
-          ? resolveSystemAgentOnboardingTarget(nextConfig)
-          : resolveOnboardingAgentTarget(inheritLegacyDefaultAgentId(baseConfig, nextConfig));
-    let workspaceDir = resolveSetupTarget().workspaceDir;
+    const resolveAgentTarget = createConfigureAgentTargetResolver({
+      baseConfig,
+      requestedAgentId,
+      runtime,
+    });
+    const resolveSetupTarget = () => resolveAgentTarget(nextConfig);
     let gatewayPort = resolveGatewayPort(baseConfig);
     let didPersistConfig = false;
     let daemonSetupOutcome: DaemonSetupOutcome | undefined;
     let healthCheckOutcome: GatewayHealthCheckOutcome | undefined;
-    const channelSetup = createChannelSetupTransaction({ runtime });
+    const channelSetup = createChannelSetupHooks({ runtime });
 
     const persistPendingConfig = async () => {
       if (!hasPendingConfig) {
@@ -656,29 +621,29 @@ export async function runConfigureWizard(
         mode: metadataMode,
       });
 
-      nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
-        const committedConfig = await writeWizardConfigFile(configToCommit, {
-          mergeBase: mergeBaseConfig,
-          writeOptions: configWriteOwnership,
-        });
-        mergeBaseConfig = structuredClone(committedConfig);
-        return committedConfig;
+      const committed = await writeWizardConfigFile(nextConfig, {
+        mergeBase: mergeBaseConfig,
+        writeOptions: configWriteOwnership,
       });
+      mergeBaseConfig = structuredClone(committed.nextConfig);
+      await channelSetup.runPostWriteHooks(committed.path);
+      nextConfig = committed.nextConfig;
       hasPendingConfig = false;
       didPersistConfig = true;
       logConfigUpdated(runtime);
     };
 
     const configureWorkspace = async () => {
+      const target = await resolveSetupTarget();
       const workspaceInput = guardCancel(
         await text({
           message: "Workspace directory",
-          initialValue: workspaceDir,
+          initialValue: target.workspaceDir,
         }),
         runtime,
         1,
       );
-      workspaceDir = resolveUserPath(
+      const workspaceDir = resolveUserPath(
         normalizeOptionalString(workspaceInput ?? "") || DEFAULT_WORKSPACE,
       );
       if (!snapshot.exists) {
@@ -707,42 +672,8 @@ export async function runConfigureWizard(
           );
         }
       }
-      const target = resolveSetupTarget();
-      const authoredEntryKey = Object.keys(nextConfig.agents?.entries ?? {}).find(
-        (key) => normalizeAgentId(key) === target.agentId,
-      );
-      const targetEntry = authoredEntryKey
-        ? nextConfig.agents?.entries?.[authoredEntryKey]
-        : undefined;
-      // Explicit fleets own workspace at the selected entry even when it inherited
-      // the global default; legacy owners stay global until they author an override.
-      nextConfig =
-        targetEntry?.workspace !== undefined ||
-        (nextConfig.agents?.ownership === "explicit" && targetEntry !== undefined)
-          ? {
-              ...nextConfig,
-              agents: {
-                ...nextConfig.agents,
-                entries: {
-                  ...nextConfig.agents?.entries,
-                  [authoredEntryKey ?? target.agentId]: { ...targetEntry, workspace: workspaceDir },
-                },
-              },
-            }
-          : {
-              ...nextConfig,
-              agents: {
-                ...nextConfig.agents,
-                defaults: {
-                  ...nextConfig.agents?.defaults,
-                  workspace: workspaceDir,
-                },
-              },
-            };
-    };
-
-    const provisionWorkspace = async () => {
-      await ensureOnboardingAgentWorkspace(resolveSetupTarget(), runtime, {
+      nextConfig = applyOnboardingWorkspace(nextConfig, target, workspaceDir);
+      await ensureOnboardingAgentWorkspace(await resolveSetupTarget(), runtime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
@@ -751,7 +682,9 @@ export async function runConfigureWizard(
     const configureChannelsSection = async () => {
       const channelMode = await promptChannelMode(runtime);
       if (channelMode === "configure") {
+        const target = await resolveSetupTarget();
         nextConfig = await setupChannels(nextConfig, runtime, prompter, {
+          workspaceDir: target.workspaceDir,
           allowDisable: true,
           allowIMessageInstall: true,
           allowSignalInstall: true,
@@ -780,12 +713,14 @@ export async function runConfigureWizard(
 
     let didConfigureGateway = false;
     const sectionActions = {
-      workspace: async () => {
-        await configureWorkspace();
-        await provisionWorkspace();
-      },
+      workspace: configureWorkspace,
       model: async () => {
-        nextConfig = await promptAuthConfig(nextConfig, runtime, prompter, resolveSetupTarget());
+        nextConfig = await promptAuthConfig(
+          nextConfig,
+          runtime,
+          prompter,
+          await resolveSetupTarget(),
+        );
       },
       web: async () => {
         nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
@@ -802,13 +737,13 @@ export async function runConfigureWizard(
         nextConfig = await configurePluginConfig({
           config: nextConfig,
           prompter,
-          workspaceDir: resolveSetupTarget().workspaceDir,
+          workspaceDir: (await resolveSetupTarget()).workspaceDir,
         });
       },
       skills: async () => {
         nextConfig = await setupSkills(
           nextConfig,
-          resolveSetupTarget().workspaceDir,
+          (await resolveSetupTarget()).workspaceDir,
           runtime,
           prompter,
         );

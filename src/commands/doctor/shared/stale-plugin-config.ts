@@ -1,15 +1,19 @@
-// Doctor scanner and repair for plugin/channel config that references missing plugins.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizePluginId } from "../../../plugins/config-state.js";
+import {
+  isExplicitPluginDisableMarker,
+  isRetiredPluginId,
+  normalizePluginId,
+} from "../../../plugins/config-state.js";
+import { hasIncompletePluginDiscovery } from "../../../plugins/discovery-availability.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import {
   listOfficialExternalPluginCatalogEntries,
-  resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginLookupIds,
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
@@ -29,10 +33,10 @@ type StalePluginConfigHit = {
 
 type StalePluginRegistryState = {
   knownIds: Set<string>;
-  officialIds: Set<string>;
+  officialLookupIds: Set<string>;
   knownChannelIds: Set<string>;
   missingInstalledIds: Set<string>;
-  hasDiscoveryErrors: boolean;
+  incompleteDiscovery: boolean;
 };
 
 function collectPluginRegistryState(
@@ -49,9 +53,9 @@ function collectPluginRegistryState(
   }).manifestRegistry;
   const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
   // Official catalog config remains valid even when its package is not installed yet.
-  const officialIds = new Set(
+  const officialLookupIds = new Set(
     listOfficialExternalPluginCatalogEntries()
-      .map((entry) => normalizePluginId(resolveOfficialExternalPluginId(entry) ?? ""))
+      .flatMap((entry) => resolveOfficialExternalPluginLookupIds(entry).map(normalizePluginId))
       .filter(Boolean),
   );
   const installedIds = new Set<string>();
@@ -84,14 +88,14 @@ function collectPluginRegistryState(
   }
   return {
     knownIds,
-    officialIds,
+    officialLookupIds,
     knownChannelIds,
     missingInstalledIds: new Set([...installedIds].filter((pluginId) => !knownIds.has(pluginId))),
-    hasDiscoveryErrors: registry.diagnostics.some((diag) => diag.level === "error"),
+    incompleteDiscovery: hasIncompletePluginDiscovery(registry.diagnostics),
   };
 }
 
-/** Return true when plugin discovery errors should pause stale-plugin auto-removal. */
+/** Incomplete discovery cannot prove that a configured plugin should be removed. */
 export function isStalePluginAutoRepairBlocked(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -99,7 +103,7 @@ export function isStalePluginAutoRepairBlocked(
   if (cfg.plugins?.enabled === false) {
     return false;
   }
-  return collectPluginRegistryState(cfg, env).hasDiscoveryErrors;
+  return collectPluginRegistryState(cfg, env).incompleteDiscovery;
 }
 
 /** Scan plugin/channel config surfaces for ids no longer present in manifests or installs. */
@@ -119,7 +123,7 @@ function scanStalePluginConfigWithState(
   registryState: StalePluginRegistryState,
 ): StalePluginConfigHit[] {
   const plugins = asNullableRecord(cfg.plugins);
-  const { knownIds, officialIds } = registryState;
+  const { knownIds, officialLookupIds } = registryState;
   const hits: StalePluginConfigHit[] = [];
   const staleEvidenceIds = new Set(registryState.missingInstalledIds);
 
@@ -133,7 +137,7 @@ function scanStalePluginConfigWithState(
       if (
         !pluginId ||
         knownIds.has(pluginId) ||
-        officialIds.has(pluginId) ||
+        officialLookupIds.has(pluginId) ||
         registryState.knownChannelIds.has(pluginId)
       ) {
         continue;
@@ -145,12 +149,13 @@ function scanStalePluginConfigWithState(
 
   const entries = asNullableRecord(plugins?.entries);
   if (entries) {
-    for (const rawPluginId of Object.keys(entries)) {
+    for (const [rawPluginId, entry] of Object.entries(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
       if (
         !pluginId ||
+        (isExplicitPluginDisableMarker(entry) && !isRetiredPluginId(pluginId)) ||
         knownIds.has(pluginId) ||
-        officialIds.has(pluginId) ||
+        officialLookupIds.has(pluginId) ||
         registryState.knownChannelIds.has(pluginId)
       ) {
         continue;
@@ -336,7 +341,7 @@ export function collectStalePluginConfigWarnings(params: {
   }
   if (params.autoRepairBlocked) {
     lines.push(
-      `- Auto-removal is paused because plugin discovery currently has errors. Fix plugin discovery first, then rerun "${params.doctorFixCommand}".`,
+      `- Auto-removal is paused because plugin discovery is incomplete; uninspected configuration is preserved. Resolve the plugin discovery diagnostics, then rerun "${params.doctorFixCommand}".`,
     );
   } else {
     lines.push(
@@ -363,7 +368,7 @@ export function maybeRepairStalePluginConfig(
   }
   const environment = env ?? process.env;
   const registryState = collectPluginRegistryState(cfg, environment);
-  if (registryState.hasDiscoveryErrors) {
+  if (registryState.incompleteDiscovery) {
     return { config: cfg, changes: [] };
   }
 

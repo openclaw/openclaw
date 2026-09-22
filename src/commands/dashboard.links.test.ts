@@ -1,6 +1,7 @@
 // Dashboard link tests cover dashboard command URL resolution and config snapshot handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardCommand } from "./dashboard.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
@@ -47,11 +48,7 @@ vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
 }));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
 function resetRuntime() {
   runtime.log.mockClear();
@@ -165,10 +162,10 @@ describe("dashboardCommand", () => {
       },
     });
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Opened in your browser. Keep that tab to control OpenClaw.",
@@ -186,10 +183,10 @@ describe("dashboardCommand", () => {
 
     // Clipboard and browser receive only the short-lived browser bootstrap.
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
 
     // The logged output must never contain the token — it flows into
@@ -381,7 +378,7 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expectNoLogWith("Token auto-auth unavailable");
     expectNoLogWith("missing env var");
@@ -402,10 +399,10 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");
     expectNoLogWith("Token auto-auth unavailable");
@@ -420,10 +417,10 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
     expectNoLogWith("Token auto-auth unavailable");
     expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");

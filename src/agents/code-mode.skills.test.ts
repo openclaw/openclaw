@@ -46,9 +46,9 @@ describe("Code Mode skills and read tools", () => {
     resetCodeModeTestState();
   });
 
-  it("keeps Code Mode skill parsing aligned with the production prompt renderer", () => {
+  it("keeps Code Mode skill parsing aligned with the production prompt renderer", async () => {
     const entries = [createFixtureSkillEntry("alpha"), createFixtureSkillEntry("beta")];
-    const skillsPrompt = resolveSkillsPrompt({
+    const skillsPrompt = await resolveSkillsPrompt({
       entries,
       workspaceDir: "/workspace",
     });

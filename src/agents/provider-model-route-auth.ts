@@ -323,6 +323,7 @@ export function selectProviderModelRouteAuth(params: {
               resolveProviderModelRouteAuthRequirement(profile.mode) === configuredRequirement,
           ),
           explicitOrder: params.sourcePlan.profiles.explicitOrder,
+          preserveProfilePriority: params.sourcePlan.preserveProfilePriority,
           allowCooldown: params.sourcePlan.allowCooldown,
           // Preserve what the operator actually declared. Filtering to a
           // route-compatible subset must not make a configured provider look
@@ -347,13 +348,32 @@ export function selectProviderModelRouteAuth(params: {
   const logicalProfiles = sourceDecision.attempts.flatMap((attempt) =>
     attempt.kind === "profile" ? [attempt.source] : [],
   );
-  const routeProfileAttempts = logicalProfiles.flatMap((source) => {
+  let routeProfileAttempts = logicalProfiles.flatMap((source) => {
     const route = routeForMode(params.resolution, source.mode);
     if (!route || (configuredRequirement && route.authRequirement !== configuredRequirement)) {
       return [];
     }
     return [{ source, route }];
   });
+  const preference = params.resolution.preferredAuthRequirement;
+  if (
+    preference &&
+    !configuredRequirement &&
+    effectiveSourcePlan.kind === "automatic" &&
+    !effectiveSourcePlan.profiles.explicitOrder &&
+    !effectiveSourcePlan.preserveProfilePriority &&
+    routeProfileAttempts.some(
+      ({ source, route }) => route.authRequirement === preference && source.cooldown === "clear",
+    ) &&
+    routeProfileAttempts.some(
+      ({ source, route }) => route.authRequirement !== preference && source.cooldown === "clear",
+    )
+  ) {
+    routeProfileAttempts = [
+      ...routeProfileAttempts.filter(({ route }) => route.authRequirement === preference),
+      ...routeProfileAttempts.filter(({ route }) => route.authRequirement !== preference),
+    ];
+  }
   if (requiredProfile && routeProfileAttempts.length === 0) {
     const accepted = params.resolution.routes
       .map((candidate) => candidate.authRequirement)

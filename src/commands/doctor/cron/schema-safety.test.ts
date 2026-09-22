@@ -6,9 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isSqliteSchemaVersionError } from "../../../infra/sqlite-user-version.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../../state/openclaw-state-db-contract.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
@@ -32,6 +33,7 @@ let fixtureDatabase: DatabaseSync | undefined;
 afterEach(async () => {
   fixtureDatabase?.close();
   fixtureDatabase = undefined;
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   if (tempRoot) {
@@ -144,7 +146,8 @@ describe("future shared-state schema safety", () => {
     ],
     [
       "Codex cron migration commit",
-      async ({ cfg }) => await repairCronCodexModelRefsAfterConfigWrite({ cfg }),
+      async ({ cfg }) =>
+        await repairCronCodexModelRefsAfterConfigWrite({ migrateCodexModelRefs: true, cfg }),
     ],
   ];
 
@@ -187,6 +190,7 @@ describe("future shared-state schema safety", () => {
     const fixture = await createFixture({ futureSchema: false });
     const state = await loadLegacyCronRepairState({ cfg: fixture.cfg });
     expect(state).not.toBeNull();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await writeFutureSchema(fixture.databasePath);
 

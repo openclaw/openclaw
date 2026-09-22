@@ -3,7 +3,14 @@ import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { asSafeIntegerInRange, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteArtifactError } from "./errors.js";
-import type { QaEvidenceSummaryJson, QaEvidenceTiming } from "./evidence-summary.js";
+import {
+  getEffectiveQaEvidenceEntries,
+  projectQaEvidenceScenarioOutcomes,
+  QA_EVIDENCE_SUMMARY_KIND,
+  validateQaEvidenceSummaryJson,
+  type QaEvidenceSummaryJson,
+  type QaEvidenceTiming,
+} from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
@@ -79,10 +86,21 @@ type QaSuiteReportOnlyScenario = {
   details?: unknown;
 };
 function readQaSuiteEvidenceEntries(summary: Record<string, unknown>): unknown[] | undefined {
+  const evidence = readQaSuiteCanonicalEvidence(summary);
+  if (evidence) {
+    return getEffectiveQaEvidenceEntries(evidence);
+  }
   if (isRecord(summary.evidence) && Array.isArray(summary.evidence.entries)) {
     return summary.evidence.entries;
   }
   return Array.isArray(summary.entries) ? summary.entries : undefined;
+}
+
+function readQaSuiteCanonicalEvidence(summary: Record<string, unknown>) {
+  const evidence = isRecord(summary.evidence) ? summary.evidence : summary;
+  return evidence.kind === QA_EVIDENCE_SUMMARY_KIND
+    ? validateQaEvidenceSummaryJson(evidence)
+    : undefined;
 }
 
 function readQaSuiteEvidenceEntryStatus(entry: unknown): unknown {
@@ -228,6 +246,16 @@ export function findQaSuiteSummaryAccountingError(summary: unknown): string | un
   }
 
   const counts = { total, passed, failed, skipped };
+  const canonicalEvidence = readQaSuiteCanonicalEvidence(summary);
+  if (
+    canonicalEvidence?.schemaVersion === 3 &&
+    failed === 0 &&
+    projectQaEvidenceScenarioOutcomes(canonicalEvidence).some(
+      (outcome) => outcome.status === null || isQaSuiteFailureStatus(outcome.status),
+    )
+  ) {
+    return "counts.failed=0 contradicts an unresolved or failed scheduled evidence instance";
+  }
   if (Array.isArray(summary.scenarios)) {
     const statuses = summary.scenarios.map((scenario) =>
       isRecord(scenario) ? scenario.status : undefined,
@@ -288,6 +316,11 @@ function assertQaSuiteSummaryHasExecutedScenarios(
     ? (payload.scenarios as QaSuiteReportOnlyScenario[])
     : undefined;
   const entries = isRecord(summary) ? readQaSuiteEvidenceEntries(summary) : undefined;
+  const canonicalEvidence = isRecord(summary) ? readQaSuiteCanonicalEvidence(summary) : undefined;
+  const canonicalOutcomes =
+    canonicalEvidence?.schemaVersion === 3
+      ? projectQaEvidenceScenarioOutcomes(canonicalEvidence)
+      : undefined;
   const hasObservedOutcomeRows = (scenarios?.length ?? 0) > 0 || (entries?.length ?? 0) > 0;
   const hasCompletedScenario =
     scenarios?.some((scenario) => scenario.status === "pass" || scenario.status === "fail") ===
@@ -322,6 +355,12 @@ function assertQaSuiteSummaryHasExecutedScenarios(
   // or positive legacy count may clear a zero-work suite. Unverified skips
   // remain blocking, including package runs that expose evidence entries only.
   if (
+    (canonicalOutcomes &&
+      (canonicalOutcomes.length === 0 ||
+        (requireExecutedScenario &&
+          !canonicalOutcomes.some(
+            (outcome) => outcome.status === "pass" || outcome.status === "fail",
+          )))) ||
     total === 0 ||
     scenarios?.length === 0 ||
     // A tolerated blocking result cannot authenticate a campaign that never completed a scenario.
@@ -375,89 +414,59 @@ export function resolveQaReportOnlyOptionalScenarioNames(
 export function countQaSuiteFailedScenarios(
   scenarios: ReadonlyArray<QaSuiteScenarioStatus>,
 ): number {
-  let failed = 0;
-  for (const scenario of scenarios) {
-    if (isQaSuiteFailureStatus(scenario.status)) {
-      failed += 1;
-    }
-  }
-  return failed;
+  return countQaSuiteScenarioStatuses(Array.from(scenarios, (scenario) => scenario.status)).failed;
 }
 
-function countQaSuiteFailedOrSkippedScenarios(
-  scenarios: ReadonlyArray<QaSuiteScenarioStatus>,
-): number {
-  let blocking = 0;
-  for (const scenario of scenarios) {
-    if (isQaSuiteBlockingStatus(scenario.status)) {
-      blocking += 1;
-    }
-  }
-  return blocking;
-}
-
-function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): number | null {
+function readQaSuiteScenarioCountFromSummary(
+  summary: unknown,
+  mode: "failed" | "blocking",
+): number | null {
   if (!isRecord(summary)) {
     return null;
   }
-  const payload = summary as {
-    counts?: {
-      failed?: unknown;
-    };
-    scenarios?: Array<QaSuiteScenarioStatus>;
+  const { counts, scenarios } = summary as {
+    counts?: { failed?: unknown; skipped?: unknown };
+    scenarios?: QaSuiteScenarioStatus[];
   };
   const entries = readQaSuiteEvidenceEntries(summary);
-  const countedFailures = readNonNegativeCount(payload.counts?.failed);
-  const scenarioFailures = Array.isArray(payload.scenarios)
-    ? countQaSuiteFailedScenarios(payload.scenarios)
-    : null;
-  const evidenceFailures = entries
-    ? entries.filter((entry) => isQaSuiteFailureStatus(readQaSuiteEvidenceEntryStatus(entry)))
-        .length
-    : null;
-  // Counts and scenario rows own scenario cardinality. Raw evidence is a
-  // lower-level fallback only when neither aggregate is available.
-  if (countedFailures !== null || scenarioFailures !== null) {
-    return Math.max(countedFailures ?? 0, scenarioFailures ?? 0);
-  }
-  return evidenceFailures;
-}
-
-function readQaSuiteFailedOrSkippedScenarioCountFromSummary(summary: unknown): number | null {
-  if (!isRecord(summary)) {
-    return null;
-  }
-  const payload = summary as {
-    counts?: {
-      failed?: unknown;
-      skipped?: unknown;
-    };
-    scenarios?: Array<QaSuiteScenarioStatus>;
-  };
-  const entries = readQaSuiteEvidenceEntries(summary);
-  const countedFailures = readNonNegativeCount(payload.counts?.failed);
-  const countedSkipped = readNonNegativeCount(payload.counts?.skipped);
-  const countedBlocking =
+  const countedFailures = readNonNegativeCount(counts?.failed);
+  const countedSkipped = mode === "blocking" ? readNonNegativeCount(counts?.skipped) : null;
+  const counted =
     countedFailures !== null || countedSkipped !== null
       ? (countedFailures ?? 0) + (countedSkipped ?? 0)
       : null;
-  const scenarioBlocking = Array.isArray(payload.scenarios)
-    ? countQaSuiteFailedOrSkippedScenarios(payload.scenarios)
+  const observed = Array.isArray(scenarios)
+    ? countQaSuiteScenarioStatuses(Array.from(scenarios, (scenario) => scenario.status))
     : null;
-  const evidenceBlocking = entries
-    ? entries.filter((entry) => isQaSuiteBlockingStatus(readQaSuiteEvidenceEntryStatus(entry)))
-        .length
+  const scenarioCount = observed
+    ? observed.failed + (mode === "blocking" ? observed.skipped : 0)
     : null;
-  if (countedBlocking !== null || scenarioBlocking !== null) {
-    return Math.max(countedBlocking ?? 0, scenarioBlocking ?? 0);
+  const matchesStatus = mode === "blocking" ? isQaSuiteBlockingStatus : isQaSuiteFailureStatus;
+  const evidence = readQaSuiteCanonicalEvidence(summary);
+  const evidenceCount =
+    evidence?.schemaVersion === 3
+      ? projectQaEvidenceScenarioOutcomes(evidence).filter((outcome) =>
+          matchesStatus(outcome.status),
+        ).length
+      : entries
+        ? entries.filter((entry) => matchesStatus(readQaSuiteEvidenceEntryStatus(entry))).length
+        : null;
+  // Canonical v3 outcomes own scheduled instances, including unresolved ones.
+  // Optional aggregates cannot hide them; v2 rows remain lower-level checks.
+  if (evidence?.schemaVersion === 3) {
+    return Math.max(evidenceCount ?? 0, counted ?? 0, scenarioCount ?? 0);
   }
-  return evidenceBlocking;
+  // Legacy raw evidence is a fallback only when neither aggregate is available.
+  if (counted !== null || scenarioCount !== null) {
+    return Math.max(counted ?? 0, scenarioCount ?? 0);
+  }
+  return evidenceCount;
 }
 
 export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string): Promise<number> {
   const payload = await readCompletedQaSuiteSummaryFile(summaryPath);
   assertQaSuiteSummaryHasExecutedScenarios(payload, summaryPath, "summary_failure_count_missing");
-  const failedScenarioCount = readQaSuiteFailedScenarioCountFromSummary(payload);
+  const failedScenarioCount = readQaSuiteScenarioCountFromSummary(payload, "failed");
   if (failedScenarioCount !== null) {
     return failedScenarioCount;
   }
@@ -479,7 +488,7 @@ export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
     options?.optionalScenarioNames,
     options?.requireExecutedScenario,
   );
-  const blockingScenarioCount = readQaSuiteFailedOrSkippedScenarioCountFromSummary(payload);
+  const blockingScenarioCount = readQaSuiteScenarioCountFromSummary(payload, "blocking");
   if (blockingScenarioCount !== null) {
     const optionalScenarioNames = options?.optionalScenarioNames;
     if (!optionalScenarioNames?.size || !isRecord(payload)) {
@@ -496,7 +505,7 @@ export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
     // Optional skips may offset only their independently verified scenario results.
     // Declared failures and count disagreements stay fail-closed.
     return Math.max(
-      readQaSuiteFailedScenarioCountFromSummary(payload) ?? 0,
+      readQaSuiteScenarioCountFromSummary(payload, "failed") ?? 0,
       blockingScenarioCount - reportOnlyOptionalSkips,
     );
   }

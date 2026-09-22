@@ -43,7 +43,6 @@ const nodeSnapshot = [
 
 let applyCodeModeCatalog: typeof import("./code-mode.js").applyCodeModeCatalog;
 let createCodeModeTools: typeof import("./code-mode.js").createCodeModeTools;
-let consumeRepairableCodeModeFailure: typeof import("./code-mode-repair-provenance.js").consumeRepairableCodeModeFailure;
 let createToolSearchCatalogRef: typeof import("./tool-search.js").createToolSearchCatalogRef;
 let createNodesTool: typeof import("./tools/nodes-tool.js").createNodesTool;
 let testing: typeof import("./code-mode.test-support.js").testing;
@@ -99,9 +98,13 @@ async function runUntilCompleted(params: {
   execTool: AnyAgentTool;
   waitTool: AnyAgentTool;
   code: string;
+  typecheck?: boolean;
 }): Promise<Record<string, unknown>> {
   let details = resultDetails(
-    await params.execTool.execute("code-nodes-call", { code: params.code }),
+    await params.execTool.execute("code-nodes-call", {
+      code: params.code,
+      ...(params.typecheck ? { language: "typescript", typecheck: true } : {}),
+    }),
   );
   for (let index = 0; index < 8 && details.status === "waiting"; index += 1) {
     details = resultDetails(
@@ -115,7 +118,6 @@ describe("Code Mode nodes", () => {
   beforeAll(async () => {
     vi.resetModules();
     ({ applyCodeModeCatalog, createCodeModeTools } = await import("./code-mode.js"));
-    ({ consumeRepairableCodeModeFailure } = await import("./code-mode-repair-provenance.js"));
     ({ createToolSearchCatalogRef } = await import("./tool-search.js"));
     ({ createNodesTool } = await import("./tools/nodes-tool.js"));
     ({ testing } = await import("./code-mode.test-support.js"));
@@ -157,15 +159,18 @@ describe("Code Mode nodes", () => {
     testing.resumingRunIds.clear();
   });
 
-  it("lists nodes and returns a callable handle with conditional directory sugar", async () => {
-    const harness = createHarness();
-    const details = await runUntilCompleted({
-      ...harness,
-      code: `
+  it.each([false, true])(
+    "lists nodes and invokes typed handles (preflight=%s)",
+    async (typecheck) => {
+      const harness = createHarness();
+      const details = await runUntilCompleted({
+        ...harness,
+        typecheck,
+        code: `
         const listed = await nodes.list();
-        const node = await nodes.get("Desk");
+        const node = await nodes.get(listed.find(entry => entry.connected)?.id ?? "Desk");
         const invoked = await node.invoke("device.status", { detail: true });
-        const directory = await node.listDir("/tmp");
+        const directory = node.listDir ? await node.listDir("/tmp") : undefined;
         return {
           listed,
           id: node.id,
@@ -176,40 +181,64 @@ describe("Code Mode nodes", () => {
           hasExec: "exec" in node,
         };
       `,
-    });
+      });
 
-    expect(details.status).toBe("completed");
-    expect(details.value).toEqual({
-      listed: [
-        {
-          id: "node-1",
-          name: "Desk",
-          platform: "darwin",
-          connected: true,
-          commands: ["device.status", "fs.listDir", "computer.act", "danger.read"],
+      expect(details.status).toBe("completed");
+      expect(details.value).toEqual({
+        listed: [
+          {
+            id: "node-1",
+            name: "Desk",
+            platform: "darwin",
+            connected: true,
+            commands: ["device.status", "fs.listDir", "computer.act", "danger.read"],
+          },
+          {
+            id: "node-2",
+            name: "shadow-id",
+            connected: false,
+            commands: ["device.status"],
+          },
+        ],
+        id: "node-1",
+        name: "Desk",
+        methods: ["id", "invoke", "listDir", "name"],
+        invoked: {
+          payload: { nodeId: "node-1", command: "device.status", params: { detail: true } },
         },
-        {
-          id: "node-2",
-          name: "shadow-id",
-          connected: false,
-          commands: ["device.status"],
+        directory: {
+          payload: { nodeId: "node-1", command: "fs.listDir", params: { path: "/tmp" } },
         },
-      ],
-      id: "node-1",
-      name: "Desk",
-      methods: ["id", "invoke", "listDir", "name"],
-      invoked: {
-        payload: { nodeId: "node-1", command: "device.status", params: { detail: true } },
-      },
-      directory: {
-        payload: { nodeId: "node-1", command: "fs.listDir", params: { path: "/tmp" } },
-      },
-      hasExec: false,
+        hasExec: false,
+      });
+      expect(harness.nestedCalls).not.toHaveLength(0);
+      expect(harness.nestedCalls.every((call) => call.parentToolCallId === "code-nodes-call")).toBe(
+        true,
+      );
+    },
+  );
+
+  it("rejects invalid node arguments and unguarded optional methods before invocation", async () => {
+    const harness = createHarness();
+    const details = await runUntilCompleted({
+      ...harness,
+      typecheck: true,
+      code: `
+        await nodes.get(123);
+        const node = await nodes.get("Desk");
+        await node.listDir("/tmp");
+        await node.describe();
+      `,
     });
-    expect(harness.nestedCalls).not.toHaveLength(0);
-    expect(harness.nestedCalls.every((call) => call.parentToolCallId === "code-nodes-call")).toBe(
-      true,
-    );
+    expect(details).toMatchObject({
+      status: "failed",
+      code: "invalid_input",
+      bridgeDispatchStarted: false,
+    });
+    expect(details.error).toContain("Argument of type 'number' is not assignable");
+    expect(details.error).toContain("Cannot invoke an object which is possibly 'undefined'");
+    expect(details.error).toContain("Property 'describe' does not exist");
+    expect(harness.nestedCalls).toHaveLength(0);
   });
 
   it("omits listDir when the node does not advertise fs.listDir", async () => {
@@ -293,7 +322,7 @@ describe("Code Mode nodes", () => {
       label: "get",
       code: `return (await nodes.get("Desk")).describe();`,
     },
-  ])("keeps a guest error after nodes.$label eligible for ordinary recovery", async ({ code }) => {
+  ])("reports a guest error after nodes.$label", async ({ code }) => {
     const details = await runUntilCompleted({ ...createHarness(), code });
 
     expect(details).toMatchObject({
@@ -301,10 +330,9 @@ describe("Code Mode nodes", () => {
       failurePhase: "bridge",
       bridgeDispatchStarted: true,
     });
-    expect(consumeRepairableCodeModeFailure(details)).toBe(true);
   });
 
-  it("keeps a guest error after nodes.invoke restricted", async () => {
+  it("reports a guest error after nodes.invoke without replaying the invocation", async () => {
     const details = await runUntilCompleted({
       ...createHarness(),
       code: `
@@ -319,7 +347,6 @@ describe("Code Mode nodes", () => {
       failurePhase: "bridge",
       bridgeDispatchStarted: true,
     });
-    expect(consumeRepairableCodeModeFailure(details)).toBe(false);
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
       expect.anything(),

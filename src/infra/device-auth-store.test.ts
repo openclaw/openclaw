@@ -343,7 +343,7 @@ describe("infra/device-auth-store", () => {
         {
           name: "device",
           load: () => loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env }),
-          store: (token: string, expectedToken?: string) =>
+          store: (token: string, expectedToken?: string | null) =>
             storeDeviceAuthToken({
               deviceId: "device-1",
               role: "operator",
@@ -369,7 +369,7 @@ describe("infra/device-auth-store", () => {
               role: "operator",
               env,
             }),
-          store: (token: string, expectedToken?: string) =>
+          store: (token: string, expectedToken?: string | null) =>
             storeOriginDeviceToken({
               gatewayScope: "wss://one.example",
               deviceId: "device-1",
@@ -391,9 +391,11 @@ describe("infra/device-auth-store", () => {
       ];
 
       for (const target of targets) {
-        const prepared = target.store(`${target.name}-prepared`);
-        const rotated = target.store(`${target.name}-rotated`);
+        const prepared = target.store(`${target.name}-prepared`, null);
         expect(prepared).not.toBeNull();
+        expect(target.store(`${target.name}-stale-insert`, null)).toBeNull();
+        expect(target.load()).toEqual(prepared);
+        const rotated = target.store(`${target.name}-rotated`);
         expect(rotated).not.toBeNull();
 
         expect(target.store(`${target.name}-stale-replacement`, prepared!.token)).toBeNull();

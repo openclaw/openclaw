@@ -118,7 +118,10 @@ describe("runGatewayConversationList", () => {
       } as never,
     );
 
-    expect(listConversations).toHaveBeenCalledWith({ agentId: "personal" }, {});
+    expect(listConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "personal" }),
+      {},
+    );
     expect(result.conversations).toEqual([
       expect.objectContaining({ accountId: "personal", target: "reef:personal-peer" }),
     ]);
@@ -175,7 +178,10 @@ describe("runGatewayConversationList", () => {
     expect(listPeers).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: "default", query: "@molty", limit: 50 }),
     );
-    expect(deps.listConversations).toHaveBeenCalledWith({ agentId: "main" }, { channel: "reef" });
+    expect(deps.listConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+      { channel: "reef" },
+    );
     expect(resolveOutboundSessionRoute).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "reef",

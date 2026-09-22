@@ -55,7 +55,7 @@ describe("browser action input fill command", () => {
         "browser",
         "fill",
         "--fields",
-        '[{"ref":"name","value":"Ada"},{"ref":"enabled","value":true}]',
+        '[{"ref":"name","value":"Ada"},{"ref":"enabled","value":true},{"ref":"omitted"},{"ref":"null","value":null},{"ref":"empty","value":""}]',
         "--target-id",
         "tab-1",
       ],
@@ -67,10 +67,13 @@ describe("browser action input fill command", () => {
       fields: [
         { ref: "name", type: "text", value: "Ada" },
         { ref: "enabled", type: "text", value: true },
+        { ref: "omitted", type: "text" },
+        { ref: "null", type: "text" },
+        { ref: "empty", type: "text", value: "" },
       ],
       targetId: "tab-1",
     });
-    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 65_000 });
+    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 126_250 });
   });
 
   it("reports malformed fields without sending a browser request", async () => {
@@ -82,6 +85,27 @@ describe("browser action input fill command", () => {
 
     expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
       "fields must be valid JSON.",
+    );
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+
+  it("reports an unsupported field key without sending a browser request", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(
+        [
+          "browser",
+          "fill",
+          "--fields",
+          '[{"ref":"name","value":"Ada"},{"ref":"enabled","value":true,"text":"unsupported"}]',
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
+      'fields[1] unsupported field key "text"',
     );
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
@@ -130,7 +154,7 @@ describe("browser action input wait command", () => {
     const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
       | { timeoutMs?: number }
       | undefined;
-    expect(options?.timeoutMs).toBe(26_000);
+    expect(options?.timeoutMs).toBe(127_250);
   });
 
   it("budgets every supplied wait condition before adding transport slack", async () => {
@@ -221,12 +245,12 @@ describe("browser action input evaluate command", () => {
       ref: "button-1",
       targetId: "tab-2",
     });
-    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 65_000 });
+    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 126_250 });
   });
 
   it.each([
-    { rawTimeout: "+030000", actionTimeoutMs: 30_000, requestTimeoutMs: 35_250 },
-    { rawTimeout: "1", actionTimeoutMs: 1, requestTimeoutMs: 5_750 },
+    { rawTimeout: "+030000", actionTimeoutMs: 30_000, requestTimeoutMs: 66_250 },
+    { rawTimeout: "1", actionTimeoutMs: 1, requestTimeoutMs: 6_252 },
   ])(
     "preserves the $rawTimeout evaluate timeout and canonical outer deadline",
     async ({ rawTimeout, actionTimeoutMs, requestTimeoutMs }) => {
@@ -257,5 +281,58 @@ describe("browser action input evaluate command", () => {
       }),
     ).rejects.toThrow("--timeout-ms must be a positive integer.");
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+
+  it.each([false, 0, "", null, undefined])("preserves the successful value %j", async (value) => {
+    mocks.callBrowserRequest.mockResolvedValueOnce({ ok: true, result: value });
+    await createActionInputProgram().parseAsync(["browser", "evaluate", "--fn", "() => 0"], {
+      from: "user",
+    });
+    expect(getBrowserCliRuntimeCapture().defaultRuntime.writeJson).toHaveBeenCalledWith(
+      value ?? null,
+    );
+  });
+});
+
+describe("browser action dialog outcomes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it.each([
+    ["evaluate", "--fn", "() => confirm('Continue?')"],
+    ["press", "Enter"],
+    ["fill", "--fields", '[{"ref":"name","value":"Ada"}]'],
+    ["wait", "--fn", "() => confirm('Continue?')"],
+    ["batch", "--actions", '[{"kind":"press","key":"Enter"}]'],
+  ])("reports a pending dialog for %s", async (...args) => {
+    const result = {
+      ok: true,
+      blockedByDialog: true,
+      browserState: {
+        dialogs: {
+          pending: [{ id: "d1", type: "confirm", message: "Page content stays in JSON output" }],
+          recent: [],
+        },
+      },
+    };
+    mocks.callBrowserRequest.mockResolvedValueOnce(result);
+    await createActionInputProgram().parseAsync(["browser", ...args], { from: "user" });
+    const capture = getBrowserCliRuntimeCapture();
+    const text = capture.runtimeLogs.join("\n");
+    expect(text).toContain("blocked by a modal dialog");
+    expect(text).toContain('"d1"');
+    expect(text).toContain("--dialog-id");
+    expect(text).not.toContain("Page content stays in JSON output");
+    expect(capture.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(capture.defaultRuntime.exit).not.toHaveBeenCalled();
+
+    capture.resetRuntimeCapture();
+    vi.clearAllMocks();
+    mocks.callBrowserRequest.mockResolvedValueOnce(result);
+    await createActionInputProgram().parseAsync(["browser", "--json", ...args], { from: "user" });
+    expect(capture.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
+    expect(capture.runtimeLogs).toEqual([JSON.stringify(result, null, 2)]);
   });
 });

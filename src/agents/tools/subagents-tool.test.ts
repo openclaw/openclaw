@@ -1,10 +1,14 @@
 // Subagents tool tests cover requester-scoped task listing and cancellation.
 import { describe, expect, it, vi } from "vitest";
+import { createSubagentTaskBackingDetail } from "../../tasks/task-backing-records.js";
+import type { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
+import { emitTaskRegistryObserverEvent } from "../../tasks/task-registry-state.js";
 import type { TaskRecord, TaskRuntime, TaskStatus } from "../../tasks/task-registry.types.js";
 import { TASK_STATUS_DETAIL_MAX_CHARS } from "../../tasks/task-status.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../subagents/registry/subagent-lifecycle-events.js";
 import {
   addSubagentRunForTests,
+  releaseSubagentRun,
   resetSubagentRegistryForTests,
 } from "../subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
@@ -45,12 +49,233 @@ function task(params: {
 }
 
 describe("subagents tool", () => {
-  it("advertises the unified task ledger", () => {
-    const tool = createSubagentsTool();
+  it.each(["reparent", "controller", "legacy-controller", "remove", "timeout"] as const)(
+    "rechecks the current control graph after %s without trusting retained task links",
+    async (transition) => {
+      resetSubagentRegistryForTests();
+      const retainsReadAccess = transition === "controller" || transition === "legacy-controller";
+      const waitsUntilTimeout = transition === "timeout" || retainsReadAccess;
+      if (waitsUntilTimeout) {
+        vi.useFakeTimers();
+      }
+      const owner = "agent:main:main";
+      const childKey = "agent:main:subagent:controlled-child";
+      const childRun: SubagentRunRecord = {
+        runId: "controlled-run",
+        childSessionKey: childKey,
+        controllerSessionKey: owner,
+        requesterSessionKey: owner,
+        requesterDisplayKey: "main",
+        requesterAgentId: "main",
+        task: "Observe controlled work",
+        generation: 1,
+        createdAt: Date.now(),
+        cleanup: "keep",
+        execution: { status: "running", startedAt: Date.now() },
+      };
+      addSubagentRunForTests(childRun);
+      const childTask = {
+        ...task({ taskId: "controlled-task", runtime: "subagent", childSessionKey: childKey }),
+        runId: childRun.runId,
+        detail: transition === "legacy-controller" ? undefined : createSubagentTaskBackingDetail(1),
+      };
+      const descendant = task({ taskId: "descendant-task", runtime: "cli", ownerKey: childKey });
+      const cancelTask = vi.fn<typeof cancelDetachedTaskRunById>().mockResolvedValue({
+        found: true,
+        cancelled: true,
+      });
+      const tool = createSubagentsTool({
+        agentSessionKey: owner,
+        config: {},
+        listTasks: () => [childTask, descendant],
+        cancelTask,
+      });
+      try {
+        expect(
+          (
+            await tool.execute("before", {
+              action: "wait",
+              taskIds: [descendant.taskId],
+              timeoutSeconds: 0,
+            })
+          ).details,
+        ).toMatchObject({ reason: "timeout", tasks: [{ taskId: descendant.taskId }] });
+        expect(
+          (
+            await tool.execute("cancel-before", {
+              action: "cancel",
+              taskId: descendant.taskId,
+            })
+          ).details,
+        ).toMatchObject({ status: "cancelled", taskId: descendant.taskId });
+        expect(cancelTask).toHaveBeenCalledExactlyOnceWith({
+          cfg: {},
+          taskId: descendant.taskId,
+        });
+        cancelTask.mockClear();
+        const waiting = tool.execute("waiting", {
+          action: "wait",
+          taskIds: [childTask.taskId, descendant.taskId],
+          timeoutSeconds: 1,
+        });
+        if (transition === "remove") {
+          releaseSubagentRun(childRun.runId);
+        } else {
+          addSubagentRunForTests({
+            ...childRun,
+            controllerSessionKey: "agent:main:other",
+            requesterSessionKey: retainsReadAccess ? owner : "agent:main:other",
+          });
+        }
+        descendant.progressSummary = "FORMER_CHILD_NEW_PRIVATE_WORK";
+        if (waitsUntilTimeout) {
+          await vi.advanceTimersByTimeAsync(1_000);
+        } else {
+          descendant.status = "succeeded";
+          emitTaskRegistryObserverEvent(() => ({ kind: "upserted", task: descendant }));
+        }
+        const result = await waiting;
+        if (retainsReadAccess) {
+          expect(result.details).toMatchObject({
+            reason: "timeout",
+            tasks: [{ taskId: childTask.taskId }, { taskId: descendant.taskId }],
+          });
+        } else {
+          expect(result.details).toMatchObject({
+            reason: "unavailable",
+            unavailable: [childTask.taskId, descendant.taskId],
+            tasks: [],
+          });
+          expect(JSON.stringify(result.details)).not.toContain("FORMER_CHILD_NEW_PRIVATE_WORK");
+        }
+        expect(childTask.ownerKey).toBe(owner);
+        expect(
+          (
+            await tool.execute("cancel-after", {
+              action: "cancel",
+              taskId: descendant.taskId,
+            })
+          ).details,
+        ).toMatchObject({ status: "forbidden", error: "Task outside session tree." });
+        expect(cancelTask).not.toHaveBeenCalled();
+        expect((await tool.execute("list", { action: "list" })).details).toMatchObject({
+          tasks: expect.arrayContaining([
+            expect.objectContaining({ taskId: childTask.taskId }),
+            ...(retainsReadAccess ? [expect.objectContaining({ taskId: descendant.taskId })] : []),
+          ]),
+        });
+      } finally {
+        vi.useRealTimers();
+        resetSubagentRegistryForTests();
+      }
+    },
+  );
 
-    expect(tool.description).toBe(
-      "Background work: subagents, media gen, automation runs. list/cancel.",
+  it("waits on harness-owned subagent tasks without borrowing the native registry", async () => {
+    const selected = Object.assign(
+      task({
+        taskId: "external-child",
+        runtime: "subagent",
+        status: "succeeded",
+        childSessionKey: "harness:child",
+      }),
+      { runId: "harness-run", taskKind: "external-harness" },
     );
+    const tool = createSubagentsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      listTasks: () => [selected],
+    });
+    const result = await tool.execute("wait", {
+      action: "wait",
+      taskIds: [selected.taskId],
+      timeoutSeconds: 0,
+    });
+    expect(result.details).toMatchObject({ reason: "completed", completed: [selected.taskId] });
+  });
+
+  it("waits for the selected task and leaves sibling work and delivery untouched", async () => {
+    const selected = task({ taskId: "selected", runtime: "subagent" });
+    const sibling = task({ taskId: "sibling", runtime: "cli" });
+    const cancelTask = vi.fn();
+    const tool = createSubagentsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      listTasks: () => [selected, sibling],
+      cancelTask,
+    });
+    let resolved = false;
+    const pending = tool
+      .execute("wait", { action: "wait", taskIds: [selected.taskId] })
+      .then((result) => {
+        resolved = true;
+        return result;
+      });
+    sibling.status = "succeeded";
+    emitTaskRegistryObserverEvent(() => ({ kind: "upserted", task: sibling }));
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    selected.status = "succeeded";
+    selected.deliveryStatus = "pending";
+    emitTaskRegistryObserverEvent(() => ({ kind: "upserted", task: selected }));
+    expect((await pending).details).toMatchObject({
+      reason: "completed",
+      completed: [selected.taskId],
+      tasks: [{ taskId: selected.taskId, deliveryStatus: "pending" }],
+    });
+    expect(cancelTask).not.toHaveBeenCalled();
+  });
+
+  it("rechecks wait ownership and reports blocked work as attention", async () => {
+    const selected = task({ taskId: "selected", runtime: "subagent" });
+    const tool = createSubagentsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      listTasks: () => [selected],
+    });
+    const pending = tool.execute("wait", { action: "wait", taskIds: [selected.taskId] });
+    selected.ownerKey = "agent:other:main";
+    emitTaskRegistryObserverEvent(() => ({ kind: "upserted", task: selected }));
+    expect((await pending).details).toMatchObject({
+      reason: "unavailable",
+      unavailable: [selected.taskId],
+      tasks: [],
+    });
+    selected.ownerKey = "agent:main:main";
+    selected.status = "succeeded";
+    selected.terminalOutcome = "blocked";
+    const result = await tool.execute("attention", { action: "wait", taskIds: [selected.taskId] });
+    expect(result.details).toMatchObject({ reason: "attention", attention: [selected.taskId] });
+  });
+
+  it("times out or aborts the wait without cancelling its selected task", async () => {
+    const selected = task({ taskId: "selected", runtime: "subagent" });
+    const cancelTask = vi.fn();
+    const tool = createSubagentsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      listTasks: () => [selected],
+      cancelTask,
+    });
+    const result = await tool.execute("snapshot", {
+      action: "wait",
+      taskIds: [selected.taskId],
+      timeoutSeconds: 0,
+    });
+    expect(result.details).toMatchObject({
+      reason: "timeout",
+      tasks: [{ taskId: selected.taskId, status: "running" }],
+    });
+    const controller = new AbortController();
+    const pending = tool.execute(
+      "abort",
+      { action: "wait", taskIds: [selected.taskId] },
+      controller.signal,
+    );
+    controller.abort();
+    await expect(pending).rejects.toThrow("tasks continue running");
+    expect(selected.status).toBe("running");
+    expect(cancelTask).not.toHaveBeenCalled();
   });
 
   it("reports a killed subagent truthfully through the actual list tool", async () => {
@@ -207,6 +432,50 @@ describe("subagents tool", () => {
     expect(cancelTask).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["list", "cancel"] as const)(
+    "keeps %s available when an unrelated retained task has ambiguous ownership",
+    async (action) => {
+      const config = { agents: { entries: { alpha: {}, beta: {} } } };
+      const cancelTask = vi.fn<typeof cancelDetachedTaskRunById>().mockResolvedValue({
+        found: true,
+        cancelled: true,
+      });
+      const tool = createSubagentsTool({
+        agentSessionKey: "agent:alpha:main",
+        config,
+        listTasks: () => [
+          task({
+            taskId: "legacy-orphan",
+            runtime: "cli",
+            ownerKey: "global",
+            requesterSessionKey: "global",
+          }),
+          task({
+            taskId: "owned-task",
+            runtime: "cli",
+            ownerKey: "agent:alpha:main",
+            requesterSessionKey: "agent:alpha:main",
+          }),
+        ],
+        cancelTask,
+      });
+
+      const result = await tool.execute(action, { action, taskId: "owned-task" });
+
+      if (action === "list") {
+        expect(result.details).toMatchObject({
+          status: "ok",
+          taskTotal: 1,
+          tasks: [expect.objectContaining({ taskId: "owned-task" })],
+        });
+        expect(cancelTask).not.toHaveBeenCalled();
+      } else {
+        expect(result.details).toMatchObject({ status: "cancelled", taskId: "owned-task" });
+        expect(cancelTask).toHaveBeenCalledExactlyOnceWith({ cfg: config, taskId: "owned-task" });
+      }
+    },
+  );
+
   it("preserves blocked terminal outcomes and actionable terminal failure reasons", async () => {
     const tasks = [
       task({
@@ -350,5 +619,99 @@ describe("subagents tool", () => {
         recentMinutes,
       }),
     ).rejects.toThrow("recentMinutes must be a positive integer");
+  });
+
+  it("lists and cancels retained policy-key tasks for a split-key caller", async () => {
+    // Regression for the ClawSweeper P2 finding on #137779: when the listing root switches to
+    // the durable key, task rows created by pre-change code still carry the policy key in
+    // owner_key. Without the fallback policy key, split-key callers (e.g. Telegram DM) lose
+    // sight of retained running tasks and cannot cancel them ("Task outside session tree").
+    const durableKey = "agent:main:telegram:direct:456";
+    const policyKey = "agent:main:telegram:default:direct:456";
+    const tasks = [
+      // Retained row from pre-change code: owner_key is the policy key.
+      task({
+        taskId: "retained-media",
+        runtime: "cli",
+        ownerKey: policyKey,
+        requesterSessionKey: policyKey,
+      }),
+      // Newly created row: owner_key is the durable key.
+      task({
+        taskId: "new-spawn",
+        runtime: "cli",
+        ownerKey: durableKey,
+        requesterSessionKey: durableKey,
+      }),
+    ];
+
+    const cancelTask = vi.fn(async () => ({ found: true, cancelled: true }));
+    const tool = createSubagentsTool({
+      agentSessionKey: durableKey,
+      callerPolicySessionKey: policyKey,
+      config: {},
+      listTasks: () => tasks,
+      cancelTask: cancelTask as never,
+    });
+
+    const result = await tool.execute("list", { action: "list" });
+    const rows = (result.details as { tasks: Array<{ taskId: string }> }).tasks;
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: "retained-media" }),
+        expect.objectContaining({ taskId: "new-spawn" }),
+      ]),
+    );
+
+    await expect(
+      tool.execute("cancel", { action: "cancel", taskId: "retained-media" }),
+    ).resolves.toEqual(
+      expect.objectContaining({ details: expect.objectContaining({ status: "cancelled" }) }),
+    );
+    expect(cancelTask).toHaveBeenCalledWith({ cfg: {}, taskId: "retained-media" });
+
+    const childKey = "agent:main:subagent:retained-native";
+    const childRun: SubagentRunRecord = {
+      runId: "retained-native-run",
+      childSessionKey: childKey,
+      controllerSessionKey: policyKey,
+      requesterSessionKey: durableKey,
+      requesterDisplayKey: durableKey,
+      requesterAgentId: "main",
+      task: "Retained native work",
+      generation: 1,
+      createdAt: Date.now(),
+      cleanup: "keep",
+      execution: { status: "running", startedAt: Date.now() },
+    };
+    tasks.push(
+      {
+        ...task({
+          taskId: "retained-native",
+          runtime: "subagent",
+          ownerKey: durableKey,
+          requesterSessionKey: durableKey,
+          childSessionKey: childKey,
+        }),
+        runId: childRun.runId,
+        detail: createSubagentTaskBackingDetail(1),
+      },
+      task({ taskId: "retained-descendant", runtime: "cli", ownerKey: childKey }),
+    );
+    resetSubagentRegistryForTests();
+    addSubagentRunForTests(childRun);
+    try {
+      expect(
+        (
+          await tool.execute("cancel-native-descendant", {
+            action: "cancel",
+            taskId: "retained-descendant",
+          })
+        ).details,
+      ).toMatchObject({ status: "cancelled", taskId: "retained-descendant" });
+      expect(cancelTask).toHaveBeenCalledWith({ cfg: {}, taskId: "retained-descendant" });
+    } finally {
+      resetSubagentRegistryForTests();
+    }
   });
 });

@@ -6,14 +6,14 @@ import { STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
-import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
+import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status-state.js";
+import { getGatewaySuspendAdmissionPhase } from "../../process/gateway-work-admission.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAgentSelectionState } from "../agent-list.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import { projectUpdateAvailable } from "../events.js";
-import { collectGatewayHealthSnapshot } from "../health/collector.js";
 import type { HealthSummary } from "../health/types.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -75,6 +75,7 @@ export function buildGatewaySnapshot(opts: {
   // Health is async; the caller replaces this with the collected snapshot.
   const emptyHealth: Snapshot["health"] = {};
   const snapshot: Snapshot = {
+    suspension: { phase: getGatewaySuspendAdmissionPhase() },
     presence,
     health: emptyHealth,
     stateVersion: { presence: presenceVersion, health: healthVersion },
@@ -149,6 +150,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   const generation = state.nextGeneration + 1;
   state.nextGeneration = generation;
   const promise = (async () => {
+    const { collectGatewayHealthSnapshot } = await import("../health/collector.js");
     let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
     try {
       runtimeSnapshot = opts?.getRuntimeSnapshot?.();

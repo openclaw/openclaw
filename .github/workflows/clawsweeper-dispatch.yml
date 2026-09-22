@@ -62,8 +62,9 @@ jobs:
               if output="$(gh api "$@" 2>&1)"; then
                 printf '%s\n' "$output"
                 return 0
+              else
+                status=$?
               fi
-              status=$?
               lower_output="${output,,}"
               if [[ "$lower_output" != *"rate limit"* && "$output" != *"HTTP 429"* ]]; then
                 printf '%s\n' "$output" >&2

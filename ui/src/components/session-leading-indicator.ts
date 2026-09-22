@@ -1,19 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { icons } from "./icons.ts";
 import {
   renderSessionAttentionIcon,
-  renderSessionState,
-  sessionHasRunningWork,
+  renderSessionIdleState,
 } from "./session-attention-presentation.ts";
-import {
-  renderSessionGlyph,
-  renderSessionUnreadBadge,
-  type SessionGlyphContent,
-} from "./session-glyph.ts";
-import { resolveSessionIconGlyph } from "./session-icon-glyph-registry.ts";
-import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
+import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
+import { resolveSessionIconGraphic } from "./session-icon-glyph-registry.ts";
 import { renderSessionOwnerChip, type SessionCreatedActor } from "./session-owner-chip.ts";
 
 type SessionAvatarAuth = {
@@ -29,84 +23,19 @@ function ensureChannelAvatarElement(): void {
   channelAvatarElementLoad ??= import("./channel-avatar.ts");
 }
 
-function renderGlyphBadge(
-  session: SidebarRecentSession,
-  pullRequestState: SessionPullRequestIndicatorState,
-): SessionGlyphContent {
-  if (session.unread && !session.hasActiveRun) {
-    return renderSessionUnreadBadge();
-  }
-  if (pullRequestState === "none") {
-    return nothing;
-  }
-  const label =
-    pullRequestState === "open" ? t("sessionsView.openPullRequest") : t("chat.pullRequests.merged");
-  return html`<span
-    class="session-glyph__badge sidebar-session-pr-indicator--${pullRequestState}"
-    data-session-pr-state=${pullRequestState}
-    role="img"
-    aria-label=${label}
-    title=${label}
-  ></span>`;
-}
-
-function pullRequestStateLabel(
-  pullRequestState: Exclude<SessionPullRequestIndicatorState, "none">,
-) {
-  return pullRequestState === "open"
-    ? t("sessionsView.openPullRequest")
-    : t("chat.pullRequests.merged");
-}
-
-function renderPullRequestIndicator(
-  pullRequestState: SessionPullRequestIndicatorState,
-  showTitle = true,
-) {
-  if (pullRequestState === "none") {
-    return nothing;
-  }
-  const label = pullRequestStateLabel(pullRequestState);
-  return html`<span
-    class="sidebar-session-pr-indicator sidebar-session-pr-indicator--${pullRequestState}"
-    data-session-pr-state=${pullRequestState}
-    role="img"
-    aria-label=${label}
-    title=${showTitle ? label : nothing}
-    >${pullRequestState === "open" ? icons.gitPullRequest : icons.gitMerge}</span
-  >`;
-}
-
-function renderSessionTrailingState(
-  session: SidebarRecentSession,
-  pullRequestState: SessionPullRequestIndicatorState,
-) {
-  const sessionState = renderSessionState(session, false);
-  if (pullRequestState === "none" && sessionState === nothing) {
-    return nothing;
-  }
-  return html`${renderPullRequestIndicator(pullRequestState, false)} ${sessionState}`;
-}
-
 function renderPersistentSessionIcon(icon: string) {
-  const glyph = resolveSessionIconGlyph(icon);
-  return glyph
-    ? html`<span class="session-glyph__icon" aria-hidden="true">${glyph}</span>`
+  const graphic = resolveSessionIconGraphic(icon);
+  return graphic
+    ? html`<span class="session-glyph__icon" aria-hidden="true">${graphic}</span>`
     : html`<span class="session-glyph__emoji" aria-hidden="true">${icon}</span>`;
 }
 
-export function describeSessionTrailingState(
-  session: SidebarRecentSession,
-  pullRequestState: SessionPullRequestIndicatorState,
-) {
-  const runningLabel =
-    session.hasActiveRun && session.status === "queued"
-      ? t("sessionsView.statusQueued")
-      : t("sessionsView.activeRun");
+export function describeSessionState(session: SidebarRecentSession) {
   return [
-    session.forkSource ? t("sessionsView.forkedSession") : "",
-    pullRequestState === "none" ? "" : pullRequestStateLabel(pullRequestState),
-    sessionHasRunningWork(session) ? runningLabel : "",
-    session.unread ? t("sessionsView.unread") : "",
+    !session.isChild && session.forkSource ? t("sessionsView.forkedSession") : "",
+    (session.hasActiveRun || session.runningChildCount > 0) && session.unread
+      ? t("sessionsView.unread")
+      : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -114,34 +43,39 @@ export function describeSessionTrailingState(
 
 export function renderSessionLeadingState(
   session: SidebarRecentSession,
-  pullRequestState: SessionPullRequestIndicatorState,
   ownerActor: SessionCreatedActor | null | undefined,
   attribution: "created" | "owned" | "archived",
   ownerViewing?: boolean,
-  participants?: readonly SessionCreatedActor[],
-  participantCount?: number,
   avatarAuth?: SessionAvatarAuth,
+  trailingState = false,
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
-  trailingIndicator: TemplateResult | typeof nothing;
-  renderedOwnerId?: string;
+  renderedIdentities?: readonly SessionParticipantIdentity[];
 } {
-  const running = sessionHasRunningWork(session);
-  const trailingIndicator = session.isChild
-    ? nothing
-    : renderSessionTrailingState(session, pullRequestState);
+  const { participants, participantCount } = session;
+  // Team rows summarize descendant activity in their trailing slots.
+  const subagentsWorking = !trailingState && session.runningChildCount > 0;
+  const running = session.hasActiveRun || subagentsWorking;
+  const ownRunQueued = session.hasActiveRun && session.status === "queued";
+  const runState = {
+    running: running && !trailingState && session.attention.kind !== "question",
+    queued: ownRunQueued && !subagentsWorking,
+    runningLabel:
+      subagentsWorking && (!session.hasActiveRun || ownRunQueued)
+        ? t("sessionsView.subagentsWorking")
+        : undefined,
+  };
   // Transient attention always outranks the persistent decorative icon.
-  if (session.isChild) {
+  if (session.isChild && !trailingState) {
     if (session.attention.kind !== "none") {
       return {
         running,
         leadingIndicator: renderSessionGlyph({
-          content: renderSessionAttentionIcon(session.attention),
-          running,
-          badge: renderGlyphBadge(session, pullRequestState),
+          content: renderSessionAttentionIcon(session.attention, true),
+          ...runState,
+          badge: session.unread && !running ? renderSessionUnreadBadge() : nothing,
         }),
-        trailingIndicator,
       };
     }
     if (session.icon) {
@@ -149,10 +83,9 @@ export function renderSessionLeadingState(
         running,
         leadingIndicator: renderSessionGlyph({
           content: renderPersistentSessionIcon(session.icon),
-          running,
-          badge: renderGlyphBadge(session, pullRequestState),
+          ...runState,
+          badge: session.unread && !running ? renderSessionUnreadBadge() : nothing,
         }),
-        trailingIndicator,
       };
     }
     if (session.channelAvatarUrl) {
@@ -165,43 +98,28 @@ export function renderSessionLeadingState(
             .authTokens=${avatarAuth?.authTokens ?? []}
             .authReady=${avatarAuth?.authReady ?? false}
           ></openclaw-channel-avatar>`,
-          running,
+          ...runState,
           circular: true,
-          badge: renderGlyphBadge(session, pullRequestState),
+          badge: session.unread && !running ? renderSessionUnreadBadge() : nothing,
         }),
-        trailingIndicator,
       };
     }
-    if (running) {
-      return {
-        running,
-        leadingIndicator: renderSessionState(session),
-        trailingIndicator,
-      };
-    }
-    if (pullRequestState !== "none") {
-      return {
-        running,
-        leadingIndicator: renderPullRequestIndicator(pullRequestState),
-        trailingIndicator,
-      };
-    }
-    const sessionState = renderSessionState(session);
     return {
       running,
-      leadingIndicator: sessionState,
-      trailingIndicator,
+      leadingIndicator: running
+        ? renderSessionGlyph({ content: nothing, ...runState })
+        : renderSessionIdleState(session),
     };
   }
 
-  if (session.attention.kind !== "none") {
+  if (session.attention.kind !== "none" && !trailingState) {
     return {
       running,
       leadingIndicator: renderSessionGlyph({
-        content: renderSessionAttentionIcon(session.attention),
-        running: false,
+        content: renderSessionAttentionIcon(session.attention, true),
+        ...runState,
+        badge: session.unread && !running && !trailingState ? renderSessionUnreadBadge() : nothing,
       }),
-      trailingIndicator,
     };
   }
   if (session.icon) {
@@ -209,22 +127,21 @@ export function renderSessionLeadingState(
       running,
       leadingIndicator: renderSessionGlyph({
         content: renderPersistentSessionIcon(session.icon),
-        running: false,
+        ...runState,
+        badge: session.unread && !running && !trailingState ? renderSessionUnreadBadge() : nothing,
       }),
-      trailingIndicator,
     };
   }
-  const ownerChip =
-    !session.isChild && ownerActor?.id?.trim()
-      ? renderSessionOwnerChip(
-          ownerActor,
-          "row",
-          attribution,
-          ownerViewing,
-          participants,
-          participantCount,
-        )
-      : undefined;
+  const ownerChip = ownerActor?.id?.trim()
+    ? renderSessionOwnerChip(
+        ownerActor,
+        "row",
+        attribution,
+        ownerViewing,
+        participants,
+        participantCount,
+      )
+    : undefined;
   if (session.channelAvatarUrl) {
     ensureChannelAvatarElement();
     return {
@@ -238,29 +155,40 @@ export function renderSessionLeadingState(
           .authReady=${avatarAuth?.authReady ?? false}
           .fallback=${ownerChip ?? nothing}
         ></openclaw-channel-avatar>`,
-        running: false,
+        ...runState,
+        badge: session.unread && !running && !trailingState ? renderSessionUnreadBadge() : nothing,
         circular: true,
       }),
-      trailingIndicator,
     };
   }
   if (ownerChip) {
+    // The chip stacks a second face (or +N) behind the owner whenever anyone
+    // else participates; the run state then traces that pair instead of a circle.
+    const stackedParticipants = participantCount ?? participants?.length ?? 0;
     return {
       running,
       leadingIndicator: renderSessionGlyph({
         content: ownerChip,
-        running: false,
+        ...runState,
+        badge: session.unread && !running && !trailingState ? renderSessionUnreadBadge() : nothing,
         circular: true,
+        ring: stackedParticipants > 0 ? "pair" : "circle",
       }),
-      trailingIndicator,
-      // Single source for facepile dedup: only the identity actually shown in
-      // the lead may be excluded, else attention/archived rows hide a viewer.
-      renderedOwnerId: ownerActor?.id,
+      // Exclude only visible avatars; a +N stack still needs individual live viewers.
+      renderedIdentities: [
+        ...(ownerActor?.identity ? [ownerActor.identity] : []),
+        ...(stackedParticipants === 1
+          ? (participants ?? []).slice(0, 1).map((participant) => participant.identity)
+          : []),
+      ],
     };
   }
   return {
     running,
-    leadingIndicator: nothing,
-    trailingIndicator,
+    leadingIndicator: runState.running
+      ? renderSessionGlyph({ content: nothing, ...runState })
+      : session.unread && !trailingState
+        ? renderSessionIdleState(session)
+        : nothing,
   };
 }

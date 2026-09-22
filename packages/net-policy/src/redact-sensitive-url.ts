@@ -1,4 +1,3 @@
-// Network Policy module implements redact sensitive url behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type ConfigUiHintTags = {
@@ -141,7 +140,12 @@ export function isSensitiveUrlConfigPath(path: string): boolean {
 
 /** True when a config UI hint explicitly marks a URL-like value as secret-bearing. */
 export function hasSensitiveUrlHintTag(hint: ConfigUiHintTags | undefined): boolean {
-  return hint?.tags?.includes(SENSITIVE_URL_HINT_TAG) === true;
+  // Security recognition must not depend on presentation metadata rewriting
+  // an author's tag spelling before redaction and restoration consume it.
+  return (
+    hint?.tags?.some((tag) => normalizeLowercaseStringOrEmpty(tag) === SENSITIVE_URL_HINT_TAG) ===
+    true
+  );
 }
 
 function redactDirectSensitiveUrl(value: string): string {

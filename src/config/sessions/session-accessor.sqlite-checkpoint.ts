@@ -5,6 +5,8 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearAllCliSessions } from "./cli-session-binding.js";
+import { buildRestartRecoveryClaimCleanupPatch } from "./restart-recovery-state.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   collectSessionEntryLookupKeys,
@@ -12,7 +14,8 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
+import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import {
   formatSqliteSessionReferenceForScope,
   getSessionKysely,
@@ -22,16 +25,20 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import {
-  appendTranscriptEventsInTransaction,
-  readTranscriptIdentityByEventId,
-} from "./session-accessor.sqlite-transcript-store.js";
+  COMPACTION_RUN_USAGE_CLEAR_PATCH,
+  SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
+} from "./session-entry-projection.js";
+import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry as SessionEntry,
   type SessionCompactionCheckpoint,
 } from "./types.js";
+import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 // Compaction checkpoint branch/restore owner.
 
@@ -77,6 +84,7 @@ type SqliteBranchCheckpointSessionParams = {
   checkpointId: string;
   expectedState: SessionEntryExpectedState;
   legacySource?: SqliteCompactionCheckpointLegacySource;
+  creation?: Parameters<typeof buildSessionCreationStamp>[0];
 };
 
 /** Parameters for restoring a SQLite session from a compaction checkpoint. */
@@ -124,29 +132,37 @@ async function applySqliteCompactionCheckpointSessionOperation(
     sessionKey: sourceKey,
     ...(operation.storePath ? { storePath: operation.storePath } : {}),
   });
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const committed = runOpenClawAgentWriteTransaction((database) => {
-      const identityKeys = uniqueStrings([
-        ...collectSessionEntryLookupKeys(database, sourceKey),
-        ...collectSessionEntryLookupKeys(database, targetKey),
-      ]);
-      const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      const result = applySqliteCompactionCheckpointSessionOperationInTransaction(
-        database,
-        resolved,
-        operation,
-        sourceKey,
-        targetKey,
-      );
-      return {
-        previousIdentity,
-        currentIdentity: readSessionIdentitySnapshot(database, identityKeys),
-        result,
-      };
-    }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(committed.previousIdentity, committed.currentIdentity);
-    return committed.result;
-  });
+  return await runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      const committed = runOpenClawAgentWriteTransaction((database) => {
+        const identityKeys = uniqueStrings([
+          ...collectSessionEntryLookupKeys(database, sourceKey),
+          ...collectSessionEntryLookupKeys(database, targetKey),
+        ]);
+        const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
+        const result = applySqliteCompactionCheckpointSessionOperationInTransaction(
+          database,
+          resolved,
+          operation,
+          sourceKey,
+          targetKey,
+        );
+        return {
+          publish: prepareSessionIdentityPublication(
+            database,
+            resolved.agentId,
+            previousIdentity,
+            readSessionIdentitySnapshot(database, identityKeys),
+          ),
+          result,
+        };
+      }, toDatabaseOptions(resolved));
+      committed.publish();
+      return committed.result;
+    },
+    operation.kind === "branch" ? "session.checkpoint.branch" : "session.checkpoint.restore",
+  );
 }
 
 function applySqliteCompactionCheckpointSessionOperationInTransaction(
@@ -186,6 +202,7 @@ function applySqliteCompactionCheckpointSessionOperationInTransaction(
     operation.kind === "branch"
       ? cloneSqliteCheckpointSessionEntry({
           currentEntry,
+          creation: operation.creation,
           label: currentEntry.label?.trim()
             ? `${currentEntry.label.trim()} (checkpoint)`
             : "Checkpoint branch",
@@ -266,6 +283,7 @@ function forkSqliteCheckpointTranscriptInTransaction(
     createSessionTranscriptHeader({
       cwd: readTranscriptHeaderCwd(selectedEvents),
       sessionId,
+      version: findSessionTranscriptHeader(selectedEvents)?.version ?? MIN_READABLE_SESSION_VERSION,
     }),
     ...selectedEvents.filter((event) => !isSessionTranscriptHeader(event)),
   ]);
@@ -371,6 +389,7 @@ function readSessionCompactionCheckpoint(
 
 function cloneSqliteCheckpointSessionEntry(params: {
   currentEntry: SessionEntry;
+  creation?: Parameters<typeof buildSessionCreationStamp>[0];
   nextSessionId: string;
   label?: string;
   parentSessionKey?: string;
@@ -379,23 +398,43 @@ function cloneSqliteCheckpointSessionEntry(params: {
 }): SessionEntry {
   const hasTotalTokens =
     typeof params.totalTokens === "number" && Number.isFinite(params.totalTokens);
-  return {
+  const next: SessionEntry = {
     ...params.currentEntry,
+    ...SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
+    ...COMPACTION_RUN_USAGE_CLEAR_PATCH,
+    ...buildRestartRecoveryClaimCleanupPatch({
+      entry: params.currentEntry,
+      recordTerminalSource: false,
+    }),
+    // A new branch belongs to its requester, including an explicitly absent
+    // sandbox floor. Restore and actorless branches retain the source stamp.
+    ...(params.creation
+      ? {
+          ...buildSessionCreationStamp(params.creation),
+          createdActor: params.creation.actor,
+          sandbox: params.creation.sandbox,
+        }
+      : {}),
     sessionId: params.nextSessionId,
     updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,
-    lifecycleRunId: undefined,
-    lastRunId: undefined,
+    lastRunError: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
     status: undefined,
-    inputTokens: undefined,
-    outputTokens: undefined,
-    cacheRead: undefined,
-    cacheWrite: undefined,
-    estimatedCostUsd: undefined,
+    // A checkpoint prefix cannot resume native history or work from the discarded tail.
+    cliHistoryBoundary: undefined,
+    agentHarnessId: undefined,
+    restartRecoveryRuns: undefined,
+    pendingFinalDelivery: undefined,
+    pendingDeliveryNotice: undefined,
+    pendingTranscriptRepair: undefined,
+    contextTokens: undefined,
+    contextTokensSource: undefined,
+    contextBudgetStatus: undefined,
+    memoryFlush: undefined,
     totalTokens: hasTotalTokens ? params.totalTokens : undefined,
     totalTokensFresh: hasTotalTokens ? true : undefined,
     totalTokensVersion: hasTotalTokens ? SESSION_TOTAL_TOKENS_VERSION : undefined,
@@ -405,6 +444,8 @@ function cloneSqliteCheckpointSessionEntry(params: {
       ? params.currentEntry.compactionCheckpoints
       : undefined,
   };
+  clearAllCliSessions(next);
+  return next;
 }
 
 function readTranscriptHeaderCwd(events: readonly TranscriptEvent[]): string | undefined {

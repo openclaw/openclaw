@@ -2,43 +2,28 @@
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory.ts";
 import {
-  completePackageInstallGuard,
   createPackageManagerWarningMessage,
   detectLifecyclePackageManager,
   enforceSupportedNodeRuntime,
   nodeVersionSatisfiesPackageEngine,
-  PACKAGE_INSTALL_GUARD_RELATIVE_PATH as PREINSTALL_GUARD_RELATIVE_PATH,
   probePackageCliNodeRuntime,
   readPackageNodeEngine,
+  removeLegacyPackageInstallGuard,
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
 import { isSupportedNodeVersion } from "../../src/infra/runtime-guard.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const EXPECTED_NODE_ENGINE_RANGE = ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0";
+const EXPECTED_NODE_ENGINE_RANGE = ">=24.16.0 <25 || >=26.1.0";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function requireFirstWarning(warn: ReturnType<typeof vi.fn>): unknown {
-  const [call] = warn.mock.calls;
-  if (!call) {
-    throw new Error("expected package manager warning");
-  }
-  const [message] = call;
-  if (message === undefined) {
-    throw new Error("expected package manager warning");
-  }
-  return message;
-}
+const testNodeExecPath = resolveTestNodeExecPath();
 
 describe("install runtime enforcement", () => {
-  it("shares the packaged install guard path", () => {
-    expect(PREINSTALL_GUARD_RELATIVE_PATH).toBe(PACKAGE_INSTALL_GUARD_RELATIVE_PATH);
-  });
-
   it("reads the canonical package engine range", () => {
     expect(readPackageNodeEngine()).toBe(EXPECTED_NODE_ENGINE_RANGE);
   });
@@ -50,19 +35,19 @@ describe("install runtime enforcement", () => {
   });
 
   it.each([
-    "24.15.0-rc.1",
+    "24.16.0-rc.1",
     "25.9.1-nightly.20260714",
     "24.15",
-    "24.15.0+",
-    "24.15.0+local..1",
-    "garbage24.15.0suffix",
-    "24.15.0suffix",
+    "24.16.0+",
+    "24.16.0+local..1",
+    "garbage24.16.0suffix",
+    "24.16.0suffix",
   ])("rejects non-release Node version %s", (version) => {
     expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(false);
   });
 
   it("accepts SemVer build metadata on a supported Node release", () => {
-    expect(nodeVersionSatisfiesPackageEngine("24.15.0+local.1", EXPECTED_NODE_ENGINE_RANGE)).toBe(
+    expect(nodeVersionSatisfiesPackageEngine("24.16.0+local.1", EXPECTED_NODE_ENGINE_RANGE)).toBe(
       true,
     );
   });
@@ -73,6 +58,7 @@ describe("install runtime enforcement", () => {
       enforceSupportedNodeRuntime(
         {
           version: "24.14.1",
+          bunVersion: null,
           engine: EXPECTED_NODE_ENGINE_RANGE,
           execPath: "/opt/node/bin/node",
         },
@@ -90,7 +76,8 @@ describe("install runtime enforcement", () => {
     expect(
       enforceSupportedNodeRuntime(
         {
-          version: "24.15.0",
+          version: "24.16.0",
+          bunVersion: null,
           engine: EXPECTED_NODE_ENGINE_RANGE,
           execPath: "/opt/node/bin/node",
         },
@@ -103,11 +90,15 @@ describe("install runtime enforcement", () => {
   it("exits nonzero when the packed entrypoint sees an unsupported runtime", () => {
     const root = tempDirs.make("openclaw-preinstall-");
     const scriptsDir = join(root, "scripts");
-    mkdirSync(scriptsDir);
+    mkdirSync(join(scriptsDir, "lib"), { recursive: true });
     const scriptPath = join(scriptsDir, "preinstall-package-manager-warning.mjs");
     copyFileSync(
       new URL("../../scripts/preinstall-package-manager-warning.mjs", import.meta.url),
       scriptPath,
+    );
+    copyFileSync(
+      new URL("../../scripts/lib/package-lifecycle-marker.mjs", import.meta.url),
+      join(scriptsDir, "lib", "package-lifecycle-marker.mjs"),
     );
     copyFileSync(
       new URL("../../node-version.mjs", import.meta.url),
@@ -115,10 +106,13 @@ describe("install runtime enforcement", () => {
     );
     writeFileSync(join(root, "package.json"), JSON.stringify({ engines: { node: ">=999.0.0" } }));
 
-    const result = spawnSync(process.execPath, [scriptPath], { encoding: "utf8" });
+    const result = spawnSync(testNodeExecPath, [scriptPath], { encoding: "utf8" });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("requires Node >=999.0.0");
-    expect(result.stderr).toContain(`detected Node ${process.versions.node}`);
+    const nodeVersion = spawnSync(testNodeExecPath, ["-p", "process.versions.node"], {
+      encoding: "utf8",
+    }).stdout.trim();
+    expect(result.stderr).toContain(`detected Node ${nodeVersion}`);
   });
 
   it("allows Bun package lifecycle scripts when the installed CLI will use supported Node", () => {
@@ -131,7 +125,7 @@ describe("install runtime enforcement", () => {
           engine: EXPECTED_NODE_ENGINE_RANGE,
           execPath: "/opt/bun/bin/bun",
           probeNodeRuntime: () => ({
-            version: "24.15.0",
+            version: "24.16.0",
             bunVersion: null,
             execPath: "/opt/node/bin/node",
           }),
@@ -192,7 +186,7 @@ describe("install runtime enforcement", () => {
         return {
           status: 0,
           stdout: JSON.stringify({
-            version: "24.15.0",
+            version: "24.16.0",
             bunVersion: null,
             execPath: "/opt/node/bin/node",
           }),
@@ -202,7 +196,7 @@ describe("install runtime enforcement", () => {
 
     expect(candidates).toEqual(["/opt/node/bin/node"]);
     expect(runtime).toEqual({
-      version: "24.15.0",
+      version: "24.16.0",
       bunVersion: null,
       execPath: "/opt/node/bin/node",
     });
@@ -297,7 +291,7 @@ describe("install runtime enforcement", () => {
           return {
             status: 0,
             stdout: JSON.stringify({
-              version: "24.15.0",
+              version: "24.16.0",
               bunVersion: "1.3.14",
               execPath: "/opt/bun/bin/bun",
             }),
@@ -374,7 +368,7 @@ describe("install runtime enforcement", () => {
           return {
             status: 0,
             stdout: JSON.stringify({
-              version: "24.15.0",
+              version: "24.16.0",
               bunVersion: null,
               execPath: "C:\\node\\node.exe",
             }),
@@ -382,7 +376,7 @@ describe("install runtime enforcement", () => {
         },
       }),
     ).toEqual({
-      version: "24.15.0",
+      version: "24.16.0",
       bunVersion: null,
       execPath: "C:\\node\\node.exe",
     });
@@ -397,20 +391,20 @@ describe("install runtime enforcement", () => {
     });
   });
 
-  it("removes the install guard after runtime validation", () => {
+  it("removes the legacy install guard after runtime validation", () => {
     const markerUrl = new URL("file:///tmp/openclaw-install-guard");
     const remove = vi.fn();
     const reportError = vi.fn();
 
-    expect(completePackageInstallGuard({ markerUrl, remove }, reportError)).toBe(true);
+    expect(removeLegacyPackageInstallGuard({ markerUrl, remove }, reportError)).toBe(true);
     expect(remove).toHaveBeenCalledWith(markerUrl, { force: true });
     expect(reportError).not.toHaveBeenCalled();
   });
 
-  it("fails installation when the install guard cannot be removed", () => {
+  it("fails installation when the legacy install guard cannot be removed", () => {
     const reportError = vi.fn();
     expect(
-      completePackageInstallGuard(
+      removeLegacyPackageInstallGuard(
         {
           remove: () => {
             throw new Error("read-only package");
@@ -420,7 +414,9 @@ describe("install runtime enforcement", () => {
       ),
     ).toBe(false);
     expect(reportError).toHaveBeenCalledWith(
-      expect.stringContaining("could not complete package preinstall: read-only package"),
+      expect.stringContaining(
+        "could not remove the legacy package install guard: read-only package",
+      ),
     );
   });
 });
@@ -514,7 +510,8 @@ describe("warnIfNonPnpmLifecycle", () => {
       ),
     ).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(requireFirstWarning(warn)).toContain("detected npm");
+    const [message] = expectDefined(warn.mock.calls[0], "package manager warning call");
+    expect(message).toContain("detected npm");
   });
 
   it("stays quiet for pnpm", () => {

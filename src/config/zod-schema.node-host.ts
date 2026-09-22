@@ -3,6 +3,7 @@ import { NODE_WORKER_CAPACITY_MAX } from "../infra/node-runner-inventory.js";
 
 export const BrowserSnapshotDefaultsSchema = z
   .object({
+    /** Default snapshot mode (applies when mode is not provided). */
     mode: z.literal("efficient").optional(),
   })
   .strict()

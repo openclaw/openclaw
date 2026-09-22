@@ -1,5 +1,9 @@
+import type { DeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 // Public facade for outbound delivery planning, queueing, and transport.
-import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import type {
+  DeliverOutboundPayloadsParams,
+  InternalDeliverOutboundPayloadsParams,
+} from "./deliver-contracts.js";
 import { runOutboundDelivery, runOutboundDeliveryInternal } from "./deliver-queue.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 
@@ -27,7 +31,8 @@ export async function deliverOutboundPayloads(
 }
 
 export async function deliverOutboundPayloadsInternal(
-  params: DeliverOutboundPayloadsParams,
+  params: InternalDeliverOutboundPayloadsParams,
+  stateContext?: DeliveryQueueStateContext,
 ): Promise<OutboundDeliveryResult[]> {
-  return await runOutboundDeliveryInternal(params);
+  return await runOutboundDeliveryInternal(params, stateContext);
 }

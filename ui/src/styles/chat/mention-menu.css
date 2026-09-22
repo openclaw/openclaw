@@ -1,0 +1,15 @@
+.mention-menu__avatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
+.mention-menu__loading:hover {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mention-menu__loading .skeleton::after {
+    animation: none;
+  }
+}

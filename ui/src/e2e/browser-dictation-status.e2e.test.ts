@@ -1,11 +1,31 @@
+import path from "node:path";
 // Control UI E2E tests cover visible browser dictation state through a real composer.
 import { expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
   installTalkBrowserFixtures,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+function createDictationMethodResponses(sessionId: string, transcriptionSessionId: string) {
+  return {
+    "talk.catalog": {
+      transcription: { ready: true, providers: [] },
+      realtime: { providers: [] },
+      speech: { providers: [] },
+      modes: [],
+      transports: [],
+      brains: [],
+    },
+    "talk.session.create": {
+      sessionId,
+      transcriptionSessionId,
+      audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
+    },
+  };
+}
 
 const suite = createControlUiE2eSuite({
   name: "Control UI browser dictation status",
@@ -23,21 +43,10 @@ suite.define(() => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         deferredMethods: ["talk.session.create"],
-        methodResponses: {
-          "talk.catalog": {
-            transcription: { ready: true, providers: [] },
-            realtime: { providers: [] },
-            speech: { providers: [] },
-            modes: [],
-            transports: [],
-            brains: [],
-          },
-          "talk.session.create": {
-            sessionId: "dictation-preview-proof",
-            transcriptionSessionId: "dictation-preview-proof",
-            audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
-          },
-        },
+        methodResponses: createDictationMethodResponses(
+          "dictation-preview-proof",
+          "dictation-preview-proof",
+        ),
       });
       await installTalkBrowserFixtures(page);
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -59,6 +68,21 @@ suite.define(() => {
         text: "please",
       });
       await expect.poll(() => textarea.inputValue()).toBe(expected);
+      await page.mouse.move(0, 0);
+      const dictationStop = page.getByRole("button", { name: "Stop and keep text" });
+      await dictationStop.evaluate(finishElementAnimations);
+      const dictationAppearance = await dictationStop.evaluate((element) => {
+        const textColor = document.createElement("span");
+        textColor.style.color = "var(--text-strong)";
+        element.append(textColor);
+        const appearance = {
+          color: getComputedStyle(element).color,
+          textStrong: getComputedStyle(textColor).color,
+        };
+        textColor.remove();
+        return appearance;
+      });
+      expect(dictationAppearance.color).toBe(dictationAppearance.textStrong);
       if (cancel) {
         await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
         await page.keyboard.press("Escape");
@@ -69,78 +93,214 @@ suite.define(() => {
       const committedDraft = cancel ? "ship it" : expected;
       expect(await textarea.inputValue()).toBe(committedDraft);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await captureComposerProof(page, `dictation-${name.replaceAll(" ", "-")}-committed.png`);
+      await captureComposerProof(
+        suite,
+        page,
+        `dictation-${name.replaceAll(" ", "-")}-committed.png`,
+      );
       expect(await textarea.inputValue()).toBe(committedDraft);
     });
   });
 
-  it("keeps recognized speech visible until Escape cancels new-session dictation", async () => {
+  it.each([
+    { name: "captured selection", editedDraft: null, expected: "ship please now it" },
+    {
+      name: "live draft edits",
+      editedDraft: "ship it today",
+      expected: "ship it today please now",
+    },
+  ])("keeps every matching final after Stop with $name", async ({ editedDraft, expected }) => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["talk.session.create"],
+        deferredMethods: ["talk.session.create", "talk.session.close"],
+        methodResponses: createDictationMethodResponses(
+          "dictation-late-final-proof",
+          "dictation-late-final-proof",
+        ),
+      });
+      await installTalkBrowserFixtures(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const textarea = page.locator(".agent-chat__composer-combobox textarea");
+      await textarea.fill("ship it");
+      await textarea.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(5, 5));
+
+      await page.getByRole("button", { name: "Start voice input" }).hover();
+      await page.mouse.down();
+      await gateway.waitForRequest("talk.session.create");
+      await gateway.resolveDeferred("talk.session.create");
+      await page.mouse.up();
+      await page.getByRole("button", { name: "Stop and keep text" }).click();
+      await gateway.waitForRequest("talk.session.close");
+      if (editedDraft) {
+        await textarea.fill(editedDraft);
+      }
+
+      await gateway.emitGatewayEvent("talk.event", {
+        transcriptionSessionId: "stale-dictation",
+        type: "transcript",
+        text: "ignore this",
+        final: true,
+      });
+      await gateway.emitGatewayEvent("talk.event", {
+        transcriptionSessionId: "dictation-late-final-proof",
+        type: "transcript",
+        text: "please",
+        final: true,
+      });
+      await gateway.emitGatewayEvent("talk.event", {
+        transcriptionSessionId: "dictation-late-final-proof",
+        type: "transcript",
+        text: "now",
+        final: true,
+      });
+      await gateway.emitGatewayEvent("talk.event", {
+        transcriptionSessionId: "dictation-late-final-proof",
+        type: "close",
+        reason: "completed",
+      });
+      await captureComposerProof(suite, page, "dictation-late-finals.png");
+
+      await expect.poll(() => textarea.inputValue()).toBe(expected);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    });
+  });
+
+  it.each([false, true])(
+    "cancels new-session dictation after dismissing any tooltip (open: %s)",
+    async (tooltipOpen) => {
+      await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          deferredMethods: ["talk.session.create"],
+          featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "sessions.dispatch"],
+          methodResponses: createDictationMethodResponses(
+            "dictation-direct-proof",
+            "dictation-direct-proof",
+          ),
+        });
+        await installTalkBrowserFixtures(page);
+        await page.goto(`${suite.server.baseUrl}new`);
+        const textarea = page.locator(".new-session-page__message");
+        await textarea.fill("keep this draft");
+        await page.getByRole("button", { name: "Dictate", exact: true }).click();
+        await gateway.waitForRequest("talk.session.create");
+        await gateway.resolveDeferred("talk.session.create");
+        await gateway.emitGatewayEvent("talk.event", {
+          transcriptionSessionId: "dictation-direct-proof",
+          type: "partial",
+          text: "discard this speech",
+        });
+        await expect.poll(() => textarea.inputValue()).toContain("discard this speech");
+        await gateway.emitGatewayEvent("talk.event", {
+          transcriptionSessionId: "dictation-direct-proof",
+          type: "transcript",
+          text: "discard this speech",
+          final: true,
+        });
+        await expect.poll(() => textarea.inputValue()).toBe("keep this draft discard this speech");
+        await gateway.emitGatewayEvent("talk.event", {
+          transcriptionSessionId: "dictation-direct-proof",
+          type: "partial",
+          text: "too",
+        });
+        await expect
+          .poll(() => textarea.inputValue())
+          .toBe("keep this draft discard this speech too");
+        await gateway.emitGatewayEvent("talk.event", {
+          transcriptionSessionId: "dictation-direct-proof",
+          type: "transcript",
+          text: "",
+          final: true,
+        });
+        await expect
+          .poll(() => textarea.inputValue())
+          .toBe("keep this draft discard this speech too");
+        await captureComposerProof(
+          suite,
+          page,
+          `dictation-new-session-${tooltipOpen ? "tooltip" : "composer"}-preview.png`,
+        );
+        // Clicking Dictate changes the hovered button into Stop; its hover hint
+        // can open while transcripts arrive. Establish which surface Escape owns.
+        await textarea.hover();
+        await textarea.focus();
+        const openTooltips = page.locator("openclaw-tooltip[open]");
+        await expect.poll(() => openTooltips.count()).toBe(0);
+        if (tooltipOpen) {
+          const stop = page.getByRole("button", { name: "Stop and keep text" });
+          const tooltip = stop.locator("..").locator("wa-tooltip");
+          await stop.hover();
+          await expect.poll(() => tooltip.getAttribute("open")).not.toBeNull();
+
+          await page.keyboard.press("Escape");
+
+          await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
+          expect(await textarea.inputValue()).toBe("keep this draft discard this speech too");
+          expect(await textarea.evaluate((element: HTMLTextAreaElement) => element.readOnly)).toBe(
+            true,
+          );
+          expect(await textarea.evaluate((element) => document.activeElement === element)).toBe(
+            true,
+          );
+          expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);
+        }
+        await page.keyboard.press("Escape");
+        await expect.poll(() => textarea.inputValue()).toBe("keep this draft");
+        await gateway.waitForRequest("talk.session.close");
+        expect(await page.getByRole("button", { name: "Dictate", exact: true }).isVisible()).toBe(
+          true,
+        );
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+        expect(await textarea.evaluate((element: HTMLTextAreaElement) => element.readOnly)).toBe(
+          false,
+        );
+        expect(await gateway.getRequests("talk.session.close")).toHaveLength(1);
+        await captureComposerProof(
+          suite,
+          page,
+          `dictation-new-session-${tooltipOpen ? "tooltip" : "composer"}-cancelled.png`,
+        );
+      });
+    },
+  );
+
+  it("preserves new-session edits before late finals commit", async () => {
+    await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["talk.session.create", "talk.session.close"],
         featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "sessions.dispatch"],
-        methodResponses: {
-          "talk.catalog": {
-            transcription: { ready: true, providers: [] },
-            realtime: { providers: [] },
-            speech: { providers: [] },
-            modes: [],
-            transports: [],
-            brains: [],
-          },
-          "talk.session.create": {
-            sessionId: "dictation-direct-proof",
-            transcriptionSessionId: "dictation-direct-proof",
-            audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
-          },
-        },
+        methodResponses: createDictationMethodResponses(
+          "dictation-new-session-late-final",
+          "dictation-new-session-late-final",
+        ),
       });
       await installTalkBrowserFixtures(page);
       await page.goto(`${suite.server.baseUrl}new`);
       const textarea = page.locator(".new-session-page__message");
-      await textarea.fill("keep this draft");
+      await textarea.fill("keep draft");
       await page.getByRole("button", { name: "Dictate", exact: true }).click();
       await gateway.waitForRequest("talk.session.create");
       await gateway.resolveDeferred("talk.session.create");
-      await gateway.emitGatewayEvent("talk.event", {
-        transcriptionSessionId: "dictation-direct-proof",
-        type: "partial",
-        text: "discard this speech",
-      });
-      await expect.poll(() => textarea.inputValue()).toContain("discard this speech");
-      await gateway.emitGatewayEvent("talk.event", {
-        transcriptionSessionId: "dictation-direct-proof",
-        type: "transcript",
-        text: "discard this speech",
-        final: true,
-      });
-      await expect.poll(() => textarea.inputValue()).toBe("keep this draft discard this speech");
-      await gateway.emitGatewayEvent("talk.event", {
-        transcriptionSessionId: "dictation-direct-proof",
-        type: "partial",
-        text: "too",
-      });
-      await expect
-        .poll(() => textarea.inputValue())
-        .toBe("keep this draft discard this speech too");
-      await gateway.emitGatewayEvent("talk.event", {
-        transcriptionSessionId: "dictation-direct-proof",
-        type: "transcript",
-        text: "",
-        final: true,
-      });
-      await expect
-        .poll(() => textarea.inputValue())
-        .toBe("keep this draft discard this speech too");
-      await captureComposerProof(page, "dictation-new-session-recognized-preview.png");
-      await page.keyboard.press("Escape");
-      await expect.poll(() => textarea.inputValue()).toBe("keep this draft");
+      await page.getByRole("button", { name: "Stop and keep text" }).click();
       await gateway.waitForRequest("talk.session.close");
-      expect(await page.getByRole("button", { name: "Dictate", exact: true }).isVisible()).toBe(
-        true,
-      );
+      await textarea.fill("keep draft today");
+
+      for (const text of ["spoken", "task"]) {
+        await gateway.emitGatewayEvent("talk.event", {
+          transcriptionSessionId: "dictation-new-session-late-final",
+          type: "transcript",
+          text,
+          final: true,
+        });
+      }
+      await gateway.emitGatewayEvent("talk.event", {
+        transcriptionSessionId: "dictation-new-session-late-final",
+        type: "close",
+        reason: "completed",
+      });
+
+      await expect.poll(() => textarea.inputValue()).toBe("keep draft today spoken task");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      await captureComposerProof(page, "dictation-new-session-cancelled.png");
+      await captureComposerProof(suite, page, "dictation-new-session-late-finals.png");
     });
   });
 
@@ -173,10 +333,10 @@ suite.define(() => {
 
       await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("false");
       await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
-      await captureComposerProof(page, "microphone-picker-hold-toggle.png");
+      await captureComposerProof(suite, page, "microphone-picker-hold-toggle.png");
       await page.screenshot({
         animations: "disabled",
-        path: ".artifacts/control-ui-e2e/voice-controls/microphone-picker-hold-toggle-full.png",
+        path: path.join(suite.artifactDir, "voice-controls/microphone-picker-hold-toggle-full.png"),
       });
     });
   });
@@ -204,10 +364,13 @@ suite.define(() => {
       await expect
         .poll(() => unavailable.getByRole("button", { name: "Configure" }).count())
         .toBe(2);
-      await captureComposerProof(page, "microphone-picker-capability-gating.png");
+      await captureComposerProof(suite, page, "microphone-picker-capability-gating.png");
       await page.screenshot({
         animations: "disabled",
-        path: ".artifacts/control-ui-e2e/voice-controls/microphone-picker-capability-gating-full.png",
+        path: path.join(
+          suite.artifactDir,
+          "voice-controls/microphone-picker-capability-gating-full.png",
+        ),
       });
     });
   });
@@ -217,21 +380,10 @@ suite.define(() => {
       { permissions: ["microphone"], viewport: { width: 390, height: 844 } },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "talk.catalog": {
-              transcription: { ready: true, providers: [] },
-              realtime: { providers: [] },
-              speech: { providers: [] },
-              modes: [],
-              transports: [],
-              brains: [],
-            },
-            "talk.session.create": {
-              sessionId: "dictation-browser-proof",
-              transcriptionSessionId: "dictation-browser-proof",
-              audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
-            },
-          },
+          methodResponses: createDictationMethodResponses(
+            "dictation-browser-proof",
+            "dictation-browser-proof",
+          ),
         });
         await installTalkBrowserFixtures(page);
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -252,10 +404,10 @@ suite.define(() => {
         expect(await composer.locator(".agent-chat__dictation-elapsed").count()).toBe(0);
         await expect.poll(() => stop.isVisible()).toBe(true);
         await expect.poll(() => send.isVisible()).toBe(true);
-        await captureComposerProof(page, "dictation-status-actions.png");
+        await captureComposerProof(suite, page, "dictation-status-actions.png");
         await page.screenshot({
           animations: "disabled",
-          path: ".artifacts/control-ui-e2e/voice-controls/dictation-latched-after-release.png",
+          path: path.join(suite.artifactDir, "voice-controls/dictation-latched-after-release.png"),
         });
         const composerBox = await composer.boundingBox();
         expect(composerBox).not.toBeNull();

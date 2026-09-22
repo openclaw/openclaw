@@ -12,7 +12,6 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 describe("resolveConversationCapabilityProfile", () => {
   it("intersects base and provider profile contributions from plugin manifests", () => {
@@ -493,12 +492,7 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
     expect(scheduledProfile({ work: {} }).policy.groupPolicy).toEqual({ allow: ["read"] });
   });
 
-  it("denies every tool for a scheduled run after its owner account is removed", () => {
-    const groupPolicy = scheduledProfile({}).policy.groupPolicy;
-
-    expect(groupPolicy).toEqual({ allow: [], deny: ["*"] });
-    for (const toolName of ["read", "write", "exec", "apply_patch"]) {
-      expect(isToolAllowedByPolicyName(toolName, groupPolicy)).toBe(false);
-    }
+  it("rejects a scheduled run after its owner account is removed", () => {
+    expect(() => scheduledProfile({})).toThrow('Scheduled account "work" is unavailable');
   });
 });

@@ -24,19 +24,6 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import { CORE_BUILT_IN_MODEL_APIS } from "./provider-config-owner.js";
 import type { PluginRegistry } from "./registry-types.js";
 
-export function manifestOwnsConfiguredSpeechProvider(params: {
-  manifest: PluginManifestRecord | undefined;
-  configuredSpeechProviderIds: ReadonlySet<string>;
-}): boolean {
-  if (params.configuredSpeechProviderIds.size === 0) {
-    return false;
-  }
-  return (params.manifest?.contracts?.speechProviders ?? []).some((providerId) => {
-    const normalized = normalizeOptionalLowercaseString(providerId);
-    return normalized ? params.configuredSpeechProviderIds.has(normalized) : false;
-  });
-}
-
 export function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): ReadonlySet<string> {
   const search = config.tools?.web?.search;
   if (search?.enabled === false || typeof search?.provider !== "string") {
@@ -44,19 +31,6 @@ export function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): R
   }
   const providerId = normalizeOptionalLowercaseString(search.provider);
   return providerId ? new Set([providerId]) : new Set();
-}
-
-export function manifestOwnsConfiguredWebSearchProvider(params: {
-  manifest: PluginManifestRecord | undefined;
-  configuredWebSearchProviderIds: ReadonlySet<string>;
-}): boolean {
-  if (params.configuredWebSearchProviderIds.size === 0) {
-    return false;
-  }
-  return (params.manifest?.contracts?.webSearchProviders ?? []).some((providerId) => {
-    const normalized = normalizeOptionalLowercaseString(providerId);
-    return normalized ? params.configuredWebSearchProviderIds.has(normalized) : false;
-  });
 }
 
 function listModelProviderRefParts(value: unknown): Array<{ providerId: string; modelId: string }> {
@@ -80,6 +54,7 @@ function collectModelProviderIds(value: unknown): ReadonlySet<string> {
 type ManifestModelProviderLookup = {
   modelApis: ReadonlyMap<string, string>;
   providerIds: ReadonlySet<string>;
+  cliBackendIds: ReadonlySet<string>;
 };
 
 function buildManifestModelProviderLookup(
@@ -103,6 +78,9 @@ function buildManifestModelProviderLookup(
   );
   return {
     modelApis,
+    cliBackendIds: new Set(
+      manifestRegistry.plugins.flatMap((plugin) => plugin.cliBackends.map(normalizeProviderId)),
+    ),
     providerIds: new Set(
       manifestRegistry.plugins.flatMap((plugin) => plugin.providers.map(normalizeProviderId)),
     ),
@@ -175,6 +153,10 @@ function configuredModelProviderNeedsRuntimePlugin(params: {
   providerId: string;
   modelId: string;
 }): boolean {
+  // A model API hint cannot replace the runtime registration of a selected CLI backend.
+  if (params.manifestModelProviders.cliBackendIds.has(params.providerId)) {
+    return true;
+  }
   const providerConfig = params.config.models?.providers?.[params.providerId];
   const configuredModel = providerConfig?.models?.find((model) => model.id === params.modelId);
   const modelApi =
@@ -196,9 +178,11 @@ export function manifestOwnsConfiguredModelProvider(params: {
   if (params.configuredModelProviderIds.size === 0) {
     return false;
   }
-  return (params.manifest?.providers ?? []).some((providerId) => {
-    return params.configuredModelProviderIds.has(normalizeProviderId(providerId));
-  });
+  return [...(params.manifest?.providers ?? []), ...(params.manifest?.cliBackends ?? [])].some(
+    (providerId) => {
+      return params.configuredModelProviderIds.has(normalizeProviderId(providerId));
+    },
+  );
 }
 
 export function collectConfiguredGenerationProviderIds(

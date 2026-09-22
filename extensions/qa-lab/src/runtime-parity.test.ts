@@ -149,6 +149,38 @@ async function captureRuntimeParityWithMockRequests(params: {
   }
 }
 
+function createTerminalImageParityInput(
+  stepStatus: "pass" | "fail",
+  details: string,
+): Parameters<typeof captureRuntimeParityWithMockRequests>[0] {
+  return {
+    requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } }],
+    messages: [
+      { role: "user", content: "Generate the QA image." },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "image-call",
+            name: "image_generate",
+            arguments: { prompt: "same" },
+          },
+        ],
+      },
+    ],
+    scenarioResult: {
+      status: "pass",
+      steps: [
+        {
+          status: stepStatus,
+          details,
+        },
+      ],
+    },
+  };
+}
+
 function makeRuntimeParityCell(
   runtime: RuntimeId,
   toolCalls: RuntimeParityToolCall[],
@@ -784,37 +816,6 @@ describe("runtime parity", () => {
     expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
   });
 
-  it("accepts a fresh scenario MEDIA result for terminal image tools", async () => {
-    const cell = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } }],
-      messages: [
-        { role: "user", content: "Generate the QA image." },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "image-call",
-              name: "image_generate",
-              arguments: { prompt: "same" },
-            },
-          ],
-        },
-      ],
-      scenarioResult: {
-        status: "pass",
-        steps: [
-          {
-            status: "pass",
-            details: "QA-CAPABILITY-1234\nimage_generate=true\nMEDIA:/tmp/qa-image.png",
-          },
-        ],
-      },
-    });
-
-    expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
-  });
-
   it("keeps multiple image provider plans from invalidating one proven runtime call", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
       requests: [
@@ -851,79 +852,18 @@ describe("runtime parity", () => {
   });
 
   it("requires call-linked passed step evidence for terminal image results", async () => {
-    const proven = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } }],
-      messages: [
-        { role: "user", content: "Generate the QA image." },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "image-call",
-              name: "image_generate",
-              arguments: { prompt: "same" },
-            },
-          ],
-        },
-      ],
-      scenarioResult: {
-        status: "pass",
-        steps: [
-          {
-            status: "pass",
-            details: "QA-CAPABILITY-1234\nimage_generate=true\nMEDIA:/tmp/qa-image.png",
-          },
-        ],
-      },
-    });
-    const unrelated = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } }],
-      messages: [
-        { role: "user", content: "Generate the QA image." },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "image-call",
-              name: "image_generate",
-              arguments: { prompt: "same" },
-            },
-          ],
-        },
-      ],
-      scenarioResult: {
-        status: "pass",
-        steps: [{ status: "pass", details: "MEDIA:/tmp/unrelated-screenshot.png" }],
-      },
-    });
-    const failed = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } }],
-      messages: [
-        { role: "user", content: "Generate the QA image." },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "image-call",
-              name: "image_generate",
-              arguments: { prompt: "same" },
-            },
-          ],
-        },
-      ],
-      scenarioResult: {
-        status: "pass",
-        steps: [
-          {
-            status: "fail",
-            details: "image_generate=true\nMEDIA:/tmp/failed-image.png",
-          },
-        ],
-      },
-    });
+    const proven = await captureRuntimeParityWithMockRequests(
+      createTerminalImageParityInput(
+        "pass",
+        "QA-CAPABILITY-1234\nimage_generate=true\nMEDIA:/tmp/qa-image.png",
+      ),
+    );
+    const unrelated = await captureRuntimeParityWithMockRequests(
+      createTerminalImageParityInput("pass", "MEDIA:/tmp/unrelated-screenshot.png"),
+    );
+    const failed = await captureRuntimeParityWithMockRequests(
+      createTerminalImageParityInput("fail", "image_generate=true\nMEDIA:/tmp/failed-image.png"),
+    );
 
     expect(proven.toolCalls[0]?.errorClass).toBeUndefined();
     expect(unrelated.toolCalls[0]?.errorClass).toBe("tool-result-missing");

@@ -1,17 +1,13 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "../../infra/fs-safe.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
-import {
-  serializeWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifest,
-} from "./workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
+import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { probeWorkspaceGitMode } from "./workspace-sync-helpers.js";
 import {
   createWorkspaceGitTransferList,
   readWorkspaceTransferPaths,
-  runWorkspaceInventoryCommandToFile,
 } from "./workspace-sync-inventory.js";
 
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
@@ -21,7 +17,8 @@ export type NodeWorkspaceTransferSnapshot = {
   manifestRef: string;
   rawManifest: string;
   root: string;
-  packPath?: string;
+  /** Sparse checkpoint payloads contain only these paths from the complete manifest. */
+  blobPaths?: ReadonlySet<string>;
 };
 
 export async function prepareNodeWorkspaceTransferSnapshot(params: {
@@ -58,7 +55,7 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
       signal: params.signal ?? AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
       timeoutMs: TRANSFER_TIMEOUT_MS,
     });
-    const transferable = await readWorkspaceTransferPaths(transferList);
+    const transferable = await readWorkspaceTransferPaths(transferList, params.signal);
     const manifestPaths = new Set(transferable);
     for (const relative of transferable) {
       const segments = relative.split("/");
@@ -68,40 +65,22 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
     }
     includePaths = manifestPaths;
   }
-  const actual = await readActualWorkspaceManifest({ root, baseCommit, includePaths });
-  let packPath: string | undefined;
-  if (baseCommit) {
-    const signal = params.signal ?? AbortSignal.timeout(TRANSFER_TIMEOUT_MS);
-    const objectListPath = path.join(params.temporaryRoot, "base-objects");
-    packPath = path.join(params.temporaryRoot, "base.pack");
-    await runWorkspaceInventoryCommandToFile({
-      argv: [
-        "git",
-        "-C",
-        root,
-        "rev-list",
-        "--objects",
-        "--no-object-names",
-        `${baseCommit}^{tree}`,
-      ],
-      outputPath: objectListPath,
-      signal,
-      timeoutMs: TRANSFER_TIMEOUT_MS,
-    });
-    await fsp.appendFile(objectListPath, `${baseCommit}\n`);
-    await runWorkspaceInventoryCommandToFile({
-      argv: ["git", "-C", root, "pack-objects", "--stdout"],
-      inputPath: objectListPath,
-      outputPath: packPath,
-      signal,
-      timeoutMs: TRANSFER_TIMEOUT_MS,
-      maxOutputBytes: MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
-    });
-  }
+  const actual = await captureWorkspaceSnapshot({
+    root,
+    baseCommit,
+    includePaths,
+    signal: params.signal,
+  });
   return {
     ...actual,
-    rawManifest: serializeWorkerWorkspaceManifest(actual.manifest),
     root,
-    ...(packPath ? { packPath } : {}),
   };
+}
+
+export function nodeWorkspaceTransferEntryPath(root: string, relative: string): string {
+  const candidate = path.join(root, ...relative.split("/"));
+  if (candidate !== root && !isPathInside(root, candidate)) {
+    throw new Error("Workspace transfer entry escaped its staging root");
+  }
+  return candidate;
 }

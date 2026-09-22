@@ -1,14 +1,16 @@
 /** Shared cron operation invariants used across lifecycle, CRUD, and manual runs. */
-import { clearCronJobActive, markCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
+import { clearCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
+import { markServiceCronJobActive } from "./run-receipts.js";
 import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState } from "./runtime-store.js";
 import type { CronServiceState } from "./state.js";
-import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
+import { ensureLoadedForOperation, runPostPersistCronNotifications } from "./store.js";
 import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
-import { type IsolatedAgentSetupTimeoutSignal, runsDetachedFromMainSession } from "./timer.js";
+import type { IsolatedAgentSetupTimeoutSignal } from "./timer.js";
 
 /** Resolves the effective agent using explicit job identity before configured defaults. */
 export function resolveEffectiveJobAgentId(
@@ -21,13 +23,10 @@ export function resolveEffectiveJobAgentId(
 export function markManualCronJobActive(
   state: CronServiceState,
   job: CronJob,
+  runReceipt: CronRunReceiptHandle,
 ): CronActiveJobMarker | undefined {
-  const jobId = job.id;
-  state.activeManualRunJobIds.add(jobId);
-  return markCronJobActive(jobId, {
-    payloadKind: job.payload.kind,
-    preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
-  });
+  state.activeManualRunJobIds.add(job.id);
+  return markServiceCronJobActive(state, job, runReceipt);
 }
 
 export function clearManualCronJobActive(
@@ -59,8 +58,8 @@ export function maybeNotifyManualIsolatedSetupTimeout(
 }
 
 export async function ensureLoadedForRead(state: CronServiceState) {
-  await ensureLoaded(state, { skipRecompute: true });
-  if (!state.store) {
+  await ensureLoadedForOperation(state);
+  if (!state.store || state.schedulerStarted) {
     return;
   }
   // Read repair is row-owned and never advances a past-due slot (#16156).
@@ -71,7 +70,9 @@ export async function ensureLoadedForRead(state: CronServiceState) {
 
 /** Resolves the current configured default agent without caching reloadable state. */
 export function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
-  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+  return state.deps.resolveDefaultAgentId
+    ? state.deps.resolveDefaultAgentId()
+    : state.deps.defaultAgentId;
 }
 
 /** Returns whether a stream event still belongs to the job's current logical source. */

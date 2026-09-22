@@ -6,10 +6,12 @@ import { getHostDesktopGuidance } from "./host-guidance.js";
 import { HostDesktopCredentialsRequiredError } from "./host-source-errors.js";
 import {
   createManagedLinuxDesktop,
+  type DesktopComputerLease,
   type ManagedLinuxDesktop,
   type ManagedLinuxDesktopStatus,
 } from "./managed-linux.js";
 import { mintDesktopObserverToken } from "./observe-bridge.js";
+import type { DesktopObserveRequester } from "./observe-requester.js";
 import { classifyRfbSecurity, probeRfbServer, type RfbProbeResult } from "./rfb-probe.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
 
@@ -207,6 +209,7 @@ export function createHostDesktopSource(params: {
     (params.config.managed === true && platform === "linux"
       ? createManagedLinuxDesktop()
       : undefined);
+  let selectedManagedDesktop = false;
 
   const acquireAttached = async (
     probe: Extract<RfbProbeResult, { kind: "rfb" }>,
@@ -253,6 +256,7 @@ export function createHostDesktopSource(params: {
   };
 
   const acquire = async (): Promise<HostDesktopAcquireResult> => {
+    selectedManagedDesktop = false;
     const probe = await probeRfb({
       host: "127.0.0.1",
       port,
@@ -266,7 +270,9 @@ export function createHostDesktopSource(params: {
         if (!managedDesktop) {
           throw new Error("managed Linux desktop lifecycle is unavailable; restart the gateway");
         }
-        return await managedDesktop.acquire();
+        const acquired = await managedDesktop.acquire();
+        selectedManagedDesktop = true;
+        return acquired;
       }
       throw new Error(unavailableError(port, platform));
     }
@@ -278,7 +284,20 @@ export function createHostDesktopSource(params: {
 
   return {
     acquire,
-    teardown: managedDesktop ? () => managedDesktop.stop() : undefined,
+    acquireComputer: async (computerParams: { onStop(): Promise<void> }) => {
+      if (!selectedManagedDesktop || !managedDesktop) {
+        throw new Error(
+          "COMPUTER_HOST_UNAVAILABLE: the selected host desktop is an external VNC server; its local computer session is unknown",
+        );
+      }
+      return await managedDesktop.acquireComputer(computerParams);
+    },
+    teardown: managedDesktop
+      ? () => {
+          selectedManagedDesktop = false;
+          return managedDesktop.stop();
+        }
+      : undefined,
     inspect: () =>
       inspectHostDesktop({
         config: params.config,
@@ -292,6 +311,7 @@ export function createHostDesktopSource(params: {
 export type HostDesktopService = {
   observe(params: {
     control: boolean;
+    requester?: DesktopObserveRequester;
     credentials?: { username?: string; password?: string };
   }): Promise<{
     transport: "rfb";
@@ -301,6 +321,7 @@ export type HostDesktopService = {
     auth: "vnc-password" | "ard-account";
     vncPassword?: string;
   }>;
+  acquireComputer(params: { onStop(): Promise<void> }): Promise<DesktopComputerLease>;
   status(): Promise<HostDesktopStatus>;
 };
 
@@ -326,14 +347,16 @@ export function createHostDesktopService(params: {
     platform,
     ...(managedDesktop ? { managedDesktop } : {}),
   });
+  const acquire = () =>
+    params.registry.acquire({
+      sourceKey: "host",
+      ownerEpoch: 0,
+      start: source.acquire,
+      ...(source.teardown ? { teardown: source.teardown } : {}),
+    });
   return {
     async observe(observeParams) {
-      const acquired = await params.registry.acquire({
-        sourceKey: "host",
-        ownerEpoch: 0,
-        start: source.acquire,
-        ...(source.teardown ? { teardown: source.teardown } : {}),
-      });
+      const acquired = await acquire();
       const auth = acquired.auth;
       if (!auth) {
         throw new Error("gateway host desktop authentication state is unavailable; retry observe");
@@ -357,6 +380,7 @@ export function createHostDesktopService(params: {
         sourceKey: "host",
         ownerEpoch: 0,
         control: observeParams.control,
+        requester: observeParams.requester,
         attachment: acquired.attachment,
         ...(preauth ? { preauth } : {}),
       });
@@ -370,6 +394,31 @@ export function createHostDesktopService(params: {
           ? { vncPassword: acquired.vncPassword }
           : {}),
       };
+    },
+    async acquireComputer(computerParams) {
+      await acquire();
+      const activity = params.registry.retainActivity("host", 0);
+      if (!activity) {
+        throw new Error("COMPUTER_HOST_UNAVAILABLE: the host desktop stopped during acquisition");
+      }
+      try {
+        const computer = await source.acquireComputer(computerParams);
+        if (!activity.isCurrent() || !computer.isCurrent()) {
+          computer.release();
+          throw new Error("COMPUTER_HOST_UNAVAILABLE: the host desktop stopped during acquisition");
+        }
+        return {
+          env: computer.env,
+          isCurrent: () => activity.isCurrent() && computer.isCurrent(),
+          release() {
+            computer.release();
+            activity.release();
+          },
+        };
+      } catch (error) {
+        activity.release();
+        throw error;
+      }
     },
     async status() {
       return (await source.inspect()).status;

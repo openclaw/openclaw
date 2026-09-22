@@ -124,7 +124,7 @@ async function extractTarBz2WithStaging(params: {
   });
 }
 
-export async function extractArchive(params: {
+export async function extractSkillDownloadArchive(params: {
   archivePath: string;
   archiveType: string;
   targetDir: string;

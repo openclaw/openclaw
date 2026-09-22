@@ -3,18 +3,21 @@ import {
   formatPluginCapabilityConsentLines,
   resolvePluginCapabilityConsentCliOptions,
 } from "../../cli/plugin-capability-consent.js";
-import { resolvePluginInstallSourcePlan } from "../../cli/plugin-install-plan.js";
 import { createPluginInstallLogger } from "../../cli/plugins-command-helpers.js";
 import { resolvePendingPluginCapabilityReview } from "../../plugins/capability-consent.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "../../plugins/clawhub.js";
-import type { ConfigSnapshotForInstallPersist } from "../../plugins/install-persistence.js";
+import type { ConfigSnapshotForInstallPersist } from "../../plugins/install-config-mutation.js";
 import {
   formatNonClawHubInstallWarning,
   NON_CLAWHUB_INSTALL_FORCE_FLAG,
   type NonClawHubInstallSourceClass,
 } from "../../plugins/install-provenance.js";
+import { resolvePluginInstallSourcePlan } from "../../plugins/install-source-plan.js";
+import type {
+  PluginLifecycleRuntimeApply,
+  PluginRuntimeApplication,
+} from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
-import { installManagedPluginSource } from "../../plugins/management-service.js";
+import { installManagedPlugin } from "../../plugins/management-mutations.js";
 
 export function formatPluginCommandCapabilityConsentError(
   error: unknown,
@@ -53,8 +56,17 @@ export async function installPluginFromPluginsCommand(params: {
   acceptCapabilities: boolean;
   force: boolean;
   snapshot: ConfigSnapshotForInstallPersist;
+  applyRuntime?: PluginLifecycleRuntimeApply;
+  beforePersistentApply?: () => void;
+  signal?: AbortSignal;
 }): Promise<
-  { ok: true; pluginId: string; warnings?: readonly string[] } | { ok: false; error: string }
+  | {
+      ok: true;
+      pluginId: string;
+      warnings?: readonly string[];
+      application?: PluginRuntimeApplication;
+    }
+  | { ok: false; error: string }
 > {
   const installMode = params.force ? "update" : "install";
   const plan = resolvePluginInstallSourcePlan({ raw: params.raw, mode: installMode });
@@ -70,13 +82,16 @@ export async function installPluginFromPluginsCommand(params: {
   if (acknowledgement && !acknowledgement.ok) {
     return acknowledgement;
   }
-  const warnings: string[] = [];
+  const warnings: string[] = plan.warning ? [plan.warning] : [];
   const logger = createPluginInstallLogger();
   const clawhub = plan.request.source === "clawhub";
-  let result: Awaited<ReturnType<typeof installManagedPluginSource>>;
+  let result: Awaited<ReturnType<typeof installManagedPlugin>>;
   try {
-    result = await installManagedPluginSource({
+    result = await installManagedPlugin({
       request: plan.request,
+      applyRuntime: params.applyRuntime,
+      beforePersistentApply: params.beforePersistentApply,
+      signal: params.signal,
       snapshot: params.snapshot,
       ...resolvePluginCapabilityConsentCliOptions({
         acceptCapabilities: params.acceptCapabilities,
@@ -103,21 +118,10 @@ export async function installPluginFromPluginsCommand(params: {
     if (consentError) {
       return { ok: false, error: consentError };
     }
-    throw error;
-  }
-  if (!result.ok) {
-    const warning = "warning" in result ? result.warning : warnings.join("\n");
-    const warningPrefix = warning ? `${warning} ` : "";
-    if (
-      clawhub &&
-      result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED
-    ) {
-      return {
-        ok: false,
-        error: `${warningPrefix}${result.error} The /plugins chat command cannot acknowledge ClawHub risk; run the local openclaw plugins install command with --acknowledge-clawhub-risk from a trusted shell after reviewing the warning.`,
-      };
+    if (error instanceof ManagedPluginLifecycleError && error.installRejected) {
+      return { ok: false, error: [error.warning, error.message].filter(Boolean).join(" ") };
     }
-    return { ok: false, error: `${warningPrefix}${result.error}` };
+    throw error;
   }
   warnings.push(...(result.warnings ?? []));
   if (acknowledgement?.ok) {
@@ -125,7 +129,8 @@ export async function installPluginFromPluginsCommand(params: {
   }
   return {
     ok: true,
-    pluginId: result.pluginId,
+    pluginId: result.plugin.id,
+    ...(result.application ? { application: result.application } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
   };
 }

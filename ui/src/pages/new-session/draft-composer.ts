@@ -1,14 +1,72 @@
-import { nothing, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
+import {
+  lobsterPetSeed,
+  resolveLobsterPetMode,
+  resolveLobsterRunOutcome,
+} from "../../components/lobster-pet-contract.ts";
+import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import { NewSessionComposerTextareaController, renderNewSessionComposer } from "./composer.ts";
-import type { NewSessionVisibility } from "./create-params.ts";
+import { NewSessionComposerTextareaController } from "./composer-controller.ts";
+import { renderNewSessionComposer } from "./composer.ts";
+import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.ts";
+import { renderDraftError } from "./draft-body.ts";
+import type { DraftPlaceState } from "./draft-place-state.ts";
+import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
+
+registerNewSessionSetupEnglish();
+
+export function renderNewSessionDraftErrors(
+  place: Pick<DraftPlaceState, "worktree" | "worktreeName">,
+  submission: Pick<
+    DraftSubmissionFlow,
+    | "submissionOutcomeUnknown"
+    | "pendingPlacement"
+    | "clearPendingPlacementRecovery"
+    | "capabilities"
+  >,
+  isCatalogTarget: boolean,
+) {
+  const worktreeNameInvalid = place.worktree && !isWorktreeNameValid(place.worktreeName);
+  const capabilities = submission.capabilities;
+  return html`
+    ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
+    ${
+      isCatalogTarget && capabilities.toolOverrides
+        ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), {
+            label: t("common.reset"),
+            onClick: () => capabilities.setToolOverrides(null),
+          })
+        : nothing
+    }
+    ${
+      submission.submissionOutcomeUnknown
+        ? renderDraftError(
+            t(
+              submission.submissionOutcomeUnknown === "gateway-changed"
+                ? "newSession.createOutcomeUnknown"
+                : "newSession.placementSetupInterrupted",
+            ),
+            submission.pendingPlacement.sessionKey
+              ? {
+                  label: t("common.reset"),
+                  onClick: () => submission.clearPendingPlacementRecovery(),
+                }
+              : undefined,
+          )
+        : nothing
+    }
+  `;
+}
 
 export function renderNewSessionDraftComposer(options: {
   agent?: GatewayAgentRow;
@@ -19,6 +77,8 @@ export function renderNewSessionDraftComposer(options: {
   draftOwnerKey: string;
   isCatalogTarget: boolean;
   message: string;
+  mentions?: readonly HumanMention[];
+  getMentions?: () => readonly HumanMention[];
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
   capabilityMenu?: CapabilityMenuProps;
@@ -34,31 +94,67 @@ export function renderNewSessionDraftComposer(options: {
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: TemplateResult | typeof nothing;
-  terminalAction?: {
-    canStart: boolean;
-    disabledReason?: string;
-    onStart: () => void;
-  };
+  nativeTerminal?: boolean;
+  onUnsupportedAttachment?: () => void;
   submitting: boolean;
   messageLocked?: boolean;
-  onInput: (message: string) => void;
+  onInput: (message: string, mentions?: readonly HumanMention[]) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
+  onBackgroundSubmit?: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
-  const commandClient = options.context?.gateway.snapshot.client ?? null;
+  const commandClient = options.nativeTerminal
+    ? null
+    : (options.context?.gateway.snapshot.client ?? null);
+  const gateway = options.context?.gateway;
+  const profile = gateway?.snapshot.selfUser?.identity;
+  const mentionDirectory =
+    commandClient &&
+    gateway?.snapshot.phase === "connected" &&
+    profile?.type === "profile" &&
+    hasOperatorWriteAccess(gateway.snapshot.hello?.auth ?? null) &&
+    !options.isCatalogTarget &&
+    options.visibility !== "incognito"
+      ? {
+          client: commandClient,
+          ownerKey: JSON.stringify([
+            gateway.connectionRevision,
+            commandClient.recoveryScope,
+            profile.id,
+            options.draftOwnerKey,
+          ]),
+          params: {
+            agentId: options.agentId,
+            ...(options.visibility === "draft" ? { visibility: "draft" as const } : {}),
+          },
+        }
+      : undefined;
   options.textareaController.syncSkillCommandOwner(
     commandClient,
     options.agentId,
     options.draftOwnerKey,
   );
   return renderNewSessionComposer({
+    renderCritters: (floorEnabled) => html`<openclaw-lobster-pet
+      .seed=${lobsterPetSeed(`${options.textareaController.critterVisit}:${options.draftOwnerKey}`)}
+      .mode=${resolveLobsterPetMode(!gateway?.snapshot.offlineStable, options.context?.sessions.state.result?.sessions)}
+      .runOutcome=${resolveLobsterRunOutcome(options.context?.sessions.state.result?.sessions)}
+      .visitsEnabled=${options.context?.theme.settings.lobsterPetVisits !== false}
+      .soundsEnabled=${options.context?.theme.settings.lobsterPetSounds === true}
+      .gatewayVersion=${options.context?.config.current.serverVersion ?? gateway?.snapshot.hello?.server?.version ?? null}
+      .onVisitsDisabled=${() => options.context?.theme.refresh()}
+      .floorEnabled=${floorEnabled}
+    ></openclaw-lobster-pet>`,
     attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
     attachments: options.attachmentDraft.attachments,
     canSubmit: options.canSubmit,
     getAttachments: () => options.attachmentDraft.attachments,
     message: options.message,
+    mentions: options.mentions,
+    getMentions: options.getMentions,
+    mentionDirectory,
     visibility: options.visibility,
     draftAvailable: options.draftAvailable,
     capabilityMenu: options.capabilityMenu,
@@ -94,7 +190,8 @@ export function renderNewSessionDraftComposer(options: {
     dictationActive: options.dictationActive,
     dictationPreview: options.dictationPreview,
     dictationStatus: options.dictationStatus,
-    terminalAction: options.terminalAction,
+    nativeTerminal: options.nativeTerminal,
+    onUnsupportedAttachment: options.onUnsupportedAttachment,
     submitting: options.submitting,
     textareaController: options.textareaController,
     voiceControl: options.voiceControl,
@@ -109,5 +206,6 @@ export function renderNewSessionDraftComposer(options: {
     onOpenImage: options.onOpenImage,
     onVisibilityChange: options.onVisibilityChange,
     onSubmit: options.onSubmit,
+    onBackgroundSubmit: options.onBackgroundSubmit,
   });
 }

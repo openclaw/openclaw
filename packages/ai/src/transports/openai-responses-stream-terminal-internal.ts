@@ -23,6 +23,7 @@ import type {
   ToolCall,
   Usage,
 } from "../types.js";
+import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
 import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE,
@@ -31,7 +32,10 @@ import {
 } from "./openai-responses-contracts.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import type { ResponsesOutputTracker } from "./openai-responses-stream-slots-internal.js";
-import { parseTerminalToolCallArguments } from "./transport-stream-shared.js";
+import {
+  IncompleteToolCallError,
+  parseTerminalToolCallArguments,
+} from "./transport-stream-shared.js";
 
 export type ResponsesEventSink = { push(event: AssistantMessageEvent): void };
 export type TextBlockReference = {
@@ -57,6 +61,7 @@ type TerminalOptions = {
     tier: ResponseCreateParamsStreaming["service_tier"] | undefined,
   ) => void;
   reasoningReplayMetadata?: OpenAIResponsesReasoningReplayMetadata;
+  resolveResponseModel?: () => string | undefined;
 };
 
 function splitToolCallId(id: string): [string, string | undefined] {
@@ -85,7 +90,9 @@ export function resolveCompletedResponsesToolCall(
   streamed?: { name?: string; arguments?: string },
 ): Pick<ToolCall, "name" | "arguments"> {
   if (item.status && item.status !== "completed") {
-    throw new Error("Responses stream completed with an incomplete terminal tool call");
+    throw new IncompleteToolCallError(
+      "Responses stream completed with an incomplete terminal tool call",
+    );
   }
   const streamedName = streamed?.name?.trim() || undefined;
   const completedName = typeof item.name === "string" ? item.name.trim() || undefined : undefined;
@@ -207,7 +214,7 @@ export function createResponsesTerminalController(params: {
     item: { type: "function_call"; id?: string; call_id?: string },
     outputIndex: number | undefined,
     started: { block: ToolCall; contentIndex: number } | undefined,
-    validated: Pick<ToolCall, "name" | "arguments">,
+    validated: Pick<ToolCall, "name" | "arguments" | "async">,
   ): void => {
     // Complete the same public block with authoritative identities and arguments;
     // scratch JSON must never survive into transcript replay.
@@ -304,7 +311,9 @@ export function createResponsesTerminalController(params: {
     responseId = response.id,
   ) => {
     output.responseId = responseId || output.responseId;
-    output.responseModel = response.model?.trim() || undefined;
+    output.responseModel = options?.resolveResponseModel
+      ? options.resolveResponseModel()?.trim() || undefined
+      : response.model?.trim() || undefined;
     const usage = mapResponsesTerminalUsage(response.usage);
     const reasoningTokens = readResponsesReasoningTokens(response.usage);
     if (usage) {
@@ -326,7 +335,7 @@ export function createResponsesTerminalController(params: {
     response: Extract<
       ResponseStreamEvent,
       { type: "response.completed" | "response.incomplete" }
-    >["response"],
+    >["response"] & { end_turn?: unknown },
     terminalEventType: "response.completed" | "response.incomplete",
   ) => {
     backfillReasoning(response.output ?? []);
@@ -339,6 +348,34 @@ export function createResponsesTerminalController(params: {
     });
     output.stopReason = terminal.stopReason;
     output.errorMessage = terminal.errorMessage;
+    if (terminalEventType === "response.completed" && typeof response.end_turn === "boolean") {
+      output.endTurn = response.end_turn;
+    }
+    const incompleteReason = response.incomplete_details?.reason;
+    appendAssistantMessageDiagnostic(output, {
+      type: "openai_responses_terminal",
+      timestamp: Date.now(),
+      details: {
+        eventType: terminalEventType,
+        ...(terminalEventType === "response.incomplete"
+          ? {
+              incompleteReason:
+                incompleteReason === "max_output_tokens" ||
+                incompleteReason === "max_messages" ||
+                incompleteReason === "content_filter" ||
+                incompleteReason === "steered"
+                  ? incompleteReason
+                  : "unknown",
+            }
+          : {}),
+        endTurn:
+          typeof response.end_turn === "boolean"
+            ? response.end_turn
+            : response.end_turn === undefined
+              ? "absent"
+              : "invalid",
+      },
+    });
   };
   return {
     finalizeResponse,

@@ -12,7 +12,7 @@ import {
   ArchiveSecurityError,
   extractArchive,
 } from "../infra/archive.js";
-import { createBackupLinkCache } from "../infra/backup-volatile-stat-cache.js";
+import { createBackupVolatileStatCache } from "../infra/backup-volatile-stat-cache.js";
 import {
   getPublishFileExclusiveFailureDetails,
   publishFileNoClobber,
@@ -302,7 +302,7 @@ export async function backupFleetCell(params: {
           gzip: true,
           portable: true,
           preservePaths: true,
-          linkCache: createBackupLinkCache(),
+          statCache: createBackupVolatileStatCache(() => false),
           filter,
           onWriteEntry: (entry) => {
             entry.path = remapArchivePath(entry.path, manifestPath, dataTarget, authTarget);
@@ -376,9 +376,8 @@ export async function backupFleetCell(params: {
 }
 
 function isAllowedRestorePath(rawPath: string): boolean {
-  // Fleet archives use POSIX separators only. A literal backslash would
-  // validate as one path but extract as another on POSIX, so it is rejected
-  // outright at both backup and restore time.
+  // Backup writes canonical POSIX names; restore receives fs-safe's canonical
+  // paths. Reject raw aliases here when validating backup source names.
   if (rawPath.includes("\\")) {
     return false;
   }
@@ -674,21 +673,25 @@ export async function restoreFleetCell(params: {
       ),
     );
 
+    // Restore decided to displace the generation inspected above, so every
+    // re-validation below re-inspects that identity rather than the cell name.
+    // Re-inspecting the name would let a container that claimed it in the
+    // meantime pass the ownership guard and be stopped or removed instead.
     if (wasRunning) {
       params.checkpoint();
-      assertManagedInspection(
+      const running = assertManagedInspection(
         params.record,
-        await params.containers.inspect(params.record.runtime, params.record.containerName),
+        await params.containers.inspect(params.record.runtime, inspection.containerId),
       );
-      await params.containers.stop(params.record.runtime, params.record.containerName);
+      await params.containers.stop(params.record.runtime, running.containerId);
       stoppedForRestore = true;
     }
     params.checkpoint();
-    assertManagedInspection(
+    const removable = assertManagedInspection(
       params.record,
-      await params.containers.inspect(params.record.runtime, params.record.containerName),
+      await params.containers.inspect(params.record.runtime, inspection.containerId),
     );
-    await params.containers.remove(params.record.runtime, params.record.containerName, false);
+    await params.containers.remove(params.record.runtime, removable.containerId, false);
     containerRemoved = true;
     params.checkpoint();
     previousDisplaced = true;
@@ -751,7 +754,7 @@ export async function restoreFleetCell(params: {
           current.labels[FLEET_ATTEMPT_LABEL] === replacementAttemptId &&
           current.running
         ) {
-          await params.containers.stop(params.record.runtime, params.record.containerName);
+          await params.containers.stop(params.record.runtime, current.containerId);
           replacementNote =
             " The interrupted replacement container was stopped; retry fleet restore to rotate a fresh Gateway token.";
         } else if (current.kind === "unavailable") {
@@ -781,15 +784,14 @@ export async function restoreFleetCell(params: {
       // Restart the same managed generation so an aborted restore does not
       // strand a healthy tenant stopped; the original error stays primary.
       try {
+        // Same generation by identity, so no attempt-label comparison is needed:
+        // the cell name may already point at something this must not start.
         const current = assertManagedInspection(
           params.record,
-          await params.containers.inspect(params.record.runtime, params.record.containerName),
+          await params.containers.inspect(params.record.runtime, inspection.containerId),
         );
-        if (
-          !current.running &&
-          current.labels[FLEET_ATTEMPT_LABEL] === inspection.labels[FLEET_ATTEMPT_LABEL]
-        ) {
-          await params.containers.start(params.record.runtime, params.record.containerName);
+        if (!current.running) {
+          await params.containers.start(params.record.runtime, current.containerId);
         }
       } catch {
         // Best-effort recovery; the container remains stopped but intact.

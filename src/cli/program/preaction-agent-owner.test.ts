@@ -1,7 +1,10 @@
 // Preaction parser coverage for explicit legacy migration ownership.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { tryResolveLegacyCompatibilityAgentId } from "../../agents/agent-scope-config.js";
+import {
+  tryResolveLegacyCompatibilityAgentId,
+  tryResolveLegacyDataOwnerAgentId,
+} from "../../agents/agent-scope-config.js";
 import { createDoctorConfigSnapshot } from "../../commands/doctor-config-snapshot.test-helpers.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,7 +24,6 @@ vi.mock("../../runtime.js", () => ({
 }));
 vi.mock("../../logging/console.js", () => ({ routeLogsToStderr: vi.fn() }));
 vi.mock("../banner.js", () => ({ emitCliBanner: vi.fn() }));
-vi.mock("../cli-name.js", () => ({ resolveCliName: () => "openclaw" }));
 vi.mock("./config-guard.js", () => ({ ensureConfigReady: mocks.ensureConfigReady }));
 vi.mock("../plugin-registry.js", () => ({ ensurePluginRegistryLoaded: vi.fn() }));
 
@@ -77,7 +79,8 @@ describe("preaction migration agent owner", () => {
 
       await program.parseAsync(process.argv);
 
-      expect(tryResolveLegacyCompatibilityAgentId(config)).toBe(expected);
+      expect(tryResolveLegacyDataOwnerAgentId(config)).toBe(expected);
+      expect(tryResolveLegacyCompatibilityAgentId(config)).toBeUndefined();
     },
   );
 });

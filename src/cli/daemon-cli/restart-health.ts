@@ -4,6 +4,11 @@ import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-pr
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
+import {
+  createConfiguredGatewayLocalProbe,
+  type ConfiguredGatewayLocalProbe,
+} from "../../gateway/local-http-probe.js";
+import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { classifyPortListener } from "../../infra/ports-format.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import type { PortUsage } from "../../infra/ports-types.js";
@@ -14,9 +19,9 @@ import {
 import { sleep } from "../../utils.js";
 import {
   confirmGatewayReachable,
-  resolveGatewayRestartProbeAuth,
+  resolveGatewayRestartProbeContext,
   type GatewayReachability,
-  type GatewayRestartProbeAuth,
+  type GatewayRestartProbeContext,
 } from "./restart-health-probe.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
@@ -28,58 +33,59 @@ export {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
 } from "./restart-health.constants.js";
+export { waitForGatewayHttpReadiness } from "./restart-health-probe.js";
 export {
+  formatGatewayRestartFailure,
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
 } from "./restart-health-diagnostics.js";
 export { waitForGatewayHealthyListener } from "./restart-health-external.js";
-export type {
-  GatewayPortHealthSnapshot,
-  GatewayRestartSnapshot,
-  GatewayRestartWaitOutcome,
-} from "./restart-health.types.js";
+export type { GatewayRestartSnapshot } from "./restart-health.types.js";
 export { terminateStaleGatewayPids } from "../../infra/restart-stale-pids.js";
 
 const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
 const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
 
-function applyExpectedVersion(
+// Both callers pass a fresh snapshot that has not escaped inspection.
+function finalizeGatewayRestartSnapshot(
   snapshot: GatewayRestartSnapshot,
   expectedVersion: string | undefined,
+  expectedBuildId: string | undefined,
+  requirePluginHealth: boolean,
 ): GatewayRestartSnapshot {
-  if (!expectedVersion) {
-    return snapshot;
+  if (expectedVersion) {
+    snapshot.expectedVersion = expectedVersion;
+    if (snapshot.gatewayVersion !== expectedVersion) {
+      snapshot.healthy = false;
+      if (snapshot.gatewayVersion != null) {
+        snapshot.versionMismatch = {
+          expected: expectedVersion,
+          actual: snapshot.gatewayVersion,
+        };
+      }
+    }
   }
-  if (snapshot.gatewayVersion === expectedVersion) {
-    return { ...snapshot, expectedVersion };
+  // Runtime identity remains required even with a separately configured UI root.
+  if (expectedBuildId) {
+    snapshot.expectedBuildId = expectedBuildId;
+    if (snapshot.gatewayBuildId !== expectedBuildId) {
+      snapshot.healthy = false;
+      if (snapshot.gatewayBuildId !== undefined) {
+        snapshot.buildIdMismatch = {
+          expected: expectedBuildId,
+          actual: snapshot.gatewayBuildId ?? null,
+        };
+      }
+    }
   }
-  if (snapshot.gatewayVersion == null) {
-    return { ...snapshot, healthy: false, expectedVersion };
+  if (
+    (requirePluginHealth && snapshot.activatedPluginErrors?.length) ||
+    snapshot.channelProbeErrors?.length
+  ) {
+    snapshot.healthy = false;
   }
-  return {
-    ...snapshot,
-    healthy: false,
-    expectedVersion,
-    versionMismatch: {
-      expected: expectedVersion,
-      actual: snapshot.gatewayVersion ?? null,
-    },
-  };
-}
-
-function applyActivatedPluginErrors(snapshot: GatewayRestartSnapshot): GatewayRestartSnapshot {
-  if (!snapshot.activatedPluginErrors?.length) {
-    return snapshot;
-  }
-  return { ...snapshot, healthy: false };
-}
-
-function applyChannelProbeErrors(snapshot: GatewayRestartSnapshot): GatewayRestartSnapshot {
-  if (!snapshot.channelProbeErrors?.length) {
-    return snapshot;
-  }
-  return { ...snapshot, healthy: false };
+  return snapshot;
 }
 
 export async function inspectGatewayRestart(params: {
@@ -87,10 +93,20 @@ export async function inspectGatewayRestart(params: {
   port: number;
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
-  includeUnknownListenersAsStale?: boolean;
-  probeAuth?: GatewayRestartProbeAuth;
+  expectedBuildId?: string | null;
+  requirePluginHealth?: boolean;
+  probeContext?: GatewayRestartProbeContext;
+  configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<GatewayRestartSnapshot> {
+  params.signal?.throwIfAborted();
+  const startedAtMs = performance.now();
+  const remainingTimeoutMs = () =>
+    params.timeoutMs === undefined
+      ? undefined
+      : Math.max(1, params.timeoutMs - (performance.now() - startedAtMs));
   const env = params.env ?? process.env;
   const probeHosts =
     params.probeHosts ??
@@ -99,31 +115,43 @@ export async function inspectGatewayRestart(params: {
       command: (await params.service.readCommand?.(env).catch(() => null)) ?? null,
     }));
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
+  const expectedBuildId = normalizeOptionalString(params.expectedBuildId);
+  const requiresGatewayProbe = Boolean(
+    expectedVersion || expectedBuildId || params.requirePluginHealth === false,
+  );
   let reachability: GatewayReachability | null = null;
   let probeError: string | undefined;
   let activatedPluginErrors: PluginHealthErrorSummary[] = [];
+  let unavailablePlugins: GatewayReachability["unavailablePlugins"] = [];
   let channelProbeErrors: Array<{ id: string; error: string }> = [];
   const loadReachability = async () => {
     if (!reachability) {
       reachability = await confirmGatewayReachable({
         port: params.port,
-        includeHealthDetails: Boolean(expectedVersion),
-        auth: params.probeAuth,
+        ...params.probeContext,
+        ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
         env,
+        timeoutMs: remainingTimeoutMs(),
+        ...(params.signal ? { signal: params.signal } : {}),
       });
       probeError = reachability.probeError;
       activatedPluginErrors = reachability.activatedPluginErrors;
+      unavailablePlugins = reachability.unavailablePlugins;
       channelProbeErrors = reachability.channelProbeErrors;
     }
     return reachability;
   };
-  let runtime: GatewayServiceRuntime = { status: "unknown" };
+  let runtime: GatewayServiceRuntime;
   try {
-    runtime = await params.service.readRuntime(env);
+    runtime =
+      params.timeoutMs === undefined
+        ? await params.service.readRuntime(env)
+        : await params.service.readRuntime(env, { timeoutMs: remainingTimeoutMs() });
   } catch (err) {
     runtime = { status: "unknown", detail: String(err) };
   }
 
+  params.signal?.throwIfAborted();
   let portUsage: PortUsage;
   try {
     portUsage = await inspectPortUsage(params.port, {
@@ -139,28 +167,32 @@ export async function inspectGatewayRestart(params: {
     };
   }
 
+  params.signal?.throwIfAborted();
   if (portUsage.status === "busy" && runtime.status !== "running") {
     const reachable = await loadReachability();
     if (reachable.reachable) {
-      return applyChannelProbeErrors(
-        applyActivatedPluginErrors(
-          applyExpectedVersion(
-            {
-              runtime,
-              portUsage,
-              healthy: true,
-              staleGatewayPids: [],
-              gatewayVersion: reachable.gatewayVersion,
-              ...(reachable.activatedPluginErrors.length > 0
-                ? { activatedPluginErrors: reachable.activatedPluginErrors }
-                : {}),
-              ...(reachable.channelProbeErrors.length > 0
-                ? { channelProbeErrors: reachable.channelProbeErrors }
-                : {}),
-            },
-            expectedVersion,
-          ),
-        ),
+      return finalizeGatewayRestartSnapshot(
+        {
+          runtime,
+          portUsage,
+          healthy: true,
+          staleGatewayPids: [],
+          gatewayVersion: reachable.gatewayVersion,
+          ...(reachable.gatewayBootId ? { gatewayBootId: reachable.gatewayBootId } : {}),
+          gatewayBuildId: reachable.gatewayBuildId,
+          ...(reachable.activatedPluginErrors.length > 0
+            ? { activatedPluginErrors: reachable.activatedPluginErrors }
+            : {}),
+          ...(reachable.unavailablePlugins.length > 0
+            ? { unavailablePlugins: reachable.unavailablePlugins }
+            : {}),
+          ...(reachable.channelProbeErrors.length > 0
+            ? { channelProbeErrors: reachable.channelProbeErrors }
+            : {}),
+        },
+        expectedVersion,
+        expectedBuildId,
+        params.requirePluginHealth !== false,
       );
     }
   }
@@ -170,16 +202,6 @@ export async function inspectGatewayRestart(params: {
       ? portUsage.listeners.filter(
           (listener) => classifyPortListener(listener, params.port) === "gateway",
         )
-      : [];
-  const fallbackListenerPids =
-    params.includeUnknownListenersAsStale &&
-    process.platform === "win32" &&
-    runtime.status !== "running" &&
-    portUsage.status === "busy"
-      ? portUsage.listeners
-          .filter((listener) => classifyPortListener(listener, params.port) === "unknown")
-          .map((listener) => listener.pid)
-          .filter((pid): pid is number => Number.isFinite(pid))
       : [];
   const running = runtime.status === "running";
   const runtimePid = runtime.pid;
@@ -191,59 +213,60 @@ export async function inspectGatewayRestart(params: {
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
   let healthy = running && ownsPort;
+  let gatewayBootId: string | undefined;
   let gatewayVersion: string | null | undefined;
-  if (expectedVersion && healthy && portUsage.status === "busy") {
+  let gatewayBuildId: string | null | undefined;
+  if (requiresGatewayProbe && healthy && portUsage.status === "busy") {
     const reachable = await loadReachability();
     healthy = reachable.reachable;
+    gatewayBootId = reachable.gatewayBootId;
     gatewayVersion = reachable.gatewayVersion;
-    if (reachable.activatedPluginErrors.length > 0) {
-      healthy = false;
-    }
-    if (reachable.channelProbeErrors.length > 0) {
-      healthy = false;
-    }
+    gatewayBuildId = reachable.gatewayBuildId;
   }
-  if (!healthy && running && portUsage.status === "busy" && !expectedVersion) {
+  if (!healthy && running && portUsage.status === "busy" && !requiresGatewayProbe) {
     const reachable = await loadReachability();
     healthy = reachable.reachable;
+    gatewayBootId = reachable.gatewayBootId;
     gatewayVersion = reachable.gatewayVersion;
+    gatewayBuildId = reachable.gatewayBuildId;
   }
-  const staleGatewayPids = Array.from(
-    new Set([
-      ...gatewayListeners
-        .filter((listener) => Number.isFinite(listener.pid))
-        .filter((listener) => {
-          if (!running) {
-            return true;
-          }
-          if (runtimePid == null) {
-            return false;
-          }
-          return !listenerOwnedByRuntimePid({ listener, runtimePid });
-        })
-        .map((listener) => listener.pid as number),
-      ...fallbackListenerPids.filter(
-        (pid) => runtime.pid == null || pid !== runtime.pid || !running,
-      ),
-    ]),
-  );
+  // Read after probes: an owner can acquire the coordinator while health is unavailable.
+  const owner =
+    portUsage.status === "busy" ? readGatewayOwnerLease({ env, port: params.port }) : undefined;
+  // A recorded owner is never stale by PID inference; other listeners are foreign.
+  // 2026.9.3 Gateways have no row and retain the installed-runtime ownership path.
+  const staleGatewayPids = owner
+    ? []
+    : Array.from(
+        new Set(
+          gatewayListeners.flatMap((listener) =>
+            typeof listener.pid === "number" &&
+            Number.isFinite(listener.pid) &&
+            (!running ||
+              (runtimePid != null && !listenerOwnedByRuntimePid({ listener, runtimePid })))
+              ? [listener.pid]
+              : [],
+          ),
+        ),
+      );
 
-  return applyChannelProbeErrors(
-    applyActivatedPluginErrors(
-      applyExpectedVersion(
-        {
-          runtime,
-          portUsage,
-          healthy,
-          staleGatewayPids,
-          ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
-          ...(probeError ? { probeError } : {}),
-          ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
-          ...(channelProbeErrors.length ? { channelProbeErrors } : {}),
-        },
-        expectedVersion,
-      ),
-    ),
+  return finalizeGatewayRestartSnapshot(
+    {
+      runtime,
+      portUsage,
+      healthy,
+      staleGatewayPids,
+      ...(gatewayBootId ? { gatewayBootId } : {}),
+      ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
+      ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
+      ...(probeError ? { probeError } : {}),
+      ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
+      ...(unavailablePlugins.length ? { unavailablePlugins } : {}),
+      ...(channelProbeErrors.length ? { channelProbeErrors } : {}),
+    },
+    expectedVersion,
+    expectedBuildId,
+    params.requirePluginHealth !== false,
   );
 }
 
@@ -273,25 +296,52 @@ function withWaitContext(
   return { ...snapshot, waitOutcome, elapsedMs };
 }
 
+export function isSameGatewayRestartGeneration(
+  previous: GatewayRestartSnapshot,
+  current: GatewayRestartSnapshot,
+): boolean {
+  return (
+    previous.runtime.status === current.runtime.status &&
+    previous.runtime.pid === current.runtime.pid &&
+    previous.gatewayBootId === current.gatewayBootId
+  );
+}
+
 export async function waitForGatewayHealthyRestart(params: {
   service: GatewayService;
   port: number;
   attempts?: number;
   delayMs?: number;
+  timeoutMs?: number;
+  settle?: { probes: number };
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
-  includeUnknownListenersAsStale?: boolean;
+  expectedBuildId?: string | null;
   requireRunningService?: boolean;
+  requirePluginHealth?: boolean;
   supervisorKeepsAlive?: boolean;
   isStartupMigrationActive?: typeof hasActiveStartupMigrationLease;
   probeHosts?: readonly string[];
+  signal?: AbortSignal;
 }): Promise<GatewayRestartSnapshot> {
+  params.signal?.throwIfAborted();
   const startedAtMs = performance.now();
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
-  const standardDeadlineMs = attempts * delayMs;
+  const settleProbes = Math.max(1, params.settle?.probes ?? 1);
+  const settleDurationMs = (settleProbes - 1) * delayMs;
+  const standardDeadlineMs = params.timeoutMs ?? attempts * delayMs;
+  const probeTimeoutMs = () =>
+    params.timeoutMs === undefined
+      ? undefined
+      : Math.max(1, params.timeoutMs + settleDurationMs - (performance.now() - startedAtMs));
+  const updateInProgress = (params.env ?? process.env).OPENCLAW_UPDATE_IN_PROGRESS === "1";
 
-  const probeAuth = await resolveGatewayRestartProbeAuth(params.env).catch(() => undefined);
+  const probeContext = await resolveGatewayRestartProbeContext(params.env).catch(() => ({
+    auth: undefined,
+    config: {},
+  }));
+  const configuredProbe = createConfiguredGatewayLocalProbe(probeContext.config);
   const probeHosts =
     params.probeHosts ??
     (await resolveGatewayServiceProbeHosts({
@@ -303,9 +353,13 @@ export async function waitForGatewayHealthyRestart(params: {
     port: params.port,
     env: params.env,
     expectedVersion: params.expectedVersion,
-    includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
-    probeAuth,
+    expectedBuildId: params.expectedBuildId,
+    requirePluginHealth: params.requirePluginHealth,
+    probeContext,
+    configuredProbe,
     probeHosts,
+    timeoutMs: probeTimeoutMs(),
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 
   let consecutiveStoppedFreeCount = 0;
@@ -318,17 +372,69 @@ export async function waitForGatewayHealthyRestart(params: {
   let postMigrationDeadlineMs: number | undefined;
   let migrationActive = false;
   let nextMigrationActivityPollMs = 0;
+  let healthyStreak: { snapshot: GatewayRestartSnapshot; probes: number } | undefined;
+  let updateStartupDeadlineMs: number | undefined;
+  let observedOwner: string | undefined;
+  let observedPid: number | undefined;
+  let observedBootId: string | undefined;
+  let generationChanged = false;
 
   for (let attempt = 0; ; attempt += 1) {
+    params.signal?.throwIfAborted();
+    // Preserve observed restarts across unavailable probes; first identity is startup progress.
+    generationChanged ||=
+      (observedPid !== undefined &&
+        snapshot.runtime.pid !== undefined &&
+        observedPid !== snapshot.runtime.pid) ||
+      (observedBootId !== undefined &&
+        snapshot.gatewayBootId !== undefined &&
+        observedBootId !== snapshot.gatewayBootId);
+    observedPid = snapshot.runtime.pid ?? observedPid;
+    observedBootId = snapshot.gatewayBootId ?? observedBootId;
+    const expiredOutcome = generationChanged ? "generation-changed" : "timeout";
     // Health probes and state-DB reads are part of the operator-visible wait. A monotonic clock
     // keeps both the normal deadline and migration watchdog bounded when those operations stall.
     const elapsedMs = Math.max(0, performance.now() - startedAtMs);
-    const healthy =
-      snapshot.healthy && (!params.requireRunningService || snapshot.runtime.status === "running");
-    if (healthy) {
-      return withWaitContext(snapshot, "healthy", elapsedMs);
+    if (updateInProgress && snapshot.runtime.status === "running") {
+      // Old updaters invoke the candidate CLI without forwarding their budget. A live
+      // process earns the startup watchdog; later phases never reset its finite cap.
+      updateStartupDeadlineMs ??= Math.max(standardDeadlineMs, STARTUP_MIGRATION_LEASE_TTL_MS);
     }
-    if (snapshot.activatedPluginErrors?.length) {
+    const boundedDeadlineMs = params.timeoutMs ?? updateStartupDeadlineMs;
+    // A managed settle streak needs a concrete process identity. Scheduled Tasks can
+    // report running without exposing a PID, so Windows retains status-only proof.
+    const healthy =
+      snapshot.healthy &&
+      (!params.requireRunningService ||
+        (snapshot.runtime.status === "running" &&
+          (process.platform === "win32" || typeof snapshot.runtime.pid === "number")));
+    snapshot.startupPhase = healthy
+      ? "settling healthy Gateway"
+      : snapshot.runtime.status !== "running"
+        ? "waiting for managed service"
+        : snapshot.portUsage.status === "free"
+          ? "waiting for Gateway listener"
+          : "waiting for Gateway health and identity";
+    if (boundedDeadlineMs !== undefined && elapsedMs > boundedDeadlineMs + settleDurationMs) {
+      return withWaitContext({ ...snapshot, healthy: false }, expiredOutcome, elapsedMs);
+    }
+    if (healthy) {
+      if (healthyStreak && isSameGatewayRestartGeneration(healthyStreak.snapshot, snapshot)) {
+        healthyStreak.probes += 1;
+      } else {
+        healthyStreak = { snapshot, probes: 1 };
+      }
+      if (healthyStreak.probes >= settleProbes) {
+        return withWaitContext(snapshot, "healthy", elapsedMs);
+      }
+    } else {
+      healthyStreak = undefined;
+    }
+    if (settleProbes > 1 && snapshot.healthy) {
+      // Callers consume snapshot.healthy; a partial settle must not report recovery at timeout.
+      snapshot.healthy = false;
+    }
+    if (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) {
       return withWaitContext(snapshot, "plugin-errors", elapsedMs);
     }
     if (snapshot.channelProbeErrors?.length) {
@@ -337,12 +443,26 @@ export async function waitForGatewayHealthyRestart(params: {
     if (snapshot.versionMismatch) {
       return withWaitContext(snapshot, "version-mismatch", elapsedMs);
     }
+    if (snapshot.buildIdMismatch) {
+      return withWaitContext(snapshot, "build-id-mismatch", elapsedMs);
+    }
     if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
       return withWaitContext(snapshot, "stale-pids", elapsedMs);
     }
-    // launchd KeepAlive can report a transient stopped state while its throttle window runs.
-    // Let the bounded standard deadline decide failure when the caller knows supervision persists.
+    const stoppedFree =
+      snapshot.runtime.status === "stopped" && snapshot.portUsage.status === "free";
+    const owner = stoppedFree
+      ? readGatewayOwnerLease({ env: params.env, port: params.port })
+      : undefined;
+    if (owner && owner.state !== "dead") {
+      observedOwner = owner.owner;
+    } else if (owner?.state === "dead" && owner.owner === observedOwner) {
+      return withWaitContext(snapshot, "stopped-free", elapsedMs);
+    }
+    // A previous crashed owner cannot describe replacement startup. Keep native
+    // startup grace for it and for published 2026.9.3 processes without owner rows.
     if (
+      (!owner || owner.state === "dead") &&
       !params.supervisorKeepsAlive &&
       shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)
     ) {
@@ -350,7 +470,7 @@ export async function waitForGatewayHealthyRestart(params: {
       if (consecutiveStoppedFreeCount >= STOPPED_FREE_THRESHOLD) {
         return withWaitContext(snapshot, "stopped-free", elapsedMs);
       }
-    } else if (snapshot.runtime.status !== "stopped" || snapshot.portUsage.status !== "free") {
+    } else {
       consecutiveStoppedFreeCount = 0;
     }
 
@@ -377,23 +497,35 @@ export async function waitForGatewayHealthyRestart(params: {
       }
     }
 
+    if (migrationActive) {
+      snapshot.startupPhase = "startup migration";
+    }
     if (elapsedMs >= standardDeadlineMs || migrationDeadlineMs !== undefined) {
-      const deadlineMs = migrationActive
-        ? migrationDeadlineMs
-        : (postMigrationDeadlineMs ?? standardDeadlineMs);
+      // Explicit update budgets win. Older update children use the startup watchdog;
+      // standalone restarts retain their migration and post-migration windows.
+      const deadlineMs =
+        boundedDeadlineMs !== undefined
+          ? boundedDeadlineMs + settleDurationMs
+          : migrationActive
+            ? migrationDeadlineMs
+            : (postMigrationDeadlineMs ?? standardDeadlineMs) + settleDurationMs;
       if (deadlineMs === undefined || elapsedMs >= deadlineMs) {
-        return withWaitContext(snapshot, "timeout", elapsedMs);
+        return withWaitContext(snapshot, expiredOutcome, elapsedMs);
       }
     }
-    await sleep(delayMs);
+    await sleep(delayMs, params.signal);
     snapshot = await inspectGatewayRestart({
       service: params.service,
       port: params.port,
       env: params.env,
       expectedVersion: params.expectedVersion,
-      includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
-      probeAuth,
+      expectedBuildId: params.expectedBuildId,
+      requirePluginHealth: params.requirePluginHealth,
+      probeContext,
+      configuredProbe,
       probeHosts,
+      timeoutMs: probeTimeoutMs(),
+      ...(params.signal ? { signal: params.signal } : {}),
     });
   }
 }

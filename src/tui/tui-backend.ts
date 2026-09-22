@@ -3,11 +3,15 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   CommandEntry,
   CommandsListParams,
+  ModelChoice,
+  QuestionGetResult,
+  QuestionListResult,
+  QuestionResolveParams,
+  QuestionResolveResult,
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
   TaskSuggestion,
-  TaskSuggestionsAcceptParams,
   TaskSuggestionsAcceptResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
@@ -30,15 +34,25 @@ export type TuiChatSendResult = {
   status?: string;
 };
 
+export type TuiImageRequest = {
+  sessionKey: string;
+  agentId?: string;
+  source: string;
+  artifactId?: string;
+  signal: AbortSignal;
+};
+
+export type TuiImageData = {
+  data: string;
+  mimeType: string;
+};
+
 export type TuiApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 type TuiTaskSuggestionActionCapabilities = {
   canAccept: boolean;
-  canAcceptModes: boolean;
   canDismiss: boolean;
 };
-
-export type TuiTaskSuggestionAcceptMode = NonNullable<TaskSuggestionsAcceptParams["mode"]>;
 
 export type TuiPluginApproval = {
   id: string;
@@ -144,13 +158,10 @@ export type TuiAgentsList = {
 };
 
 /** Model choice payload shown by TUI model pickers. */
-export type TuiModelChoice = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-  reasoning?: boolean;
-};
+export type TuiModelChoice = Pick<
+  ModelChoice,
+  "id" | "name" | "provider" | "contextWindow" | "reasoning" | "available" | "unavailableReason"
+>;
 
 /** Result shape returned by session mutation commands. */
 export type TuiSessionMutationResult = {
@@ -200,6 +211,7 @@ export type TuiBackend = {
     runId?: string;
   }) => Promise<{ ok: boolean; aborted: boolean; runIds?: string[] }>;
   loadHistory: (opts: { sessionKey: string; agentId?: string; limit?: number }) => Promise<unknown>;
+  loadImage?: (opts: TuiImageRequest) => Promise<TuiImageData>;
   listSessions: (opts?: SessionsListParams) => Promise<TuiSessionList>;
   listAgents: () => Promise<TuiAgentsList>;
   patchSession: (opts: SessionsPatchParams) => Promise<SessionsPatchResult>;
@@ -214,14 +226,12 @@ export type TuiBackend = {
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
   listPluginApprovals?: () => Promise<unknown>;
   resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;
+  listQuestions?: () => Promise<QuestionListResult>;
+  getQuestion?: (id: string) => Promise<QuestionGetResult>;
+  resolveQuestion?: (params: QuestionResolveParams) => Promise<QuestionResolveResult>;
   getTaskSuggestionActionCapabilities?: () => TuiTaskSuggestionActionCapabilities;
   listTaskSuggestions?: () => Promise<TaskSuggestion[]>;
-  listCloudWorkerProfiles?: () => Promise<string[]>;
-  acceptTaskSuggestion?: (
-    taskId: string,
-    mode?: TuiTaskSuggestionAcceptMode,
-    cloudProfileId?: string,
-  ) => Promise<TaskSuggestionsAcceptResult>;
+  acceptTaskSuggestion?: (taskId: string) => Promise<TaskSuggestionsAcceptResult>;
   dismissTaskSuggestion?: (taskId: string) => Promise<{ taskId: string; dismissed: boolean }>;
   runGoalCommand?: (
     opts: TuiGoalCommandOptions,

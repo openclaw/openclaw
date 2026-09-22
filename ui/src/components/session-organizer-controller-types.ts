@@ -17,7 +17,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
     | "isSessionMutationScopeCurrent"
     | "publishSessionMutationError"
     | "refreshSidebarSessions"
-    | "resetForStatusFilter"
+    | "resetSessionList"
     | "sessionMutationError"
   >;
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
@@ -35,8 +35,10 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   knownSessionCatalogIds(): string[];
   knownSectionOrder(): string[];
   pruneSidebarSessionEntry(key: string): void;
-  reconciledSidebarZone(): { sidebarEntries: readonly string[] };
-  replaceCurrentSession(sessionKey: string): void;
+  reconciledSidebarZone(): {
+    sidebarEntries: readonly string[];
+    defaultPluginNavigationKeys: ReadonlySet<string>;
+  };
   selectSession(sessionKey: string): void;
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
 }

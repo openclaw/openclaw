@@ -1,31 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
-import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
-import { WorkboardStore } from "./store.js";
+import {
+  createWorkboardSqliteTestHarness,
+  createWorkboardSqliteTestStore,
+} from "./test/sqlite-store.js";
 
 const CLAIM_RECLAIM_MS = 5 * 60 * 1000;
 
-function createMemoryStore(): WorkboardKeyedStore {
-  const entries = new Map<string, PersistedWorkboardCard>();
-  return {
-    async register(key, value) {
-      entries.set(key, value);
-    },
-    async lookup(key) {
-      return entries.get(key);
-    },
-    async delete(key) {
-      return entries.delete(key);
-    },
-    async entries() {
-      return [...entries].map(([key, value]) => ({ key, value }));
-    },
-  };
-}
-
 describe("Workboard dispatcher ownership", () => {
   it("dispatches a card whose create input tried to inject archivedAt", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const now = 10;
     const card = await store.create({
       title: "Injected archive",
@@ -48,8 +32,8 @@ describe("Workboard dispatcher ownership", () => {
   });
 
   it("falls back to one default owner for persisted blank and unassigned agents", async () => {
-    const keyed = createMemoryStore();
-    const store = new WorkboardStore(keyed);
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const keyed = stores.cards;
     const blankAgent = await store.create({
       title: "Blank agent worker",
       status: "ready",
@@ -85,8 +69,8 @@ describe("Workboard dispatcher ownership", () => {
   });
 
   it("keeps an active blank-assignment card in the default worker slot", async () => {
-    const keyed = createMemoryStore();
-    const store = new WorkboardStore(keyed);
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const keyed = stores.cards;
     const active = await store.create({
       title: "Active default worker",
       status: "running",
@@ -115,7 +99,7 @@ describe("Workboard dispatcher ownership", () => {
   });
 
   it("bounds failed worker attempts without draining the ready queue", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const cards = [];
     for (let index = 0; index < 5; index += 1) {
       cards.push(
@@ -158,7 +142,7 @@ describe("Workboard dispatcher ownership", () => {
   });
 
   it("does not spend worker attempts on cards that fail workspace preflight", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const inaccessible = [];
     for (const [index, priority] of (["urgent", "high"] as const).entries()) {
       inaccessible.push(
@@ -198,7 +182,7 @@ describe("Workboard dispatcher ownership", () => {
   });
 
   it("tries a healthy owner before retrying a failed owner's queued cards", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const failed = await store.create({
       title: "Failing urgent worker",
       status: "ready",
@@ -243,7 +227,7 @@ describe("Workboard dispatcher ownership", () => {
   });
 
   it("preserves priority order among available owners when workers start successfully", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const urgent = await store.create({
       title: "Urgent primary worker",
       status: "ready",
@@ -294,79 +278,85 @@ describe("Workboard dispatcher ownership", () => {
   ])(
     "keeps a cross-board running worker slot for a $name assigned agent until its heartbeat grace expires",
     async ({ agentId }) => {
-      const store = new WorkboardStore(createMemoryStore());
-      const stale = await store.create({
-        title: "Abandoned product worker",
-        status: "running",
-        agentId,
-        boardId: "product",
-        execution: {
-          id: "stale-execution",
-          kind: "agent-session",
-          mode: "autonomous",
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(10_000);
+        const store = createWorkboardSqliteTestStore();
+        const stale = await store.create({
+          title: "Abandoned product worker",
           status: "running",
-          startedAt: 1,
-          updatedAt: 1,
-        },
-      });
-      const claimed = await store.claim(stale.id, {
-        ownerId: "shared-worker",
-        token: "stale-token",
-        ttlSeconds: 1,
-      });
-      const ready = await store.create({
-        title: "Ready operations recovery",
-        status: "ready",
-        agentId: "shared-worker",
-        boardId: "ops",
-        workspaceAccess: { unrestricted: true },
-      });
-      const run = vi.fn().mockResolvedValue({ runId: "run-after-grace" });
-      const expiresAt = claimed.card.metadata?.claim?.expiresAt;
-      expect(expiresAt).toBeDefined();
-
-      const withinGrace = await dispatchAndStartWorkboardCards({
-        store,
-        subagent: { run },
-        options: {
-          now: expiresAt! + CLAIM_RECLAIM_MS,
-          maxStarts: 1,
+          agentId,
+          boardId: "product",
+          execution: {
+            id: "stale-execution",
+            kind: "agent-session",
+            mode: "autonomous",
+            status: "running",
+            startedAt: 1,
+            updatedAt: 1,
+          },
+        });
+        const claimed = await store.claim(stale.id, {
+          ownerId: "shared-worker",
+          token: "stale-token",
+          ttlSeconds: 1,
+        });
+        const ready = await store.create({
+          title: "Ready operations recovery",
+          status: "ready",
+          agentId: "shared-worker",
           boardId: "ops",
-        },
-      });
+          workspaceAccess: { unrestricted: true },
+        });
+        const run = vi.fn().mockResolvedValue({ runId: "run-after-grace" });
+        const expiresAt = claimed.card.metadata?.claim?.expiresAt;
+        expect(expiresAt).toBeDefined();
 
-      expect(withinGrace.started).toEqual([]);
-      expect(run).not.toHaveBeenCalled();
-      await expect(store.get(stale.id)).resolves.toMatchObject({
-        status: "running",
-        execution: { status: "running" },
-        metadata: { claim: { ownerId: "shared-worker" } },
-      });
+        vi.setSystemTime(expiresAt! + CLAIM_RECLAIM_MS);
+        const withinGrace = await dispatchAndStartWorkboardCards({
+          store,
+          subagent: { run },
+          options: {
+            maxStarts: 1,
+            boardId: "ops",
+          },
+        });
 
-      const reclaimed = await dispatchAndStartWorkboardCards({
-        store,
-        subagent: { run },
-        options: {
-          now: expiresAt! + CLAIM_RECLAIM_MS + 1,
-          maxStarts: 1,
-          boardId: "ops",
-        },
-      });
+        expect(withinGrace.started).toEqual([]);
+        expect(run).not.toHaveBeenCalled();
+        await expect(store.get(stale.id)).resolves.toMatchObject({
+          status: "running",
+          execution: { status: "running" },
+          metadata: { claim: { ownerId: "shared-worker" } },
+        });
 
-      expect(reclaimed.started).toEqual([
-        expect.objectContaining({ cardId: ready.id, runId: "run-after-grace" }),
-      ]);
-      expect(run).toHaveBeenCalledOnce();
-      await expect(store.get(stale.id)).resolves.toMatchObject({
-        status: "running",
-        execution: { status: "running" },
-        metadata: { claim: { ownerId: "shared-worker" } },
-      });
+        vi.setSystemTime(expiresAt! + CLAIM_RECLAIM_MS + 1);
+        const reclaimed = await dispatchAndStartWorkboardCards({
+          store,
+          subagent: { run },
+          options: {
+            maxStarts: 1,
+            boardId: "ops",
+          },
+        });
+
+        expect(reclaimed.started).toEqual([
+          expect.objectContaining({ cardId: ready.id, runId: "run-after-grace" }),
+        ]);
+        expect(run).toHaveBeenCalledOnce();
+        await expect(store.get(stale.id)).resolves.toMatchObject({
+          status: "running",
+          execution: { status: "running" },
+          metadata: { claim: { ownerId: "shared-worker" } },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 
   it("does not let an expired review claim consume worker capacity", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const now = Date.now();
     await store.create({
       title: "Expired review claim",
@@ -403,16 +393,16 @@ describe("Workboard dispatcher ownership", () => {
   });
 
   it.each([
-    { wallClock: 10_000, dispatchNow: 50_000, expectedStarts: 1 },
-    { wallClock: 50_000, dispatchNow: 10_000, expectedStarts: 0 },
+    { wallClock: 10_000, dispatchNow: 50_000, expectedClaimAttempts: 1 },
+    { wallClock: 50_000, dispatchNow: 10_000, expectedClaimAttempts: 0 },
   ])(
-    "evaluates claim capacity at dispatch time instead of wall time ($wallClock, $dispatchNow)",
-    async ({ wallClock, dispatchNow, expectedStarts }) => {
+    "selects at the dispatch snapshot while claiming at current time ($wallClock, $dispatchNow)",
+    async ({ wallClock, dispatchNow, expectedClaimAttempts }) => {
       vi.useFakeTimers();
       try {
         vi.setSystemTime(wallClock);
-        const store = new WorkboardStore(createMemoryStore());
-        await store.create({
+        const store = createWorkboardSqliteTestStore();
+        const review = await store.create({
           title: "Review claim with a deterministic expiry",
           status: "review",
           agentId: "shared-worker",
@@ -433,6 +423,7 @@ describe("Workboard dispatcher ownership", () => {
           workspaceAccess: { unrestricted: true },
         });
         const run = vi.fn().mockResolvedValue({ runId: "run-at-dispatch-time" });
+        const claim = vi.spyOn(store, "claim");
 
         const result = await dispatchAndStartWorkboardCards({
           store,
@@ -440,14 +431,28 @@ describe("Workboard dispatcher ownership", () => {
           options: { now: dispatchNow, maxStarts: 1 },
         });
 
-        expect(run).toHaveBeenCalledTimes(expectedStarts);
-        expect(result.started).toHaveLength(expectedStarts);
-        if (expectedStarts === 1) {
-          expect(result.started[0]).toMatchObject({
-            cardId: ready.id,
-            runId: "run-at-dispatch-time",
-          });
-        }
+        expect(claim.mock.calls.map(([id]) => id)).toEqual(
+          expectedClaimAttempts === 1 ? [ready.id] : [],
+        );
+        expect(run).not.toHaveBeenCalled();
+        expect(result.started).toEqual([]);
+        expect(result.startFailures).toEqual(
+          expectedClaimAttempts === 1
+            ? [
+                expect.objectContaining({
+                  cardId: ready.id,
+                  error: "Owner shared-worker already has active Workboard work.",
+                }),
+              ]
+            : [],
+        );
+        const unchangedReady = await store.get(ready.id);
+        expect(unchangedReady?.status).toBe("ready");
+        expect(unchangedReady?.metadata?.claim).toBeUndefined();
+        await expect(store.get(review.id)).resolves.toMatchObject({
+          status: "review",
+          metadata: { claim: review.metadata?.claim },
+        });
       } finally {
         vi.useRealTimers();
       }
@@ -460,7 +465,7 @@ describe("Workboard dispatcher ownership", () => {
   ])(
     "replaces an expired ready-card claim with the $ownerId slot",
     async ({ agentId, ownerId }) => {
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const now = Date.now();
       const card = await store.create({
         title: "Ready with an expired lease",
@@ -499,7 +504,7 @@ describe("Workboard dispatcher ownership", () => {
   );
 
   it("serializes concurrent board dispatches for the same worker", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const ops = await store.create({
       title: "Ops shared worker",
       status: "ready",
@@ -564,7 +569,7 @@ describe("Workboard dispatcher ownership", () => {
   });
 
   it("keeps one worker slot across 25 concurrent board dispatches", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const cards = await Promise.all(
       Array.from({ length: 25 }, (_, index) =>
         store.create({
@@ -598,7 +603,7 @@ describe("Workboard dispatcher ownership", () => {
   it.each(["scheduled dispatch", "dashboard exact-card start"] as const)(
     "persists launch association before %s and keeps accepted runs visible",
     async (origin) => {
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const card = await store.create({
         title: "Worker with unavailable execution persistence",
         status: "ready",
@@ -690,7 +695,7 @@ describe("Workboard dispatcher ownership", () => {
   );
 
   it("marks a prepared launch accepted after Gateway acceptance", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Worker with durable acceptance",
       status: "ready",
@@ -742,7 +747,7 @@ describe("Workboard dispatcher ownership", () => {
   it.each(["backlog", "todo", "ready"] as const)(
     "starts an exact dashboard card from %s",
     async (status) => {
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const card = await store.create({
         title: `Exact ${status}`,
         status,
@@ -766,7 +771,7 @@ describe("Workboard dispatcher ownership", () => {
   it.each(["review", "blocked", "done"] as const)(
     "rejects an exact dashboard card in %s",
     async (status) => {
-      const store = new WorkboardStore(createMemoryStore());
+      const store = createWorkboardSqliteTestStore();
       const card = await store.create({
         title: `Invalid exact ${status}`,
         status,
@@ -800,7 +805,7 @@ describe("Workboard dispatcher ownership", () => {
     { label: "due", offsetMs: -1_000, starts: true },
     { label: "future", offsetMs: 60_000, starts: false },
   ])("handles a $label scheduled exact dashboard card", async ({ offsetMs, starts }) => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const now = Date.now();
     const card = await store.create({
       title: "Scheduled exact",
@@ -826,7 +831,7 @@ describe("Workboard dispatcher ownership", () => {
   });
 
   it("keeps global owner capacity for exact dashboard starts across boards", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const active = await store.create({
       title: "Active owner",
       status: "ready",
@@ -858,7 +863,7 @@ describe("Workboard dispatcher ownership", () => {
   });
 
   it("starts the exact lower-priority card without selecting a sibling", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const urgent = await store.create({
       title: "Urgent sibling",
       status: "ready",
@@ -886,7 +891,7 @@ describe("Workboard dispatcher ownership", () => {
   });
 
   it("keeps an accepted worker running when its worker log cannot be recorded", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Worker with unavailable logging",
       status: "ready",

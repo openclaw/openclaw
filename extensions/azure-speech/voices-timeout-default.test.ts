@@ -23,10 +23,9 @@ type GuardRequest = {
   auditContext?: string;
 };
 
-function queueGuardedResponse(response: Response): { release: ReturnType<typeof vi.fn> } {
+function queueGuardedResponse(response: Response) {
   const release = vi.fn(async () => {});
   fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
-  return { release };
 }
 
 function lastGuardRequest(): GuardRequest {

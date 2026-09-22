@@ -1,19 +1,22 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
+import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { ensureColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import {
+  publishSessionEntryCacheInvalidation,
+  trackSessionEntryCacheWrite,
+} from "./session-accessor.sqlite-entry-cache.js";
 import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import type { SessionCreatedActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
 
 export function replaceSessionOwnerInTransaction(
   database: OpenClawAgentDatabase,
@@ -24,35 +27,39 @@ export function replaceSessionOwnerInTransaction(
     if (!owner?.actor.id) {
       return false;
     }
-    for (const { columnName, dataType, tableName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+    for (const { columnName, dataType, tableName } of SESSION_OWNER_COLUMN_DEFINITIONS) {
       ensureColumn(database.db, tableName, `${columnName} ${dataType}`);
     }
   }
-  const result = executeSqliteQuerySync(
-    database.db,
-    getSessionKysely(database.db)
-      .updateTable("session_nodes")
-      .set({
-        owner_actor_type: owner?.actor.type ?? null,
-        owner_actor_id: owner?.actor.id ?? null,
-        owner_assigned_by_type: owner?.assignedBy?.type ?? null,
-        owner_assigned_by_id: owner?.assignedBy?.id ?? null,
-        owner_assigned_at: owner?.assignedAt ?? null,
-      })
-      .where("session_key", "=", sessionKey),
-  );
-  if (result.numAffectedRows !== 1n) {
+  let updated = false;
+  const writeGeneration = trackSessionEntryCacheWrite(database, () => {
+    updated =
+      executeSqliteQuerySync(
+        database.db,
+        getSessionKysely(database.db)
+          .updateTable("session_nodes")
+          .set({
+            owner_actor_type: owner?.actor.type ?? null,
+            owner_actor_id: owner?.actor.id ?? null,
+            owner_assigned_by_type: owner?.assignedBy?.type ?? null,
+            owner_assigned_by_id: owner?.assignedBy?.id ?? null,
+            owner_assigned_at: owner?.assignedAt ?? null,
+          })
+          .where("session_key", "=", sessionKey),
+      ).numAffectedRows === 1n;
+  });
+  if (!updated) {
     return false;
   }
-  publishSessionEntryCacheInvalidation(database);
+  publishSessionEntryCacheInvalidation(database, { sessionKey }, writeGeneration);
   return true;
 }
 
 export function assignSessionOwner(
   scope: SessionAccessScope,
   params: {
-    owner: SessionCreatedActor & { id: string };
-    assignedBy: SessionCreatedActor & { id: string };
+    owner: SessionActor & { id: string };
+    assignedBy: SessionActor & { id: string };
     assignedAt?: number;
     assertCurrent?: () => void;
   },

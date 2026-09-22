@@ -3,7 +3,10 @@
 import { isNixMode } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import type { GatewayDiscovery } from "./server-discovery-runtime.js";
+import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 type StartGatewayMaintenanceTimers =
@@ -12,52 +15,10 @@ type GatewayMaintenanceParams = Parameters<StartGatewayMaintenanceTimers>[0];
 
 const loadRemoteSkillsRuntimeModule = async () => await import("../skills/runtime/remote.js");
 
-/** Start plugin discovery and return the Bonjour shutdown callback when discovery is active. */
-export async function startGatewayPluginDiscovery(params: {
-  minimalTestGateway: boolean;
-  cfgAtStart: OpenClawConfig;
-  port: number;
-  gatewayTls: { enabled: boolean; fingerprintSha256?: string };
-  gatewayDirectReachable: boolean;
-  tailscaleMode: GatewayTailscaleMode;
-  logDiscovery: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-  };
-  pluginRegistry?: PluginRegistry;
-  startupTrace?: GatewayStartupTrace;
-}): Promise<(() => Promise<void>) | null> {
-  if (params.minimalTestGateway) {
-    return null;
-  }
-  const machineDisplayName = await measureStartup(
-    params.startupTrace,
-    "runtime.early.discovery.machine-name",
-    async () => (await import("../infra/machine-name.js")).getMachineDisplayName(),
-  );
-  return await measureStartup(params.startupTrace, "runtime.early.discovery.start", async () => {
-    const { startGatewayDiscovery } = await import("./server-discovery-runtime.js");
-    const discovery = await startGatewayDiscovery({
-      machineDisplayName,
-      port: params.port,
-      gatewayTls: params.gatewayTls.enabled
-        ? { enabled: true, fingerprintSha256: params.gatewayTls.fingerprintSha256 }
-        : undefined,
-      gatewayDirectReachable: params.gatewayDirectReachable,
-      wideAreaDiscoveryEnabled: Boolean(params.cfgAtStart.discovery?.wideArea?.domain?.trim()),
-      wideAreaDiscoveryDomain: params.cfgAtStart.discovery?.wideArea?.domain,
-      tailscaleMode: params.tailscaleMode,
-      mdnsMode: params.cfgAtStart.discovery?.mdns?.mode,
-      gatewayDiscoveryServices: params.pluginRegistry?.gatewayDiscoveryServices,
-      logDiscovery: params.logDiscovery,
-    });
-    return discovery.bonjourStop;
-  });
-}
-
 /** Start early Gateway side runtimes before the main server is fully ready. */
 export async function startGatewayEarlyRuntime(params: {
   minimalTestGateway: boolean;
+  updateCanary?: boolean;
   cfgAtStart: OpenClawConfig;
   port: number;
   gatewayTls: { enabled: boolean; fingerprintSha256?: string };
@@ -72,8 +33,9 @@ export async function startGatewayEarlyRuntime(params: {
     warn: (msg: string) => void;
   };
   nodeRegistry: Parameters<typeof import("../skills/runtime/remote.js").setSkillsRemoteRegistry>[0];
-  swapBonjourStop: (next: (() => Promise<void>) | null) => (() => Promise<void>) | null;
+  swapDiscovery: (next: GatewayDiscovery | null) => GatewayDiscovery | null;
   pluginRegistry?: PluginRegistry;
+  pluginRuntimeClaim: GatewayPluginRuntimeClaim;
   broadcast: GatewayMaintenanceParams["broadcast"];
   nodeSendToAllSubscribed: Parameters<StartGatewayMaintenanceTimers>[0]["nodeSendToAllSubscribed"];
   getPresenceVersion: GatewayMaintenanceParams["getPresenceVersion"];
@@ -91,7 +53,6 @@ export async function startGatewayEarlyRuntime(params: {
   removeChatRun: GatewayMaintenanceParams["removeChatRun"];
   agentRunSeq: GatewayMaintenanceParams["agentRunSeq"];
   nodeSendToSession: GatewayMaintenanceParams["nodeSendToSession"];
-  mediaCleanupTtlMs?: number;
   skillsRefreshDelayMs: number;
   getSkillsRefreshTimer: () => ReturnType<typeof setTimeout> | null;
   setSkillsRefreshTimer: (timer: ReturnType<typeof setTimeout> | null) => void;
@@ -102,13 +63,41 @@ export async function startGatewayEarlyRuntime(params: {
     await measureStartup(params.startupTrace, "runtime.early.task-state", async () => {
       const { ensureTaskRuntimeStateReady } = await import("../tasks/runtime-internal.js");
       ensureTaskRuntimeStateReady();
+      const { reconcileRetainedHarnessCompletionDeliveries } =
+        await import("../agents/agent-harness-completion-delivery.js");
+      reconcileRetainedHarnessCompletionDeliveries();
     });
   }
   // Startup failure can occur immediately after discovery; publish its owner first.
-  params.swapBonjourStop(
-    await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
-      startGatewayPluginDiscovery(params),
-    ),
+  params.swapDiscovery(
+    await measureStartup(params.startupTrace, "runtime.early.discovery", async () => {
+      if (params.minimalTestGateway) {
+        return null;
+      }
+      const machineDisplayName = await measureStartup(
+        params.startupTrace,
+        "runtime.early.discovery.machine-name",
+        async () => (await import("../infra/machine-name.js")).getMachineDisplayName(),
+      );
+      return await measureStartup(
+        params.startupTrace,
+        "runtime.early.discovery.start",
+        async () => {
+          const { startGatewayDiscovery } = await import("./server-discovery-runtime.js");
+          return await startGatewayDiscovery({
+            machineDisplayName,
+            port: params.port,
+            gatewayTls: params.gatewayTls.enabled ? params.gatewayTls : undefined,
+            gatewayDirectReachable: params.gatewayDirectReachable,
+            discovery: params.cfgAtStart.discovery,
+            tailscaleMode: params.tailscaleMode,
+            gatewayDiscoveryServices: params.pluginRegistry?.gatewayDiscoveryServices,
+            pluginRuntimeClaim: params.pluginRuntimeClaim,
+            logDiscovery: params.logDiscovery,
+          });
+        },
+      );
+    }),
   );
   let getActiveTaskCount = () => 0;
 
@@ -122,14 +111,16 @@ export async function startGatewayEarlyRuntime(params: {
       );
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
-    // Task registry maintenance is authoritative in the Gateway process so
-    // restart-blocker counts reflect the same live cron runtime.
-    taskRegistryMaintenance.configureTaskRegistryMaintenance({
-      runtimeAuthoritative: true,
-    });
-    taskRegistryMaintenance.startTaskRegistryMaintenance();
-    getActiveTaskCount = () =>
-      taskRegistryMaintenance.getInspectableActiveTaskRestartBlockers().length;
+    // Canary task rows belong to the source Gateway; never reconcile or resume them.
+    if (!params.updateCanary) {
+      // Restart-blocker counts must reflect the same live cron runtime.
+      taskRegistryMaintenance.configureTaskRegistryMaintenance({
+        runtimeAuthoritative: true,
+      });
+      taskRegistryMaintenance.startTaskRegistryMaintenance();
+      getActiveTaskCount = () =>
+        taskRegistryMaintenance.getInspectableActiveTaskRestartBlockers().length;
+    }
   }
 
   const skillsChangeUnsub = params.minimalTestGateway
@@ -174,7 +165,7 @@ export async function startGatewayEarlyRuntime(params: {
         };
       });
 
-  const startMaintenance = async () => {
+  const startMaintenance = async (activeWorkInspectors: Partial<GatewayActiveWorkInspectors>) => {
     // Defer periodic maintenance until the caller has finished ready-state
     // wiring, but keep the lazy import owned by this early-runtime bundle.
     if (params.minimalTestGateway) {
@@ -189,6 +180,7 @@ export async function startGatewayEarlyRuntime(params: {
         getHealthVersion: params.getHealthVersion,
         refreshGatewayHealthSnapshot: params.refreshGatewayHealthSnapshot,
         restartRunningChannels: params.restartRunningChannels,
+        activeWorkInspectors,
         refreshPresence: params.refreshPresence,
         resetEventLoopHealth: params.resetEventLoopHealth,
         logHealth: params.logHealth,
@@ -202,9 +194,6 @@ export async function startGatewayEarlyRuntime(params: {
         nodeSendToSession: params.nodeSendToSession,
         isNixMode,
         getRuntimeConfig: params.getRuntimeConfig,
-        ...(typeof params.mediaCleanupTtlMs === "number"
-          ? { mediaCleanupTtlMs: params.mediaCleanupTtlMs }
-          : {}),
       });
     });
   };

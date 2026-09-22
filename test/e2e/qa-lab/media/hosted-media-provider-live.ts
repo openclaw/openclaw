@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mts";
 import {

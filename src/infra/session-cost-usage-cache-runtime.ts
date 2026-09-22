@@ -1,7 +1,7 @@
-import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   countUsableUsageCostRollups,
@@ -17,8 +17,7 @@ import {
 import { isSessionCostUsageRefreshRunning } from "./session-cost-usage-cache.sqlite.js";
 import {
   listUsageCountedTranscriptStats,
-  resolveUsageCostTranscriptFile,
-  USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
+  resolveUsageCostTranscriptFiles,
 } from "./session-cost-usage-collection.js";
 import {
   buildCostUsageSummaryFromRollups,
@@ -42,13 +41,19 @@ type UsageCostRefreshState = {
   databasePath: string;
   fullRefreshRequested: boolean;
   pendingSessionFiles: Set<string>;
-  running: boolean;
-  sessionsDir: string;
-  busyRetryDelayMs: number;
-  timer?: ReturnType<typeof setTimeout>;
+  storePath: string;
 };
 
-const usageCostRefreshes = new Map<string, UsageCostRefreshState>();
+type UsageCostRefreshRequest = Pick<UsageCostRefreshState, "agentId" | "config" | "storePath"> & {
+  sessionFiles?: string[];
+};
+
+// Only active queues retain their scope; one owner cannot adopt another owner's work.
+const usageCostRefreshes = new Map<AbortSignal | undefined, Map<string, UsageCostRefreshState>>();
+
+function isUsageCostRefreshQueued(databasePath: string): boolean {
+  return usageCostRefreshes.get(getAsyncWorkSignal())?.has(databasePath) === true;
+}
 
 export async function loadCostUsageSummary(params: {
   startMs?: number;
@@ -64,15 +69,17 @@ export async function loadCostUsageSummary(params: {
   const endMs = params.endMs ?? now;
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
+  const storePath = resolveSessionStorePathForScope(params, params.config);
   const result = await refreshCostUsageCacheForAgent({
     config: params.config,
     agentId: params.agentId,
     agentDir,
     databasePath,
+    storePath,
   });
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
+  const pricingFingerprint = await resolveUsageCostPricingFingerprint(params.config, agentDir);
   const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
-  const files = await listUsageCountedTranscriptStats(params.agentId);
+  const files = await listUsageCountedTranscriptStats(params.agentId, { storePath });
   return buildCostUsageSummaryFromRollups({
     rollups,
     files,
@@ -81,8 +88,8 @@ export async function loadCostUsageSummary(params: {
     dayBucket: params.dayBucket,
     refreshing:
       result === "busy" ||
-      usageCostRefreshes.has(databasePath) ||
-      isSessionCostUsageRefreshRunning(params.agentId, databasePath),
+      isUsageCostRefreshQueued(databasePath) ||
+      (await isSessionCostUsageRefreshRunning(params.agentId, databasePath)),
   });
 }
 
@@ -97,9 +104,10 @@ export async function loadCostUsageSummaryFromCache(params: {
 }): Promise<CostUsageSummary> {
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
+  const storePath = resolveSessionStorePathForScope(params, params.config);
+  const pricingFingerprint = await resolveUsageCostPricingFingerprint(params.config, agentDir);
   let rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
-  let files = await listUsageCountedTranscriptStats(params.agentId);
+  let files = await listUsageCountedTranscriptStats(params.agentId, { storePath });
   const staleFiles = getUsageCostStaleRollupFiles({ rollups, files });
   if (params.requestRefresh !== false && staleFiles.length > 0) {
     const cachedFiles = countUsableUsageCostRollups({ rollups, files });
@@ -108,15 +116,16 @@ export async function loadCostUsageSummaryFromCache(params: {
         config: params.config,
         agentId: params.agentId,
         agentDir,
+        storePath,
         startMs: params.startMs,
       });
       rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
-      files = await listUsageCountedTranscriptStats(params.agentId);
+      files = await listUsageCountedTranscriptStats(params.agentId, { storePath });
       if (result === "refreshed" && getUsageCostStaleRollupFiles({ rollups, files }).length > 0) {
-        requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
+        requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId, storePath });
       }
     } else {
-      requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
+      requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId, storePath });
     }
   }
   return buildCostUsageSummaryFromRollups({
@@ -126,8 +135,8 @@ export async function loadCostUsageSummaryFromCache(params: {
     endMs: params.endMs,
     dayBucket: params.dayBucket,
     refreshing:
-      usageCostRefreshes.has(databasePath) ||
-      isSessionCostUsageRefreshRunning(params.agentId, databasePath),
+      isUsageCostRefreshQueued(databasePath) ||
+      (await isSessionCostUsageRefreshRunning(params.agentId, databasePath)),
   });
 }
 
@@ -143,14 +152,13 @@ export async function loadSessionCostSummariesFromCache(params: {
 }): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
-  const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath);
-  const fileTasks = params.sessions.map(
-    (session) => async () => await resolveUsageCostTranscriptFile(session.sessionFile),
+  const storePath = resolveSessionStorePathForScope(params, params.config);
+  const pricingFingerprint = await resolveUsageCostPricingFingerprint(params.config, agentDir);
+  const files = await resolveUsageCostTranscriptFiles(
+    params.sessions.map((session) => session.sessionFile),
   );
-  const { results: files } = await runTasksWithConcurrency({
-    tasks: fileTasks,
-    limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
+  const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, {
+    filePaths: files.flatMap((file) => (file ? [file.filePath] : [])),
   });
   const staleFiles = new Set<string>();
   let cachedFiles = 0;
@@ -162,7 +170,7 @@ export async function loadSessionCostSummariesFromCache(params: {
     const file = files[index];
     const stored = file ? rollups.get(file.filePath) : undefined;
     if (!file || !stored || !isUsageCostRollupFresh({ stored, file })) {
-      staleFiles.add(file?.filePath ?? session.sessionFile);
+      staleFiles.add(file?.sourcePath ?? session.sessionFile);
       return null;
     }
     cachedFiles += 1;
@@ -181,10 +189,11 @@ export async function loadSessionCostSummariesFromCache(params: {
     requestCostUsageCacheRefresh({
       config: params.config,
       agentId: params.agentId,
+      storePath,
       sessionFiles: [...staleFiles],
     });
   }
-  const refreshRunning = isSessionCostUsageRefreshRunning(params.agentId, databasePath);
+  const refreshRunning = await isSessionCostUsageRefreshRunning(params.agentId, databasePath);
   return {
     summaries,
     cacheStatus: {
@@ -204,14 +213,14 @@ export async function loadSessionCostSummariesFromCache(params: {
   };
 }
 
-function requestCostUsageCacheRefresh(params: {
-  config?: OpenClawConfig;
-  agentId: string;
-  sessionFiles?: string[];
-}): void {
+function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): void {
+  const scopeSignal = getAsyncWorkSignal();
+  if (scopeSignal?.aborted) {
+    return;
+  }
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
-  const refreshKey = databasePath;
-  const existing = usageCostRefreshes.get(refreshKey);
+  const refreshes = usageCostRefreshes.get(scopeSignal) ?? new Map<string, UsageCostRefreshState>();
+  const existing = refreshes.get(databasePath);
   if (existing) {
     mergeUsageCostRefreshRequest(existing, params);
     return;
@@ -223,27 +232,22 @@ function requestCostUsageCacheRefresh(params: {
     databasePath,
     fullRefreshRequested: false,
     pendingSessionFiles: new Set(),
-    running: false,
-    sessionsDir: resolveSessionTranscriptsDirForAgent(params.agentId),
-    busyRetryDelayMs: USAGE_COST_REFRESH_RETRY_MIN_MS,
+    storePath: params.storePath,
   };
   mergeUsageCostRefreshRequest(state, params);
-  usageCostRefreshes.set(refreshKey, state);
-  scheduleUsageCostRefresh(refreshKey, state);
+  usageCostRefreshes.set(scopeSignal, refreshes);
+  // Register the initial timer and every retry now, not after a timer fires.
+  refreshes.set(databasePath, state);
+  void trackAsyncWork(() => runQueuedUsageCostRefresh(state, refreshes, scopeSignal));
 }
 
 function mergeUsageCostRefreshRequest(
   state: UsageCostRefreshState,
-  params: {
-    config?: OpenClawConfig;
-    agentId: string;
-    sessionFiles?: string[];
-  },
+  params: UsageCostRefreshRequest,
 ): void {
-  if (params.config) {
-    state.config = params.config;
-  }
+  state.config = params.config ?? state.config;
   state.agentId = params.agentId;
+  state.storePath = params.storePath;
   if (!params.sessionFiles) {
     state.fullRefreshRequested = true;
     return;
@@ -253,88 +257,82 @@ function mergeUsageCostRefreshRequest(
   }
 }
 
-function scheduleUsageCostRefresh(
-  refreshKey: string,
-  state: UsageCostRefreshState,
-  delayMs = 0,
-): void {
-  if (state.running || state.timer) {
-    return;
-  }
-  const timer = setTimeout(() => {
-    state.timer = undefined;
-    void runQueuedUsageCostRefresh(refreshKey, state);
-  }, delayMs);
-  timer.unref?.();
-  state.timer = timer;
+function waitForUsageCostRefresh(signal: AbortSignal | undefined, delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    // Zero must remain a real timer so cache reads return before refresh starts.
+    const timer = setTimeout(finish, delayMs);
+    timer.unref?.();
+    function finish() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    }
+    signal?.addEventListener("abort", finish, { once: true });
+    if (signal?.aborted) {
+      finish();
+    }
+  });
 }
-
-const usageCostRefreshRuntime = { refreshCostUsageCacheForAgent };
 
 async function runQueuedUsageCostRefresh(
-  refreshKey: string,
   state: UsageCostRefreshState,
+  refreshes: Map<string, UsageCostRefreshState>,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
-  state.running = true;
+  let busyRetryDelayMs = USAGE_COST_REFRESH_RETRY_MIN_MS;
   let retryDelayMs = 0;
   try {
-    while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
-      const fullRefreshRequested = state.fullRefreshRequested;
-      const sessionFiles = fullRefreshRequested ? [] : [...state.pendingSessionFiles];
-      if (!fullRefreshRequested) {
-        state.pendingSessionFiles.clear();
+    do {
+      await waitForUsageCostRefresh(signal, retryDelayMs);
+      if (signal?.aborted) {
+        return;
       }
-      state.fullRefreshRequested = false;
-      const result = await usageCostRefreshRuntime.refreshCostUsageCacheForAgent({
-        config: state.config,
-        agentId: state.agentId,
-        databasePath: state.databasePath,
-        sessionsDir: state.sessionsDir,
-        sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
-      });
-      if (result === "busy") {
-        if (fullRefreshRequested) {
-          state.fullRefreshRequested = true;
-        } else {
-          for (const sessionFile of sessionFiles) {
-            state.pendingSessionFiles.add(sessionFile);
+      retryDelayMs = 0;
+      try {
+        while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
+          const fullRefreshRequested = state.fullRefreshRequested;
+          const sessionFiles = fullRefreshRequested ? [] : [...state.pendingSessionFiles];
+          if (!fullRefreshRequested) {
+            state.pendingSessionFiles.clear();
           }
+          state.fullRefreshRequested = false;
+          const result = await refreshCostUsageCacheForAgent({
+            config: state.config,
+            agentId: state.agentId,
+            databasePath: state.databasePath,
+            storePath: state.storePath,
+            sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
+          });
+          if (signal?.aborted) {
+            return;
+          }
+          if (result === "busy") {
+            if (fullRefreshRequested) {
+              state.fullRefreshRequested = true;
+            } else {
+              for (const sessionFile of sessionFiles) {
+                state.pendingSessionFiles.add(sessionFile);
+              }
+            }
+            retryDelayMs = busyRetryDelayMs;
+            // Contention among many per-agent refreshes must degrade to polling, not a 20Hz spin.
+            busyRetryDelayMs = Math.min(busyRetryDelayMs * 2, USAGE_COST_REFRESH_RETRY_MAX_MS);
+            break;
+          }
+          busyRetryDelayMs = USAGE_COST_REFRESH_RETRY_MIN_MS;
         }
-        retryDelayMs = state.busyRetryDelayMs;
-        // Contention among many per-agent refreshes must degrade to polling, not a 20Hz spin.
-        state.busyRetryDelayMs = Math.min(
-          state.busyRetryDelayMs * 2,
-          USAGE_COST_REFRESH_RETRY_MAX_MS,
-        );
-        break;
+      } catch (error) {
+        logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
+        if (signal?.aborted) {
+          return;
+        }
       }
-      state.busyRetryDelayMs = USAGE_COST_REFRESH_RETRY_MIN_MS;
-    }
-  } catch (error) {
-    logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
+    } while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0);
   } finally {
-    state.running = false;
-    if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
-      scheduleUsageCostRefresh(refreshKey, state, retryDelayMs);
-    } else {
-      usageCostRefreshes.delete(refreshKey);
+    // Remove synchronously with completion; a late request must enqueue a new owner.
+    refreshes.delete(state.databasePath);
+    if (refreshes.size === 0) {
+      usageCostRefreshes.delete(signal);
     }
   }
-}
-
-function clearUsageCostRefreshesForTest(): void {
-  for (const state of usageCostRefreshes.values()) {
-    if (state.timer) {
-      clearTimeout(state.timer);
-    }
-  }
-  usageCostRefreshes.clear();
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionCostUsageTestApi")] = {
-    requestCostUsageCacheRefresh,
-    usageCostRefreshRuntime,
-    clearUsageCostRefreshesForTest,
-  };
 }

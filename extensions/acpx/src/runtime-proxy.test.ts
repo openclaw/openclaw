@@ -23,6 +23,7 @@ function createCompleteRuntime(promptStarted: Promise<void> = Promise.resolve())
   }));
   const prepareFreshSession = vi.fn(async () => {});
   const runtime: CompleteAcpRuntime = {
+    shutdown: vi.fn(async () => {}),
     ensureSession: vi.fn(async () => handle),
     startTurn,
     async *runTurn() {},
@@ -45,6 +46,11 @@ describe("createLazyAcpRuntimeProxy", () => {
       promptStarted.promise,
     );
     const proxy = createLazyAcpRuntimeProxy(async () => runtime);
+    const accepted = { configOptions: [{ id: "effort", currentValue: "medium" }] };
+    runtime.setConfigOption = vi.fn(async () => accepted);
+    await expect(proxy.setConfigOption({ handle, key: "effort", value: "high" })).resolves.toBe(
+      accepted,
+    );
 
     await expect(proxy.doctor()).resolves.toEqual({
       ok: false,

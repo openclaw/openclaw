@@ -3,12 +3,13 @@ import type { WorkboardCard } from "@openclaw/workboard-contract";
 import type { OpenClawPluginApi } from "../api.js";
 import {
   readId,
+  readExpectedUpdatedAt,
   readPatch,
   resolveGatewayWorkboardWorkspaceAccess,
   respondError,
   type GatewayMethodContext,
 } from "./gateway-helpers.js";
-import { WorkboardCardConflictError, type WorkboardStore } from "./store.js";
+import type { WorkboardStore } from "./store.js";
 import {
   assertWorkboardWorkspaceMutationAccess,
   canonicalizeWorkboardWorkspaceAccess,
@@ -84,13 +85,7 @@ export function registerWorkboardWorkspaceCardMethods(params: WorkspaceGatewayMe
       try {
         const patch = withoutWorkboardWorkspaceAccess(readPatch(requestParams));
         const access = await resolveGatewayWorkspaceMutationAccess(request, patch);
-        const expectedUpdatedAt = requestParams.expectedUpdatedAt;
-        if (
-          expectedUpdatedAt !== undefined &&
-          (typeof expectedUpdatedAt !== "number" || !Number.isFinite(expectedUpdatedAt))
-        ) {
-          throw new Error("expectedUpdatedAt must be a finite number.");
-        }
+        const expectedUpdatedAt = readExpectedUpdatedAt(requestParams);
         respond(true, {
           card: redactCard(
             await store.update(
@@ -103,17 +98,6 @@ export function registerWorkboardWorkspaceCardMethods(params: WorkspaceGatewayMe
           ),
         });
       } catch (error) {
-        if (error instanceof WorkboardCardConflictError) {
-          respond(false, undefined, {
-            code: "workboard_conflict",
-            message: error.message,
-            details: {
-              type: "workboard_card_conflict",
-              card: redactCard(error.current),
-            },
-          });
-          return;
-        }
         respondError(respond, error);
       }
     },

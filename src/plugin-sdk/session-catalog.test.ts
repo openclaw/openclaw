@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { PluginRuntime } from "./plugin-runtime.js";
 import {
   createSessionCatalogFamily,
   sessionCatalogPaging,
   sessionCatalogAdoptedSourceKey,
   type SessionCatalogFamilyOptions,
+  type SessionCatalogProvider,
   type SessionCatalogSession,
+  type SessionCatalogTranscriptItem,
 } from "./session-catalog.js";
 
 const messages = {
@@ -26,6 +29,32 @@ const session = (threadId: string): SessionCatalogSession => ({
 });
 
 describe("session catalog SDK", () => {
+  it("exposes the closed share-route contract to external providers", () => {
+    const shareRoute = {
+      kind: "thread-id-prefix",
+      routeSegment: "shared-sessions",
+      hostId: "gateway",
+      identifierAlphabet: "lowercase-hex",
+      fullLength: 32,
+      minPrefixLength: 12,
+      lookup: "catalog-list-search-by-thread-id-prefix",
+      ambiguity: "multiple-results-or-next-cursor",
+    } as const satisfies NonNullable<SessionCatalogProvider["shareRoute"]>;
+    const provider = {
+      id: "external",
+      label: "External",
+      shareRoute,
+      async list() {
+        return [];
+      },
+      async read({ hostId, threadId }) {
+        return { hostId, threadId, items: [] };
+      },
+    } satisfies SessionCatalogProvider;
+
+    expect(provider.shareRoute).toEqual(shareRoute);
+  });
+
   it("owns canonical list/read parameter and cursor parsing", () => {
     const cursor = sessionCatalogPaging.encodeCursor(2);
     expect(
@@ -51,9 +80,70 @@ describe("session catalog SDK", () => {
         { threadIdMaxLength: 32, threadIdPattern: /^(?!-)[a-z0-9-]+$/u, messages },
       ),
     ).toThrow("bad thread");
+    const nativeCursor = "a".repeat(200);
+    const readOptions = { threadIdMaxLength: 32, threadIdPattern: /^thread-\d+$/u, messages };
+    expect(() =>
+      sessionCatalogPaging.parseReadParams(
+        { threadId: "thread-1", cursor: nativeCursor },
+        readOptions,
+      ),
+    ).toThrow("cursor is invalid");
+    expect(
+      sessionCatalogPaging.parseReadParams(
+        { threadId: "thread-1", cursor: nativeCursor },
+        { ...readOptions, cursorMaxLength: 200 },
+      ),
+    ).toEqual({ threadId: "thread-1", limit: 20, cursor: nativeCursor });
+    expect(() =>
+      sessionCatalogPaging.parseReadParams(
+        { threadId: "thread-1", cursor: `${nativeCursor}a` },
+        { ...readOptions, cursorMaxLength: 200 },
+      ),
+    ).toThrow("cursor is invalid");
   });
 
-  it("composes explicit local, node, adoption, capability, and continuation operations", async () => {
+  it.each([
+    { name: "missing", timestamps: [] },
+    {
+      name: "equal",
+      timestamps: Array.from({ length: 5 }, () => "2026-08-30T12:00:00Z"),
+    },
+    {
+      name: "non-monotonic",
+      timestamps: [
+        "2026-08-30T12:00:04Z",
+        "2026-08-30T12:00:01Z",
+        "2026-08-30T12:00:03Z",
+        "2026-08-30T12:00:00Z",
+        "2026-08-30T12:00:02Z",
+      ],
+    },
+  ])("pages newest-first by source order with $name timestamps", ({ timestamps }) => {
+    const items: SessionCatalogTranscriptItem[] = ["z", "2", "10", "a", "1"].map((id, index) => ({
+      id,
+      type: "agentMessage",
+      text: id,
+      timestamp: timestamps[index],
+    }));
+    const latest = sessionCatalogPaging.boundTranscriptPage(items, 2, 0);
+    expect(latest.items.map((item) => item.id)).toEqual(["1", "a"]);
+    const older = sessionCatalogPaging.boundTranscriptPage(
+      items,
+      2,
+      sessionCatalogPaging.decodeCursor(latest.nextCursor),
+    );
+    expect(older.items.map((item) => item.id)).toEqual(["10", "2"]);
+    const oldest = sessionCatalogPaging.boundTranscriptPage(
+      items,
+      2,
+      sessionCatalogPaging.decodeCursor(older.nextCursor),
+    );
+    expect(oldest.items.map((item) => item.id)).toEqual(["z"]);
+    expect(oldest.nextCursor).toBeUndefined();
+    expect(items.map((item) => item.id)).toEqual(["z", "2", "10", "a", "1"]);
+  });
+
+  function createFamilyFixture() {
     const invoke = vi.fn().mockResolvedValue({
       payloadJSON: JSON.stringify({ sessions: [session("remote-thread")] }),
     });
@@ -72,8 +162,12 @@ describe("session catalog SDK", () => {
         invoke,
       },
     } as unknown as PluginRuntime;
-    const create = vi.fn().mockResolvedValue({ sessionKey: "agent:main:created" });
-    const complete = vi.fn(async (continued: { sessionKey: string }) => continued);
+    const create = vi.fn<SessionCatalogFamilyOptions["continuation"]["create"]>(
+      async ({ agentId }) => ({ sessionKey: `agent:${agentId}:created` }),
+    );
+    const complete = vi.fn<SessionCatalogFamilyOptions["continuation"]["complete"]>(
+      async (continued) => continued,
+    );
     const options: SessionCatalogFamilyOptions = {
       runtime,
       local: {
@@ -114,7 +208,7 @@ describe("session catalog SDK", () => {
         sessionUnavailable: "session unavailable",
       },
       continuation: {
-        resolveAgentId: () => "main",
+        resolveAgentId: (agentId = "main") => agentId,
         availability: () => ({ available: true }),
         listAdopted: (_agentId, entries) =>
           entries
@@ -136,6 +230,11 @@ describe("session catalog SDK", () => {
       checkUpstreamActivity: async () => [],
     };
     const provider = createSessionCatalogFamily(options, sessionCatalogPaging.isExactCursor);
+    return { provider, options, create, complete };
+  }
+
+  it("composes explicit local, node, adoption, capability, and continuation operations", async () => {
+    const { provider } = createFamilyFixture();
     const onHost = vi.fn();
 
     const hosts = await provider.list({
@@ -168,13 +267,251 @@ describe("session catalog SDK", () => {
     ]);
     expect(onHost).toHaveBeenCalledTimes(2);
 
-    const [first, second] = await Promise.all([
-      provider.continueSession!({ hostId: "gateway", threadId: "local-thread" }),
-      provider.continueSession!({ hostId: "gateway", threadId: "local-thread" }),
-    ]);
-    expect(first).toEqual({ sessionKey: "agent:main:created" });
-    expect(second).toEqual(first);
-    expect(create).toHaveBeenCalledOnce();
-    expect(complete).toHaveBeenCalledOnce();
+    await expect(
+      provider.openTerminal({ hostId: "node:node-1", threadId: "remote-thread" }),
+    ).resolves.toEqual({
+      kind: "node",
+      nodeId: "node-1",
+      command: "family.terminal",
+      paramsJSON: JSON.stringify({ threadId: "remote-thread" }),
+      title: "family remote-thread",
+    });
+
+    await expect(
+      provider.continueSession({ hostId: "gateway", threadId: "local-thread" }),
+    ).resolves.toEqual({ sessionKey: "agent:main:created" });
   });
+
+  it.each(["local", "nodes"] as const)(
+    "does not start node work when the owner retires during %s discovery",
+    async (stage) => {
+      const { provider, options } = createFamilyFixture();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      const project = vi.fn(options.capabilities.project);
+      options.capabilities.project = project;
+      if (stage === "local") {
+        const original = options.local.list;
+        options.local.list = async (query) => {
+          entered.resolve();
+          await release.promise;
+          return original(query);
+        };
+      } else {
+        const listNodes = vi.mocked(options.runtime.nodes.list);
+        const original = listNodes.getMockImplementation()!;
+        listNodes.mockImplementation(async (query) => {
+          entered.resolve();
+          await release.promise;
+          return original(query);
+        });
+      }
+      const pending = provider.list({ agentId: "main", signal: controller.signal });
+      await entered.promise;
+      const reason = new Error("catalog owner retired");
+      controller.abort(reason);
+      release.resolve();
+      await expect(pending).rejects.toBe(reason);
+
+      expect(options.runtime.nodes.invoke).not.toHaveBeenCalled();
+      if (stage === "local") {
+        expect(project).not.toHaveBeenCalled();
+        expect(options.runtime.nodes.list).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("delivers owner retirement to an active node invocation", async () => {
+    const { provider, options } = createFamilyFixture();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const controller = new AbortController();
+    let transportRetired = false;
+    vi.mocked(options.runtime.nodes.invoke).mockImplementation(async ({ signal }) => {
+      const retire = () => {
+        transportRetired = true;
+        release.resolve();
+      };
+      signal?.addEventListener("abort", retire, { once: true });
+      entered.resolve();
+      try {
+        await release.promise;
+        return { payloadJSON: JSON.stringify({ sessions: [] }) };
+      } finally {
+        signal?.removeEventListener("abort", retire);
+      }
+    });
+    const pending = provider.list({
+      agentId: "main",
+      hostIds: ["node:node-1"],
+      signal: controller.signal,
+    });
+    try {
+      await entered.promise;
+      controller.abort(new Error("catalog owner retired"));
+      expect(transportRetired).toBe(true);
+    } finally {
+      release.resolve();
+      await pending.catch(() => []);
+    }
+  });
+
+  it("does not retry local publication as a discovery failure", async () => {
+    const { provider, options } = createFamilyFixture();
+    const reason = new Error("publication failed");
+    const onHost = vi.fn(() => {
+      throw reason;
+    });
+
+    await expect(provider.list({ onHost })).rejects.toBe(reason);
+
+    expect(onHost).toHaveBeenCalledTimes(1);
+    expect(options.runtime.nodes.list).not.toHaveBeenCalled();
+  });
+
+  it.each(["retirement", "publication failure"] as const)(
+    "joins all started node work before rejecting on %s",
+    async (failure) => {
+      const { provider, options } = createFamilyFixture();
+      const entered = createDeferred();
+      const fast = createDeferred();
+      const slow = createDeferred();
+      const reason = new Error(failure);
+      const controller = new AbortController();
+      vi.mocked(options.runtime.nodes.list).mockResolvedValue({
+        nodes: ["fast", "slow"].map((nodeId) => ({
+          nodeId,
+          connected: true,
+          commands: ["family.list"],
+        })),
+      });
+      let started = 0;
+      vi.mocked(options.runtime.nodes.invoke).mockImplementation(async ({ nodeId }) => {
+        if (++started === 2) {
+          entered.resolve();
+        }
+        await (nodeId === "fast" ? fast.promise : slow.promise);
+        return { payloadJSON: JSON.stringify({ sessions: [] }) };
+      });
+      const onHost = vi.fn((host: { hostId: string }) => {
+        if (failure === "publication failure" && host.hostId === "node:fast") {
+          throw reason;
+        }
+      });
+      let settled = false;
+      const pending = provider.list({
+        hostIds: ["node:fast", "node:slow"],
+        signal: controller.signal,
+        onHost,
+      });
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      try {
+        await entered.promise;
+        if (failure === "retirement") {
+          controller.abort(reason);
+        }
+        fast.resolve();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(false);
+        if (failure === "retirement") {
+          expect(onHost).not.toHaveBeenCalled();
+        }
+        slow.resolve();
+        await expect(pending).rejects.toBe(reason);
+      } finally {
+        fast.resolve();
+        slow.resolve();
+        await pending.catch(() => []);
+      }
+    },
+  );
+
+  it.each([
+    { joinDuring: "lookup", firstAgentId: "main", secondAgentId: "main" },
+    { joinDuring: "lookup", firstAgentId: "main", secondAgentId: "other" },
+    { joinDuring: "lookup", firstAgentId: undefined, secondAgentId: "main" },
+    { joinDuring: "completion", firstAgentId: "main", secondAgentId: "main" },
+    { joinDuring: "completion", firstAgentId: "main", secondAgentId: "other" },
+    { joinDuring: "completion", firstAgentId: undefined, secondAgentId: "main" },
+  ])(
+    "coordinates $firstAgentId/$secondAgentId adoption during $joinDuring and reuses stored adoption",
+    async ({ joinDuring, firstAgentId, secondAgentId }) => {
+      const { provider, options, create, complete } = createFamilyFixture();
+      const request = { hostId: "gateway", threadId: "local-thread" };
+      const sourceKey = sessionCatalogAdoptedSourceKey(request.hostId, request.threadId);
+      const adopted = new Map<string, Map<string, string>>();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const secondResolved = createDeferred();
+      let resolutions = 0;
+      options.continuation.resolveAgentId = (agentId = "main") => {
+        if (++resolutions === 2) {
+          secondResolved.resolve();
+        }
+        return agentId;
+      };
+      const listAdopted = vi.fn(async (agentId = "main") => {
+        if (joinDuring === "lookup") {
+          entered.resolve();
+          await release.promise;
+        }
+        return adopted.get(agentId) ?? new Map<string, string>();
+      });
+      options.continuation.listAdopted = listAdopted;
+      create.mockImplementation(async ({ agentId }) => {
+        const sessionKey = `agent:${agentId}:created`;
+        adopted.set(agentId, new Map([[sourceKey, sessionKey]]));
+        return { sessionKey };
+      });
+      complete.mockImplementation(async (continued) => {
+        if (joinDuring === "completion") {
+          entered.resolve();
+          await release.promise;
+        }
+        return continued;
+      });
+
+      const first = provider.continueSession({ ...request, agentId: firstAgentId });
+      await entered.promise;
+      const second = provider.continueSession({ ...request, agentId: secondAgentId });
+      // Resolution is synchronous; the second request enters single-flight before this resumes.
+      await secondResolved.promise;
+      release.resolve();
+      const results = await Promise.all([first, second]);
+
+      expect
+        .soft(results)
+        .toEqual([
+          { sessionKey: "agent:main:created" },
+          { sessionKey: `agent:${secondAgentId}:created` },
+        ]);
+      const agentIds = [...new Set(["main", secondAgentId])];
+      expect.soft(listAdopted.mock.calls).toEqual(agentIds.map((agentId) => [agentId]));
+      expect.soft(create).toHaveBeenCalledTimes(agentIds.length);
+      expect.soft(complete).toHaveBeenCalledTimes(agentIds.length);
+      for (const agentId of agentIds) {
+        const continued = { sessionKey: `agent:${agentId}:created` };
+        expect.soft(create).toHaveBeenCalledWith({
+          ...request,
+          agentId,
+          session: session(request.threadId),
+        });
+        expect.soft(complete).toHaveBeenCalledWith(continued, request.threadId);
+        // Stored source identity stays host/thread-only after the in-flight operation ends.
+        await expect(provider.continueSession({ ...request, agentId })).resolves.toEqual(continued);
+      }
+      expect(create).toHaveBeenCalledTimes(agentIds.length);
+      expect(complete).toHaveBeenCalledTimes(agentIds.length * 2);
+    },
+  );
 });

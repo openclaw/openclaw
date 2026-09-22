@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ let root: string;
 let record: FleetCellRecord;
 
 const tempRoot = createSuiteTempRootTracker({ prefix: "openclaw-fleet-backup-test-" });
+const nativeConfig = getFsSafeNativeConfig();
 
 function inspection(running = false): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
@@ -48,7 +50,7 @@ function inspection(running = false): Extract<FleetContainerInspectResult, { kin
 function containerMock(current: FleetContainerInspectResult = inspection()) {
   return {
     assertLocal: vi.fn(async () => undefined),
-    inspect: vi.fn(async () => current),
+    inspect: vi.fn<FleetContainerRuntime["inspect"]>(async () => current),
     inspectNetwork: vi.fn(async () => ({
       kind: "ok" as const,
       labels: {
@@ -116,6 +118,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
+  configureFsSafeNative(nativeConfig);
   vi.restoreAllMocks();
   await tempRoot.cleanup();
 });
@@ -132,20 +135,17 @@ describe("fleet backup runtime", () => {
     };
   }
 
-  function interruptCopy(archivePath: string, mutate: (targetPath: string) => Promise<void>) {
-    const error = Object.assign(new Error("archive copy interrupted"), { code: "EIO" });
+  function forceJavaScriptCopyFallback() {
+    // These fixtures exercise publication without native or filesystem hard-link support.
+    configureFsSafeNative({ mode: "off" });
     vi.spyOn(fs, "link").mockRejectedValue(
       Object.assign(new Error("unsupported"), { code: "ENOTSUP" }),
     );
-    const copyFile = fs.copyFile.bind(fs);
-    const legacyCopy = vi.spyOn(fs, "copyFile").mockImplementation(async (source, target, mode) => {
-      if (path.resolve(String(target)) !== archivePath) {
-        return await copyFile(source, target, mode);
-      }
-      await fs.writeFile(target, "");
-      await mutate(String(target));
-      throw error;
-    });
+  }
+
+  function interruptCopy(archivePath: string, mutate: (targetPath: string) => Promise<void>) {
+    forceJavaScriptCopyFallback();
+    const error = Object.assign(new Error("archive copy interrupted"), { code: "EIO" });
     __setFsSafeTestHooksForTest({
       afterPublishTargetCreated: async (method, targetPath) => {
         if (method === "exclusive-copy" && targetPath === archivePath) {
@@ -154,7 +154,6 @@ describe("fleet backup runtime", () => {
         }
       },
     });
-    return legacyCopy;
   }
 
   it("writes a private archive with manifest, data, and auth while skipping symlinks", async () => {
@@ -199,11 +198,9 @@ describe("fleet backup runtime", () => {
     expect(leftovers).toEqual([]);
   });
 
-  it("publishes a complete archive through the copy fallback", async () => {
+  it("publishes a complete archive through the JavaScript copy fallback", async () => {
     const archivePath = path.join(root, "copy.tgz");
-    vi.spyOn(fs, "link").mockRejectedValue(
-      Object.assign(new Error("unsupported"), { code: "ENOTSUP" }),
-    );
+    forceJavaScriptCopyFallback();
     const methods: string[] = [];
     __setFsSafeTestHooksForTest({
       afterPublishTargetCreated: (method) => {
@@ -218,16 +215,13 @@ describe("fleet backup runtime", () => {
 
   it("removes an interrupted owned copy and allows a backup retry", async () => {
     const archivePath = path.join(root, "interrupted.tgz");
-    const legacyCopy = interruptCopy(archivePath, (targetPath) =>
-      fs.writeFile(targetPath, "partial archive"),
-    );
+    interruptCopy(archivePath, (targetPath) => fs.writeFile(targetPath, "partial archive"));
 
     await expect(backupFleetCell(backupParams(archivePath))).rejects.toThrow(
       /archive copy interrupted/iu,
     );
     await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
     __setFsSafeTestHooksForTest(undefined);
-    legacyCopy.mockRestore();
     await expect(backupFleetCell(backupParams(archivePath))).resolves.toMatchObject({
       archivePath,
     });
@@ -288,9 +282,7 @@ describe("fleet backup runtime", () => {
 
   it("rejects and removes a copy that fails publication content verification", async () => {
     const archivePath = path.join(root, "integrity-failure.tgz");
-    vi.spyOn(fs, "link").mockRejectedValue(
-      Object.assign(new Error("unsupported"), { code: "ENOTSUP" }),
-    );
+    forceJavaScriptCopyFallback();
     __setFsSafeTestHooksForTest({
       afterPublishTargetCreated: async (method, targetPath) => {
         if (method === "exclusive-copy" && targetPath === archivePath) {
@@ -591,9 +583,31 @@ describe("fleet restore runtime", () => {
     );
   });
 
-  it("swaps state, repins config, and rotates the token", async () => {
+  it.each([
+    {
+      name: "generated previous default",
+      cache: "/home/node/.cache",
+      keys: [],
+      expectedCache: "/home/node/.openclaw/cache",
+    },
+    {
+      name: "explicit matching default",
+      cache: "/home/node/.openclaw/cache",
+      keys: ["XDG_CACHE_HOME"],
+      expectedCache: "/home/node/.openclaw/cache",
+    },
+    {
+      name: "explicit previous default",
+      cache: "/home/node/.cache",
+      keys: ["XDG_CACHE_HOME"],
+      expectedCache: "/home/node/.cache",
+    },
+  ])("restores state and token with $name", async ({ cache, keys, expectedCache }) => {
     const archive = await createArchive();
-    const containers = containerMock();
+    const current = inspection();
+    current.labels["openclaw.fleet.env-keys"] = keys.join(",");
+    current.environment.XDG_CACHE_HOME = cache;
+    const containers = containerMock(current);
     const result = await restoreFleetCell(restoreParams(containers, archive));
     await expect(fs.readFile(path.join(record.dataDir, "restored.txt"), "utf8")).resolves.toBe(
       "new-data",
@@ -606,6 +620,8 @@ describe("fleet restore runtime", () => {
     ) as { gateway?: { controlUi?: { allowedOrigins?: string[] } } };
     expect(config.gateway?.controlUi?.allowedOrigins).toContain("http://127.0.0.1:19100");
     expect(containers.run.mock.calls[0]?.[0].environment.OPENCLAW_GATEWAY_TOKEN).toBe("new-token");
+    expect(containers.run.mock.calls[0]?.[0].environment.XDG_CACHE_HOME).toBe(expectedCache);
+    expect(containers.run.mock.calls[0]?.[0].userEnvironmentKeys).toEqual(keys);
     // The disk limit must survive restore via the fleet label even on Podman,
     // whose inspect schema has no HostConfig.StorageOpt.
     expect(containers.run.mock.calls[0]?.[0].diskSize).toBe("10g");
@@ -616,6 +632,43 @@ describe("fleet restore runtime", () => {
     expect(result.started).toBe(false);
     await expect(fs.readdir(path.join(root, "fleet", "restore-tmp"))).resolves.toEqual([]);
   });
+
+  it.each([true, false])(
+    "removes the inspected generation, not a replacement that took the name (wasRunning: %s)",
+    async (wasRunning) => {
+      const archive = await createArchive();
+      const running = inspection(wasRunning);
+      const containers = containerMock(running);
+      // Restore's first lookup finds the real cell. Immediately afterwards a
+      // replacement claims the cell name; it carries valid fleet ownership
+      // labels and would pass the guard, so only pinning the inspected identity
+      // keeps stop and remove on the generation restore decided to displace.
+      const replacement = {
+        ...inspection(true),
+        containerId: "replacement-id",
+        labels: { ...inspection(true).labels, "openclaw.fleet.attempt": NEXT_ATTEMPT },
+      };
+      containers.inspect.mockImplementationOnce(async () => {
+        containers.inspect.mockImplementation(async (_runtime, reference) =>
+          reference === "container-id" ? running : replacement,
+        );
+        return running;
+      });
+      containers.stop.mockImplementation(async () => {
+        running.running = false;
+        running.state = "exited";
+      });
+
+      await restoreFleetCell({ ...restoreParams(containers, archive), force: true });
+
+      if (wasRunning) {
+        expect(containers.stop).toHaveBeenCalledWith("docker", "container-id");
+        expect(containers.stop).not.toHaveBeenCalledWith("docker", "replacement-id");
+      }
+      expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", false);
+      expect(containers.remove).not.toHaveBeenCalledWith("docker", "replacement-id", false);
+    },
+  );
 
   it("restarts a force-stopped cell when restore fails before removal", async () => {
     const archive = await createArchive();
@@ -629,7 +682,7 @@ describe("fleet restore runtime", () => {
     await expect(
       restoreFleetCell({ ...restoreParams(containers, archive), force: true }),
     ).rejects.toThrow(/transient removal failure/iu);
-    expect(containers.start).toHaveBeenCalledWith("docker", "openclaw-cell-acme");
+    expect(containers.start).toHaveBeenCalledWith("docker", "container-id");
     await expect(fs.readFile(path.join(record.dataDir, "state.txt"), "utf8")).resolves.toBe(
       "state",
     );

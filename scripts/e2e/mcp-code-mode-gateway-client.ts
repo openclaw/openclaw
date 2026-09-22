@@ -6,6 +6,7 @@ import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import { readMcpCodeModeDiagnostics } from "./lib/mcp-code-mode-diagnostics.ts";
 import {
   extractMcpCodeModePlannedTools,
   type McpCodeModeMentions,
@@ -176,6 +177,16 @@ async function main() {
     sessionKey: MCP_CODE_MODE_SESSION_KEY,
   });
   const plannedTools = extractMcpCodeModePlannedTools(transcriptEvents);
+  if (process.env.MOCK_REQUEST_LOG) {
+    process.stdout.write(
+      `${JSON.stringify({
+        mcpCodeModeDiagnostics: await readMcpCodeModeDiagnostics(
+          process.env.MOCK_REQUEST_LOG,
+          transcriptEvents,
+        ),
+      })}\n`,
+    );
+  }
   const finalText = validateMcpCodeModeResult(response, mentions as McpCodeModeMentions, {
     plannedTools,
     requireExec: true,

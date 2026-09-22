@@ -4,7 +4,10 @@ import { Type } from "typebox";
 import { AgentOwnershipSchema } from "./agents-models-skills.js";
 import { closedObject } from "./closed-object.js";
 import { UpdateAvailableSchema, UpdateScheduleStateSchema } from "./config.js";
+import { GatewaySuspensionSchema } from "./gateway-suspend.js";
 import { NonEmptyString } from "./primitives.js";
+import { GatewayEventLoopHealthSchema } from "./runtime-vitals.js";
+import { SessionPersonSchema } from "./session-participant.js";
 
 /**
  * Gateway state snapshot schemas.
@@ -15,6 +18,7 @@ import { NonEmptyString } from "./primitives.js";
 /** One gateway-visible presence record for a node/client/runtime. */
 export const PresenceEntrySchema = closedObject({
   host: Type.Optional(NonEmptyString),
+  clientId: Type.Optional(NonEmptyString),
   ip: Type.Optional(NonEmptyString),
   version: Type.Optional(NonEmptyString),
   platform: Type.Optional(NonEmptyString),
@@ -37,8 +41,9 @@ export const PresenceEntrySchema = closedObject({
   instanceId: Type.Optional(NonEmptyString),
   user: Type.Optional(
     closedObject({
-      /** Canonical profile id when resolved, otherwise authenticated identity. Clients group presence by this. */
+      /** Canonical profile id when resolved, otherwise authenticated identity; grouping also uses identity qualification. */
       id: NonEmptyString,
+      identity: Type.Optional(SessionPersonSchema.properties.identity),
       email: Type.Optional(NonEmptyString),
       name: Type.Optional(NonEmptyString),
       avatarUrl: Type.Optional(NonEmptyString),
@@ -66,24 +71,7 @@ const HealthSnapshotSchema = closedObject({
   ok: Type.Optional(Type.Literal(true)),
   ts: Type.Optional(Type.Integer({ minimum: 0 })),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  eventLoop: Type.Optional(
-    closedObject({
-      degraded: Type.Boolean(),
-      degradedSinceMs: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
-      reasons: Type.Array(
-        Type.Union([
-          Type.Literal("event_loop_delay"),
-          Type.Literal("event_loop_utilization"),
-          Type.Literal("cpu"),
-        ]),
-      ),
-      intervalMs: Type.Number({ minimum: 0 }),
-      delayP99Ms: Type.Number({ minimum: 0 }),
-      delayMaxMs: Type.Number({ minimum: 0 }),
-      utilization: Type.Number({ minimum: 0 }),
-      cpuCoreRatio: Type.Number({ minimum: 0 }),
-    }),
-  ),
+  eventLoop: Type.Optional(GatewayEventLoopHealthSchema),
   plugins: Type.Optional(
     closedObject({
       loaded: Type.Array(Type.String()),
@@ -234,6 +222,7 @@ export const StateVersionSchema = closedObject({
 
 /** Initial and incremental gateway state snapshot payload. */
 export const SnapshotSchema = closedObject({
+  suspension: Type.Optional(GatewaySuspensionSchema),
   presence: Type.Array(PresenceEntrySchema),
   health: HealthSnapshotSchema,
   stateVersion: StateVersionSchema,
@@ -243,6 +232,8 @@ export const SnapshotSchema = closedObject({
   configPath: Type.Optional(NonEmptyString),
   stateDir: Type.Optional(NonEmptyString),
   sessionDefaults: Type.Optional(SessionDefaultsSchema),
+  /** Credential-free browser sign-in endpoint advertised to authenticated operators. */
+  controlUiIdentityUrl: Type.Optional(NonEmptyString),
   authMode: Type.Optional(
     Type.Union([
       Type.Literal("none"),

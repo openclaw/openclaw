@@ -38,6 +38,7 @@ import {
   getCachedIMessagePrivateApiStatus,
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
+import type { probeIMessagePrivateApi } from "./probe.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const DEFAULT_SENDER = "+15550001111";
@@ -159,6 +160,7 @@ const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
 );
 const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
+const probeIMessagePrivateApiMock = vi.hoisted(() => vi.fn<typeof probeIMessagePrivateApi>());
 const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
   vi.fn<typeof ensureConfiguredBindingRouteReady>(async () => ({ ok: true })),
@@ -245,6 +247,14 @@ vi.mock("./client.js", () => ({
   createIMessageRpcClient: createIMessageRpcClientMock,
 }));
 
+vi.mock("./probe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./probe.js")>();
+  return {
+    ...actual,
+    probeIMessagePrivateApi: probeIMessagePrivateApiMock,
+  };
+});
+
 vi.mock("./monitor/abort-handler.js", () => ({
   attachIMessageMonitorAbortHandler: vi.fn(() => () => {}),
 }));
@@ -287,6 +297,15 @@ describe("iMessage monitor last-route updates", () => {
     installIMessageStateRuntimeForTest();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
+    probeIMessagePrivateApiMock.mockReset().mockImplementation(
+      async (cliPath) =>
+        getCachedIMessagePrivateApiStatus(cliPath) ?? {
+          available: false,
+          v2Ready: false,
+          selectors: {},
+          rpcMethods: [],
+        },
+    );
     readChannelAllowFromStoreMock.mockReset().mockResolvedValue([]);
     ensureConfiguredBindingRouteReadyMock.mockReset().mockResolvedValue({ ok: true });
     dispatchReplyWithBufferedBlockDispatcherMock.mockClear();
@@ -390,7 +409,7 @@ describe("iMessage monitor last-route updates", () => {
       expectedService: "auto",
     },
   ] as const)(
-    "preserves the inbound direct service through early typing, final delivery, and last-route ($label)",
+    "preserves the inbound direct route through early typing, exact-chat final delivery, and last-route ($label)",
     async ({ label, configuredService, chatGuid, expectedService }) => {
       setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing", "read"]);
       const stateDir = createTestStateDir(
@@ -434,7 +453,7 @@ describe("iMessage monitor last-route updates", () => {
           expect.any(Object),
         );
       });
-      const expectedReadTarget = chatGuid ? { chat_guid: chatGuid } : { to: DEFAULT_SENDER };
+      const expectedReadTarget = chatGuid ? { chat_guid: chatGuid } : { chat_id: 123 };
       expect(auxiliaryClient.request).toHaveBeenCalledWith(
         "read",
         expect.objectContaining(expectedReadTarget),
@@ -443,16 +462,15 @@ describe("iMessage monitor last-route updates", () => {
       expect(auxiliaryClient.request).toHaveBeenCalledWith(
         "send",
         expect.objectContaining({
-          service: expectedService,
+          chat_id: 123,
           text: "reply over the originating service",
-          to: DEFAULT_SENDER,
         }),
         expect.any(Object),
       );
       const dispatchParams = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.at(0)?.[0];
       expect(dispatchParams?.ctx).toMatchObject({
         From: `${expectedService}:${DEFAULT_SENDER}`,
-        To: `${expectedService}:${DEFAULT_SENDER}`,
+        To: "chat_id:123",
       });
       await vi.waitFor(() => {
         expect(
@@ -622,17 +640,21 @@ describe("iMessage monitor last-route updates", () => {
     return resolveIMessageRecoveryCursorDbIdentity({ dbPath });
   }
 
-  function createRecoveryChatDb(prefix: string, cursor?: number, label = "boundary"): string {
+  async function createRecoveryChatDb(
+    prefix: string,
+    cursor?: number,
+    label = "boundary",
+  ): Promise<string> {
     const dbPath = path.join(createTestStateDir(prefix), "chat.db");
     if (cursor !== undefined) {
-      advanceIMessageRecoveryCursor("default", recoveryCursorIdentity(dbPath), cursor);
+      await advanceIMessageRecoveryCursor("default", recoveryCursorIdentity(dbPath), cursor);
     }
     seedChatDb(dbPath, label);
     return dbPath;
   }
 
-  function loadRecoveryCursor(dbPath: string): number | null {
-    return loadIMessageRecoveryCursor("default", recoveryCursorIdentity(dbPath));
+  async function loadRecoveryCursor(dbPath: string): Promise<number | null> {
+    return await loadIMessageRecoveryCursor("default", recoveryCursorIdentity(dbPath));
   }
 
   async function runMessageCase(
@@ -703,13 +725,9 @@ describe("iMessage monitor last-route updates", () => {
           }),
         ),
       ),
-      afterNotify: async () => {
-        await vi.waitFor(() => {
-          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(texts.length);
-        });
-      },
       monitor: { runtime },
     });
+    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(texts.length);
     expect(
       dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.map(
         ([params]) => params.ctx.BodyForAgent,
@@ -855,6 +873,7 @@ describe("iMessage monitor last-route updates", () => {
     setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing"]);
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
       expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+      expect(params.replyOptions?.allowToolLifecycleWhenProgressHidden).toBe(true);
       expect(params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
       const onReplyStart =
         params.dispatcherOptions.onReplyStart ??
@@ -940,6 +959,7 @@ describe("iMessage monitor last-route updates", () => {
     setAvailablePrivateApiMethods(["watch.subscribe", "send", "read"]);
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
       expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+      expect(params.replyOptions?.allowToolLifecycleWhenProgressHidden).toBe(true);
       expect(params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
       expect(params.replyOptions?.onToolStart).toBeUndefined();
       const onToolResult = params.replyOptions?.onToolResult;
@@ -1022,6 +1042,39 @@ describe("iMessage monitor last-route updates", () => {
     });
   });
 
+  it("re-probes missing private API capabilities before typing and read receipts", async () => {
+    probeIMessagePrivateApiMock.mockResolvedValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      rpcMethods: ["watch.subscribe", "typing", "read"],
+    });
+    const client = await runMessageCase({
+      auxiliaryRequests: {
+        typing: { ok: true },
+        read: { ok: true },
+      },
+      message: createInboundMessage({
+        id: 14,
+        guid: "private-api-refresh-guid-14",
+        text: "restore native feedback after bridge recovery",
+      }),
+    });
+    const auxiliaryClient = client.auxiliaryClient!;
+
+    expect(probeIMessagePrivateApiMock).toHaveBeenCalledWith("imsg", 10_000);
+    expect(auxiliaryClient.request).toHaveBeenCalledWith(
+      "read",
+      expect.objectContaining({ chat_id: 123 }),
+      expect.any(Object),
+    );
+    expect(auxiliaryClient.request).toHaveBeenCalledWith(
+      "typing",
+      expect.objectContaining({ typing: true }),
+      expect.any(Object),
+    );
+  });
+
   for (const { name, id, guid, monitor } of [
     ...(["never", "message", "thinking"] as const).map((typingMode) => ({
       name: `does not start direct tool typing when typingMode is ${typingMode}`,
@@ -1089,7 +1142,7 @@ describe("iMessage monitor last-route updates", () => {
 
     expect(readClient.request).toHaveBeenCalledWith(
       "read",
-      expect.objectContaining({ to: "+15550001111" }),
+      expect.objectContaining({ chat_id: 123 }),
       expect.any(Object),
     );
     expect(watchClient.request).not.toHaveBeenCalledWith(
@@ -1269,14 +1322,18 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("passes the startup rowid watermark as since_rowid when chat.db is readable", async () => {
-    const dbPath = createRecoveryChatDb("openclaw-imsg-startup-rowid-", undefined, "watermark");
+    const dbPath = await createRecoveryChatDb(
+      "openclaw-imsg-startup-rowid-",
+      undefined,
+      "watermark",
+    );
     const client = await runMessageCase({ monitor: { imessage: { dbPath } } });
 
     expectWatchSubscription(client, 5000);
   });
 
   it("recovers over a remote cliPath: replays from the cursor even without a local chat.db boundary", async () => {
-    advanceIMessageRecoveryCursor(
+    await advanceIMessageRecoveryCursor(
       "default",
       resolveIMessageRecoveryCursorDbIdentity({ remoteHost: "user@gateway-host" }),
       4990,
@@ -1293,7 +1350,7 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("routes legacy catchup through durable ingress and rejects a live GUID overlap", async () => {
-    const dbPath = createRecoveryChatDb("openclaw-imsg-catchup-window-");
+    const dbPath = await createRecoveryChatDb("openclaw-imsg-catchup-window-");
     const createdAt = new Date().toISOString();
     const historyMessage = createInboundMessage({
       id: 4995,
@@ -1325,7 +1382,7 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("recovers downtime messages: replays from the cursor and delivers replay rows older than the live fence", async () => {
-    const dbPath = createRecoveryChatDb("openclaw-imsg-recovery-", 4990);
+    const dbPath = await createRecoveryChatDb("openclaw-imsg-recovery-", 4990);
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
     const client = await runMessageCase({
@@ -1353,7 +1410,7 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("does not treat startup-boundary rows as recovery replay without a prior cursor", async () => {
-    const dbPath = createRecoveryChatDb("openclaw-imsg-first-run-boundary-");
+    const dbPath = await createRecoveryChatDb("openclaw-imsg-first-run-boundary-");
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
     const client = await runMessageCase({
@@ -1372,7 +1429,7 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   it("records a suppressed live row so a later replay of the same row is deduped, not delivered", async () => {
-    const dbPath = createRecoveryChatDb("openclaw-imsg-suppress-record-");
+    const dbPath = await createRecoveryChatDb("openclaw-imsg-suppress-record-");
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
     await runMessageCase({
@@ -1398,7 +1455,7 @@ describe("iMessage monitor last-route updates", () => {
 
   it("advances the recovery cursor after durable enqueue before dispatch", async () => {
     debouncerControl.holdEntries = true;
-    const dbPath = createRecoveryChatDb("openclaw-imsg-recovery-failed-", 4990);
+    const dbPath = await createRecoveryChatDb("openclaw-imsg-recovery-failed-", 4990);
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
     const client = await runMessageCase({
@@ -1417,12 +1474,12 @@ describe("iMessage monitor last-route updates", () => {
     await vi.waitFor(() => {
       expect(debouncerControl.entries).toHaveLength(2);
     });
-    expect(loadRecoveryCursor(dbPath)).toBe(4996);
+    expect(await loadRecoveryCursor(dbPath)).toBe(4996);
   });
 
   it("keeps the durable recovery cursor independent of later dispatch order", async () => {
     debouncerControl.holdEntries = true;
-    const dbPath = createRecoveryChatDb("openclaw-imsg-recovery-ordered-", 4990);
+    const dbPath = await createRecoveryChatDb("openclaw-imsg-recovery-ordered-", 4990);
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
     await runMessageCase({
@@ -1440,7 +1497,7 @@ describe("iMessage monitor last-route updates", () => {
     await vi.waitFor(() => {
       expect(debouncerControl.entries).toHaveLength(2);
     });
-    expect(loadRecoveryCursor(dbPath)).toBe(4996);
+    expect(await loadRecoveryCursor(dbPath)).toBe(4996);
   });
 
   const replacedDatabaseCases = [
@@ -1464,7 +1521,7 @@ describe("iMessage monitor last-route updates", () => {
     it(replacedDatabase.name, async () => {
       const stateDir = createTestStateDir(replacedDatabase.prefix);
       const dbPath = path.join(stateDir, "chat.db");
-      advanceIMessageRecoveryCursor(
+      await advanceIMessageRecoveryCursor(
         "default",
         resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
         9000,
@@ -1517,7 +1574,10 @@ describe("iMessage monitor last-route updates", () => {
         expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
       });
       expect(
-        loadIMessageRecoveryCursor("default", resolveIMessageRecoveryCursorDbIdentity({ dbPath })),
+        await loadIMessageRecoveryCursor(
+          "default",
+          resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
+        ),
       ).toBe(replacedDatabase.liveRowid);
     });
   }
@@ -1525,7 +1585,7 @@ describe("iMessage monitor last-route updates", () => {
   it("does not self-fence past the first row inserted while an empty rebuilt chat.db starts", async () => {
     const stateDir = createTestStateDir("openclaw-imsg-db-rebuilt-startup-race-");
     const dbPath = path.join(stateDir, "chat.db");
-    advanceIMessageRecoveryCursor(
+    await advanceIMessageRecoveryCursor(
       "default",
       resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
       9000,
@@ -1576,7 +1636,10 @@ describe("iMessage monitor last-route updates", () => {
       expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
     });
     expect(
-      loadIMessageRecoveryCursor("default", resolveIMessageRecoveryCursorDbIdentity({ dbPath })),
+      await loadIMessageRecoveryCursor(
+        "default",
+        resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
+      ),
     ).toBe(1);
   });
 
@@ -1693,7 +1756,7 @@ describe("iMessage monitor last-route updates", () => {
           expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
         });
         const dispatchParams = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.at(0)?.[0];
-        expect(dispatchParams?.ctx.To).toBe("imessage:+15550000002");
+        expect(dispatchParams?.ctx.To).toBe("chat_id:42");
         expect(dispatchParams?.ctx.To).not.toBe("imessage:+15550000001");
       }
     });

@@ -1,11 +1,11 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
@@ -17,6 +17,7 @@ const fixturePath = fileURLToPath(
 const artifactsRoot = path.join(repoRoot, ".artifacts", "qa-e2e");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcess>();
+const nodeExecPath = resolveTestNodeExecPath();
 
 const PROCESS_LIFECYCLE_SCENARIO = "channel-chat-baseline";
 // Suite execution contends with the surrounding extension shard; only the bounded
@@ -33,13 +34,8 @@ function buildSuiteProcessEnv(outputDir: string) {
     OPENCLAW_HOME: home,
     OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
     OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
-    OPENCLAW_BUILD_PRIVATE_QA: "1",
     OPENCLAW_QA_SUITE_PROGRESS: "1",
-    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
   };
-  if (!existsSync(path.join(repoRoot, "dist", "index.js"))) {
-    env.OPENCLAW_FORCE_BUILD = "1";
-  }
   delete env.VITEST;
   delete env.VITEST_POOL_ID;
   delete env.VITEST_WORKER_ID;
@@ -115,15 +111,11 @@ afterEach(async () => {
 });
 
 function startSuiteProcess(outputDir: string, scenarioIds: readonly string[]) {
-  const child = spawn(
-    process.execPath,
-    ["--import", "tsx", fixturePath, outputDir, ...scenarioIds],
-    {
-      cwd: repoRoot,
-      env: buildSuiteProcessEnv(outputDir),
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+  const child = spawn(nodeExecPath, ["--import", "tsx", fixturePath, outputDir, ...scenarioIds], {
+    cwd: repoRoot,
+    env: buildSuiteProcessEnv(outputDir),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   activeChildren.add(child);
   let stdout = "";
   let stderr = "";

@@ -13,6 +13,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFileBackedSessionManagerForTest } from "../../test/helpers/session-manager-file-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
 import {
@@ -21,9 +22,11 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { flushPendingToolResultsAfterIdle } from "./embedded-agent-runner/wait-for-idle-before-flush.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 function assistantToolCall(id: string): AgentMessage {
   return {
@@ -54,10 +57,7 @@ describe("guardSessionManager integration", () => {
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
 
     appendMessage(assistantToolCall("call_1"));
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "followup" }],
-    } as AgentMessage);
+    appendMessage(textAssistant("followup") as AgentMessage);
 
     const messages = getMessages(sm);
 
@@ -83,13 +83,7 @@ describe("guardSessionManager integration", () => {
       model: "delivery-mirror",
       content: [{ type: "text", text: "display copy" }],
     } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "n",
-      content: [{ type: "text", text: "real output" }],
-      isError: false,
-    } as AgentMessage);
+    appendMessage(textToolResult("call_1", "n", "real output", { isError: false }) as AgentMessage);
 
     const messages = getMessages(sm);
 
@@ -226,6 +220,104 @@ describe("guardSessionManager integration", () => {
     ]);
   });
 
+  it.each(["user", "assistant"] as const)(
+    "sender provenance repair preserves runtime hook %s rewrites and display redaction",
+    (role) => {
+      const prepared: PersistedUserTurnMessage = {
+        role: "user",
+        content: "private",
+        timestamp: 1,
+        __openclaw: {
+          senderId: "person",
+          senderIdentity: { type: "profile", id: "person" },
+          senderIsOwner: true,
+          replyToId: "private-reply",
+          replyToPreview: { text: "private" },
+          transport: { messageId: "private" },
+          media: [{ path: "private" }],
+          mediaImageLayout: { slots: [] },
+          lateMedia: true,
+        },
+      };
+      const replacement =
+        role === "user"
+          ? { role, content: "redacted", timestamp: 2, __openclaw: { hookOwned: true } }
+          : makeAgentAssistantMessage({ content: [{ type: "text", text: "rewritten" }] });
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_message_write", handler: () => ({ message: replacement }) },
+        ]),
+      );
+      // Generic harness hooks only constrain sender provenance; runtime preparation
+      // separately protects operational fields, not editable reply/media display.
+      expect(runAgentHarnessBeforeMessageWriteHook({ message: prepared })).toEqual(replacement);
+      const sm = guardSessionManager(SessionManager.inMemory(), {
+        preparedUserTurnMessage: prepared,
+      });
+      sm.appendMessage({ role: "user", content: "runtime", timestamp: 3 });
+      expect(getMessages(sm)).toEqual([
+        role === "user"
+          ? { ...replacement, __openclaw: { hookOwned: true, senderIsOwner: true } }
+          : replacement,
+      ]);
+    },
+  );
+
+  it.each(["retain", "omit", "in-place", "forge"] as const)(
+    "sender provenance survives only unchanged queued hook evidence: %s",
+    (mode) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (event) => {
+              const message = (event as { message: PersistedUserTurnMessage }).message;
+              const metadata = message["__openclaw"]!;
+              if (mode === "omit") {
+                delete metadata.senderIdentity;
+              }
+              if (mode === "in-place") {
+                (metadata.senderIdentity as { id: string }).id = "forged";
+              }
+              if (mode === "forge") {
+                metadata.senderIdentity = { type: "profile", id: "forged" };
+              }
+              metadata.senderIsOwner = false;
+            },
+          },
+        ]),
+      );
+      const identity = { type: "profile", id: "author" };
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "queued",
+          timestamp: 1,
+          __openclaw: {
+            senderId: "author",
+            senderIsOwner: true,
+            ...(mode === "forge" ? {} : { senderIdentity: identity }),
+          },
+        },
+        target: createTestUserTurnTranscriptTarget(),
+      });
+      const sm = guardSessionManager(SessionManager.inMemory());
+      sm.appendMessage(
+        attachRuntimeUserTurnTranscriptContext(
+          { role: "user", content: "runtime", timestamp: 2 },
+          { message: recorder.message!, recorder },
+        ),
+      );
+      expect(getMessages(sm)[0]).toMatchObject({
+        __openclaw: { senderId: "author", senderIsOwner: true },
+      });
+      expect(
+        (getMessages(sm)[0] as PersistedUserTurnMessage)["__openclaw"]?.senderIdentity,
+      ).toEqual(mode === "retain" ? { type: "profile", id: "author" } : undefined);
+      expect(recorder.hasPersisted()).toBe(true);
+    },
+  );
+
   it("lets a write hook remove sender identity while preserving auth state", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
@@ -341,11 +433,7 @@ describe("guardSessionManager integration", () => {
     });
     const preparedMessage = expectDefined(recorder.message, "expected prepared queued turn");
     const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
-      {
-        role: "user",
-        content: "runtime queued prompt",
-        timestamp: 456,
-      },
+      makeUserMessage("runtime queued prompt", 456),
       { message: preparedMessage, recorder },
     );
     const sm = guardSessionManager(SessionManager.inMemory());
@@ -416,13 +504,9 @@ describe("guardSessionManager integration", () => {
       ],
       stopReason: "toolUse",
     } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "read",
-      content: [{ type: "text", text: "peter@dc.io\n" }],
-      isError: false,
-    } as AgentMessage);
+    appendMessage(
+      textToolResult("call_1", "read", "peter@dc.io\n", { isError: false }) as AgentMessage,
+    );
 
     const messages = getMessages(sm);
 

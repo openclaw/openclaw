@@ -12,8 +12,26 @@ Text is supported everywhere; media and reactions vary by channel.
 Entries marked "bundled plugin" or "included in core" ship with the core
 install. Channels marked "official plugin" install with one command
 (`openclaw plugins install @openclaw/<id>`) or on demand during
-`openclaw onboard` / `openclaw channels add`, then need a Gateway restart.
+`openclaw onboard` / `openclaw channels add`. Plugin management applies changes
+to a running Gateway; see [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 "External plugin" channels are maintained outside the OpenClaw repo.
+
+## Which channel should I connect first?
+
+Start with **Telegram**. It needs a bot token and no plugin install, so it is
+the fastest channel to get working. WhatsApp requires QR pairing and stores
+more state on disk.
+
+```bash
+openclaw channels add --channel telegram --token <bot-token>
+```
+
+Run `openclaw channels add` with no flags to pick a channel from a list
+instead. With the default [hot reload](/gateway/configuration/hot-reload),
+the running Gateway applies the new account configuration. Check
+`openclaw channels status --probe`; start the Gateway if it is offline.
+Full walkthrough: [Telegram](/channels/telegram). Command reference:
+[`openclaw channels`](/cli/channels).
 
 ## Supported channels
 
@@ -46,7 +64,7 @@ install. Channels marked "official plugin" install with one command
 - [Twitch](/channels/twitch) - Twitch chat bot: install, credentials, access control, token refresh (official plugin).
 - [WebChat](/web/webchat) - Native and Control UI WebChat usage over the Gateway WebSocket (included in core).
 - [WeChat](/channels/wechat) - WeChat channel setup through the external openclaw-weixin plugin (external plugin).
-- [WeCom](/channels/wecom) - Install the official WeCom plugin and find its versioned setup documentation (external plugin).
+- [WeCom](/channels/wecom) - Install the external WeCom plugin and find its versioned setup documentation (external plugin).
 - [WhatsApp](/channels/whatsapp) - WhatsApp channel support, access controls, delivery behavior, and operations (official plugin).
 - [Yuanbao](/channels/yuanbao) - Yuanbao bot overview, features, and configuration (external plugin).
 - [Zalo](/channels/zalo) - Zalo bot support status, capabilities, and configuration (official plugin).
@@ -61,7 +79,7 @@ install. Channels marked "official plugin" install with one command
 
 ## Group join introductions
 
-Discord, Slack, and Telegram post one room-specific introduction when the bot
+Discord, LINE, Matrix, Slack, and Telegram post one room-specific introduction when the bot
 joins an allowed group, instead of joining silently. The introduction says what
 the room appears to be for and names a few concrete jobs the bot could take on
 there, grounded in what that platform can actually show it.
@@ -71,7 +89,7 @@ there, grounded in what that platform can actually show it.
 `channels.<channel>.accounts.<accountId>.joinIntro`. Resolution order is the
 account value, then the channel value, then the default of `true`. There is no
 per-room switch, because a room is only configurable after the bot has already
-joined it. Only Discord, Slack, and Telegram accept this option; other channels
+joined it. Only Discord, LINE, Matrix, Slack, and Telegram accept this option; other channels
 reject it rather than accepting a setting they never read.
 
 **What it reads.** Core requests up to 100 recent messages plus room metadata,
@@ -80,14 +98,16 @@ messages first. What each platform can supply differs:
 
 | Channel  | Room metadata                            | Prior messages                                  |
 | -------- | ---------------------------------------- | ----------------------------------------------- |
-| Slack    | Channel name, purpose, topic             | Up to 100 via conversation history              |
 | Discord  | Channel name, topic                      | Up to 100, only with `Read Message History`     |
+| LINE     | Group name; none for multi-person rooms  | None - the Messaging API has no history reader  |
+| Matrix   | Room name, topic                         | Up to 100 readable room messages                |
+| Slack    | Channel name, purpose, topic             | Up to 100 via conversation history              |
 | Telegram | Group title, description, pinned message | None - the Bot API cannot read pre-join history |
 
 When history is unavailable or unreadable, the introduction is still posted from
 room metadata alone and says what it can see rather than inventing activity.
 
-**Where it posts.** Slack and Telegram introduce in the room that was joined.
+**Where it posts.** LINE, Matrix, Slack, and Telegram introduce in the room that was joined.
 Discord joins a server rather than a channel, so it uses the system channel when
 it can both view and send there, otherwise the first text channel that qualifies;
 if no channel qualifies, it records a skip instead of posting.
@@ -96,7 +116,9 @@ if no channel qualifies, it records a skip instead of posting.
 and room with a 90-day lifetime, so reconnects and gateway restarts do not repeat
 an introduction. Discord additionally ignores server-available events older than
 five minutes, so restarting never mass-introduces into servers the bot already
-belonged to. A re-invite after the claim expires introduces again.
+belonged to. Matrix ignores startup room snapshots and membership updates that
+leave the bot joined, such as display-name changes. An unaccepted Matrix invite
+does not trigger an introduction. A re-invite after the claim expires introduces again.
 
 **Safety.** Room titles, topics, pinned text, and message history are third-party
 content, so they are wrapped as untrusted external content and the introduction
@@ -125,8 +147,6 @@ carries no message to mention the bot in.
 ## Notes
 
 - Channels can run simultaneously; configure multiple and OpenClaw will route per chat.
-- Fastest setup is usually **Telegram** (simple bot token, no plugin install). WhatsApp
-  requires QR pairing and stores more state on disk.
 - Group behavior varies by channel; see [Groups](/channels/groups).
 - DM pairing and allowlists are enforced for safety; see [Security](/gateway/security).
 - Troubleshooting: [Channel troubleshooting](/channels/troubleshooting).

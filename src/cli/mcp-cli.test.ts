@@ -21,10 +21,7 @@ import {
 import { writeProbeMcpServer } from "./mcp-cli.test-support.js";
 import { runCliWithExitFinalization } from "./one-shot-exit.js";
 
-async function writeMcpDoctorServers(
-  home: string,
-  servers: Record<string, unknown>,
-): Promise<void> {
+async function writeMcpServers(home: string, servers: Record<string, unknown>): Promise<void> {
   await fs.writeFile(
     path.join(home, ".openclaw", "openclaw.json"),
     `${JSON.stringify({ mcp: { servers } })}\n`,
@@ -393,19 +390,42 @@ describe("mcp cli", () => {
     });
   });
 
-  it("tells the operator how to add a server when probing with none configured", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
+  it.each([
+    { label: "no configured servers", servers: {} },
+    {
+      label: "one disabled server",
+      servers: { paused: { enabled: false, command: process.execPath } },
+    },
+    {
+      label: "only disabled servers and overrides",
+      servers: {
+        paused: { enabled: false, command: process.execPath },
+        override: { enabled: false },
+      },
+    },
+  ])("explains $label while preserving JSON output", async ({ servers }) => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      mockLog.mockClear();
+      await writeMcpServers(home, servers);
 
       await runMcpCommand(["mcp", "probe"]);
 
       const output = mockLog.mock.calls.map((call) => String(call[0])).join("\n");
-      expect(output).toContain("No MCP servers configured in");
+      expect(output).toContain("No enabled MCP servers in");
       expect(output).toContain("openclaw mcp add <name> --command <command>");
-      // A bare "MCP probe (<path>):" header was the whole output before this guard.
+      expect(output).toContain("openclaw mcp configure <name> --enable");
       expect(output).not.toMatch(/^MCP probe \(.*\):$/m);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "probe", "--json"]);
+      expect(mockLog).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(lastLogLine())).toEqual({
+        generatedAt: expect.any(String),
+        servers: {},
+        tools: [],
+        diagnostics: [],
+      });
     });
   });
 
@@ -625,7 +645,7 @@ describe("mcp cli", () => {
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
       readMcpOAuthCredentialsStatus.mockResolvedValue({ state: "authorized" });
 
-      await writeMcpDoctorServers(
+      await writeMcpServers(
         home,
         Object.fromEntries(
           [
@@ -677,7 +697,7 @@ describe("mcp cli", () => {
     await withTempHome("openclaw-cli-mcp-home-", async (home) => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      await writeMcpDoctorServers(
+      await writeMcpServers(
         home,
         Object.fromEntries(
           Array.from({ length: 6 }, (_, index) => [
@@ -692,7 +712,13 @@ describe("mcp cli", () => {
       );
 
       const checksBlocked = createDeferred();
+      const firstBatchStarted = createDeferred();
+      let startedChecks = 0;
       readMcpOAuthCredentialsStatus.mockImplementation(async () => {
+        startedChecks += 1;
+        if (startedChecks === 4) {
+          firstBatchStarted.resolve();
+        }
         await checksBlocked.promise;
         return {
           state: "unauthenticated",
@@ -700,18 +726,18 @@ describe("mcp cli", () => {
       });
 
       const doctorPromise = runMcpCommand(["mcp", "doctor", "--json"]);
-      await vi.waitFor(() => {
-        expect(readMcpOAuthCredentialsStatus.mock.calls.length).toBeGreaterThanOrEqual(4);
-      });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      const startedBeforeRelease = readMcpOAuthCredentialsStatus.mock.calls.length;
-      checksBlocked.resolve();
-      await doctorPromise;
+      try {
+        await Promise.race([firstBatchStarted.promise, doctorPromise]);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(startedChecks).toBe(4);
+      } finally {
+        checksBlocked.resolve();
+        await doctorPromise;
+      }
 
       expect(readMcpOAuthCredentialsStatus).toHaveBeenCalledTimes(6);
-      expect(startedBeforeRelease).toBe(4);
       expect(
         JSON.parse(lastLogLine()).servers.map((server: { name: string }) => server.name),
       ).toEqual(["server-0", "server-1", "server-2", "server-3", "server-4", "server-5"]);
@@ -918,12 +944,7 @@ describe("mcp cli", () => {
         { serverName: string; launchSummary: string; toolCount: number }
       > = {};
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({ mcp: { servers: { incomplete: { command: "node" } } } })}\n`,
-        "utf8",
-      );
+      await writeMcpServers(home, { incomplete: { command: "node" } });
       setCreateSessionMcpRuntimeOverride((params) => ({
         sessionId: params.sessionId,
         workspaceDir: params.workspaceDir,
@@ -954,18 +975,10 @@ describe("mcp cli", () => {
       expect(JSON.parse(lastLogLine())).toMatchObject({ servers: {}, diagnostics: [] });
       expect(lastErrorLine()).toBe(`MCP probe did not connect to "incomplete" in ${configPath}.`);
 
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({
-          mcp: {
-            servers: {
-              healthy: { command: "node" },
-              disabled: { enabled: false },
-            },
-          },
-        })}\n`,
-        "utf8",
-      );
+      await writeMcpServers(home, {
+        healthy: { command: "node" },
+        disabled: { enabled: false },
+      });
       catalogServers = {
         healthy: { serverName: "healthy", launchSummary: "node", toolCount: 1 },
       };
@@ -984,6 +997,12 @@ describe("mcp cli", () => {
         diagnostics: [],
       });
       expect(lastErrorLine()).toBe("");
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "probe"]);
+      const output = mockLog.mock.calls.map(([line]) => String(line)).join("\n");
+      expect(output).toContain("- healthy: 1 tools");
+      expect(output).not.toContain("No enabled MCP servers");
     });
   });
 
@@ -1030,13 +1049,13 @@ describe("mcp cli", () => {
       mockLog.mockClear();
       await runMcpCommand(["mcp", "probe", "memory"]);
       expect(mockLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-        "tools have no safety annotations; calls will require interactive approval",
+        "tools have no safety annotations; calls require approval in prompting session postures",
       );
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "doctor", "memory", "--probe"]);
       expect(mockLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-        "tools have no safety annotations; calls will require interactive approval",
+        "tools have no safety annotations; calls require approval in prompting session postures",
       );
     });
   });

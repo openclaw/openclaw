@@ -27,7 +27,9 @@ export type AgentHarnessHookContext = {
   modelProviderId?: string;
   modelId?: string;
   messageProvider?: string;
+  accountId?: string;
   trigger?: string;
+  inputProvenance?: PluginHookAgentContext["inputProvenance"];
   channelId?: string;
   contextTokenBudget?: number;
   contextWindowSource?: PluginHookContextWindowSource;
@@ -52,8 +54,12 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.modelProviderId ? { modelProviderId: params.modelProviderId } : {}),
     ...(params.modelId ? { modelId: params.modelId } : {}),
     ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
+    // The agent's configured channel account is routing context, not requester identity.
+    // Keep it on non-user turns while the identity projection below withholds sender/chat facts.
+    ...(params.accountId ? { accountId: params.accountId } : {}),
     ...(params.channel ? { channel: params.channel } : {}),
     ...(params.trigger ? { trigger: params.trigger } : {}),
+    ...(params.inputProvenance ? { inputProvenance: params.inputProvenance } : {}),
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.contextTokenBudget ? { contextTokenBudget: params.contextTokenBudget } : {}),
     ...(params.contextWindowSource ? { contextWindowSource: params.contextWindowSource } : {}),

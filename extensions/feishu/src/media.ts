@@ -29,7 +29,6 @@ import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { saveMediaStreamWithIdleTimeout } from "./media-chunk-idle.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import { sendReplyOrFallbackDirect } from "./send.js";
 
@@ -565,39 +564,21 @@ async function sendImageFeishu(params: {
   });
   const content = JSON.stringify({ image_key: imageKey });
 
-  if (replyToMessageId) {
-    return sendReplyOrFallbackDirect(client, {
-      replyToMessageId,
-      replyInThread,
-      allowTopLevelReplyFallback,
+  return sendReplyOrFallbackDirect(client, {
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    content,
+    msgType: "image",
+    directParams: {
+      receiveId,
+      receiveIdType,
       content,
       msgType: "image",
-      directParams: {
-        receiveId,
-        receiveIdType,
-        content,
-        msgType: "image",
-      },
-      directErrorPrefix: "Feishu image send failed",
-      replyErrorPrefix: "Feishu image reply failed",
-    });
-  }
-
-  const response = await requestFeishuApi(
-    () =>
-      client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          content,
-          msg_type: "image",
-        },
-      }),
-    "Feishu image send failed",
-    { includeNestedErrorLogId: true },
-  );
-  assertFeishuMessageApiSuccess(response, "Feishu image send failed");
-  return toFeishuSendResult(response, receiveId, "media", "Feishu image send failed");
+    },
+    directErrorPrefix: "Feishu image send failed",
+    replyErrorPrefix: "Feishu image reply failed",
+  });
 }
 
 /**

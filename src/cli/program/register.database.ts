@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
+import { preflightOpenClawAgentDatabasePath } from "../../state/openclaw-agent-schema-inspection.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   preflightOpenClawStateDatabasePath,
@@ -22,8 +23,14 @@ function writeDatabaseError(error: unknown, json: boolean): void {
   defaultRuntime.exit(1);
 }
 
-async function runDatabasePreflight(databasePath: string, options: DatabaseOutputOptions) {
-  const result = await preflightOpenClawStateDatabasePath(databasePath);
+async function runDatabasePreflight(
+  databasePath: string,
+  options: DatabaseOutputOptions & { agentId?: string },
+) {
+  const result =
+    options.agentId === undefined
+      ? await preflightOpenClawStateDatabasePath(databasePath)
+      : await preflightOpenClawAgentDatabasePath(databasePath, options.agentId);
   if (options.json) {
     writeRuntimeJson(defaultRuntime, result);
   } else {
@@ -68,7 +75,7 @@ function runDatabaseOwnership(options: DatabaseOutputOptions & { manager?: strin
 export function registerDatabaseCommand(program: Command): void {
   const database = program
     .command("database")
-    .description("Inspect shared-state schema compatibility and write ownership")
+    .description("Inspect database schema compatibility and shared-state write ownership")
     .addHelpText("after", `\nDocs: ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}\n`);
 
   database
@@ -77,6 +84,16 @@ export function registerDatabaseCommand(program: Command): void {
     .argument("<path>", "explicit copied SQLite database path")
     .option("--json", "emit machine-readable JSON", false)
     .action(async (databasePath: string, options: DatabaseOutputOptions) => {
+      await runDatabasePreflight(databasePath, options);
+    });
+
+  database
+    .command("preflight-agent")
+    .description("Compare one copied agent SQLite file with this release's agent schema and owner")
+    .argument("<path>", "explicit copied agent SQLite database path")
+    .requiredOption("--agent-id <id>", "exact canonical agent owner ID")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (databasePath: string, options: DatabaseOutputOptions & { agentId: string }) => {
       await runDatabasePreflight(databasePath, options);
     });
 

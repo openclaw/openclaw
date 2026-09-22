@@ -8,7 +8,12 @@ import type {
   OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type WatchIgnoredFn = (watchPath: string, stats?: { isDirectory?: () => boolean }) => boolean;
@@ -125,18 +130,10 @@ const {
 
 const CHOKIDAR_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
 const NATIVE_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
-const originalWatcherStateDir = process.env.OPENCLAW_STATE_DIR;
+const watcherEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 function setWatcherStateDir(stateDir: string): void {
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
-}
-
-function restoreWatcherStateDir(): void {
-  if (originalWatcherStateDir === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalWatcherStateDir);
-  }
 }
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (importOriginal) => {
@@ -202,21 +199,25 @@ describe("memory watcher config", () => {
     createdChokidarWatchers.length = 0;
     createdNativeWatchers.length = 0;
     nativeWatchMockFailingDir.current = null;
-    if (manager) {
-      await manager.close();
-      manager = null;
-    }
-    await closeAllMemorySearchManagers();
-    clearRegistry();
-    restoreWatcherStateDir();
-    // The agent close releases its leases through shared state and reopens it, so the
-    // shared handle is released second; otherwise Windows fails the removal with EBUSY.
-    closeOpenClawAgentDatabasesForTest();
-    resetPluginStateStoreForTests();
-    if (workspaceDir) {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-      workspaceDir = "";
-      extraDir = "";
+    try {
+      if (manager) {
+        await manager.close();
+        manager = null;
+      }
+      await closeAllMemorySearchManagers();
+      clearRegistry();
+      // Agent lease release can reopen shared state; drain that owner first.
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      if (workspaceDir) {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+        workspaceDir = "";
+        extraDir = "";
+      }
+    } finally {
+      watcherEnv.restore();
     }
   });
 
@@ -230,31 +231,23 @@ describe("memory watcher config", () => {
   }
 
   function createWatcherConfig(overrides?: Partial<MemorySearchConfig>): OpenClawConfig {
-    const defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {
-      workspace: workspaceDir,
-    };
     return isolateMemoryManagerTestConfig({
       memory: {
-        backend: "builtin",
         search: {
           provider: "openai",
           model: "mock-embed",
           store: { vector: { enabled: false } },
-          sync: { watch: true, onSessionStart: false, onSearch: false },
-          query: { minScore: 0, hybrid: { enabled: false } },
+          query: { minScore: 0 },
           extraPaths: [extraDir],
           ...overrides,
         },
       },
-      agents: {
-        defaults,
-        list: [{ id: "main", default: true }],
-      },
-    } as OpenClawConfig);
+      agents: { entries: { main: { workspace: workspaceDir } } },
+    });
   }
 
-  async function expectWatcherManager(cfg: OpenClawConfig) {
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+  async function expectWatcherManager(cfg: OpenClawConfig, agentId = "main") {
+    const result = await getMemorySearchManager({ cfg, agentId });
     if (!result.manager) {
       throw new Error("manager missing");
     }
@@ -344,32 +337,35 @@ describe("memory watcher config", () => {
     },
   );
 
-  it("filters patterned extra path file events while watching the directory root", async () => {
-    await setupWatcherWorkspace({ name: "seed.md", contents: "seed" });
-    await fs.mkdir(path.join(extraDir, "notes"), { recursive: true });
-    await fs.mkdir(path.join(extraDir, "drafts"), { recursive: true });
-    await fs.writeFile(path.join(extraDir, "notes", "keep.md"), "keep");
-    await fs.writeFile(path.join(extraDir, "drafts", "skip.md"), "skip");
-    const cfg = createWatcherConfig({
-      extraPaths: [{ path: extraDir, pattern: "notes/**/*.md" }],
-    });
+  it.each(["notes", "..notes"])(
+    "filters %s file events while watching the directory root",
+    async (directory) => {
+      await setupWatcherWorkspace({ name: "seed.md", contents: "seed" });
+      await fs.mkdir(path.join(extraDir, directory), { recursive: true });
+      await fs.mkdir(path.join(extraDir, "drafts"), { recursive: true });
+      await fs.writeFile(path.join(extraDir, directory, "keep.md"), "keep");
+      await fs.writeFile(path.join(extraDir, "drafts", "skip.md"), "skip");
+      const cfg = createWatcherConfig({
+        extraPaths: [{ path: extraDir, pattern: `${directory}/**/*.md` }],
+      });
 
-    const activeManager = await expectWatcherManager(cfg);
-    const extraWatcher = createdNativeWatchers.find(
-      (watcher) => watcher.dir === extraDir && watcher.recursive,
-    );
-    expect(extraWatcher).toBeDefined();
-    vi.useFakeTimers();
-    const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
+      const activeManager = await expectWatcherManager(cfg);
+      const extraWatcher = createdNativeWatchers.find(
+        (watcher) => watcher.dir === extraDir && watcher.recursive,
+      );
+      expect(extraWatcher).toBeDefined();
+      vi.useFakeTimers();
+      const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
-    extraWatcher?.emit("change", path.join("drafts", "skip.md"));
-    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
-    expect(syncSpy).not.toHaveBeenCalled();
+      extraWatcher?.emit("change", path.join("drafts", "skip.md"));
+      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      expect(syncSpy).not.toHaveBeenCalled();
 
-    extraWatcher?.emit("change", path.join("notes", "keep.md"));
-    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
-    expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
-  });
+      extraWatcher?.emit("change", path.join(directory, "keep.md"));
+      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+      expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+    },
+  );
 
   it("does not start watchers for one-shot CLI managers", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
@@ -608,16 +604,20 @@ describe("memory watcher config", () => {
         await fs.mkdir(path.join(root, `topic-${i}`));
       }
       const cfg = createWatcherConfig({ extraPaths: [] });
+      cfg.agents = {
+        ownership: "explicit",
+        entries: { main: {}, "watch-linux": { workspace: workspaceDir } },
+      };
       vi.useFakeTimers();
 
-      await expectWatcherManager(cfg);
-      expect(memoryLoggerWarn).not.toHaveBeenCalledWith(
-        expect.stringContaining("Memory file watching is tracking 2002 directories."),
-      );
+      await expectWatcherManager(cfg, "watch-linux");
+      expect(memoryLoggerWarn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(memoryLoggerWarn).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(10_000);
 
-      expect(memoryLoggerWarn).toHaveBeenCalledWith(
-        expect.stringContaining("Memory file watching is tracking 2002 directories."),
+      expect(memoryLoggerWarn).toHaveBeenCalledExactlyOnceWith(
+        "Memory file watching is tracking 2002 directories. Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files. Remove unnecessary memory.search.extraPaths entries or narrow their directory roots, including per-agent entries; otherwise review the host's file-watch/open-file limits. After changes, restart the Gateway. To refresh the affected index, run in the Gateway's environment: openclaw memory index --force --agent watch-linux.",
       );
     } finally {
       Object.defineProperty(process, "platform", {
@@ -724,7 +724,7 @@ describe("memory watcher config", () => {
     }
   });
 
-  it.each(["ENOENT", "EACCES", "ROOT_REPLACED", "CHILD_STAT_MISSING"])(
+  it.each(["ENOENT", "EACCES", "ROOT_REPLACED", "CHILD_STAT_MISSING", "ENOSPC"])(
     "handles Linux subtree scan %s",
     async (code) => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
@@ -745,6 +745,9 @@ describe("memory watcher config", () => {
       readdirSpy.mockImplementation((...args: Parameters<typeof fsSync.readdirSync>) => {
         if (String(args[0]) === nestedDir && code === "CHILD_STAT_MISSING") {
           throw Object.assign(new Error("DT_UNKNOWN child disappeared"), { code: "ENOENT" });
+        }
+        if (String(args[0]) === nestedDir && code === "ENOSPC") {
+          throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
         }
         if (String(args[0]) === nestedDir && code === "ROOT_REPLACED") {
           fsSync.renameSync(dir, path.join(workspaceDir, "previous-memory"));
@@ -1125,26 +1128,38 @@ describe("memory watcher config", () => {
   });
 
   it("warns when chokidar memory watching tracks many paths", async () => {
-    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
-    const cfg = createWatcherConfig();
-    vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_PROFILE", "memory-watch");
+    try {
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const cfg = createWatcherConfig();
+      cfg.agents = {
+        ownership: "explicit",
+        entries: { main: {}, "watch-paths": { workspace: workspaceDir } },
+      };
+      vi.useFakeTimers();
 
-    await expectWatcherManager(cfg);
+      const activeManager = await expectWatcherManager(cfg, "watch-paths");
 
-    const chokidarWatcher = createdChokidarWatchers[0];
-    if (!chokidarWatcher) {
-      throw new Error("expected chokidar watcher");
+      const chokidarWatcher = createdChokidarWatchers[0];
+      if (!chokidarWatcher) {
+        throw new Error("expected chokidar watcher");
+      }
+      chokidarWatcher.watchedEntries = {
+        [workspaceDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
+      };
+      expect(memoryLoggerWarn).not.toHaveBeenCalled();
+      chokidarWatcher.emit("ready");
+      expect(memoryLoggerWarn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await activeManager.close();
+      expect(chokidarWatcher.close).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(memoryLoggerWarn).toHaveBeenCalledExactlyOnceWith(
+        "Memory file watching is tracking 2002 paths. Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files. Remove unnecessary memory.search.extraPaths entries or narrow their directory roots, including per-agent entries; otherwise review the host's file-watch/open-file limits. After changes, restart the Gateway. To refresh the affected index, run in the Gateway's environment: openclaw --profile memory-watch memory index --force --agent watch-paths.",
+      );
+    } finally {
+      vi.unstubAllEnvs();
     }
-    chokidarWatcher.watchedEntries = {
-      [workspaceDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
-    };
-    expect(memoryLoggerWarn).not.toHaveBeenCalledWith(
-      expect.stringContaining("Memory file watching is tracking 2002 paths."),
-    );
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(memoryLoggerWarn).toHaveBeenCalledWith(
-      expect.stringContaining("Memory file watching is tracking 2002 paths."),
-    );
   });
 });

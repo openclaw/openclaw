@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeAskUserTool,
+  describeSecretsTool,
   describeSessionsHistoryTool,
   describeSessionsListTool,
   describeSessionsSearchTool,
@@ -19,6 +20,24 @@ describe("ask_user tool guidance", () => {
   });
 });
 
+describe("secrets tool guidance", () => {
+  it("distinguishes config references from egress permission without offering plaintext", () => {
+    const description = describeSecretsTool();
+    expect(description).toContain("`list` metadata first");
+    expect(description).toContain("human masked entry");
+    expect(description).toContain("store SecretRef for supported config fields");
+    expect(description).toContain("enabled proxy + exact allowedHosts required");
+    expect(description).toContain("no hosts blocks egress, not config refs");
+    expect(description).toContain("No plaintext fallback");
+    expect(description).toContain("auto-injected opaque env sentinel under stored name");
+    expect(description).toContain("No secret templates; never override/print that variable");
+    expect(description).toContain("Native shell/sandbox/node: no protected injection");
+    expect(description).toContain("late saves need next turn");
+    expect(description).toContain("Operator-set env entries are readable and managed separately");
+    expect(description).toContain("no_answer means no credential was supplied");
+  });
+});
+
 const SESSION_LINK_BASE = "http://127.0.0.1:18789/control";
 const SESSION_LINK_LINE =
   "When pointing the user at a session, cite its Control UI URL: main session -> `http://127.0.0.1:18789/control/chat/<agentId>`; any other display session key -> `http://127.0.0.1:18789/control/chat/<agentId>/~key/` + key minus `agent:<agentId>:`, with `:` replaced by `/`.";
@@ -27,18 +46,18 @@ const SESSION_DESCRIPTIONS = [
     tool: "sessions_list",
     describe: describeSessionsListTool,
     original:
-      "List visible sessions and sidebar categories; filter kind/label/agentId/search/activity/archive. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
+      "List visible session metadata and groups; filter ownerId/creatorId, projectId/workspaceDir, group/pinned, kind/agent/activity/archive. relationship=owned|created|involving selects the authenticated requesting user's sessions, not the agent's owner. Metadata-only by default. limit defaults to 100; larger requests stay valid but limitApplied never exceeds 200. count is this page, not an inventory total. Continue with nextOffset and identical filters while hasMore; truncationReason names a scan/byte budget. Pages are live: deduplicate by agentId/key/sessionId or restart for a fresh inventory. archived=all includes active and archived rows. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. enrichmentOmitted means previews exceeded the byte budget; read history separately. Use before history/send target selection.",
   },
   {
     tool: "sessions_history",
     describe: describeSessionsHistoryTool,
     original:
-      "Read sanitized visible-session history. Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
+      "Read sanitized visible-session history. Before reply/debug/resume. Use messageId (optionally sessionId) for anchored history; offset is ignored when messageId is set. Without messageId, use offset for plain pagination. limit bounds either mode. Include tool messages with includeTools. pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
   },
   {
     tool: "sessions_search",
     describe: describeSessionsSearchTool,
-    original: "Search your own past sessions for matching user and assistant text.",
+    original: "Search visible past sessions for matching user and assistant text.",
   },
 ] as const;
 
@@ -61,5 +80,7 @@ describe("sessions_send tool description", () => {
     expect(describeSessionsSendTool()).toContain("not an external address");
     expect(describeSessionsSendTool()).not.toContain("conversations_");
     expect(describeSessionsSendTool()).toContain("reply may still announce");
+    expect(describeSessionsSendTool()).toContain('`targetDisposition: "queued"` or `"steered"`');
+    expect(describeSessionsSendTool()).toContain("neither proves target completion");
   });
 });

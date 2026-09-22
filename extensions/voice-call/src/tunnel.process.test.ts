@@ -1,8 +1,8 @@
-// Voice Call process tests exercise real tunnel child shutdown behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi } from "vitest";
 import { startTunnel } from "./tunnel.js";
 
 function isProcessAlive(pid: number): boolean {
@@ -43,57 +43,54 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
 
 describe.skipIf(process.platform === "win32")("voice-call tunnel child process", () => {
   it("passes ngrok auth through the environment without exposing it in argv", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ngrok-auth-"));
-    const evidencePath = path.join(tempDir, "ngrok-auth-evidence.json");
-    const ngrokPath = path.join(tempDir, "ngrok");
-    const previousPath = process.env.PATH;
-    const previousEvidencePath = process.env.OPENCLAW_NGROK_AUTH_EVIDENCE_FILE;
+    await withTempDir("openclaw-ngrok-auth-", async (tempDir) => {
+      const evidencePath = path.join(tempDir, "ngrok-auth-evidence.json");
+      const ngrokPath = path.join(tempDir, "ngrok");
 
-    await fs.writeFile(
-      ngrokPath,
-      [
-        "#!/usr/bin/env node",
-        'const fs = require("node:fs");',
-        "const token = process.env.NGROK_AUTHTOKEN;",
-        "fs.writeFileSync(",
-        "  process.env.OPENCLAW_NGROK_AUTH_EVIDENCE_FILE,",
-        "  JSON.stringify({ argvContainsToken: process.argv.includes(token), envHasToken: Boolean(token) }),",
-        ");",
-        'process.stdout.write(JSON.stringify({ msg: "started tunnel", url: "https://auth.ngrok.test" }) + "\\n");',
-        "setInterval(() => {}, 1000);",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-    process.env.PATH = `${tempDir}${path.delimiter}${previousPath ?? ""}`;
-    process.env.OPENCLAW_NGROK_AUTH_EVIDENCE_FILE = evidencePath;
+      await fs.writeFile(
+        ngrokPath,
+        [
+          "#!/usr/bin/env node",
+          'const fs = require("node:fs");',
+          "const token = process.env.NGROK_AUTHTOKEN;",
+          "fs.writeFileSync(",
+          "  process.env.OPENCLAW_NGROK_AUTH_EVIDENCE_FILE,",
+          "  JSON.stringify({ argvContainsToken: process.argv.includes(token), envHasToken: Boolean(token) }),",
+          ");",
+          'process.stdout.write(JSON.stringify({ msg: "started tunnel", url: "https://auth.ngrok.test" }) + "\\n");',
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      await withEnvAsync(
+        {
+          PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          OPENCLAW_NGROK_AUTH_EVIDENCE_FILE: evidencePath,
+        },
+        async () => {
+          const tunnel = await startTunnel({
+            provider: "ngrok",
+            port: 3334,
+            path: "/voice/webhook",
+            ngrokAuthToken: "synthetic-test-token",
+          });
+          if (!tunnel) {
+            throw new Error("Expected ngrok tunnel to start");
+          }
 
-    try {
-      const tunnel = await startTunnel({
-        provider: "ngrok",
-        port: 3334,
-        path: "/voice/webhook",
-        ngrokAuthToken: "synthetic-test-token",
-      });
-      if (!tunnel) {
-        throw new Error("Expected ngrok tunnel to start");
-      }
-
-      await expect
-        .poll(async () => JSON.parse(await fs.readFile(evidencePath, "utf8")), {
-          timeout: 2_000,
-          interval: 20,
-        })
-        .toEqual({ argvContainsToken: false, envHasToken: true });
-      await tunnel.stop();
-    } finally {
-      process.env.PATH = previousPath;
-      if (previousEvidencePath === undefined) {
-        delete process.env.OPENCLAW_NGROK_AUTH_EVIDENCE_FILE;
-      } else {
-        process.env.OPENCLAW_NGROK_AUTH_EVIDENCE_FILE = previousEvidencePath;
-      }
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+          try {
+            await expect
+              .poll(async () => JSON.parse(await fs.readFile(evidencePath, "utf8")), {
+                timeout: 2_000,
+                interval: 20,
+              })
+              .toEqual({ argvContainsToken: false, envHasToken: true });
+          } finally {
+            await tunnel.stop();
+          }
+        },
+      );
+    });
   });
 
   it("force-kills ngrok when it ignores graceful shutdown", async () => {
@@ -157,6 +154,7 @@ describe.skipIf(process.platform === "win32")("voice-call tunnel child process",
     const previousPidPath = process.env.OPENCLAW_NGROK_PID_FILE;
     const previousSignalPath = process.env.OPENCLAW_NGROK_SIGNAL_FILE;
     let childPid: number | undefined;
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
 
     await fs.writeFile(
       ngrokPath,
@@ -174,12 +172,38 @@ describe.skipIf(process.platform === "win32")("voice-call tunnel child process",
     process.env.OPENCLAW_NGROK_SIGNAL_FILE = signalPath;
 
     try {
-      const result = startTunnel({
-        provider: "ngrok",
-        port: 3334,
-        path: "/voice/webhook",
-      });
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      let result: ReturnType<typeof startTunnel>;
+      let timeoutCalls: typeof timeoutSpy.mock.calls;
+      let timeoutResults: typeof timeoutSpy.mock.results;
+      try {
+        result = startTunnel({
+          provider: "ngrok",
+          port: 3334,
+          path: "/voice/webhook",
+        });
+        // Keep setup failures from leaving an unobserved startup rejection.
+        void result.catch(() => undefined);
+        timeoutCalls = [...timeoutSpy.mock.calls];
+        timeoutResults = [...timeoutSpy.mock.results];
+        const timer = timeoutResults[0];
+        if (timer?.type === "return") {
+          startupTimer = timer.value;
+        }
+      } finally {
+        timeoutSpy.mockRestore();
+      }
       childPid = await readPid(pidPath);
+
+      expect(timeoutCalls).toEqual([[expect.any(Function), 30_000]]);
+      const callback = timeoutCalls[0]?.[0];
+      expect(timeoutResults).toHaveLength(1);
+      if (typeof callback !== "function" || !startupTimer) {
+        throw new Error("Expected one native ngrok startup deadline");
+      }
+      // Advance only startup readiness; real signal escalation and child closure stay timed.
+      clearTimeout(startupTimer);
+      callback();
 
       await expect(result).rejects.toThrow("ngrok startup timed out (30s)");
 

@@ -145,6 +145,7 @@ export type FleetLifecycleAction = "start" | "stop" | "restart";
 export type FleetLogsOptions = {
   tenant: string;
   follow?: boolean;
+  timestamps?: boolean;
   tail?: number;
   since?: string;
 };
@@ -204,7 +205,9 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         throw new Error("Gateway token must not be empty.");
       }
       const token = gatewayToken ?? generateToken();
-      const environment = buildCellEnvironment(token, parseEnvAssignments(createOptions.env ?? []));
+      const userEnvironment = parseEnvAssignments(createOptions.env ?? []);
+      const environment = buildCellEnvironment(token, userEnvironment);
+      const userEnvironmentKeys = Object.keys(userEnvironment);
       const attemptId = generateAttemptId();
       await containers.assertLocal(runtime);
       if (network === "internal" && runtime === "docker") {
@@ -300,6 +303,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               ...(diskSize ? { diskSize } : {}),
               pidsLimit: createOptions.pidsLimit ?? 512,
               environment,
+              userEnvironmentKeys,
               ...(containerUser ? { containerUser } : {}),
               selinuxRelabel: await selinuxEnabled(),
             };
@@ -518,12 +522,14 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         operation: async (checkpoint) => {
           const record = requireCell(env, tenantId);
           await containers.assertLocal(record.runtime);
-          assertManagedInspection(
+          const inspection = assertManagedInspection(
             record,
             await containers.inspect(record.runtime, record.containerName),
           );
           checkpoint();
-          await containers[action](record.runtime, record.containerName);
+          // Pin the inspected generation: the ownership guard above proved this
+          // container, and a name can point at a different one by the time we act.
+          await containers[action](record.runtime, inspection.containerId);
           return { tenant: record.tenantId, action };
         },
       });
@@ -540,6 +546,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       // Pin the inspected generation so a concurrent restore cannot redirect the stream.
       await containers.logs(record.runtime, inspection.containerId, {
         follow: logOptions.follow,
+        timestamps: logOptions.timestamps,
         tail: logOptions.tail,
         since: logOptions.since,
         redactValues: gatewayCredential ? [gatewayCredential] : [],
@@ -605,10 +612,10 @@ export function createFleetService(options: FleetServiceOptions = {}) {
           try {
             if (inspection.running) {
               checkpoint();
-              await containers.stop(record.runtime, record.containerName);
+              await containers.stop(record.runtime, inspection.containerId);
             }
             checkpoint();
-            await containers.remove(record.runtime, record.containerName, false);
+            await containers.remove(record.runtime, inspection.containerId, false);
             checkpoint();
             await containers.run(nextProfile, true);
             // `run -d` succeeds once the container launches, and a broken image can stay
@@ -765,14 +772,16 @@ export function createFleetService(options: FleetServiceOptions = {}) {
             assertManagedNetwork(record, networkInspection);
           }
           if (inspection.kind === "ok") {
-            assertManagedInspection(record, inspection);
+            const managed = assertManagedInspection(record, inspection);
             if (inspection.running && !params.force) {
               throw new Error(
                 `Fleet cell ${record.tenantId} is running; use --force to remove it.`,
               );
             }
             checkpoint();
-            await containers.remove(record.runtime, record.containerName, params.force === true);
+            // Pin the inspected generation: `--force --purge-data` must never
+            // destroy a container that did not pass the ownership guard.
+            await containers.remove(record.runtime, managed.containerId, params.force === true);
           }
           if (networkInspection.kind === "ok") {
             checkpoint();

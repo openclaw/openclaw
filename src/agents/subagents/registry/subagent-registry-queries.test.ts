@@ -1,16 +1,17 @@
 // Subagent registry query tests cover liveness, descendant counting, requester
 // lookup, and stale-row handling for in-memory run snapshots.
 import { describe, expect, it } from "vitest";
+import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import {
+  buildSubagentRunReadIndexFromRuns,
   countActiveRunsForSessionFromRuns,
   countPendingDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
-  isSubagentSessionRunActiveFromRuns,
   listRunsForRequesterFromRuns,
   resolveRequesterForChildSessionFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
@@ -40,6 +41,89 @@ function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
 }
 
 describe("subagent registry query regressions", () => {
+  it("preserves complete snapshot inputs and exact memory winners after the source changes", () => {
+    const ungrouped = makeRun({ runId: "ungrouped", requesterSessionKey: "", endedAt: 50 });
+    const older = makeRun({ runId: "older", createdAt: 10, endedAt: 15 });
+    const winner = makeRun({
+      runId: "winner",
+      childSessionKey: older.childSessionKey,
+      createdAt: 20,
+      endedAt: 30,
+    });
+    const runs = toRunMap([ungrouped, structuredClone(winner)]);
+    const memory = toRunMap([older, winner, ungrouped]);
+    const index = buildSubagentRunReadIndexFromRuns({
+      runs,
+      inMemoryRuns: memory.values(),
+      now: 100,
+    });
+    memory.clear();
+    expect(index.inputs).toBeDefined();
+    expect(index.inputs.runs).toBe(runs);
+    expect(index.inputs.runs.get(ungrouped.runId)).toBe(ungrouped);
+    expect(index.inputs.inMemoryRuns).toHaveLength(2);
+    expect(index.inputs.inMemoryRuns[0]).toBe(winner);
+    const candidates = index.runsByChildSessionKey.get(winner.childSessionKey);
+    expect(candidates).toHaveLength(2);
+    expect(candidates?.[0]).toBe(runs.get(winner.runId));
+    expect(candidates?.[1]).toBe(winner);
+    expect(index.runsByChildSessionKey.get(ungrouped.childSessionKey)).toEqual([ungrouped]);
+    expect(index.atTime(200).runsByChildSessionKey).toBe(index.runsByChildSessionKey);
+    const replay = buildSubagentRunReadIndexFromRuns({ ...index.inputs, now: 200 });
+    expect(replay.getDisplaySubagentRun(winner.childSessionKey)).toBe(winner);
+    expect(replay.getDisplaySubagentRun(ungrouped.childSessionKey)).toBe(ungrouped);
+  });
+
+  it("preserves captured display classification while descendant queries see released owners", () => {
+    const now = Date.now();
+    const root = "agent:main:captured-index";
+    const running = makeRun({
+      runId: "captured-display",
+      requesterSessionKey: root,
+      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+    });
+    const ended = makeRun({
+      runId: "captured-ended",
+      requesterSessionKey: root,
+      childSessionKey: running.childSessionKey,
+      createdAt: now - 100,
+      endedAt: now - 10,
+    });
+    const sibling = makeRun({
+      runId: "captured-sibling",
+      requesterSessionKey: root,
+      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+    });
+    const claims = [running, sibling].map(
+      (entry) =>
+        [
+          entry.runId,
+          claimAgentRunContext(
+            entry.runId,
+            { sessionKey: entry.childSessionKey },
+            { trackOwner: true, ownsContext: true },
+          ),
+        ] as const,
+    );
+    try {
+      const params = { runs: toRunMap([running, ended, sibling]), now };
+      const index = buildSubagentRunReadIndexFromRuns(params);
+      for (const [id, claim] of claims) {
+        releaseAgentRunContext(id, claim);
+      }
+      expect(index.getDisplaySubagentRun(running.childSessionKey)).toBe(running);
+      expect(index.countActiveDescendantRuns(root)).toBe(0);
+      expect(index.atTime(now).getDisplaySubagentRun(running.childSessionKey)).toBe(ended);
+      expect(index.getDisplaySubagentRun(running.childSessionKey)).toBe(running);
+    } finally {
+      for (const [id, claim] of claims) {
+        releaseAgentRunContext(id, claim);
+      }
+    }
+  });
+
   it("selects the newer generation when child runs share a timestamp", () => {
     const childSessionKey = "agent:main:subagent:same-millisecond";
     const runs = toRunMap([
@@ -61,40 +145,12 @@ describe("subagent registry query regressions", () => {
       }),
     ]);
 
-    expect(isSubagentSessionRunActiveFromRuns(runs, childSessionKey)).toBe(true);
     expect(resolveRequesterForChildSessionFromRuns(runs, childSessionKey)).toMatchObject({
       requesterSessionKey: "agent:main:new-parent",
     });
     expect(getSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey)?.runId).toBe(
       "run-live-successor",
     );
-  });
-
-  it("does not treat stale unended rows as active child-session liveness", () => {
-    const now = Date.now();
-    const childSessionKey = "agent:main:subagent:stale-live-check";
-    const runs = toRunMap([
-      makeRun({
-        runId: "run-stale",
-        childSessionKey,
-        createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-        startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      }),
-    ]);
-
-    expect(isSubagentSessionRunActiveFromRuns(runs, childSessionKey)).toBe(false);
-
-    runs.set(
-      "run-fresh",
-      makeRun({
-        runId: "run-fresh",
-        childSessionKey,
-        createdAt: now - 60_000,
-        startedAt: now - 60_000,
-      }),
-    );
-
-    expect(isSubagentSessionRunActiveFromRuns(runs, childSessionKey)).toBe(true);
   });
 
   it("does not count stale unended direct children as active concurrency", () => {

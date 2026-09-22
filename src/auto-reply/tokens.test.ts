@@ -123,22 +123,29 @@ describe("isSilentReplyText", () => {
     " .NO_REPLY ",
     " NO_REPLY. ",
     " *NO_REPLY* ",
+    "«NO_REPLY»",
+    "\u{10100}NO_REPLY\u{10101}",
+    "\u{10100}No_RePlY NO_REPLY\u{10101}",
   ])("returns true for punctuation-wrapped token-only text: %j (#98166)", (text) => {
     expect(isSilentReplyText(text)).toBe(true);
   });
 
-  it.each(["the sentinel is NO_REPLY, fyi", "💬NO_REPLY", "NO_REPLY👍"])(
-    "keeps substantive punctuation or symbols: %j",
-    (text) => {
-      expect(isSilentReplyText(text)).toBe(false);
-    },
-  );
+  it.each([
+    "the sentinel is NO_REPLY, fyi",
+    "💬NO_REPLY",
+    "NO_REPLY👍",
+    "NO_REPLY\ud800",
+    "NO_REPLY\udc00",
+  ])("keeps substantive punctuation or symbols: %j", (text) => {
+    expect(isSilentReplyText(text)).toBe(false);
+  });
 
   it("preserves exact custom-token matches with punctuation-edged tokens", () => {
     // Custom tokens whose first/last character is punctuation must still match
     expect(isSilentReplyText("*SILENT*", "*SILENT*")).toBe(true);
     expect(isSilentReplyText("#QUIET#", "#QUIET#")).toBe(true);
     expect(isSilentReplyText("^^MUTE^^", "^^MUTE^^")).toBe(true);
+    expect(isSilentReplyText("**SILENT**", "*SILENT*")).toBe(false);
   });
 });
 
@@ -237,8 +244,13 @@ describe("stripSilentToken", () => {
     expect(stripSilentToken("NO_REPLY ok NO_REPLY")).toBe("NO_REPLY ok");
   });
 
-  it("strips every adjacent trailing silent token", () => {
-    expect(stripSilentToken("Done. NO_REPLY NO_REPLY")).toBe("Done.");
+  it.each([
+    ["Done. NO_REPLY NO_REPLY", "Done."],
+    ["Done.\r\nno_reply\tNO_REPLY\u00a0", "Done."],
+    ["**NO_REPLY NO_REPLY", ""],
+    ["Done.NO_REPLY NO_REPLY", "Done.NO_REPLY"],
+  ])("strips adjacent trailing silent tokens in %j", (text, expected) => {
+    expect(stripSilentToken(text)).toBe(expected);
   });
 
   it("returns empty string when only token remains", () => {
@@ -275,8 +287,33 @@ describe("custom silent tokens", () => {
       check: () => stripSilentToken("done HEARTBEAT_OK", "HEARTBEAT_OK"),
       expected: "done",
     },
+    {
+      name: "trailing token with regex punctuation",
+      check: () => stripSilentToken("done [quiet] [QUIET]\n", "[quiet]"),
+      expected: "done",
+    },
+    {
+      name: "trailing token containing whitespace",
+      check: () => stripSilentToken("done KEEP QUIET KEEP QUIET", "KEEP QUIET"),
+      expected: "done",
+    },
   ])("handles custom token for $name", ({ check, expected }) => {
     expect(check()).toBe(expected);
+  });
+
+  it.each(["[quiet]", "a+b?"])("keeps interleaved matching independent for %s", (token) => {
+    const upper = token.toUpperCase();
+    for (let pass = 0; pass < 2; pass++) {
+      expect(isSilentReplyText(`${upper} ${token}`, token)).toBe(true);
+      expect(stripSilentToken(`done ${upper}\n`, token)).toBe("done");
+      expect(startsWithSilentToken(`${upper}你好`, token)).toBe(true);
+      expect(stripLeadingSilentToken(`${upper}你好`, token)).toBe("你好");
+      expect(startsWithSilentToken(`${upper}7`, token)).toBe(true);
+      expect(startsWithSilentToken(`${upper}: literal`, token)).toBe(false);
+      expect(startsWithSilentToken(`${upper}\n: visible`, token)).toBe(true);
+      expect(stripLeadingSilentToken(`${upper}\n: visible`, token)).toBe(": visible");
+      expect(isSilentReplyText(`visible ${upper}`, token)).toBe(false);
+    }
   });
 });
 

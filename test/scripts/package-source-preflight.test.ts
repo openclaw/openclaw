@@ -1,9 +1,18 @@
-import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { readCurrentPackageChangelog } from "../../scripts/package-changelog.mjs";
 import { validateBundledPackageDependencyAlignment } from "../../scripts/package-source-dependencies.mjs";
 import {
   validatePackageSource,
@@ -11,6 +20,9 @@ import {
   validatePackageSourceRef,
 } from "../../scripts/package-source-preflight.mjs";
 import { writeRunSummary } from "../../scripts/test-docker-all.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const changelog = `# Changelog
 
@@ -82,6 +94,7 @@ function runSourceRequirement(step: WorkflowStep, env: Record<string, string>) {
       encoding: "utf8",
       env: {
         ...process.env,
+        ...Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""])),
         ...env,
         GITHUB_OUTPUT: outputPath,
       },
@@ -102,6 +115,11 @@ function runLiveArtifactTupleValidation(packageEnv: Record<string, string>) {
   const summaryPath = path.join(tempDir, "summary");
   const selectedSha = "a".repeat(40);
   mkdirSync(fakeBin);
+  mkdirSync(path.join(tempDir, ".release-harness", "scripts"), { recursive: true });
+  copyFileSync(
+    path.resolve("scripts/resolve-fs-safe-native-contract.mjs"),
+    path.join(tempDir, ".release-harness", "scripts/resolve-fs-safe-native-contract.mjs"),
+  );
   writeFileSync(
     path.join(fakeBin, "git"),
     `#!/usr/bin/env bash
@@ -120,6 +138,7 @@ exit 64
   const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
   try {
     const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
+      cwd: tempDir,
       encoding: "utf8",
       env: {
         ...process.env,
@@ -131,6 +150,7 @@ exit 64
         PROVIDED_BARE_IMAGE: "ghcr.io/openclaw/openclaw:test",
         SELECTED_SHA: selectedSha,
         SHARED_IMAGE_POLICY: "existing-only",
+        TRUSTED_WORKFLOW_SHA: selectedSha,
         ...packageEnv,
       },
     });
@@ -194,9 +214,6 @@ if [[ "$1" == "scripts/package-openclaw-for-docker.mjs" ]]; then
   printf '{"commit":"%s"}\\n' "$SELECTED_SHA" > "$fixture/package/dist/build-info.json"
   tar -czf "$output_dir/$output_name" -C "$fixture" package
   rm -rf "$fixture"
-  exit 0
-fi
-if [[ "$1" == "scripts/check-openclaw-package-tarball.mjs" ]]; then
   exit 0
 fi
 exit 64
@@ -282,20 +299,78 @@ function runReleaseInputCapture(params: {
   const outputPath = path.join(tempDir, "output");
   const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
   try {
+    const tooling = path.join(tempDir, "workflow");
+    for (const file of [
+      "scripts/preflight-frozen-target-contracts.mjs",
+      "scripts/lib/frozen-target-source.mjs",
+      "scripts/lib/docker-e2e-plan.mts",
+      "scripts/lib/docker-e2e-scenarios.mts",
+      "scripts/lib/official-external-channel-catalog.json",
+      "scripts/lib/upgrade-survivor-policy.mjs",
+      "scripts/lib/upgrade-survivor-scenarios.json",
+      "scripts/lib/release-version.mjs",
+      "scripts/lib/frozen-target-compat.sh",
+      "scripts/resolve-frozen-codex-live-suite.mjs",
+      "scripts/resolve-fs-safe-native-contract.mjs",
+      "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
+      "scripts/windows-cmd-helpers.mjs",
+      "package.json",
+      "pnpm-lock.yaml",
+      "scripts/plan-release-workflow-matrix.mjs",
+      "scripts/lib/direct-run.mjs",
+      "scripts/lib/plugin-prerelease-test-plan.mts",
+      "scripts/plan-targeted-docker-lane-groups.mjs",
+      "scripts/lib/numeric-options.mjs",
+      "scripts/e2e/lib/upgrade-survivor/config-recipe",
+      "scripts/github/validate-release-suite-filters.sh",
+      "scripts/lib/cross-os-release-checks/suite-filter.mjs",
+    ]) {
+      mkdirSync(path.dirname(path.join(tooling, file)), { recursive: true });
+      cpSync(file, path.join(tooling, file), { recursive: true });
+    }
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "commit.gpgsign=false",
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.test",
+          "-C",
+          tooling,
+          ...args,
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ).trim();
+    git("init", "-q");
+    git("add", ".");
+    git("commit", "-qm", "candidate tooling fixture");
+    const toolingSha = git("rev-parse", "HEAD");
     const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
+      cwd: tempDir,
       encoding: "utf8",
       env: {
         ...process.env,
         ...stepEnv,
+        ADMISSION_TOOLING_ROOT: tooling,
+        ADMISSION_TOOLING_SHA: toolingSha,
         CANDIDATE_ARTIFACT_JSON_INPUT: params.candidateArtifactJson ?? "",
         GITHUB_OUTPUT: outputPath,
         RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: "false",
         RELEASE_CROSS_OS_SUITE_FILTER_INPUT: "",
         RELEASE_FAIL_FAST_INPUT: "false",
-        RELEASE_FILTER_VALIDATOR: path.resolve("scripts/github/validate-release-suite-filters.sh"),
+        RELEASE_FILTER_VALIDATOR: path.join(
+          tooling,
+          "scripts/github/validate-release-suite-filters.sh",
+        ),
         RELEASE_LIVE_SUITE_FILTER_INPUT: "",
         RELEASE_MODE_INPUT: "both",
         RELEASE_PACKAGE_SPEC_INPUT: params.releasePackageSpec ?? "",
+        RELEASE_PHASE_INPUT: "all",
         RELEASE_PROFILE_INPUT: "beta",
         RELEASE_PROVIDER_INPUT: "openai",
         RELEASE_QA_DISCORD_LIVE_CI_ENABLED: "false",
@@ -306,6 +381,7 @@ function runReleaseInputCapture(params: {
         RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
         RELEASE_RUN_RELEASE_SOAK_INPUT: "false",
         RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: "false",
+        TELEGRAM_WAIVER: "",
       },
     });
     expect(result.status, result.stderr).toBe(0);
@@ -324,15 +400,37 @@ function runReleaseInputCapture(params: {
 }
 
 describe("package source preflight", () => {
-  it("accepts aligned source manifests and the explicitly allowed Unreleased section", () => {
+  it("validates selected split notes instead of accepting an index as package contents", () => {
+    const root = tempDirs.make("openclaw-package-source-split-");
+    mkdirSync(path.join(root, "CHANGELOG"));
+    writeFileSync(path.join(root, "package.json"), rootManifest({ dependencies: {} }));
+    writeFileSync(
+      path.join(root, "CHANGELOG.md"),
+      "# Changelog\n\n- [Release](CHANGELOG/2026.8.1.md)\n",
+    );
+    writeFileSync(
+      path.join(root, "CHANGELOG", "2026.8.1.md"),
+      changelog.replace("Unreleased", "2026.8.1"),
+    );
+    expect(validatePackageSourceDir(root)).toBe("2026.8.1");
+    writeFileSync(path.join(root, "CHANGELOG", "2026.8.1.md"), "## 2026.8.1\n- Tiny.\n");
+    expect(() => validatePackageSourceDir(root)).toThrow("only 7 body bytes");
+  });
+
+  it.each([
+    ["2026.8.1", "Unreleased"],
+    ["2026.8.1-beta.4", "Unreleased"],
+    ["2026.9.1", "Unreleased"],
+    ["2026.9.1", "2026.8.3 (Unreleased)"],
+  ])("accepts aligned %s source manifests with %s notes", (version, heading) => {
     expect(
       validatePackageSource({
-        aiManifestContent: aiManifest(),
+        aiManifestContent: aiManifest({ version }),
         allowUnreleasedChangelog: true,
-        changelogContent: changelog,
-        rootManifestContent: rootManifest(),
+        changelogContent: changelog.replace("## Unreleased", `## ${heading}`),
+        rootManifestContent: rootManifest({ version }),
       }),
-    ).toBe("2026.8.1");
+    ).toBe(version);
   });
 
   it("uses canonical package changelog validation", () => {
@@ -343,6 +441,16 @@ describe("package source preflight", () => {
         rootManifestContent: rootManifest(),
       }),
     ).toThrow("CHANGELOG.md does not contain a release section for 2026.8.1.");
+  });
+
+  it("accepts complete oversized contribution records through the package renderer", () => {
+    expect(
+      validatePackageSource({
+        aiManifestContent: aiManifest(),
+        rootManifestContent: rootManifest(),
+        changelogContent: `# Changelog\n\n## 2026.8.1\n\n- A complete release note with its original credit. Thanks @contributor.\n\n### Complete contribution record\n\n${"- **PR #123** Thanks @contributor.\n".repeat(20_000)}`,
+      }),
+    ).toBe("2026.8.1");
   });
 
   it("rejects source package version drift", () => {
@@ -411,13 +519,16 @@ describe("package source preflight", () => {
   it("rejects real partial-json source manifest drift", () => {
     const root = JSON.parse(readFileSync("package.json", "utf8")) as {
       dependencies: Record<string, string>;
+      version: string;
     };
     root.dependencies["partial-json"] = "0.1.8";
     expect(() =>
       validatePackageSource({
         aiManifestContent: readFileSync("packages/ai/package.json", "utf8"),
         allowUnreleasedChangelog: true,
-        changelogContent: readFileSync("CHANGELOG.md", "utf8"),
+        changelogContent: readCurrentPackageChangelog(process.cwd(), root.version, {
+          allowUnreleased: true,
+        }),
         rootManifestContent: JSON.stringify(root),
       }),
     ).toThrow(
@@ -437,16 +548,20 @@ describe("package source preflight", () => {
   });
 
   it("validates the current source ref without modifying the checkout", () => {
+    const committedManifest = JSON.parse(
+      execFileSync("git", ["show", "HEAD:package.json"], { encoding: "utf8" }),
+    ) as { version: string };
+    const workingManifest = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
     expect(
       validatePackageSourceRef("HEAD", {
         allowUnreleasedChangelog: true,
       }),
-    ).toBe("2026.8.1");
+    ).toBe(committedManifest.version);
     expect(
       validatePackageSourceDir(process.cwd(), {
         allowUnreleasedChangelog: true,
       }),
-    ).toBe("2026.8.1");
+    ).toBe(workingManifest.version);
   });
 
   it("normalizes release-check package mode and guards the source resolver", () => {
@@ -492,9 +607,11 @@ describe("package source preflight", () => {
       release_package_spec: "",
     });
     expect(
-      runReleaseInputCapture({ candidateArtifactJson: '{"packageArtifactId":"1"}' }),
+      runReleaseInputCapture({
+        candidateArtifactJson: '{"packagePublished":false,"packageArtifactId":"1"}',
+      }),
     ).toMatchObject({
-      candidate_artifact_json: '{"packageArtifactId":"1"}',
+      candidate_artifact_json: '{"packagePublished":false,"packageArtifactId":"1"}',
       package_mode: "artifact",
       release_package_spec: "",
     });
@@ -502,6 +619,9 @@ describe("package source preflight", () => {
     expect(preflight.env?.PACKAGE_REF).toBe("${{ needs.resolve_target.outputs.revision }}");
     expect(preflight.run).toContain("node scripts/package-source-preflight.mjs");
     expect(packageStep.env?.PACKAGE_MODE).toBe("${{ needs.resolve_target.outputs.package_mode }}");
+    expect(packageStep.env?.CANDIDATE_PUBLISHED).toBe(
+      "${{ needs.resolve_target.outputs.candidate_published }}",
+    );
     expect(setup.if).toBe("needs.resolve_target.outputs.package_mode != 'artifact'");
     expect(packageStep.if).toBe("needs.resolve_target.outputs.package_mode != 'artifact'");
     expect(packageStep.run).toContain('if [[ "$PACKAGE_MODE" == "published" ]]');
@@ -509,12 +629,13 @@ describe("package source preflight", () => {
     expect(artifactIdentity.if).toBe("needs.resolve_target.outputs.package_mode == 'artifact'");
     expect(workflow.jobs.docker_e2e_release_checks?.with).toMatchObject({
       enable_prepublish_plugin_registry:
-        "${{ needs.resolve_target.outputs.package_mode != 'published' }}",
+        "${{ fromJSON(needs.prepare_release_package.outputs.candidate_artifact_json).packagePublished != true }}",
     });
     expect(workflow.jobs.package_acceptance_release_checks?.with).toMatchObject({
-      candidate_artifact_json: "${{ needs.resolve_target.outputs.candidate_artifact_json }}",
+      candidate_artifact_json:
+        "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.candidate_artifact_json || '' }}",
       source:
-        "${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}",
+        "${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
     });
     const workflowSource = readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8");
     expect(workflowSource.match(/\$\{\{ inputs\.candidate_artifact_json \}\}/gu)).toHaveLength(1);
@@ -559,6 +680,12 @@ describe("package source preflight", () => {
     expect(
       runSourceRequirement(sourceRequirement, {
         PACKAGE_ARTIFACT_PRESENT: "true",
+      }),
+    ).toBe("required=false");
+    expect(
+      runSourceRequirement(sourceRequirement, {
+        PACKAGE_ARTIFACT_PRESENT: "false",
+        PREPARED_NPM_BUNDLE_JSON: "{}",
       }),
     ).toBe("required=false");
     expect(steps.indexOf(prepareOnlyPreflight)).toBeLessThan(steps.indexOf(harnessSetup));
@@ -633,7 +760,6 @@ describe("package source preflight", () => {
     expect(result.validationResult.status, result.validationResult.stderr).toBe(0);
     expect(result.calls).toEqual([
       expect.stringContaining("scripts/package-openclaw-for-docker.mjs"),
-      expect.stringContaining("scripts/check-openclaw-package-tarball.mjs"),
     ]);
     expect(result.output).toMatchObject({
       file_name: "openclaw-current.tgz",
@@ -721,20 +847,20 @@ describe("package source preflight", () => {
   });
 
   it("guards npm source producers with trusted tooling before Node setup", () => {
-    const workflow = readWorkflow(".github/workflows/openclaw-npm-release.yml");
-    const steps = workflow.jobs.preflight_openclaw_npm!.steps;
+    const workflow = readWorkflow(".github/workflows/openclaw-npm-preflight.yml");
+    const steps = workflow.jobs.prepare_openclaw_npm!.steps;
     const checkout = workflowStep(
       workflow,
-      "preflight_openclaw_npm",
+      "prepare_openclaw_npm",
       "Checkout trusted package source preflight",
     );
     const preflight = workflowStep(
       workflow,
-      "preflight_openclaw_npm",
+      "prepare_openclaw_npm",
       "Validate npm package source metadata",
     );
-    const setup = workflowStep(workflow, "preflight_openclaw_npm", "Setup Node environment");
-    const build = workflowStep(workflow, "preflight_openclaw_npm", "Build");
+    const setup = workflowStep(workflow, "prepare_openclaw_npm", "Setup Node environment");
+    const build = workflowStep(workflow, "prepare_openclaw_npm", "Build");
 
     expect(checkout.with).toMatchObject({
       ref: "${{ github.workflow_sha }}",

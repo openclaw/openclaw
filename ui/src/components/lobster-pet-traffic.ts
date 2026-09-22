@@ -18,6 +18,7 @@ import {
 // controller only reports crossing milestones.
 type LobsterTrafficHooks = {
   visitsEnabled: () => boolean;
+  onPasserStart: (plan: LobsterPasserPlan) => void;
   // Fired at crossing start (toward the entry side) and mid-cross (travel
   // direction) so the resident can watch the traffic go by.
   onPasserFacing: (facing: 1 | -1) => void;
@@ -29,6 +30,7 @@ type LobsterBottleScene = { spotPct: number; opened: boolean; fortune: string };
 
 export class LobsterLedgeTraffic implements ReactiveController {
   passer: LobsterPasserPlan | null = null;
+  private connected = false;
   private bottlePlan: LobsterBottlePlan | null = null;
   private bottleVisible = false;
   private bottleOpened = false;
@@ -45,7 +47,20 @@ export class LobsterLedgeTraffic implements ReactiveController {
     host.addController(this);
   }
 
+  hostConnected() {
+    this.connected = true;
+  }
+
+  hostUpdate() {
+    if (!this.hooks.visitsEnabled()) {
+      this.clearTimers();
+      this.passer = null;
+      this.bottleVisible = false;
+    }
+  }
+
   hostDisconnected() {
+    this.connected = false;
     this.clearTimers();
     // The show ends with the host, mirroring the pet's own visit timers
     // (which also die on disconnect and only re-arm on a seed change):
@@ -62,8 +77,10 @@ export class LobsterLedgeTraffic implements ReactiveController {
     this.passer = null;
     this.bottleVisible = false;
     this.bottleOpened = false;
-    this.schedulePasser(seed);
-    this.scheduleBottle(seed);
+    if (this.connected && this.hooks.visitsEnabled()) {
+      this.schedulePasser(seed);
+      this.scheduleBottle(seed);
+    }
   }
 
   passerCrossMs(): number {
@@ -120,9 +137,15 @@ export class LobsterLedgeTraffic implements ReactiveController {
     }
     this.passerTimer = window.setTimeout(() => {
       this.passerTimer = null;
-      if (!this.hooks.visitsEnabled() || document.hidden) {
+      if (
+        !this.connected ||
+        !this.hooks.visitsEnabled() ||
+        document.hidden ||
+        prefersReducedMotion()
+      ) {
         return;
       }
+      this.hooks.onPasserStart(plan);
       this.passer = plan;
       this.host.requestUpdate();
       const crossMs = LOBSTER_PASSER_CROSS_MS[plan.kind];
@@ -152,6 +175,9 @@ export class LobsterLedgeTraffic implements ReactiveController {
     }
     this.bottleTimer = window.setTimeout(() => {
       this.bottleTimer = null;
+      if (!this.connected || !this.hooks.visitsEnabled()) {
+        return;
+      }
       this.bottleVisible = true;
       this.host.requestUpdate();
       this.armBottleEbb(300_000);

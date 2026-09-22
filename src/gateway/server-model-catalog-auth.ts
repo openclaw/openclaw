@@ -1,11 +1,20 @@
 import type { RuntimeAuthMaterialization } from "../agents/auth-profiles/runtime-materializations.js";
+import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
 import type { ResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.types.js";
 import type { PreparedModelRuntimeAuthScope } from "../agents/prepared-model-runtime-auth.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
 export type PreparedGatewayModelCatalogSnapshot = GatewayModelCatalogSnapshot &
-  Pick<ResolvedPublishedModelCatalogOwner, "authModes" | "authStore" | "metadataSnapshot"> & {
+  Pick<
+    ResolvedPublishedModelCatalogOwner,
+    | "authModes"
+    | "authStore"
+    | "metadataSnapshot"
+    | "pluginRegistry"
+    | "isCurrent"
+    | "observationConfig"
+  > & {
     authMaterializations: readonly RuntimeAuthMaterialization[];
   };
 
@@ -15,7 +24,8 @@ type GatewayModelCatalogReadParams = {
   authScope?: PreparedModelRuntimeAuthScope;
   readOnly?: boolean;
   refreshAuth?: boolean;
-  refreshFullCatalog?: boolean;
+  refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
+  providerDiscoveryProviderIds?: readonly string[];
   workspaceDir?: string;
 };
 
@@ -33,7 +43,7 @@ const privateAccessByLoader = new WeakMap<
   GatewayModelCatalogPrivateAccess
 >();
 
-/** Keeps prepared auth and metadata behind the Gateway-owned loader boundary. */
+/** Keeps prepared auth, metadata, and registry ownership behind the Gateway loader boundary. */
 export function registerGatewayModelCatalogPrivateAccess(
   loader: GatewayRequestContext["loadGatewayModelCatalogSnapshot"],
   access: GatewayModelCatalogPrivateAccess,
@@ -56,7 +66,7 @@ export async function loadDeferredCatalog(
   agentId: string,
   options: Pick<
     GatewayModelCatalogReadParams,
-    "authScope" | "readOnly" | "refreshAuth" | "refreshFullCatalog"
+    "authScope" | "readOnly" | "refreshAuth" | "refreshFullCatalog" | "providerDiscoveryProviderIds"
   >,
 ): Promise<PreparedGatewayModelCatalogSnapshot> {
   return await requirePrivateAccess(context).loadDeferred({ agentId, ...options });

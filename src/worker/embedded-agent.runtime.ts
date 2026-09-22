@@ -1,3 +1,4 @@
+import type { SkillResourceDelivery } from "../../packages/gateway-protocol/src/schema/skill-resources.js";
 import type {
   WorkerLiveEvent,
   WorkerTranscriptMessage,
@@ -16,7 +17,12 @@ import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createEmbeddedAgentResourceLoader } from "../agents/embedded-agent-runner/resource-loader.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
-import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
+import { recordModelFallbackStop } from "../agents/failover-error.js";
+import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.js";
+import {
+  projectEffectiveExecPolicy,
+  resolveSessionPermissionCoreToolPolicy,
+} from "../agents/session-permission-exec-mode.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
@@ -28,19 +34,22 @@ import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-calle
 import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
+import { materializeSkillResources } from "../skills/runtime/resources.js";
 import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
+import { createWorkerComputerTool } from "./computer-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
   createWorkerTranscriptRuntime,
   toAgentMessage,
   toWorkerInferenceContext,
 } from "./embedded-agent-transcript.runtime.js";
-import type { WorkerBrowserLaunchDescriptor } from "./launch-descriptor.js";
+import type { WorkerBrowserLaunchDescriptor, WorkerLaunchPlan } from "./launch-descriptor.js";
 import {
   WORKER_LOCAL_TOOL_NAMES,
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
   WORKER_SESSION_TOOL_NAMES,
   WORKER_TOOL_NAMES,
+  type WorkerToolAuthority,
   type WorkerToolName,
 } from "./tool-authority.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
@@ -73,16 +82,19 @@ type WorkerEmbeddedLiveClient = {
 };
 
 type RunWorkerEmbeddedTurnParams = {
+  skillResources?: SkillResourceDelivery;
+  skillAuthoring?: import("../../packages/gateway-protocol/src/schema/worker-skill-workshop.js").WorkerSkillWorkshopBinding;
   agentId: string;
   operationalRunInstance: OperationalRunInstanceRef;
   agentRuntimeIdentityToken: string;
   cwd: string;
   workerContainmentRoot: string;
   stateDir: string;
+  github?: PreparedGitHubToolEnvironment;
   sessionId: string;
   sessionKey: string;
   runId: string;
-  prompt: string;
+  prompt: WorkerLaunchPlan["assignment"]["prompt"];
   modelRef: WorkerInferenceModelRef;
   inference: WorkerEmbeddedInferenceClient;
   transcript: WorkerEmbeddedTranscriptClient;
@@ -94,17 +106,56 @@ type RunWorkerEmbeddedTurnParams = {
   inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly WorkerToolName[];
   permissionMode?: import("../../packages/gateway-protocol/src/schema/sessions-row.js").SessionPermissionMode;
+  execAuthority: WorkerToolAuthority["exec"];
   browser?: WorkerBrowserLaunchDescriptor;
   browserRuntime?: WorkerBrowserRuntime;
+  computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
   signal?: AbortSignal;
 };
 
 const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawConfig;
 
 export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams): Promise<void> {
+  const resources = params.skillResources
+    ? await materializeSkillResources(params.skillResources, () => params.signal?.throwIfAborted())
+    : undefined;
+  try {
+    await runWorkerEmbeddedTurnWithResources(
+      {
+        ...params,
+        prompt: resources
+          ? typeof params.prompt === "string"
+            ? resources.rewriteReferences(params.prompt)
+            : params.prompt.map((part) =>
+                part.type === "text"
+                  ? { ...part, text: resources.rewriteReferences(part.text) }
+                  : part,
+              )
+          : params.prompt,
+        systemPrompt:
+          [params.systemPrompt, resources?.snapshot.prompt].filter(Boolean).join("\n\n") ||
+          undefined,
+      },
+      resources?.snapshot,
+    );
+  } finally {
+    await resources?.cleanup();
+  }
+}
+
+async function runWorkerEmbeddedTurnWithResources(
+  params: RunWorkerEmbeddedTurnParams,
+  skillsSnapshot?: import("../skills/types.js").SkillSnapshot,
+): Promise<void> {
+  if (params.allowedToolNames.includes("skill_workshop") !== Boolean(params.skillAuthoring)) {
+    throw new Error("Worker Workshop capability and tool authority must agree.");
+  }
   const browserAuthorized = params.allowedToolNames.includes("browser");
   if (browserAuthorized !== (params.browser !== undefined)) {
     throw new Error("Worker Browser authority and launch descriptor must be provided together.");
+  }
+  if (params.allowedToolNames.includes("computer") !== (params.computer !== undefined)) {
+    throw new Error("Worker computer authority and launch descriptor must be provided together.");
   }
   if (params.operationalRunInstance.runId !== params.runId) {
     throw new Error("worker operational run instance disagrees with the admitted turn");
@@ -119,9 +170,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     compaction: { enabled: false },
     retry: { enabled: false },
   });
-  const bootstrapFiles = (await loadWorkspaceBootstrapFiles(params.cwd)).filter(
-    (file) => file.name === DEFAULT_AGENTS_FILENAME,
-  );
+  const bootstrapFiles = await loadWorkspaceBootstrapFiles(params.cwd, [DEFAULT_AGENTS_FILENAME]);
   const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, {});
   const resourceLoader = createEmbeddedAgentResourceLoader({
     cwd: params.cwd,
@@ -145,8 +194,18 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     onMessagePersisted: transcriptRuntime.onMessagePersisted,
   });
 
+  // Exec security/ask are host-relative, and workers have no Gateway transport for node RPC:
+  // snapshotNodeWorkerEnv strips the Gateway URL/token, so resolveNodeExecutionTarget ->
+  // callGatewayTool has no loopback. Fail closed; the descriptor still carries audit authority.
+  const execUnavailable =
+    params.execAuthority === undefined ||
+    params.execAuthority.host === "sandbox" ||
+    params.execAuthority.host === "node";
   const allowedToolNameSet = new Set<string>(params.allowedToolNames);
-  const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
+  if (execUnavailable) {
+    allowedToolNameSet.delete("exec");
+    allowedToolNameSet.delete("process");
+  }
   const permissionToolPolicy = params.permissionMode
     ? resolveSessionPermissionCoreToolPolicy({ mode: params.permissionMode })
     : undefined;
@@ -156,14 +215,32 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   const activeToolNames = WORKER_TOOL_NAMES.filter(
     (name) => allowedToolNameSet.has(name) && !omittedToolNames?.has(name),
   );
+  const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
   const headlessApprovalText = params.permissionMode
     ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
     : undefined;
+  // The Gateway resolves effective exec policy before dispatch; deriving it from the worker's
+  // isolated config would reconstruct restricted turns with wider authority.
+  const execAuthority = params.execAuthority ?? {
+    host: "gateway" as const,
+    security: "deny" as const,
+    ask: "off" as const,
+  };
+  const {
+    security: execSecurity,
+    ask: execAsk,
+    mode: execMode,
+  } = projectEffectiveExecPolicy({
+    base: execAuthority,
+    overrides: execAuthority,
+    permissionPolicy: params.permissionMode ? { mode: params.permissionMode } : undefined,
+  });
   const coreTools = createCoreCodingTools({
+    skillsSnapshot,
     codingRoot: params.cwd,
     containmentRoot: params.workerContainmentRoot,
     includeBaseCodingTools: true,
-    includeShellTools: true,
+    shellTools: execUnavailable ? "patch-only" : "full",
     workspaceOnly: permissionToolPolicy?.workspaceOnly ?? false,
     readOnly: permissionToolPolicy?.readOnly ?? false,
     modelContextWindowTokens: model.contextWindow,
@@ -176,18 +253,22 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       }),
     applyPatchWorkspaceOnly: permissionToolPolicy?.applyPatchWorkspaceOnly ?? true,
     execDefaults: {
-      bypassHostApprovalFloors: permissionToolPolicy?.bypassHostApprovalFloors,
-      host: "gateway",
-      mode: permissionToolPolicy?.execMode ?? "full",
-      security: "full",
-      ask: "off",
-      // Safe clamp v1 keeps allowlist hits local but denies misses before review.
+      bypassHostApprovalFloors:
+        permissionToolPolicy?.bypassHostApprovalFloors && execSecurity === "full",
+      safeBins: execAuthority.safeBins ?? [],
+      host: execAuthority.host,
+      node: execAuthority.host === "node" ? execAuthority.node : undefined,
+      security: execSecurity,
+      ask: execAsk,
+      ...(execMode ? { mode: execMode } : {}),
+      // Host-specific approvals are not portable; misses require local execution.
       // Worker LLM review and interactive approval RPC remain a named follow-up.
       nonInteractiveApproval: Boolean(
         permissionToolPolicy && permissionToolPolicy.execMode !== "full",
       ),
       approvalFollowupText: headlessApprovalText,
       config: WORKER_TOOL_CONFIG,
+      ...(params.github ? { preparedRunEnvironment: params.github } : {}),
       commandHighlighting: false,
       agentId: params.agentId,
       allowBackground: true,
@@ -213,10 +294,45 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   const toolSignal = params.signal
     ? AbortSignal.any([params.signal, turnLifetime.signal])
     : turnLifetime.signal;
+  let computerCleanup: ((reason: string) => Promise<void>) | undefined;
+  function disposeTools(failure: Error): Promise<Error>;
+  function disposeTools(failure?: Error): Promise<Error | undefined>;
+  async function disposeTools(failure?: Error): Promise<Error | undefined> {
+    turnLifetime.abort();
+    const cleanup = computerCleanup;
+    computerCleanup = undefined;
+    const failures = failure ? [failure] : [];
+    for (const dispose of [
+      () => cleanup?.("Worker turn finished"),
+      () => browserRuntime?.dispose(),
+    ]) {
+      try {
+        await dispose();
+      } catch (error) {
+        const cleanupFailure = toWorkerAgentError(error, "Worker tool cleanup failed.");
+        recordModelFallbackStop(cleanupFailure);
+        failures.push(cleanupFailure);
+      }
+    }
+    return failures.length > 1 ? new AggregateError(failures, "Worker turn failed") : failures[0];
+  }
   const { session } = await (async () => {
     try {
+      const computerTool = params.computer
+        ? createWorkerComputerTool({
+            ...params.computer,
+            runId: params.runId,
+            registerRunCleanup: (cleanup) => {
+              computerCleanup = cleanup;
+            },
+          })
+        : undefined;
       const unboundLocalTools = finalizeAgentTools({
-        tools: browserRuntime ? [...coreTools, browserRuntime.tool] : coreTools,
+        tools: [
+          ...coreTools,
+          ...(browserRuntime ? [browserRuntime.tool] : []),
+          ...(computerTool ? [computerTool] : []),
+        ],
         modelProvider: params.modelRef.provider,
         modelId: params.modelRef.model,
         hookContext: {
@@ -233,7 +349,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
             agentId: params.agentId,
           }),
         },
-        agentId: params.agentId,
         abortSignal: toolSignal,
       }).filter((tool) => localToolNameSet.has(tool.name));
       const localTools = unboundLocalTools.map((tool) =>
@@ -246,7 +361,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       );
       const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
       for (const toolName of WORKER_REQUIRED_LOCAL_TOOL_NAMES) {
-        if (omittedToolNames?.has(toolName)) {
+        if (
+          omittedToolNames?.has(toolName) ||
+          (execUnavailable && (toolName === "exec" || toolName === "process"))
+        ) {
           continue;
         }
         if (!discoveredToolNames.has(toolName)) {
@@ -260,7 +378,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         throw new Error("Worker session tool client unavailable");
       }
       const sessionTools = params.sessions
-        ? createWorkerSessionTools(params.sessions).filter((tool) =>
+        ? createWorkerSessionTools(params.sessions, params.skillAuthoring).filter((tool) =>
             allowedToolNameSet.has(tool.name),
           )
         : [];
@@ -284,9 +402,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         withSessionWriteSettlement: transcriptRuntime.withSessionWriteSettlement,
       });
     } catch (error) {
-      turnLifetime.abort();
-      await browserRuntime?.dispose();
-      throw error;
+      throw await disposeTools(toWorkerAgentError(error, "Worker agent setup failed."));
     }
   })();
   session.agent.sessionId = params.sessionId;
@@ -319,7 +435,8 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     }
     await session.agent.prompt({
       role: "user",
-      content: [{ type: "text", text: params.prompt }],
+      content:
+        typeof params.prompt === "string" ? [{ type: "text", text: params.prompt }] : params.prompt,
       timestamp: Date.now(),
     });
     await session.agent.waitForIdle();
@@ -339,14 +456,19 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     runFailure = params.signal?.aborted
       ? toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.")
       : toWorkerAgentError(error, "Worker agent turn failed.");
-    liveRuntime.enqueueRunFailure({
-      aborted: params.signal?.aborted === true,
-      error: runFailure,
-    });
   }
 
   let finalTranscriptFailure: Error | undefined;
   try {
+    // Provider executions must close while the Gateway still admits this turn.
+    // The terminal ACK fences every later desktop RPC, including cleanup.
+    runFailure = await disposeTools(runFailure);
+    if (runFailure) {
+      liveRuntime.enqueueRunFailure({
+        aborted: params.signal?.aborted === true,
+        error: runFailure,
+      });
+    }
     try {
       await transcriptRuntime.withSessionWriteSettlement(() => undefined);
     } catch (error) {
@@ -362,7 +484,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     params.signal?.removeEventListener("abort", abortTurn);
     unsubscribe();
     session.dispose();
-    await browserRuntime?.dispose();
   }
   if (runFailure !== undefined) {
     throw runFailure;

@@ -1,11 +1,13 @@
 import { createServer } from "node:http";
+import path from "node:path";
 // Configure gateway auth prompt tests cover interactive auth selection and model-aware auth config.
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, aroundEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -66,7 +68,26 @@ vi.mock("./models/list.manifest-catalog.js", () => ({
 
 import { promptAuthConfig } from "./configure.gateway-auth.js";
 
+// Keep the real SQLite lifecycle coordinators under the isolated worker home.
+aroundEach(async (runTest) => {
+  const testHome = process.env.OPENCLAW_TEST_HOME;
+  if (!testHome) {
+    throw new Error("Provider auth tests require an isolated test home.");
+  }
+  await withStateDatabaseCoordinatorRuntimeDirectory(testHome, runTest);
+});
+
 beforeEach(() => {
+  const testHome = process.env.OPENCLAW_TEST_HOME;
+  if (!testHome) {
+    throw new Error("Provider auth tests require an isolated test home.");
+  }
+  const stateDir = path.join(testHome, ".openclaw");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+  for (const mock of Object.values(mocks)) {
+    mock.mockReset();
+  }
   // These provider fixtures expose no CLI backends; policy checks need no plugin discovery.
   cliBackendsTesting.setDepsForTest({
     resolveRuntimeCliBackends: () => [],
@@ -693,6 +714,68 @@ describe("promptAuthConfig", () => {
     });
   });
 
+  it.each([
+    { kind: "primary", selected: true },
+    { kind: "primary", selected: false },
+    { kind: "utility", selected: true },
+    { kind: "utility", selected: false },
+  ])(
+    "keeps $kind defaults on the requested owner (explicit selector=$selected)",
+    async ({ kind, selected }) => {
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: { model: "shared/original", utilityModel: "utility/original" },
+          entries: { main: { default: true }, ops: {} },
+        },
+      };
+      const original = structuredClone(config);
+      mocks.promptAuthChoiceGrouped.mockResolvedValue(kind === "primary" ? "skip" : "fixture");
+      mocks.promptDefaultModel.mockResolvedValue({ model: "fixture/selected" });
+      mocks.applyAuthChoice.mockResolvedValue({ config, utilityModelOverride: "fixture/selected" });
+      mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+      const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, {
+        agentId: "ops",
+        agentDir: "/tmp/ops-agent",
+        workspaceDir: "/tmp/ops-workspace",
+        ...(selected ? { defaultsScope: "agent" as const } : {}),
+      });
+      const field = kind === "primary" ? "model" : "utilityModel";
+      const expected = kind === "primary" ? { primary: "fixture/selected" } : "fixture/selected";
+      if (selected) {
+        expect(result.agents?.defaults).toEqual(config.agents?.defaults);
+        expect(result.agents?.entries?.ops?.[field]).toEqual(expected);
+      } else {
+        expect(result.agents?.defaults?.[field]).toEqual(expected);
+        expect(result.agents?.entries?.ops).toEqual({});
+      }
+      expect(result.agents?.entries?.main).toEqual(config.agents?.entries?.main);
+      expect(config).toEqual(original);
+    },
+  );
+
+  it("does not change selected-agent defaults when model selection fails", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { model: "shared/original" },
+        entries: { main: { default: true }, ops: {} },
+      },
+    };
+    const original = structuredClone(config);
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("skip");
+    mocks.promptDefaultModel.mockRejectedValueOnce(new Error("Model selection cancelled"));
+    await expect(
+      promptAuthConfig(config, makeRuntime(), noopPrompter, {
+        agentId: "ops",
+        agentDir: "/tmp/ops-agent",
+        workspaceDir: "/tmp/ops-workspace",
+        defaultsScope: "agent",
+      }),
+    ).rejects.toThrow("Model selection cancelled");
+    expect(config).toEqual(original);
+    expect(mocks.applyAuthChoice).not.toHaveBeenCalled();
+    expect(mocks.promptModelAllowlist).not.toHaveBeenCalled();
+  });
+
   it.each<{
     name: string;
     defaultModel?: AgentModelConfig;
@@ -852,6 +935,7 @@ describe("promptAuthConfig", () => {
   it.each<{
     name: string;
     explicit?: boolean;
+    selectedAgent?: boolean;
     defaultModel?: AgentModelConfig;
     agentModel?: AgentModelConfig;
     expectedModel: AgentModelConfig | undefined;
@@ -899,9 +983,20 @@ describe("promptAuthConfig", () => {
       explicit: true,
       expectedModel: { primary: "custom/llama3" },
     },
+    {
+      name: "scopes an explicit legacy selector without changing shared defaults",
+      selectedAgent: true,
+      expectedModel: { primary: "custom/llama3" },
+    },
+    {
+      name: "preserves an explicit legacy selector's inherited primary",
+      selectedAgent: true,
+      defaultModel: "openai/gpt-5.6-luna",
+      expectedModel: undefined,
+    },
   ])(
     "custom-provider setup $name",
-    async ({ explicit, defaultModel, agentModel, expectedModel }) => {
+    async ({ explicit, selectedAgent, defaultModel, agentModel, expectedModel }) => {
       vi.clearAllMocks();
       mocks.promptAuthChoiceGrouped.mockResolvedValue("custom-api-key");
       await using server = createServer((_req, res) => {
@@ -944,12 +1039,14 @@ describe("promptAuthConfig", () => {
         agentId: "ops",
         agentDir: "/tmp/ops-agent",
         workspaceDir: "/tmp/ops-workspace",
+        ...(selectedAgent ? { defaultsScope: "agent" as const } : {}),
       });
 
-      const modelOwner = explicit ? result.agents?.entries?.OPS : result.agents?.defaults;
+      const modelOwner =
+        explicit || selectedAgent ? result.agents?.entries?.OPS : result.agents?.defaults;
       expect(modelOwner?.model).toEqual(expectedModel);
       expect(modelOwner?.models?.["custom/llama3"]).toEqual({ alias: "Custom" });
-      if (explicit) {
+      if (explicit || selectedAgent) {
         expect(result.agents?.defaults?.model).toEqual(defaultModel);
         expect(result.agents?.defaults?.models).toBeUndefined();
       }

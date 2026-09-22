@@ -97,12 +97,19 @@ describe("legacy state migration ownership", () => {
       beforeRelease: () => {
         throw new Error("nested release failed");
       },
-      run: async () => ({ changes: ["imported"], warnings: [] }),
+      run: async () => ({
+        changes: ["imported"],
+        warnings: ["retained historical source"],
+        warningDisposition: "recoverable",
+      }),
     });
 
     expect(result).toEqual({
       changes: ["imported"],
-      warnings: ["Example migration lock release failed: nested release failed"],
+      warnings: [
+        "retained historical source",
+        "Example migration lock release failed: nested release failed",
+      ],
     });
     await expectStateOwnershipReleased(options.env);
   });

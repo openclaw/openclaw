@@ -14,6 +14,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 import type { resolvePoolAcquire } from "./src/attempt.js";
@@ -171,11 +172,11 @@ function makeSessionStoreMock() {
   return {
     entries,
     store: {
-      register: vi.fn((key: string, value: CopilotSessionBinding) => {
+      register: vi.fn(async (key: string, value: CopilotSessionBinding) => {
         entries.set(key, value);
       }),
-      lookup: vi.fn((key: string) => entries.get(key)),
-      delete: vi.fn((key: string) => entries.delete(key)),
+      lookup: vi.fn(async (key: string) => entries.get(key)),
+      delete: vi.fn(async (key: string) => entries.delete(key)),
     },
   };
 }
@@ -185,6 +186,8 @@ async function flushAsyncWork() {
     setTimeout(resolve, 0);
   });
 }
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("createCopilotAgentHarness", () => {
   beforeEach(() => {
@@ -466,7 +469,7 @@ describe("createCopilotAgentHarness", () => {
     });
     mocks.runCopilotAttempt
       .mockImplementationOnce(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-session-finalize",
           pooledClient: { client, key: TEST_POOL_KEY },
           sessionConfig: TEST_SESSION_CONFIG,
@@ -720,6 +723,69 @@ describe("createCopilotAgentHarness", () => {
     expect(session.disconnect).toHaveBeenCalledOnce();
   });
 
+  it.each(["client acquisition", "session creation"] as const)(
+    "releases resources without further SDK dispatch when the owner is revoked during %s",
+    async (stage) => {
+      const controller = new AbortController();
+      const retired = new Error("isolated completion owner retired");
+      let current = true;
+      const session = {
+        abort: vi.fn().mockResolvedValue(undefined),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+        sendAndWait: vi.fn().mockResolvedValue({
+          type: "assistant.message",
+          data: { content: "Must not be returned", messageId: "revoked-owner" },
+        }),
+      };
+      const sessionReady = createDeferred<typeof session>();
+      const createSession = vi
+        .fn()
+        .mockReturnValue(
+          stage === "session creation" ? sessionReady.promise : Promise.resolve(session),
+        );
+      const handle = { client: createMockCopilotClient({ createSession }), key: TEST_POOL_KEY };
+      const handleReady = createDeferred<typeof handle>();
+      const pool = makePoolMock();
+      pool.acquire.mockReturnValue(
+        stage === "client acquisition" ? handleReady.promise : Promise.resolve(handle),
+      );
+      pool.release.mockResolvedValue(undefined);
+      const harness = createCopilotAgentHarness({ pool });
+      const pending = harness.runIsolatedCompletionV2?.({
+        ...ISOLATED_COMPLETION_PARAMS,
+        abortSignal: controller.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw retired;
+          }
+        },
+      });
+      try {
+        await vi.waitFor(() =>
+          expect(
+            stage === "client acquisition" ? pool.acquire : createSession,
+          ).toHaveBeenCalledOnce(),
+        );
+        current = false;
+      } finally {
+        handleReady.resolve(handle);
+        sessionReady.resolve(session);
+      }
+
+      await expect(pending).rejects.toBe(retired);
+      await flushAsyncWork();
+      expect(controller.signal.aborted).toBe(false);
+      expect(session.sendAndWait).not.toHaveBeenCalled();
+      expect(pool.release).toHaveBeenCalledExactlyOnceWith(handle);
+      if (stage === "client acquisition") {
+        expect(createSession).not.toHaveBeenCalled();
+      } else {
+        expect(session.abort).toHaveBeenCalledOnce();
+        expect(session.disconnect).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it("does not start a request when cancellation wins the send boundary", async () => {
     const controller = new AbortController();
     let boundaryRegistrations = 0;
@@ -758,46 +824,64 @@ describe("createCopilotAgentHarness", () => {
     expect(session.disconnect).toHaveBeenCalledOnce();
   });
 
-  it("bounds client acquisition and releases a handle that arrives after timeout", async () => {
-    const client = createMockCopilotClient();
-    const lateHandle = { client, key: TEST_POOL_KEY };
-    const deferred = createDeferred<typeof lateHandle>();
-    const pool = makePoolMock();
-    pool.acquire.mockReturnValue(deferred.promise);
-    const harness = createCopilotAgentHarness({ pool });
-
-    await expect(
-      harness.runIsolatedCompletionV2?.({ ...ISOLATED_COMPLETION_PARAMS, timeoutMs: 5 }),
-    ).rejects.toThrow("timed out after 5ms");
-    deferred.resolve(lateHandle);
-    await flushAsyncWork();
-    expect(pool.release).toHaveBeenCalledWith(lateHandle);
-  });
-
-  it("starts late-session disconnect even when abort wedges", async () => {
-    const lateSession = {
-      abort: vi.fn().mockReturnValue(new Promise<void>(() => {})),
-      disconnect: vi.fn().mockResolvedValue(undefined),
-      sendAndWait: vi.fn(),
-    };
-    const deferred = createDeferred<typeof lateSession>();
-    const client = createMockCopilotClient({
-      createSession: vi.fn().mockReturnValue(deferred.promise),
-      resumeSession: vi.fn(),
-    });
-    const pool = makePoolMock();
-    pool.acquire.mockResolvedValue({ client, key: TEST_POOL_KEY });
-    const harness = createCopilotAgentHarness({ pool });
-
-    await expect(
-      harness.runIsolatedCompletionV2?.({ ...ISOLATED_COMPLETION_PARAMS, timeoutMs: 5 }),
-    ).rejects.toThrow("timed out after 5ms");
-    deferred.resolve(lateSession);
-    await flushAsyncWork();
-    expect(lateSession.abort).toHaveBeenCalledOnce();
-    expect(lateSession.disconnect).toHaveBeenCalledOnce();
-    expect(pool.release).toHaveBeenCalledOnce();
-  });
+  it.each(["client acquisition", "session creation"] as const)(
+    "cleans up a late %s after its deadline expires",
+    async (stage) => {
+      const started = createDeferred<void>();
+      const released = createDeferred<void>();
+      const disconnected = createDeferred<void>();
+      const lateSession = {
+        abort: vi.fn().mockReturnValue(new Promise<void>(() => {})),
+        disconnect: vi.fn(async () => disconnected.resolve()),
+        sendAndWait: vi.fn(),
+      };
+      const sessionReady = createDeferred<typeof lateSession>();
+      const client = createMockCopilotClient({
+        createSession: vi.fn(() => {
+          started.resolve();
+          return sessionReady.promise;
+        }),
+      });
+      const lateHandle = { client, key: TEST_POOL_KEY };
+      const handleReady = createDeferred<typeof lateHandle>();
+      const pool = makePoolMock();
+      pool.acquire.mockImplementation(() => {
+        if (stage === "client acquisition") {
+          started.resolve();
+          return handleReady.promise;
+        }
+        return Promise.resolve(lateHandle);
+      });
+      pool.release.mockImplementation(async () => released.resolve());
+      const harness = createCopilotAgentHarness({ pool });
+      vi.useFakeTimers();
+      try {
+        const completion = harness.runIsolatedCompletionV2?.({
+          ...ISOLATED_COMPLETION_PARAMS,
+          timeoutMs: 5,
+        });
+        const rejected = expect(completion).rejects.toThrow("timed out after 5ms");
+        // Expire the deadline only once the resource factory owns the pending request.
+        await started.promise;
+        await vi.advanceTimersByTimeAsync(5);
+        await rejected;
+        handleReady.resolve(lateHandle);
+        sessionReady.resolve(lateSession);
+        await released.promise;
+        if (stage === "session creation") {
+          await disconnected.promise;
+          expect(lateSession.abort).toHaveBeenCalledOnce();
+          expect(lateSession.disconnect).toHaveBeenCalledOnce();
+        }
+        expect(pool.release).toHaveBeenCalledExactlyOnceWith(lateHandle);
+        expect(lateSession.sendAndWait).not.toHaveBeenCalled();
+      } finally {
+        handleReady.resolve(lateHandle);
+        sessionReady.resolve(lateSession);
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("does not let a wedged session disconnect delay a completed result", async () => {
     const disconnect = vi.fn().mockReturnValue(new Promise<void>(() => {}));
@@ -1074,7 +1158,7 @@ describe("createCopilotAgentHarness", () => {
       const deleteSession = vi.fn().mockResolvedValue(undefined);
       const client = createMockCopilotClient({ deleteSession });
       mocks.runCopilotAttempt.mockImplementation(async (params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-123",
           pooledClient: { key: TEST_POOL_KEY, client },
         });
@@ -1106,7 +1190,7 @@ describe("createCopilotAgentHarness", () => {
       const deleteSession = vi.fn().mockRejectedValue(new Error("session not found"));
       const client = createMockCopilotClient({ deleteSession });
       mocks.runCopilotAttempt.mockImplementation(async (params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-err",
           pooledClient: { key: TEST_POOL_KEY, client },
         });
@@ -1125,7 +1209,7 @@ describe("createCopilotAgentHarness", () => {
       const deleteSession = vi.fn().mockResolvedValue(undefined);
       const client = createMockCopilotClient({ deleteSession });
       mocks.runCopilotAttempt.mockImplementation(async (params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-x",
           pooledClient: { key: TEST_POOL_KEY, client },
         });
@@ -1145,7 +1229,7 @@ describe("createCopilotAgentHarness", () => {
       const deleteSession = vi.fn().mockResolvedValue(undefined);
       const client = createMockCopilotClient({ deleteSession });
       mocks.runCopilotAttempt.mockImplementation(async (params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-y",
           pooledClient: { key: TEST_POOL_KEY, client },
         });
@@ -1165,7 +1249,7 @@ describe("createCopilotAgentHarness", () => {
     const deleteSession = vi.fn().mockResolvedValue(undefined);
     const client = createMockCopilotClient({ deleteSession });
     mocks.runCopilotAttempt.mockImplementation(async (params, deps) => {
-      deps.onSessionEstablished?.({
+      await deps.onSessionEstablished?.({
         sdkSessionId: "sdk-sess-d",
         pooledClient: { key: TEST_POOL_KEY, client },
       });
@@ -1180,16 +1264,88 @@ describe("createCopilotAgentHarness", () => {
     expect(deleteSession).not.toHaveBeenCalled();
   });
 
+  it("waits for binding publication before completing an attempt or disposing its pool", async () => {
+    const sessionStore = makeSessionStoreMock();
+    const write = createDeferred<void>();
+    const admitted = createDeferred<void>();
+    sessionStore.store.register.mockImplementationOnce(async (key, value) => {
+      admitted.resolve();
+      await write.promise;
+      sessionStore.entries.set(key, value);
+    });
+    const pool = makePoolMock();
+    mocks.createCopilotClientPool.mockReturnValue(pool);
+    const continued = vi.fn();
+    mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+      await deps.onSessionEstablished?.({
+        sdkSessionId: "sdk-sess-delayed-write",
+        pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
+      });
+      continued();
+      return ATTEMPT_RESULT;
+    });
+    const harness = createCopilotAgentHarness({ sessionStore: sessionStore.store });
+    const attempt = harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-delayed-write" });
+    await admitted.promise;
+    const disposal = harness.dispose?.();
+    await flushAsyncWork();
+    expect(continued).not.toHaveBeenCalled();
+    expect(pool.dispose).not.toHaveBeenCalled();
+    write.resolve();
+    await expect(attempt).resolves.toBe(ATTEMPT_RESULT);
+    await disposal;
+    expect(sessionStore.entries.get("oc-delayed-write")?.sdkSessionId).toBe(
+      "sdk-sess-delayed-write",
+    );
+    expect(pool.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("joins deferred binding deletion before disposal releases the pool", async () => {
+    const sessionStore = makeSessionStoreMock();
+    const deletion = createDeferred<void>();
+    const admitted = createDeferred<void>();
+    sessionStore.store.delete.mockImplementationOnce(async (key) => {
+      admitted.resolve();
+      await deletion.promise;
+      return sessionStore.entries.delete(key);
+    });
+    const cleanup = createDeferred<"aborted" | "completed" | "deadline">();
+    const pool = makePoolMock();
+    mocks.createCopilotClientPool.mockReturnValue(pool);
+    mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+      await deps.onSessionEstablished?.({
+        sdkSessionId: "sdk-sess-delayed-delete",
+        pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
+      });
+      await deps.onDeferredCompaction?.({
+        abort: () => cleanup.resolve("aborted"),
+        cleanup: cleanup.promise,
+        sdkSessionId: "sdk-sess-delayed-delete",
+      });
+      return ATTEMPT_RESULT;
+    });
+    const harness = createCopilotAgentHarness({ sessionStore: sessionStore.store });
+    await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-delayed-delete" });
+    const disposal = harness.dispose?.();
+    await admitted.promise;
+    await flushAsyncWork();
+    expect(pool.dispose).not.toHaveBeenCalled();
+    deletion.resolve();
+    await disposal;
+    expect(sessionStore.entries.has("oc-delayed-delete")).toBe(false);
+    expect(pool.dispose).toHaveBeenCalledOnce();
+  });
+
   it("aborts deferred compaction cleanup before disposal", async () => {
     const cleanup = createDeferred<"aborted" | "completed" | "deadline">();
     const abort = vi.fn(() => cleanup.resolve("aborted"));
     mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-      deps.onSessionEstablished?.({
+      await deps.onSessionEstablished?.({
         sdkSessionId: "sdk-sess-pending-cleanup",
         pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         sessionConfig: TEST_SESSION_CONFIG,
       });
-      deps.onDeferredCompaction?.({
+      await deps.onDeferredCompaction?.({
         abort,
         cleanup: cleanup.promise,
         sdkSessionId: "sdk-sess-pending-cleanup",
@@ -1208,12 +1364,12 @@ describe("createCopilotAgentHarness", () => {
     const cleanup = createDeferred<"aborted" | "completed" | "deadline">();
     const abort = vi.fn(() => cleanup.resolve("aborted"));
     mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-      deps.onSessionEstablished?.({
+      await deps.onSessionEstablished?.({
         sdkSessionId: "sdk-sess-reset-cleanup",
         pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         sessionConfig: TEST_SESSION_CONFIG,
       });
-      deps.onDeferredCompaction?.({
+      await deps.onDeferredCompaction?.({
         abort,
         cleanup: cleanup.promise,
         sdkSessionId: "sdk-sess-reset-cleanup",
@@ -1238,7 +1394,7 @@ describe("createCopilotAgentHarness", () => {
     mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
       attempt += 1;
       if (attempt === 1) {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-before-reset",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -1246,13 +1402,13 @@ describe("createCopilotAgentHarness", () => {
           },
           sessionConfig: TEST_SESSION_CONFIG,
         });
-        deps.onDeferredCompaction?.({
+        await deps.onDeferredCompaction?.({
           abort,
           cleanup: cleanup.promise,
           sdkSessionId: "sdk-sess-before-reset",
         });
       } else {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-replacement",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -1290,18 +1446,18 @@ describe("createCopilotAgentHarness", () => {
     mocks.runCopilotAttempt.mockImplementation(async (params, deps) => {
       attempt += 1;
       if (attempt === 1) {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-before-reset",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
           sessionConfig: TEST_SESSION_CONFIG,
         });
-        deps.onDeferredCompaction?.({
+        await deps.onDeferredCompaction?.({
           abort,
           cleanup: cleanup.promise,
           sdkSessionId: "sdk-sess-before-reset",
         });
       } else if (attempt === 2) {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-replacement",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -1310,7 +1466,7 @@ describe("createCopilotAgentHarness", () => {
           sessionConfig: TEST_SESSION_CONFIG,
         });
       } else if (attempt === 3 && !params.initialReplayState?.sdkSessionId) {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-during-reset",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -1370,7 +1526,7 @@ describe("createCopilotAgentHarness", () => {
       const pool = makePoolMock();
       const client = createMockCopilotClient({ deleteSession: vi.fn() });
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-warm",
           pooledClient: { key: TEST_POOL_KEY, client },
         });
@@ -1402,7 +1558,7 @@ describe("createCopilotAgentHarness", () => {
       let call = 0;
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
         call += 1;
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-provenance",
           pooledClient: { key: TEST_POOL_KEY, client },
         });
@@ -1431,12 +1587,12 @@ describe("createCopilotAgentHarness", () => {
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
         attempt += 1;
         if (attempt === 1) {
-          deps.onSessionEstablished?.({
+          await deps.onSessionEstablished?.({
             sdkSessionId: "sdk-sess-compacting",
             pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
             sessionConfig: TEST_SESSION_CONFIG,
           });
-          deps.onDeferredCompaction?.({
+          await deps.onDeferredCompaction?.({
             abort: () => undefined,
             cleanup: cleanup.promise,
             sdkSessionId: "sdk-sess-compacting",
@@ -1471,18 +1627,18 @@ describe("createCopilotAgentHarness", () => {
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
         attempt += 1;
         if (attempt === 1) {
-          deps.onSessionEstablished?.({
+          await deps.onSessionEstablished?.({
             sdkSessionId: "sdk-sess-old",
             pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
             sessionConfig: TEST_SESSION_CONFIG,
           });
-          deps.onDeferredCompaction?.({
+          await deps.onDeferredCompaction?.({
             abort: () => undefined,
             cleanup: cleanup.promise,
             sdkSessionId: "sdk-sess-old",
           });
         } else if (attempt === 2) {
-          deps.onSessionEstablished?.({
+          await deps.onSessionEstablished?.({
             sdkSessionId: "sdk-sess-replacement",
             pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
             sessionConfig: TEST_SESSION_CONFIG,
@@ -1512,12 +1668,12 @@ describe("createCopilotAgentHarness", () => {
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
         attempt += 1;
         if (attempt === 1) {
-          deps.onSessionEstablished?.({
+          await deps.onSessionEstablished?.({
             sdkSessionId: "sdk-sess-cancelled",
             pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
             sessionConfig: TEST_SESSION_CONFIG,
           });
-          deps.onDeferredCompaction?.({
+          await deps.onDeferredCompaction?.({
             abort: () => undefined,
             cleanup: cleanup.promise,
             sdkSessionId: "sdk-sess-cancelled",
@@ -1555,7 +1711,7 @@ describe("createCopilotAgentHarness", () => {
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
         attempt += 1;
         if (attempt === 1) {
-          deps.onSessionEstablished?.({
+          await deps.onSessionEstablished?.({
             sdkSessionId: "sdk-sess-stale",
             pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
             sessionConfig: TEST_SESSION_CONFIG,
@@ -1563,7 +1719,7 @@ describe("createCopilotAgentHarness", () => {
           firstAttemptDeps = deps;
           await firstAttemptFinished.promise;
         } else if (attempt === 2) {
-          deps.onSessionEstablished?.({
+          await deps.onSessionEstablished?.({
             sdkSessionId: "sdk-sess-current",
             pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
             sessionConfig: TEST_SESSION_CONFIG,
@@ -1597,7 +1753,7 @@ describe("createCopilotAgentHarness", () => {
     it("does not seed sdkSessionId on the first turn (nothing tracked yet)", async () => {
       const pool = makePoolMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-cold",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -1616,7 +1772,7 @@ describe("createCopilotAgentHarness", () => {
     it("does not seed when compatibility fingerprint differs (model change)", async () => {
       const pool = makePoolMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-gpt4",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -1643,7 +1799,7 @@ describe("createCopilotAgentHarness", () => {
     it("does not seed when compatibility fingerprint differs (model API change)", async () => {
       const pool = makePoolMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-api",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -1673,7 +1829,7 @@ describe("createCopilotAgentHarness", () => {
     it("does not seed when compatibility fingerprint differs (legacy auth.gitHubToken rotation)", async () => {
       const pool = makePoolMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-auth1",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -1714,7 +1870,7 @@ describe("createCopilotAgentHarness", () => {
       // invalidate session reuse.
       const pool = makePoolMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-p1",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -1754,7 +1910,7 @@ describe("createCopilotAgentHarness", () => {
       // store re-issues a token under the same profile id.
       const pool = makePoolMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-tok1",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -1788,7 +1944,7 @@ describe("createCopilotAgentHarness", () => {
     it("preserves caller-provided initialReplayState.replayInvalid:true (does not overwrite)", async () => {
       const pool = makePoolMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-tracked",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -1819,7 +1975,7 @@ describe("createCopilotAgentHarness", () => {
       const client = createMockCopilotClient({ deleteSession });
       let nextSdkId = "sdk-sess-1";
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: nextSdkId,
           pooledClient: { key: TEST_POOL_KEY, client },
         });
@@ -1838,47 +1994,65 @@ describe("createCopilotAgentHarness", () => {
       expect(deleteSession).toHaveBeenCalledWith("sdk-sess-2");
     });
 
-    it("persists sdkSessionId in plugin state and resumes it from a new harness instance", async () => {
-      const firstPool = makePoolMock();
-      const secondPool = makePoolMock();
-      const sessionStore = makeSessionStoreMock();
+    it("persists sdkSessionId across SQLite close and resumes it from a new harness", async () => {
+      const { createPluginStateKeyedStoreForTests, resetPluginStateStoreForTests } =
+        await import("openclaw/plugin-sdk/plugin-state-test-runtime");
+      const { closeOpenClawStateDatabaseAsync } =
+        await import("openclaw/plugin-sdk/sqlite-runtime-testing");
+      const storeOptions = {
+        namespace: "sdk-sessions",
+        maxEntries: 5000,
+        defaultTtlMs: 90 * 24 * 60 * 60 * 1000,
+        env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("copilot-binding-") },
+      };
+      const openStore = () =>
+        createPluginStateKeyedStoreForTests<CopilotSessionBinding>("copilot", storeOptions);
+      const firstStore = openStore();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-sqlite",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
-        return ATTEMPT_RESULT;
+        return { ...ATTEMPT_RESULT, journalValidated: true, sdkSessionId: "sdk-sess-sqlite" };
       });
       const firstHarness = createCopilotAgentHarness({
-        pool: firstPool,
-        sessionStore: sessionStore.store,
+        pool: makePoolMock(),
+        sessionStore: firstStore,
       });
-      const secondHarness = createCopilotAgentHarness({
-        pool: secondPool,
-        sessionStore: sessionStore.store,
-      });
-
-      await firstHarness.runAttempt(makeAttemptParams({ runId: "t1" }));
-      await secondHarness.runAttempt(makeAttemptParams({ runId: "t2" }));
-
-      expect(sessionStore.store.register).toHaveBeenCalledWith(
-        "oc-sess-reuse",
-        expect.objectContaining({
+      try {
+        await firstHarness.runAttempt(makeAttemptParams({ runId: "t1" }));
+        expect(await firstStore.lookup("oc-sess-reuse")).toMatchObject({
           schemaVersion: 2,
+          journalVersion: 1,
           sdkSessionId: "sdk-sess-sqlite",
-        }),
-      );
-      const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
-        initialReplayState?: { journalValidated?: boolean; sdkSessionId?: string };
-      };
-      expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-sqlite");
-      expect(secondCallParams.initialReplayState?.journalValidated).toBeUndefined();
+        });
+        await firstHarness.dispose?.();
+        await closeOpenClawStateDatabaseAsync();
+        resetPluginStateStoreForTests();
+        const secondStore = openStore();
+        const secondHarness = createCopilotAgentHarness({
+          pool: makePoolMock(),
+          sessionStore: secondStore,
+        });
+        await secondHarness.runAttempt(makeAttemptParams({ runId: "t2" }));
+        expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]?.initialReplayState).toMatchObject({
+          journalValidated: true,
+          sdkSessionId: "sdk-sess-sqlite",
+        });
+        await secondHarness.reset?.({ sessionId: "oc-sess-reuse" });
+        expect(await secondStore.lookup("oc-sess-reuse")).toBeUndefined();
+        await secondHarness.dispose?.();
+      } finally {
+        await firstHarness.dispose?.();
+        await closeOpenClawStateDatabaseAsync();
+        resetPluginStateStoreForTests();
+      }
     });
 
     it("persists BYOK session compatibility with endpoint fingerprints instead of raw URLs", async () => {
       const sessionStore = makeSessionStoreMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-byok",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -1923,7 +2097,7 @@ describe("createCopilotAgentHarness", () => {
         baseUrl: "https://proxy.example/v1",
       };
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-byok",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -1966,7 +2140,7 @@ describe("createCopilotAgentHarness", () => {
     it("resumes shipped schema v1 plugin-state bindings for attempts", async () => {
       const sessionStore = makeSessionStoreMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-current",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -2004,7 +2178,7 @@ describe("createCopilotAgentHarness", () => {
 
     it("starts a fresh SDK session when persisted binding lookup fails", async () => {
       const sessionStore = makeSessionStoreMock();
-      sessionStore.store.lookup.mockImplementation(() => {
+      sessionStore.store.lookup.mockImplementation(async () => {
         throw new Error("sqlite read failed");
       });
       mocks.runCopilotAttempt.mockResolvedValue(ATTEMPT_RESULT);
@@ -2034,11 +2208,11 @@ describe("createCopilotAgentHarness", () => {
         authMode: "useLoggedInUser",
         updatedAt: 1,
       });
-      sessionStore.store.register.mockImplementation(() => {
+      sessionStore.store.register.mockImplementation(async () => {
         throw new Error("sqlite write failed");
       });
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-memory-only",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -2063,7 +2237,7 @@ describe("createCopilotAgentHarness", () => {
     it("ignores a persisted sdkSessionId when the compatibility fingerprint changes", async () => {
       const sessionStore = makeSessionStoreMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-old-model",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -2097,7 +2271,7 @@ describe("createCopilotAgentHarness", () => {
     it("ignores a persisted sdkSessionId when the default Copilot home changes by agent id", async () => {
       const sessionStore = makeSessionStoreMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-main-home",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -2140,7 +2314,7 @@ describe("createCopilotAgentHarness", () => {
     it("does not let stale plugin state override a newer incompatible tracked session", async () => {
       const sessionStore = makeSessionStoreMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-tracked-model",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -2197,12 +2371,12 @@ describe("createCopilotAgentHarness", () => {
 
     it("still clears tracked SDK sessions when durable reset delete fails", async () => {
       const sessionStore = makeSessionStoreMock();
-      sessionStore.store.delete.mockImplementation(() => {
+      sessionStore.store.delete.mockImplementation(async () => {
         throw new Error("sqlite delete failed");
       });
       const deleteSession = vi.fn();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-reset",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient({ deleteSession }) },
         });
@@ -2222,7 +2396,7 @@ describe("createCopilotAgentHarness", () => {
     it("blocks persisted reuse after reset cannot delete a durable binding", async () => {
       const sessionStore = makeSessionStoreMock();
       mocks.runCopilotAttempt.mockImplementationOnce(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-before-reset",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
         });
@@ -2235,7 +2409,7 @@ describe("createCopilotAgentHarness", () => {
 
       await firstHarness.runAttempt(makeAttemptParams({ runId: "t1" }));
       expect(sessionStore.entries.get("oc-sess-reuse")?.sdkSessionId).toBe("sdk-sess-before-reset");
-      sessionStore.store.delete.mockImplementation(() => {
+      sessionStore.store.delete.mockImplementation(async () => {
         throw new Error("sqlite delete failed");
       });
       mocks.runCopilotAttempt.mockResolvedValue(ATTEMPT_RESULT);
@@ -2302,12 +2476,12 @@ describe("createCopilotAgentHarness", () => {
       const cleanup = createDeferred<"aborted" | "completed" | "deadline">();
       const pool = makePoolMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-background",
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
           sessionConfig: TEST_SESSION_CONFIG,
         });
-        deps.onDeferredCompaction?.({
+        await deps.onDeferredCompaction?.({
           abort: () => undefined,
           cleanup: cleanup.promise,
           sdkSessionId: "sdk-sess-background",
@@ -2333,7 +2507,7 @@ describe("createCopilotAgentHarness", () => {
     it("clears the reset block when storing a replacement session fails", async () => {
       const cleanup = createDeferred<"aborted" | "completed" | "deadline">();
       const sessionStore = makeSessionStoreMock();
-      sessionStore.store.register.mockImplementation(() => {
+      sessionStore.store.register.mockImplementation(async () => {
         throw new Error("sqlite register failed");
       });
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
@@ -2341,13 +2515,13 @@ describe("createCopilotAgentHarness", () => {
           mocks.runCopilotAttempt.mock.calls.length === 1
             ? "sdk-sess-background"
             : "sdk-sess-replacement";
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId,
           pooledClient: { key: TEST_POOL_KEY, client: createMockCopilotClient() },
           sessionConfig: TEST_SESSION_CONFIG,
         });
         if (sdkSessionId === "sdk-sess-background") {
-          deps.onDeferredCompaction?.({
+          await deps.onDeferredCompaction?.({
             abort: () => undefined,
             cleanup: cleanup.promise,
             sdkSessionId,
@@ -2410,7 +2584,7 @@ describe("createCopilotAgentHarness", () => {
       const release = vi.fn(async () => undefined);
       pool.release = release;
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-compact",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -2515,7 +2689,7 @@ describe("createCopilotAgentHarness", () => {
       const release = vi.fn(async () => undefined);
       pool.release = release;
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-abort",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -2612,7 +2786,7 @@ describe("createCopilotAgentHarness", () => {
           provider: { mode: "github-copilot" },
         });
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-token",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -2731,7 +2905,7 @@ describe("createCopilotAgentHarness", () => {
         wireModel: "proxy-model",
       };
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           compactionSessionConfig: {
             ...TEST_SESSION_CONFIG,
             provider: trackedProvider,
@@ -2820,7 +2994,7 @@ describe("createCopilotAgentHarness", () => {
       }));
       pool.acquire = acquire;
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-model",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -2855,7 +3029,7 @@ describe("createCopilotAgentHarness", () => {
         client: createMockCopilotClient({ deleteSession: vi.fn(), resumeSession }),
       }));
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-login",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -2897,41 +3071,56 @@ describe("createCopilotAgentHarness", () => {
       });
     });
 
-    it("classifies missing SDK sessions as stale bindings for host recovery", async () => {
-      const sessionStore = makeSessionStoreMock();
-      const resumeSession = vi.fn(async () => {
-        throw new Error("session not found");
-      });
-      const pool = makePoolMock();
-      pool.acquire = vi.fn(async () => ({
-        key: TEST_POOL_KEY,
-        client: createMockCopilotClient({ deleteSession: vi.fn(), resumeSession }),
-      }));
-      pool.release = vi.fn(async () => undefined);
-      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
-          sdkSessionId: "sdk-sess-stale",
-          pooledClient: {
-            key: TEST_POOL_KEY,
-            client: createMockCopilotClient({ deleteSession: vi.fn(), resumeSession }),
-          },
-          sessionConfig: TEST_SESSION_CONFIG,
+    it.each([false, true])(
+      "invalidates a stale SDK session unless a replacement was published (replacement=%s)",
+      async (replacement) => {
+        const sessionStore = makeSessionStoreMock();
+        const resume = createDeferred<void>();
+        const admitted = createDeferred<void>();
+        const resumeSession = vi.fn(async () => {
+          admitted.resolve();
+          await resume.promise;
+          throw new Error("session not found");
         });
-        return ATTEMPT_RESULT;
-      });
-      const harness = createCopilotAgentHarness({ pool, sessionStore: sessionStore.store });
-
-      await harness.runAttempt(makeCompactParams({ sessionId: "oc-sess-stale" }));
-      const result = await harness.compact?.(makeCompactParams({ sessionId: "oc-sess-stale" }));
-
-      expect(sessionStore.store.delete).toHaveBeenCalledWith("oc-sess-stale");
-      expect(result).toEqual({
-        ok: false,
-        compacted: false,
-        reason: "stale_thread_binding",
-        failure: { reason: "stale_thread_binding", rawError: "session not found" },
-      });
-    });
+        const pool = makePoolMock();
+        pool.acquire = vi.fn(async () => ({
+          key: TEST_POOL_KEY,
+          client: createMockCopilotClient({ deleteSession: vi.fn(), resumeSession }),
+        }));
+        pool.release = vi.fn(async () => undefined);
+        let turn = 0;
+        mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+          const sdkSessionId =
+            replacement && turn++ > 0 ? "sdk-sess-replacement" : "sdk-sess-stale";
+          await deps.onSessionEstablished?.({
+            sdkSessionId,
+            pooledClient: {
+              key: TEST_POOL_KEY,
+              client: createMockCopilotClient({ deleteSession: vi.fn(), resumeSession }),
+            },
+            sessionConfig: TEST_SESSION_CONFIG,
+          });
+          return { ...ATTEMPT_RESULT, sdkSessionId, journalValidated: true };
+        });
+        const harness = createCopilotAgentHarness({ pool, sessionStore: sessionStore.store });
+        const params = makeCompactParams({ sessionId: "oc-sess-stale" });
+        await harness.runAttempt(params);
+        const compaction = harness.compact?.(params);
+        await admitted.promise;
+        await harness.runAttempt(params);
+        resume.resolve();
+        const result = await compaction;
+        expect(sessionStore.entries.get("oc-sess-stale")?.sdkSessionId).toBe(
+          replacement ? "sdk-sess-replacement" : undefined,
+        );
+        expect(result).toEqual({
+          ok: false,
+          compacted: false,
+          reason: "stale_thread_binding",
+          failure: { reason: "stale_thread_binding", rawError: "session not found" },
+        });
+      },
+    );
 
     it("does not start SDK compaction when the compact call is already aborted", async () => {
       const abort = new AbortController();
@@ -2944,7 +3133,7 @@ describe("createCopilotAgentHarness", () => {
       }));
       pool.release = vi.fn(async () => undefined);
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-abort",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -2998,7 +3187,7 @@ describe("createCopilotAgentHarness", () => {
       }));
       pool.release = vi.fn(async () => undefined);
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-cancel",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -3046,7 +3235,7 @@ describe("createCopilotAgentHarness", () => {
         provider: { mode: "github-copilot" },
       });
       mocks.runCopilotAttempt.mockImplementationOnce(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-persisted-token",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -3134,7 +3323,7 @@ describe("createCopilotAgentHarness", () => {
         sessionStore: sessionStore.store,
       });
       mocks.runCopilotAttempt.mockImplementationOnce(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-persisted",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -3191,7 +3380,7 @@ describe("createCopilotAgentHarness", () => {
       }));
       pool.release = vi.fn(async () => undefined);
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
-        deps.onSessionEstablished?.({
+        await deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-noop",
           pooledClient: {
             key: TEST_POOL_KEY,

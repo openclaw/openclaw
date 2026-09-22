@@ -18,20 +18,17 @@ import {
   DEFAULT_MAX_ENTRY_BYTES,
   loadZipArchiveWithPreflight,
 } from "../infra/archive.js";
-import {
-  downloadClawHubPackageArchive,
-  normalizeClawHubSha256Integrity,
-  normalizeClawHubSha256Hex,
-} from "../infra/clawhub-artifacts.js";
+import { downloadClawHubPackageArchive } from "../infra/clawhub-artifacts.js";
 import {
   ClawHubRequestError,
   isDefaultClawHubBaseUrl,
   resolveClawHubBaseUrl,
 } from "../infra/clawhub-client.js";
+import { checkClawHubPackageTrust } from "../infra/clawhub-install-trust.js";
 import {
-  ensureClawHubPackageTrustAcknowledged,
-  type ClawHubRiskAcknowledgementRequest,
-} from "../infra/clawhub-install-trust.js";
+  normalizeClawHubSha256Integrity,
+  normalizeClawHubSha256Hex,
+} from "../infra/clawhub-integrity.js";
 import {
   fetchClawHubPackageArtifact,
   fetchClawHubPackageDetail,
@@ -63,7 +60,6 @@ import { checkMinHostVersion } from "./min-host-version.js";
 import { satisfiesPluginApiRange } from "./package-compat.js";
 
 export { CLAWHUB_INSTALL_ERROR_CODE };
-export type { ClawHubRiskAcknowledgementRequest };
 
 type PluginInstallLogger = {
   info?: (message: string) => void;
@@ -300,6 +296,7 @@ type ClawHubResolvedArtifactWire = {
   sha256?: string | null;
   npmIntegrity?: string | null;
   npmShasum?: string | null;
+  size?: number | null;
   downloadUrl?: string | null;
 };
 
@@ -320,6 +317,7 @@ function resolveTopLevelNpmPackArtifact(
     sha256: wire.artifactSha256 ?? wire.sha256 ?? null,
     npmIntegrity: wire.npmIntegrity,
     npmShasum: wire.npmShasum ?? null,
+    size: wire.size ?? null,
     downloadUrl: wire.downloadUrl ?? null,
   };
 }
@@ -856,20 +854,12 @@ async function verifyClawHubArchiveFiles(params: {
     });
     const actualFiles = new Map<string, string>();
     const validatedGeneratedPaths = new Set<string>();
-    let entryCount = 0;
     let extractedBytes = 0;
     const addArchiveBytes = (bytes: number): boolean => {
       extractedBytes += bytes;
       return extractedBytes <= DEFAULT_MAX_EXTRACTED_BYTES;
     };
     for (const entry of Object.values(zip.files as Record<string, JSZip.JSZipObject>)) {
-      entryCount += 1;
-      if (entryCount > DEFAULT_MAX_ENTRIES) {
-        return buildClawHubInstallFailure(
-          "ClawHub archive fallback verification exceeded the archive entry limit.",
-          CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-        );
-      }
       if (entry.dir) {
         continue;
       }
@@ -1234,9 +1224,9 @@ export async function installPluginFromClawHub(
     expectedPluginId?: string;
     expectedIntegrity?: string;
     env?: RuntimeVersionEnv;
-    acknowledgeClawHubRisk?: boolean;
-    onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+    confirmInstall?: () => boolean | Promise<boolean>;
     onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
   },
 ): Promise<
   | ({
@@ -1322,19 +1312,20 @@ export async function installPluginFromClawHub(
   });
   const trustResult = officialClawHubPackage
     ? null
-    : await ensureClawHubPackageTrustAcknowledged({
+    : await checkClawHubPackageTrust({
         subject: { kind: "plugin", packageName: canonicalPackageName },
         version: versionState.version,
         baseUrl: params.baseUrl,
         token: params.token,
         timeoutMs: params.timeoutMs,
-        acknowledgeClawHubRisk: params.acknowledgeClawHubRisk,
-        onClawHubRisk: params.onClawHubRisk,
         logger: params.logger,
         mode: params.mode,
       });
   if (trustResult && !trustResult.ok) {
     return trustResult;
+  }
+  if (params.mode !== "update" && params.confirmInstall && !(await params.confirmInstall())) {
+    return buildClawHubInstallFailure("Install cancelled.");
   }
   if (!versionState.verification && !expectedClawPackSha256) {
     return buildClawHubInstallFailure(
@@ -1461,7 +1452,6 @@ export async function installPluginFromClawHub(
     const installResult = await installPluginFromArchive(
       copyPluginInstallTransactionRequest(params, {
         archivePath: archive.archivePath,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
         trustedSourceLinkedOfficialInstall:
           officialClawHubPackage || isTrustedSourceLinkedOfficialPackage(detail.package!),
@@ -1472,7 +1462,21 @@ export async function installPluginFromClawHub(
         timeoutMs: params.timeoutMs,
         dryRun: params.dryRun,
         expectedPluginId: runtimeIdResolution.expectedPluginId,
-        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+        beforePersistentApply: params.beforePersistentApply,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit
+          ? (artifact) =>
+              params.onBeforePluginArtifactCommit!({
+                ...artifact,
+                sourceRecord: {
+                  source: "clawhub",
+                  spec: params.spec,
+                  clawhubUrl: clawhubRegistry,
+                  clawhubPackage: canonicalPackageName,
+                  clawhubChannel: detail.package!.channel,
+                  integrity: archive.integrity,
+                },
+              })
+          : undefined,
         installPolicyRequest: {
           kind: "plugin-archive",
           requestedSpecifier: params.spec,

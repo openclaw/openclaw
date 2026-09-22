@@ -1,22 +1,27 @@
+import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { acknowledgeInternalToolResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { isTerminalCodexTurnNotificationForTurn } from "./attempt-notification-state.js";
 import {
-  applyCodexTurnNotificationState,
-  isTerminalCodexTurnNotificationForTurn,
-} from "./attempt-notification-state.js";
-import {
-  describeNotificationActivity,
-  isAssistantCompletionReleaseNotification,
+  isCodexTurnAbortMarkerNotification,
+  isPendingOpenClawDynamicToolCompletionNotification,
   isRawFunctionToolOutputCompletionNotification,
   readCodexNotificationItem,
+  readNotificationItemId,
   readRawResponseToolCallId,
+  updateActiveTurnItemIds,
 } from "./attempt-notifications.js";
+import { isCodexNotificationForTurn } from "./notification-correlation.js";
 import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import type { CodexServerNotification } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { readCodexFinalizationHookNotification } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS } from "./turn-router.js";
+import {
+  CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS,
+  waitForPromiseOrAbort,
+} from "./turn-router.js";
 import type { CodexThreadRouteScope } from "./turn-router.js";
 
 export function createCodexAttemptNotificationController(
@@ -27,28 +32,49 @@ export function createCodexAttemptNotificationController(
   const { prompt, state: resourceState, projectorRef, registerNativeSubagentMonitor } = resources;
   const { context, turnState } = prompt;
   const { attemptTools, runtime } = context;
-  const { connection } = runtime;
-  const { appServer, runAbortController } = connection;
+  const { appServer, runAbortController } = runtime.connection;
   const { allocateCodexToolOutcomeOrdinal } = attemptTools;
   const {
     state,
     turnIdRef,
     userInputBridgeRef,
     steeringQueueRef,
-    turnWatches,
     activeTurnItemIds,
-    activeCompletionBlockerItemIds,
-    activeFinalizationHookRunIds,
-    finalizationHookBatchStatuses,
     pendingOpenClawDynamicToolCompletionIds,
-    postToolRawAssistantCompletionIdleTimeoutMs,
+    openClawDynamicToolExecutions,
     completeTurn,
+    noteProgress,
+    deadlines,
   } = turnRuntime;
   const {
     scheduleTerminalDynamicToolReleaseCheck,
     reportExecutionNotification,
     maybeAnnounceFastModeAutoOff,
   } = lifecycle;
+  const pendingNativeCommandItems = new Set<string>();
+  const nativeItemObservers = new Set<() => void>();
+  const waitForNativeTerminalItems = async (signal: AbortSignal) => {
+    // Exited commands disappear from native inventory before their final item arrives.
+    // Receipt-owned command facts exclude older turns and withheld dynamic replies.
+    if (pendingNativeCommandItems.size === 0) {
+      return;
+    }
+    const completion = createDeferred<void>();
+    const observe = () => {
+      if (pendingNativeCommandItems.size === 0) {
+        completion.resolve();
+      }
+    };
+    nativeItemObservers.add(observe);
+    try {
+      observe();
+      if (!(await waitForPromiseOrAbort(completion.promise, signal))) {
+        signal.throwIfAborted();
+      }
+    } finally {
+      nativeItemObservers.delete(observe);
+    }
+  };
   const isTerminalTurnNotificationForTurn = (
     notification: CodexServerNotification,
     notificationTurnId: string,
@@ -59,9 +85,11 @@ export function createCodexAttemptNotificationController(
       turnId: notificationTurnId,
     });
   const handleNotification = async (notification: CodexServerNotification) => {
+    if (state.projectionClosed) {
+      return;
+    }
     const projector = projectorRef.current;
     const turnId = turnIdRef.current;
-    const steeringQueue = steeringQueueRef.current;
     userInputBridgeRef.current?.handleNotification(notification);
     if (!projector || !turnId) {
       if (notification.method === "error") {
@@ -69,88 +97,78 @@ export function createCodexAttemptNotificationController(
       }
       return;
     }
-    if (
-      (state.timedOut || state.localCompletionRequested) &&
-      notification.method === "turn/completed" &&
-      readCodexTurnCompletedNotification(notification.params)?.turn.status === "interrupted"
-    ) {
-      // Our cleanup interrupt proves the native turn ended; it must not replace
-      // an already-owned final answer, yield result, or recorded response usage.
-      completeTurn();
-      return;
-    }
-    const notificationState = applyCodexTurnNotificationState({
-      notification,
-      threadId: resourceState.thread.threadId,
-      turnId,
-      currentPromptTexts: [turnState.codexTurnPromptText],
-      turnWatches,
-      activeTurnItemIds,
-      activeCompletionBlockerItemIds,
-      activeAppServerTurnRequests: state.activeAppServerTurnRequests,
-      pendingOpenClawDynamicToolCompletionIds,
-      turnCrossedToolHandoff: state.turnCrossedToolHandoff,
-      postToolRawAssistantCompletionIdleTimeoutMs,
-      onScheduleTerminalDynamicToolReleaseCheck: scheduleTerminalDynamicToolReleaseCheck,
-      onReportExecutionNotification: reportExecutionNotification,
-    });
-    state.turnCrossedToolHandoff = notificationState.turnCrossedToolHandoff;
-    if (notificationState.isCurrentTurnNotification && notification.method === "item/completed") {
-      const item = readCodexNotificationItem(notification.params);
-      if (item?.type === "userMessage" && typeof item.clientId === "string") {
-        await steeringQueue?.confirmConsumed(item.clientId);
-      }
-    }
-    if (notificationState.isTurnAbortMarker) {
-      state.sawCodexInterruptMarker = true;
-    }
-    const hookNotification = readCodexFinalizationHookNotification(
-      notification,
+    const isCurrentTurn = isCodexNotificationForTurn(
+      notification.params,
       resourceState.thread.threadId,
       turnId,
     );
-    if (hookNotification?.phase === "started") {
-      if (activeFinalizationHookRunIds.size === 0) {
-        finalizationHookBatchStatuses.clear();
-      }
-      activeFinalizationHookRunIds.add(hookNotification.runId);
-      turnWatches.disarmAssistantCompletionIdleWatch();
+    const isTerminal = isTerminalTurnNotificationForTurn(notification, turnId);
+    if (
+      (state.timeout || state.localCompletionRequested) &&
+      isTerminal &&
+      readCodexTurnCompletedNotification(notification.params)?.turn.status === "interrupted"
+    ) {
+      // Cleanup's interrupt confirms stop; it cannot replace the result or
+      // usage already owned by an execution deadline or terminal tool.
+      completeTurn();
+      return;
     }
-    if (notificationState.isTurnTerminal) {
-      state.terminalTurnNotificationQueued = true;
-    }
+    state.activeLocalProjections += 1;
     try {
-      await projector.handleNotification(notification);
-      const canRelease =
-        isAssistantCompletionReleaseNotification(notification, state.turnCrossedToolHandoff) ||
-        (notificationState.isCurrentTurnNotification &&
-          state.turnCrossedToolHandoff &&
-          notification.method === "rawResponseItem/completed" &&
-          projector.canReleaseLatestTerminalAssistantAfterToolHandoff());
-      if (notificationState.isCurrentTurnNotification && canRelease) {
-        const itemId = projector.getLatestTerminalAssistantCandidate()?.itemId;
+      if (isCurrentTurn) {
+        updateActiveTurnItemIds(notification, activeTurnItemIds);
+        noteProgress(`notification:${notification.method}`);
+        reportExecutionNotification(notification);
         if (
-          state.rejectedFinalizationHookAssistant &&
-          itemId &&
-          itemId !== state.rejectedFinalizationHookAssistant.itemId
+          isPendingOpenClawDynamicToolCompletionNotification(
+            notification,
+            pendingOpenClawDynamicToolCompletionIds,
+          )
         ) {
-          state.rejectedFinalizationHookAssistant = undefined;
-        } else if (state.rejectedFinalizationHookAssistant) {
-          turnWatches.disarmAssistantCompletionIdleWatch();
-        } else if (
-          activeFinalizationHookRunIds.size === 0 &&
-          !state.terminalTurnNotificationQueued &&
-          state.activeAppServerTurnRequests === 0 &&
-          activeTurnItemIds.size === 0 &&
-          activeCompletionBlockerItemIds.size === 0 &&
-          pendingOpenClawDynamicToolCompletionIds.size === 0 &&
-          projector.hasLatestTerminalAssistantCandidateText()
+          const itemId = readNotificationItemId(notification);
+          if (itemId) {
+            pendingOpenClawDynamicToolCompletionIds.delete(itemId);
+          }
+        }
+        if (notification.method === "item/completed") {
+          if (activeTurnItemIds.size === 0) {
+            scheduleTerminalDynamicToolReleaseCheck();
+          }
+          const item = readCodexNotificationItem(notification.params);
+          if (item?.type === "dynamicToolCall" && typeof item.id === "string") {
+            const response = await openClawDynamicToolExecutions.get({
+              threadId: resourceState.thread.threadId,
+              turnId,
+              callId: item.id,
+            });
+            // Codex emits these fields after accepting the response; decode failures
+            // instead complete with a replacement error. A pipe write is not acceptance.
+            if (
+              response &&
+              !state.projectionClosed &&
+              !runAbortController.signal.aborted &&
+              turnIdRef.current === turnId &&
+              item.success === response.success &&
+              isDeepStrictEqual(item.contentItems, response.contentItems)
+            ) {
+              acknowledgeInternalToolResult(response);
+            }
+          }
+          if (item?.type === "userMessage" && typeof item.clientId === "string") {
+            steeringQueueRef.current?.confirmConsumed(item.clientId);
+          }
+        }
+        if (
+          isCodexTurnAbortMarkerNotification(notification, {
+            currentPromptTexts: [turnState.codexTurnPromptText],
+          })
         ) {
-          turnWatches.armAssistantCompletionIdleWatch(describeNotificationActivity(notification));
+          state.sawCodexInterruptMarker = true;
         }
       }
+      await projector.handleNotification(notification);
       if (
-        notificationState.isCurrentTurnNotification &&
+        isCurrentTurn &&
         activeTurnItemIds.size === 0 &&
         isRawFunctionToolOutputCompletionNotification(notification)
       ) {
@@ -162,44 +180,20 @@ export function createCodexAttemptNotificationController(
         error,
       });
     } finally {
-      if (hookNotification?.phase === "completed") {
-        state.unsettledFinalizationHookCount = Math.max(
-          0,
-          state.unsettledFinalizationHookCount - 1,
-        );
-        activeFinalizationHookRunIds.delete(hookNotification.runId);
-        finalizationHookBatchStatuses.set(hookNotification.runId, hookNotification.status);
-        if (activeFinalizationHookRunIds.size === 0) {
-          const statuses = new Set(finalizationHookBatchStatuses.values());
-          if (statuses.has("blocked") && !statuses.has("stopped")) {
-            const itemId = projector.getLatestTerminalAssistantCandidate()?.itemId;
-            state.rejectedFinalizationHookAssistant = itemId ? { itemId } : {};
-            turnWatches.disarmAssistantCompletionIdleWatch();
-          } else {
-            state.rejectedFinalizationHookAssistant = undefined;
-          }
-        }
-        if (
-          activeFinalizationHookRunIds.size === 0 &&
-          state.rejectedFinalizationHookAssistant === undefined &&
-          !state.terminalTurnNotificationQueued &&
-          state.activeAppServerTurnRequests === 0 &&
-          activeTurnItemIds.size === 0 &&
-          activeCompletionBlockerItemIds.size === 0 &&
-          pendingOpenClawDynamicToolCompletionIds.size === 0 &&
-          projector.hasLatestTerminalAssistantCandidateText()
-        ) {
-          turnWatches.armAssistantCompletionIdleWatch({
-            lastNotificationMethod: notification.method,
-            hookRunId: hookNotification.runId,
-            hookStatus: hookNotification.status,
-          });
+      state.activeLocalProjections -= 1;
+      if (isCurrentTurn && notification.method === "item/completed") {
+        const item = readCodexNotificationItem(notification.params);
+        if (item?.type === "commandExecution" && typeof item.id === "string") {
+          pendingNativeCommandItems.delete(item.id);
         }
       }
-      if (notificationState.isTurnTerminal) {
+      for (const observe of nativeItemObservers) {
+        observe();
+      }
+      if (isTerminal) {
         const completedTurn = readCodexTurnCompletedNotification(notification.params)?.turn;
-        // App-server collapses abort reasons; interrupted plus this marker is the
-        // only user-interrupt discriminator until Codex exposes abortReason.
+        // App-server collapses abort reasons; the marker preserves explicit
+        // native user interruption without treating marker text as terminal.
         if (completedTurn?.status === "interrupted" && state.sawCodexInterruptMarker) {
           projector.markAborted();
         }
@@ -233,12 +227,18 @@ export function createCodexAttemptNotificationController(
   ) => {
     const projector = projectorRef.current;
     const turnId = turnIdRef.current;
-    if (!projector || !turnId) {
+    if (!projector || !turnId || state.projectionClosed) {
       return;
     }
+    projector.recordMcpToolCallReceipt(notification);
     if (isTerminalTurnNotificationForTurn(notification, turnId)) {
+      const completed = readCodexTurnCompletedNotification(notification.params);
+      if (completed) {
+        projector.settlement.terminalReceipt = completed.turn;
+      }
       state.terminalTurnNotificationQueued = true;
       steeringQueueRef.current?.sealAdmission();
+      deadlines.beginSettlement(receivedAtMs);
     }
     if (scope.turnId === turnId) {
       const modelToolCallId = readRawResponseToolCallId(notification);
@@ -246,20 +246,19 @@ export function createCodexAttemptNotificationController(
         allocateCodexToolOutcomeOrdinal?.(modelToolCallId);
       }
       const nativeItem = readCodexNotificationItem(notification.params);
+      if (
+        notification.method === "item/started" &&
+        nativeItem?.type === "commandExecution" &&
+        typeof nativeItem.id === "string"
+      ) {
+        pendingNativeCommandItems.add(nativeItem.id);
+      }
       if (nativeItem?.type === "webSearch") {
+        // Native result provenance must survive an abandoned transcript projection.
+        projector.settlement.turnTainted ||= notification.method === "item/completed";
         projector.recordNativeToolOutcome(nativeItem);
       }
     }
-    const hookNotification = readCodexFinalizationHookNotification(
-      notification,
-      resourceState.thread.threadId,
-      turnId,
-    );
-    if (hookNotification?.phase === "started") {
-      state.unsettledFinalizationHookCount += 1;
-      turnWatches.disarmAssistantCompletionIdleWatch();
-    }
-    turnWatches.noteNotificationReceived(notification.method, { receivedAtMs });
   };
   const enqueueNotification = async (
     notification: CodexServerNotification,
@@ -277,6 +276,7 @@ export function createCodexAttemptNotificationController(
   registerNativeSubagentMonitor(resourceState.thread.threadId);
   return {
     waitForActiveNativeTurnCompletion,
+    waitForNativeTerminalItems,
     noteNotificationReceived,
     enqueueNotification,
     drainNotificationQueue,

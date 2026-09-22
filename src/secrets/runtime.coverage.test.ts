@@ -4,13 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadBundledPluginPublicSurface } from "../plugin-sdk/test-helpers/public-surface-loader.js";
 import type {
   PluginOrigin,
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
 } from "../plugins/types.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
 
 const COVERAGE_WEB_PROVIDER_PLUGIN_IDS = vi.hoisted(() => ({
@@ -917,7 +918,7 @@ describe("secrets runtime target coverage", () => {
           async (channelId) =>
             [
               channelId,
-              await loadBundledPluginPublicSurface<object>({
+              await loadBundledPluginFacade<object>({
                 pluginId: channelId,
                 artifactBasename: "secret-contract-api.js",
               }),
@@ -968,10 +969,7 @@ describe("secrets runtime target coverage", () => {
       async ({ batch }) => {
         logCoverageBatch("auth-profiles.json", batch);
         const env: Record<string, string> = {};
-        const authStore: AuthProfileStore = {
-          version: 1,
-          profiles: {},
-        };
+        const authStore: AuthProfileStore = createAuthProfileStoreFixture({});
         for (const [index, entry] of batch.entries()) {
           const envId = toCoverageEnvRefId("OPENCLAW_AUTH_SECRET_TARGET", entry.id);
           env[envId] = `resolved-${entry.id}`;

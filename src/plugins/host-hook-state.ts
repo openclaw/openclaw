@@ -1,4 +1,3 @@
-// Tracks host hook state and scheduled turn identifiers.
 import { randomUUID } from "node:crypto";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -20,7 +19,7 @@ import {
   type PluginSessionExtensionProjection,
   type PluginSessionExtensionRegistration,
 } from "./host-hooks.js";
-import { getActivePluginRegistry, getActivePluginSessionExtensionRegistry } from "./runtime.js";
+import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
 const log = createSubsystemLogger("plugins/host-hook-state");
@@ -151,7 +150,8 @@ export async function enqueuePluginNextTurnInjection(params: {
     injection: { ...params.injection, sessionKey, text },
     now,
   });
-  const updated = await updateResolvedSessionEntry({ cfg: params.cfg, sessionKey }, (entry) => {
+  const scope = { cfg: params.cfg, sessionKey, agentId: params.injection.agentId };
+  const updated = await updateResolvedSessionEntry(scope, (entry) => {
     let enqueued = false;
     let resultId = record.id;
     const injections = { ...entry.pluginNextTurnInjections };
@@ -187,16 +187,15 @@ export async function enqueuePluginNextTurnInjection(params: {
   return { ...updated.result, sessionKey: updated.canonicalKey };
 }
 
-async function drainPluginNextTurnInjections(params: {
-  cfg: OpenClawConfig;
-  sessionKey?: string;
-  now?: number;
-}): Promise<PluginNextTurnInjectionRecord[]> {
+async function drainPluginNextTurnInjections(
+  params: Parameters<typeof drainPluginNextTurnInjectionContext>[0],
+): Promise<PluginNextTurnInjectionRecord[]> {
   const sessionKey = params.sessionKey?.trim();
   if (!sessionKey) {
     return [];
   }
-  const target = resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey });
+  const scope = { cfg: params.cfg, sessionKey, agentId: params.agentId };
+  const target = resolveSessionEntryAccessTarget(scope);
   if (!target.entry) {
     return [];
   }
@@ -211,12 +210,12 @@ async function drainPluginNextTurnInjections(params: {
     return [];
   }
   const now = params.now ?? Date.now();
-  const updated = await updateResolvedSessionEntry({ cfg: params.cfg, sessionKey }, (entry) => {
+  const updated = await updateResolvedSessionEntry(scope, (entry) => {
     if (!entry?.pluginNextTurnInjections) {
       return [];
     }
     const activePluginIds = new Set(
-      (getActivePluginRegistry()?.plugins ?? [])
+      (getPluginRegistryForContext()?.plugins ?? [])
         .filter((plugin) => plugin.status === "loaded")
         .map((plugin) => plugin.id),
     );
@@ -250,6 +249,7 @@ async function drainPluginNextTurnInjections(params: {
 export async function drainPluginNextTurnInjectionContext(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   now?: number;
 }): Promise<PluginAgentTurnPrepareResult & { queuedInjections: PluginNextTurnInjectionRecord[] }> {
   const queuedInjections = await drainPluginNextTurnInjections(params);
@@ -263,13 +263,18 @@ export function getPluginSessionExtensionStateSync(params: {
   cfg: OpenClawConfig;
   pluginId: string;
   sessionKey?: string;
+  agentId?: string;
 }): Record<string, PluginJsonValue> | undefined {
   const pluginId = params.pluginId.trim();
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!pluginId || !sessionKey) {
     return undefined;
   }
-  const target = resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey });
+  const target = resolveSessionEntryAccessTarget({
+    cfg: params.cfg,
+    sessionKey,
+    agentId: params.agentId,
+  });
   const value = target.entry?.pluginExtensions?.[pluginId] as
     | Record<string, PluginJsonValue>
     | undefined;
@@ -301,7 +306,7 @@ export async function patchPluginSessionExtension(params: {
     return { ok: false, error: "plugin session extension value is required unless unset is true" };
   }
   const nextPluginValue = params.value as PluginJsonValue;
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
   const registration = (registry?.sessionExtensions ?? []).find(
     (entry) => entry.pluginId === pluginId && entry.extension.namespace === namespace,
   );
@@ -324,7 +329,7 @@ export async function patchPluginSessionExtension(params: {
     {
       cfg: params.cfg,
       sessionKey: params.sessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
+      agentId: params.agentId,
     },
     (entry, context) => {
       params.assertCurrent?.();
@@ -429,7 +434,7 @@ function collectPluginSessionExtensionProjections(params: {
   sessionKey: string;
   entry: SessionEntry;
 }): PluginSessionExtensionProjection[] {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
   const extensions = registry?.sessionExtensions ?? [];
   if (extensions.length === 0) {
     return [];

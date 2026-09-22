@@ -1,5 +1,6 @@
 // Pins scheduled restart ordering against the reversible host-suspension fence.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewayWorkAdmissionClosed,
@@ -173,10 +174,7 @@ describe("scheduled restart during gateway suspension", () => {
 
   it("reports active work while a due restart is preparing to emit", async () => {
     const emitSpy = vi.spyOn(process, "emit");
-    let releasePreparation: () => void = () => {};
-    const preparation = new Promise<void>((resolve) => {
-      releasePreparation = resolve;
-    });
+    const { promise: preparation, resolve: releasePreparation } = createDeferred();
     scheduleGatewaySigusr1Restart({
       delayMs: 0,
       reason: "config.patch",
@@ -277,10 +275,7 @@ describe("scheduled restart during gateway suspension", () => {
     const emitSpy = vi.spyOn(process, "emit");
     const preparationStarted = vi.fn();
     const afterEmitRejected = vi.fn();
-    let releasePreparation = () => {};
-    const preparation = new Promise<void>((resolve) => {
-      releasePreparation = resolve;
-    });
+    const { promise: preparation, resolve: releasePreparation } = createDeferred();
     scheduleGatewaySigusr1Restart({
       delayMs: 0,
       skipCooldown: true,

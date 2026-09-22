@@ -1,43 +1,41 @@
-import {
-  GATEWAY_SERVER_CAPS,
-  type TaskSuggestion,
-  type TaskSuggestionEvent,
-  type TaskSuggestionsAcceptResult,
-  type TaskSuggestionsListResult,
+import type {
+  TaskSuggestion,
+  TaskSuggestionEvent,
+  TaskSuggestionsAcceptResult,
+  TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  isGatewayCapabilityAdvertised,
-  isGatewayMethodAdvertised,
-} from "../../lib/gateway-methods.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import {
-  taskSuggestionAcceptParams,
-  type TaskSuggestionAcceptMode,
-} from "../../lib/task-suggestion-acceptance.ts";
-import { discoverPlaceCatalog } from "../new-session/cloud-profile-discovery.ts";
 import { ChatPaneSharing } from "./chat-pane-sharing.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import type { TaskSuggestionStartMode } from "./components/chat-task-suggestions.ts";
 
 export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
   protected taskSuggestions: TaskSuggestion[] = [];
   protected readonly taskSuggestionBusyIds = new Set<string>();
   protected readonly taskSuggestionCopiedIds = new Set<string>();
-  protected readonly taskSuggestionOperations = new Map<string, symbol>();
+  protected readonly taskSuggestionOperations = new Map<
+    string,
+    { action: "accept" | "dismiss"; resolved: boolean }
+  >();
   protected taskSuggestionsRequestVersion = 0;
-  protected taskSuggestionCloudProfiles: Array<{ id: string }> = [];
-  protected taskSuggestionCloudProfileGeneration = -1;
   protected activeTaskSuggestionId: string | undefined;
   protected taskSuggestionSwapDirection: "next" | "previous" | undefined;
   protected taskSuggestionSwapGeneration = 0;
+  private explicitReadScope: string | undefined;
 
   protected setTaskSuggestions(suggestions: TaskSuggestion[]): void {
-    this.taskSuggestions = suggestions;
-    if (!suggestions.some((suggestion) => suggestion.id === this.activeTaskSuggestionId)) {
-      this.activeTaskSuggestionId = suggestions[0]?.id;
+    // Pending dismissals stay hidden when events or list snapshots arrive.
+    const visible = suggestions.filter(
+      (suggestion) => this.taskSuggestionOperations.get(suggestion.id)?.action !== "dismiss",
+    );
+    this.taskSuggestions = visible;
+    if (!visible.some((suggestion) => suggestion.id === this.activeTaskSuggestionId)) {
+      this.activeTaskSuggestionId = visible[0]?.id;
       this.taskSuggestionSwapDirection = undefined;
     }
   }
@@ -72,41 +70,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     });
   };
 
-  protected resetTaskSuggestionCloudProfiles(): void {
-    this.taskSuggestionCloudProfiles = [];
-    this.taskSuggestionCloudProfileGeneration = -1;
-  }
-
-  protected async ensureTaskSuggestionCloudProfiles(): Promise<void> {
-    const scope = this.captureConnectionScope();
-    if (
-      !scope ||
-      this.taskSuggestions.length === 0 ||
-      this.taskSuggestionCloudProfileGeneration === scope.generation ||
-      !hasOperatorAdminAccess(scope.context.gateway.snapshot.hello?.auth ?? null) ||
-      isGatewayMethodAdvertised(scope.context.gateway.snapshot, "taskSuggestions.accept") !== true
-    ) {
-      return;
-    }
-    // Profile metadata is connection-stable. Mark the generation before the
-    // request so repeated renders cannot turn this optional affordance into polling.
-    this.taskSuggestionCloudProfileGeneration = scope.generation;
-    if (isGatewayMethodAdvertised(scope.context.gateway.snapshot, "environments.list") !== true) {
-      return;
-    }
-    try {
-      const { profiles } = await discoverPlaceCatalog(scope.client, true, true);
-      if (!this.isConnectionScopeCurrent(scope)) {
-        return;
-      }
-      this.taskSuggestionCloudProfiles = profiles.map((profile) => ({ id: profile.id }));
-      this.requestUpdate();
-    } catch {
-      // Cloud is optional; a failed one-shot discovery leaves the disabled hint.
-    }
-  }
-
-  protected async refreshTaskSuggestions(): Promise<void> {
+  protected async refreshTaskSuggestions(options?: { automatic?: boolean }): Promise<void> {
     const requestVersion = ++this.taskSuggestionsRequestVersion;
     const scope = this.captureConnectionScope();
     if (
@@ -124,6 +88,14 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       return;
     }
     const agentId = resolveChatAgentId(scope.state);
+    const readScope = JSON.stringify([this.connectionGeneration, sessionKey, agentId]);
+    if (options?.automatic) {
+      if (!this.secondarySessionReadsReady(this.explicitReadScope === readScope)) {
+        return;
+      }
+    } else {
+      this.explicitReadScope = readScope;
+    }
     try {
       const result = await scope.client.request<TaskSuggestionsListResult>("taskSuggestions.list", {
         agentId,
@@ -141,7 +113,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       this.requestUpdate();
     } catch {
       // Suggestions are an optional ephemeral affordance; chat remains usable
-      // when an older Gateway or a reconnect loses the process-local registry.
+      // when a reconnect loses the process-local registry.
       // Keep event-delivered cards when a background reconciliation fails.
     }
   }
@@ -156,20 +128,23 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         ...this.taskSuggestions.filter((item) => item.id !== event.suggestion.id),
       ]);
     } else {
+      const operation = this.taskSuggestionOperations.get(event.taskId);
+      if (operation) {
+        operation.resolved = true;
+      }
       this.setTaskSuggestions(this.taskSuggestions.filter((item) => item.id !== event.taskId));
       this.taskSuggestionBusyIds.delete(event.taskId);
     }
     this.requestUpdate();
     // The replacement snapshot includes the event plus unrelated suggestions;
     // its request version prevents any older snapshot from overwriting either.
-    void this.refreshTaskSuggestions();
+    void this.refreshTaskSuggestions({ automatic: true });
   }
 
   protected readonly acceptTaskSuggestion = (
     suggestion: TaskSuggestion,
-    mode: TaskSuggestionAcceptMode,
-    cloudProfileId?: string,
-  ): Promise<void> => this.resolveTaskSuggestion(suggestion, "accept", mode, cloudProfileId);
+    mode: TaskSuggestionStartMode = "local",
+  ): Promise<void> => this.resolveTaskSuggestion(suggestion, "accept", mode);
 
   protected readonly dismissTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
     this.resolveTaskSuggestion(suggestion, "dismiss");
@@ -224,14 +199,8 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       onResolveSessionSuggestion: this.resolveCurrentSessionSuggestion.bind(this),
       canAcceptTaskSuggestions:
         canAdmin && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.accept") === true,
-      canAcceptTaskSuggestionModes:
-        isGatewayCapabilityAdvertised(
-          gatewaySnapshot,
-          GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
-        ) === true,
       canDismissTaskSuggestions:
         canWrite && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.dismiss") === true,
-      taskSuggestionCloudProfiles: this.taskSuggestionCloudProfiles,
       taskSuggestionCopiedIds: this.taskSuggestionCopiedIds,
       onCopyTaskSuggestionPrompt: this.copyTaskSuggestionPrompt,
       onAcceptTaskSuggestion: this.acceptTaskSuggestion,
@@ -242,8 +211,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
   protected async resolveTaskSuggestion(
     suggestion: TaskSuggestion,
     action: "accept" | "dismiss",
-    mode: TaskSuggestionAcceptMode = "worktree",
-    cloudProfileId?: string,
+    mode: TaskSuggestionStartMode = "local",
   ): Promise<void> {
     const scope = this.captureConnectionScope();
     if (
@@ -254,20 +222,26 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    const operation = Symbol("task-suggestion-operation");
+    const operation = { action, resolved: false };
+    const originalIndex = this.taskSuggestions.findIndex((item) => item.id === suggestion.id);
     const isCurrent = () =>
       this.isConnectionScopeCurrent(scope) &&
       scope.state.sessionKey === sessionKey &&
       this.taskSuggestionOperations.get(suggestion.id) === operation;
     this.taskSuggestionOperations.set(suggestion.id, operation);
-    this.taskSuggestionBusyIds.add(suggestion.id);
+    if (action === "dismiss") {
+      this.setTaskSuggestions(this.taskSuggestions);
+    } else {
+      this.taskSuggestionBusyIds.add(suggestion.id);
+    }
     this.requestUpdate();
+    let restoreDismissed = false;
     try {
       let acceptedKey: string | undefined;
       if (action === "accept") {
         const result = await scope.client.request<TaskSuggestionsAcceptResult>(
           "taskSuggestions.accept",
-          taskSuggestionAcceptParams(suggestion.id, mode, cloudProfileId),
+          { taskId: suggestion.id, mode },
         );
         acceptedKey = result.key;
       } else {
@@ -284,6 +258,13 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       if (!isCurrent()) {
         return;
       }
+      if (action === "dismiss") {
+        // A resolved event confirms removal even if its RPC response was lost.
+        if (operation.resolved) {
+          return;
+        }
+        restoreDismissed = originalIndex >= 0;
+      }
       scope.state.lastError = formatUiError(error);
       scope.state.chatError = scope.state.lastError;
     } finally {
@@ -291,7 +272,17 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         this.taskSuggestionOperations.delete(suggestion.id);
         this.taskSuggestionBusyIds.delete(suggestion.id);
         if (this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
+          if (restoreDismissed) {
+            const restored = [...this.taskSuggestions];
+            restored.splice(originalIndex, 0, suggestion);
+            this.setTaskSuggestions(restored);
+          }
           this.requestUpdate();
+          if (action === "dismiss") {
+            // Replace stale reads after every outcome, including refused dismissals,
+            // so another card's completion cannot discard their reconciliation.
+            void this.refreshTaskSuggestions();
+          }
         }
       }
     }

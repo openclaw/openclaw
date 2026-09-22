@@ -87,7 +87,7 @@ describe("Signal approval reaction durable replay", () => {
             applied: true,
             approval: { status: "allowed", decision: "allow-once" },
           });
-        registerSignalApprovalReactionTarget({
+        await registerSignalApprovalReactionTarget({
           accountId: "default",
           // normalizeE164 preserves '+', matching the conversationKey the handler
           // derives from the sender (signal:+15550001111).

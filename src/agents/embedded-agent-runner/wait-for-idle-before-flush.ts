@@ -2,15 +2,17 @@
  * Waits for tool-result streams to become idle before flushing output.
  */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import type { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
+import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 
 type IdleAwareAgent = {
   waitForIdle?: (() => Promise<void>) | undefined;
 };
 
-type ToolResultFlushManager = {
-  flushPendingToolResults?: (() => void) | undefined;
-  clearPendingToolResults?: (() => void) | undefined;
-};
+type ToolResultFlushManager = Pick<
+  ReturnType<typeof guardSessionManager>,
+  "getSessionTarget" | "hasPendingToolResults" | "flushPendingToolResults"
+>;
 
 const DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 
@@ -58,5 +60,11 @@ export async function flushPendingToolResultsAfterIdle(opts: {
       opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS,
     );
   }
-  opts.sessionManager?.flushPendingToolResults?.();
+  const { sessionManager } = opts;
+  if (
+    sessionManager?.flushPendingToolResults &&
+    sessionManager.hasPendingToolResults?.() !== false
+  ) {
+    await withSessionManagerWrite(sessionManager, () => sessionManager.flushPendingToolResults?.());
+  }
 }

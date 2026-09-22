@@ -1,6 +1,7 @@
 // Webhooks TaskFlow E2E covers route-bound child cancellation on a real Gateway listener.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
 import {
   createPluginStateKeyedStoreForTests,
@@ -18,7 +19,6 @@ import {
 import { createTestAdmittedRunContext } from "../../../../src/agents/admitted-run-context.test-support.js";
 import { cancelBackgroundExecSession } from "../../../../src/agents/bash-process-control.js";
 import { killSubagentRunAdmin } from "../../../../src/agents/subagents/registry/subagent-control.js";
-import { testing as subagentControlTesting } from "../../../../src/agents/subagents/registry/subagent-control.test-support.js";
 import { getSubagentRunByRunId } from "../../../../src/agents/subagents/registry/subagent-registry.js";
 import {
   addSubagentRunForTests,
@@ -73,13 +73,6 @@ type WebhookResponse = {
 };
 
 beforeEach(() => {
-  // Keep the real registry and kill lifecycle while injecting the process facts
-  // that this isolated Gateway has no embedded model run or persisted session for.
-  subagentControlTesting.setDepsForTest({
-    abortEmbeddedAgentRun: () => false,
-    isEmbeddedAgentRunActive: () => false,
-    clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
-  });
   subagentRegistryTesting.setDepsForTest({
     persistSubagentRunsToDisk: () => {},
     persistSubagentRunsToDiskOrThrow: () => {},
@@ -96,7 +89,6 @@ afterEach(() => {
   resetTaskFlowRegistryForTests({ persist: false });
   resetPluginStateStoreForTests();
   resetPluginRuntimeStateForTest();
-  subagentControlTesting.setDepsForTest();
   subagentRegistryTesting.setDepsForTest();
 });
 
@@ -182,12 +174,18 @@ async function projectChild(params: {
   expect(response).toMatchObject({ status: 200, body: { ok: true } });
 }
 
-async function readAcpTraceMethods(tracePath: string): Promise<string[]> {
+type AcpFixtureTraceEntry = {
+  method: string;
+  threadId?: string;
+  turnId?: string;
+};
+
+async function readAcpTrace(tracePath: string): Promise<AcpFixtureTraceEntry[]> {
   return (await fs.readFile(tracePath, "utf8"))
     .trim()
     .split("\n")
     .filter(Boolean)
-    .map((line) => (JSON.parse(line) as { method: string }).method);
+    .map((line) => JSON.parse(line) as AcpFixtureTraceEntry);
 }
 
 describe("webhooks TaskFlow child cancellation authority", () => {
@@ -271,12 +269,6 @@ describe("webhooks TaskFlow child cancellation authority", () => {
               stateDir: acpxStateDir,
               permissionMode: "deny-all",
               timeoutSeconds: 15,
-              agents: {
-                codex: {
-                  command: process.execPath,
-                  args: [path.resolve("node_modules/@agentclientprotocol/codex-acp/dist/index.js")],
-                },
-              },
             },
             runtime: acpxRuntime,
             registerService: (service) => {
@@ -533,8 +525,8 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             throw new Error("failed to create persisted ACP projection");
           }
 
-          const elicitationEntered = createDeferred<void>();
-          const releaseElicitation = createDeferred<void>();
+          const elicitationEntered = createDeferred();
+          const releaseElicitation = createDeferred();
           const replacementAcpTurn = acpManager.runTurn({
             admittedRunContext: createTestAdmittedRunContext(reusedAcpRunId),
             cfg: config,
@@ -563,7 +555,9 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             });
             expect(getTaskFlowById(acpReplacementFlowId)).toMatchObject({ status: "queued" });
             expect(getTaskFlowById(acpReplacementFlowId)?.cancelRequestedAt).toBeUndefined();
-            acpxMethodsBeforeRelease = await readAcpTraceMethods(acpxTracePath);
+            acpxMethodsBeforeRelease = (await readAcpTrace(acpxTracePath)).map(
+              (entry) => entry.method,
+            );
             expect(acpxMethodsBeforeRelease).toContain("turn/start");
             expect(acpxMethodsBeforeRelease).not.toContain("turn/interrupt");
           } finally {
@@ -595,8 +589,9 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             mode: "persistent",
             backendId: "acpx",
           });
-          const queuedTargetEntered = createDeferred<void>();
-          const releaseQueuedTarget = createDeferred<void>();
+          const queuedTargetEntered = createDeferred();
+          const queuedTurnOrder: string[] = [];
+          const queuedTargetEvents: AcpRuntimeEvent[] = [];
           const queuedTargetTurn = acpManager.runTurn({
             admittedRunContext: createTestAdmittedRunContext(queuedAcpRunId),
             cfg: config,
@@ -605,13 +600,32 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             text: "Keep the target active while its same-id successor queues.",
             mode: "prompt",
             requestId: queuedAcpRunId,
-            onElicitation: async () => {
+            onElicitation: async (_request, context) => {
               queuedTargetEntered.resolve();
-              await releaseQueuedTarget.promise;
-              return { action: "accept", content: { question: "cancel target" } };
+              await new Promise<void>((resolve) => {
+                if (context.signal.aborted) {
+                  resolve();
+                  return;
+                }
+                context.signal.addEventListener("abort", () => resolve(), { once: true });
+              });
+              return { action: "cancel" };
+            },
+            onEvent: (event) => {
+              queuedTargetEvents.push(event);
+              if (event.type === "done" && event.status === "cancelled") {
+                queuedTurnOrder.push("target-cancelled");
+              }
             },
           });
           await queuedTargetEntered.promise;
+          const targetTurnStart = (await readAcpTrace(acpxTracePath)).findLast(
+            (entry) => entry.method === "turn/start",
+          );
+          expect(targetTurnStart).toMatchObject({
+            threadId: expect.any(String),
+            turnId: expect.any(String),
+          });
           const queuedFlowId = await createFlow(origin, "Cancel target before queued successor");
           await projectChild({
             origin,
@@ -620,11 +634,12 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             childSessionKey: queuedAcpChild,
             runId: queuedAcpRunId,
           });
-          const interruptsBeforeQueuedCancel = (await readAcpTraceMethods(acpxTracePath)).filter(
-            (method) => method === "turn/interrupt",
+          const interruptsBeforeQueuedCancel = (await readAcpTrace(acpxTracePath)).filter(
+            (entry) => entry.method === "turn/interrupt",
           ).length;
-          const queuedSuccessorEntered = createDeferred<void>();
-          const releaseQueuedSuccessor = createDeferred<void>();
+          const queuedSuccessorEntered = createDeferred();
+          const releaseQueuedSuccessor = createDeferred();
+          const queuedSuccessorEvents: AcpRuntimeEvent[] = [];
           const queuedSuccessorTurn = acpManager.runTurn({
             admittedRunContext: createTestAdmittedRunContext(queuedAcpRunId),
             cfg: config,
@@ -634,9 +649,13 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             mode: "prompt",
             requestId: queuedAcpRunId,
             onElicitation: async () => {
+              queuedTurnOrder.push("successor-entered");
               queuedSuccessorEntered.resolve();
               await releaseQueuedSuccessor.promise;
               return { action: "accept", content: { question: "complete successor" } };
+            },
+            onEvent: (event) => {
+              queuedSuccessorEvents.push(event);
             },
           });
           const queuedCancelPromise = postWebhook(origin, {
@@ -645,28 +664,61 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           });
           await vi.waitFor(
             async () => {
-              const interruptCount = (await readAcpTraceMethods(acpxTracePath)).filter(
-                (method) => method === "turn/interrupt",
+              const interruptCount = (await readAcpTrace(acpxTracePath)).filter(
+                (entry) => entry.method === "turn/interrupt",
               ).length;
               expect(interruptCount - interruptsBeforeQueuedCancel).toBeGreaterThan(0);
             },
             { interval: 10, timeout: 10_000 },
           );
-          releaseQueuedTarget.resolve();
           const queuedCancel = await queuedCancelPromise;
           expect(queuedCancel).toMatchObject({ status: 200, body: { ok: true } });
-          const interruptsAfterTargetCancel = (await readAcpTraceMethods(acpxTracePath)).filter(
-            (method) => method === "turn/interrupt",
-          ).length;
-          expect(interruptsAfterTargetCancel - interruptsBeforeQueuedCancel).toBeGreaterThan(0);
+          const interruptsAfterTargetCancel = (await readAcpTrace(acpxTracePath)).filter(
+            (entry) => entry.method === "turn/interrupt",
+          );
+          const targetInterrupts = interruptsAfterTargetCancel.slice(interruptsBeforeQueuedCancel);
+          expect(targetInterrupts).toEqual([
+            expect.objectContaining({
+              threadId: targetTurnStart?.threadId,
+              turnId: targetTurnStart?.turnId,
+            }),
+          ]);
           await queuedTargetTurn;
+          expect(queuedTargetEvents.at(-1)).toEqual({
+            type: "done",
+            status: "cancelled",
+            stopReason: "cancelled",
+          });
           await queuedSuccessorEntered.promise;
-          const interruptsWhileSuccessorActive = (await readAcpTraceMethods(acpxTracePath)).filter(
-            (method) => method === "turn/interrupt",
-          ).length;
-          expect(interruptsWhileSuccessorActive - interruptsAfterTargetCancel).toBe(0);
+          expect(queuedTurnOrder).toEqual(["target-cancelled", "successor-entered"]);
+          const successorTurnStart = (await readAcpTrace(acpxTracePath)).findLast(
+            (entry) => entry.method === "turn/start",
+          );
+          expect(successorTurnStart?.threadId).toBe(targetTurnStart?.threadId);
+          expect(successorTurnStart?.turnId).toEqual(expect.any(String));
+          expect(successorTurnStart?.turnId).not.toBe(targetTurnStart?.turnId);
           releaseQueuedSuccessor.resolve();
           await queuedSuccessorTurn;
+          expect(queuedSuccessorEvents.at(-1)).toEqual({
+            type: "done",
+            status: "completed",
+            stopReason: "end_turn",
+          });
+          expect(
+            queuedSuccessorEvents.filter(
+              (event) =>
+                event.type === "done" &&
+                (event.status === "cancelled" ||
+                  event.stopReason === "cancel" ||
+                  event.stopReason === "cancelled"),
+            ),
+          ).toHaveLength(0);
+          const interruptsAfterSuccessor = (await readAcpTrace(acpxTracePath)).filter(
+            (entry) => entry.method === "turn/interrupt",
+          );
+          expect(
+            interruptsAfterSuccessor.filter((entry) => entry.turnId === successorTurnStart?.turnId),
+          ).toHaveLength(0);
 
           console.info(
             "webhooks-taskflow-authority-proof",
@@ -705,9 +757,10 @@ describe("webhooks TaskFlow child cancellation authority", () => {
               acpQueuedSuccessor: {
                 transport: "process",
                 httpStatus: queuedCancel.status,
-                targetInterruptRequests: interruptsAfterTargetCancel - interruptsBeforeQueuedCancel,
-                successorInterruptRequests:
-                  interruptsWhileSuccessorActive - interruptsAfterTargetCancel,
+                targetInterruptRequests: targetInterrupts.length,
+                successorInterruptRequests: interruptsAfterSuccessor.filter(
+                  (entry) => entry.turnId === successorTurnStart?.turnId,
+                ).length,
                 successorStatus: "completed",
               },
             }),

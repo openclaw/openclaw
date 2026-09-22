@@ -15,7 +15,60 @@ export const MODEL_OBSERVATION_MAX_ELEMENTS = 200;
 
 export type ComputerToolAction = ComputerUseV2ActionName;
 
-export type ComputerTarget = { nodeId: string; screenIndex: number };
+const COMPUTER_OBSERVATION_ACTIONS = new Set<string>([
+  "screenshot",
+  "wait",
+  "list_apps",
+  "list_windows",
+  "get_accessibility_tree",
+  "get_cursor_position",
+  "get_window_state",
+  "zoom",
+  "get_browser_state",
+  "get_recording_state",
+] satisfies ComputerToolAction[]);
+
+// Observations may refresh frame/ref caches, but do not perform setup or input.
+// Keep result handling and replay classification on the same action contract.
+export function isComputerObservationAction(
+  action: string | undefined,
+  dialogAction?: unknown,
+): boolean {
+  return (
+    action !== undefined &&
+    (COMPUTER_OBSERVATION_ACTIONS.has(action) ||
+      (action === "browser_dialog" && dialogAction === "inspect"))
+  );
+}
+
+/** The owner binds the execution target and revalidates its authority before every dispatch. */
+export type ComputerToolTransport = {
+  readonly computerUse?: ComputerUseCapabilityDescriptor;
+  resolveNode: (
+    query?: string,
+    signal?: AbortSignal,
+  ) => Promise<{ nodeId: string; computerUse?: ComputerUseCapabilityDescriptor }>;
+  invoke: (params: {
+    nodeId: string;
+    command: typeof COMPUTER_ACT_COMMAND | typeof SCREEN_SNAPSHOT_COMMAND;
+    commandParams: Record<string, unknown>;
+    timeoutMs?: number;
+    idempotencyKey?: string;
+    signal?: AbortSignal;
+  }) => Promise<unknown>;
+};
+
+export type ComputerHost = { host: "gateway" } | { host: "node"; nodeId: string };
+
+export type ComputerTarget = ComputerHost & { screenIndex: number };
+
+export function computerHostKey(target: ComputerHost): string {
+  return target.host === "gateway" ? "gateway" : `node:${target.nodeId}`;
+}
+
+export function computerTargetDetails(target: ComputerHost) {
+  return target.host === "gateway" ? { target: "gateway" as const } : { node: target.nodeId };
+}
 
 export type ComputerFrame = {
   target: ComputerTarget;
@@ -33,9 +86,12 @@ export type ScreenshotCapture = {
 };
 
 export type ComputerObservationState = {
-  nodeId: string;
+  targetKey: string;
   providerGeneration: string;
   observationId: string;
+  imageCoordinates?:
+    | { kind: "unavailable" }
+    | { kind: "available"; scaleX: number; scaleY: number };
 };
 
 export type ComputerContextEpoch = {

@@ -46,8 +46,9 @@ describe("cron trigger CLI options", () => {
     }
   });
 
-  it("reads --trigger-script client-side and sends trigger metadata on add", async () => {
-    const scriptPath = path.join(fixtureRoot, "watch.js");
+  it.each(["watch.js", "watch.js "])("reads trigger file %j on add", async (fileName) => {
+    const scriptPath = path.join(fixtureRoot, fileName);
+    await fs.writeFile(path.join(fixtureRoot, "watch.js"), "json({ fire: false })", "utf8");
     await fs.writeFile(scriptPath, "  json({ fire: true })  \n", "utf8");
     const program = new Command().exitOverride();
     registerCronAddCommand(program);
@@ -86,9 +87,6 @@ describe("cron trigger CLI options", () => {
     const program = new Command().exitOverride();
     registerCronAddCommand(program);
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
-      throw new Error(`exit:${code}`);
-    });
 
     try {
       await expect(
@@ -108,7 +106,7 @@ describe("cron trigger CLI options", () => {
           ],
           { from: "user" },
         ),
-      ).rejects.toThrow("exit:1");
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining("--trigger-script must not be blank"),
@@ -116,12 +114,12 @@ describe("cron trigger CLI options", () => {
       expect(callGatewayFromCli).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();
-      exitSpy.mockRestore();
     }
   });
 
-  it("reads --script client-side and sends payload budgets on add", async () => {
-    const scriptPath = path.join(fixtureRoot, "job.js");
+  it.each(["job.js", "job.js "])("reads payload file %j and budgets on add", async (fileName) => {
+    const scriptPath = path.join(fixtureRoot, fileName);
+    await fs.writeFile(path.join(fixtureRoot, "job.js"), "return { notify: 'wrong file' }", "utf8");
     await fs.writeFile(scriptPath, "  return { notify: 'done' }  \n", "utf8");
     const program = new Command().exitOverride();
     registerCronAddCommand(program);
@@ -176,9 +174,6 @@ describe("cron trigger CLI options", () => {
     const program = new Command().exitOverride();
     registerCronAddCommand(program);
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
-      throw new Error(`exit:${code}`);
-    });
 
     try {
       await expect(
@@ -186,7 +181,7 @@ describe("cron trigger CLI options", () => {
           ["add", "--name", "script job", "--every", "30s", "--script", scriptPath, ...args],
           { from: "user" },
         ),
-      ).rejects.toThrow("exit:1");
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining(
           "Use --script-timeout-seconds for script jobs, not --timeout-seconds.",
@@ -195,12 +190,16 @@ describe("cron trigger CLI options", () => {
       expect(callGatewayFromCli).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();
-      exitSpy.mockRestore();
     }
   });
 
-  it("reads script payload updates client-side", async () => {
-    const scriptPath = path.join(fixtureRoot, "edit-job.js");
+  it.each(["edit-job.js", "edit-job.js "])("reads payload file %j on edit", async (fileName) => {
+    const scriptPath = path.join(fixtureRoot, fileName);
+    await fs.writeFile(
+      path.join(fixtureRoot, "edit-job.js"),
+      "return { state: { ok: false } }",
+      "utf8",
+    );
     await fs.writeFile(scriptPath, "return { state: { ok: true } }\n", "utf8");
     const program = new Command().exitOverride();
     registerCronEditCommand(program);
@@ -291,9 +290,6 @@ describe("cron trigger CLI options", () => {
     const program = new Command().exitOverride();
     registerCronAddCommand(program);
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
-      throw new Error(`exit:${code}`);
-    });
 
     try {
       await expect(
@@ -313,7 +309,7 @@ describe("cron trigger CLI options", () => {
           ],
           { from: "user" },
         ),
-      ).rejects.toThrow("exit:1");
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining("Trigger script exceeds 65536 bytes"),
@@ -321,7 +317,6 @@ describe("cron trigger CLI options", () => {
       expect(callGatewayFromCli).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();
-      exitSpy.mockRestore();
     }
   });
 

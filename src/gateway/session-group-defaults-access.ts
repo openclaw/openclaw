@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { resolveSessionGroupMutationTargetsByName } from "./session-sharing-target-input.js";
+import { resolveSessionGroupMutationTargetsByName } from "./session-groups.js";
 import { authorizeSessionSharing, isGatewayAdmin } from "./session-sharing.js";
 import type {
   GatewaySessionStoreCache,
@@ -13,6 +13,9 @@ export function filterMutableSessionGroupRecords<T extends { name: string }>(par
   client: GatewayClient | null;
   records: readonly T[];
 }): T[] {
+  if (params.records.length === 0) {
+    return [];
+  }
   const allowed = new Set(params.records.map((record) => record.name));
   if (isGatewayAdmin(params.client)) {
     return [...params.records];

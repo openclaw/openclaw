@@ -12,9 +12,9 @@ import {
   resolveBackupAgentRoots,
   resolveRequiredBackupPath,
 } from "./backup-shared.js";
-import { verifyBackupArchive } from "./backup-verify.js";
+import { prepareBackupArchive } from "./backup-verify.js";
 import { isPathWithin } from "./cleanup-utils.js";
-import { resolveUpgradeConfigSnapshot } from "./doctor/shared/automatic-upgrade-config-repair.js";
+import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-config-repair.js";
 
 const BACKUP_RESTORE_WARNINGS = [
   "Restoring an archive is time travel: every restored state surface rolls back to the archive timestamp.",
@@ -30,16 +30,8 @@ type BackupRestoreOptions = {
   json?: boolean;
 };
 
-type BackupRestoreResult = {
-  ok: true;
-  archivePath: string;
+type BackupRestoreResult = Awaited<ReturnType<typeof prepareBackupArchive>>["result"] & {
   targetPath: string;
-  archiveRoot: string;
-  createdAt: string;
-  runtimeVersion: string;
-  assetCount: number;
-  entryCount: number;
-  symlinkCount: number;
   warnings: string[];
 };
 
@@ -54,7 +46,7 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
     );
   }
   const configSnapshot = await readConfigFileSnapshot({ observe: false });
-  const discoverySnapshot = resolveUpgradeConfigSnapshot(configSnapshot);
+  const discoverySnapshot = resolveStartupConfigSnapshot(configSnapshot);
   if (!discoverySnapshot) {
     return;
   }
@@ -98,7 +90,12 @@ async function cleanupFailedRestore(targetPath: string, created: boolean): Promi
   }
 }
 
-async function extractBackupArchive(archivePath: string, targetPath: string): Promise<void> {
+async function extractBackupArchive(
+  archivePath: string,
+  targetPath: string,
+  hardlinkTargets: ReadonlyMap<string, string>,
+  symbolicLinkPaths: ReadonlySet<string>,
+): Promise<void> {
   let extractionError: Error | undefined;
   await tar.x({
     file: archivePath,
@@ -109,6 +106,15 @@ async function extractBackupArchive(archivePath: string, targetPath: string): Pr
     // Verification catches fatal archive errors; rethrow recoverable warnings after close.
     strict: false,
     preserveOwner: false,
+    // Create links only after file writes finish; never extract through a link.
+    filter: (entryPath) => !symbolicLinkPaths.has(entryPath),
+    // node-tar calls this before its path checks and filesystem reservations.
+    onReadEntry: (entry) => {
+      const target = hardlinkTargets.get(entry.path);
+      if (target !== undefined) {
+        entry.linkpath = target;
+      }
+    },
     onwarn: (code, message, data) => {
       extractionError ??=
         data instanceof Error ? data : Object.assign(new Error(`${code}: ${message}`), data);
@@ -140,28 +146,34 @@ export async function backupRestoreCommand(
 ): Promise<BackupRestoreResult> {
   const targetPath = resolveRequiredBackupPath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
-  const verified = await verifyBackupArchive(options.archive);
+  const {
+    result: verified,
+    hardlinkTargets,
+    symbolicLinks,
+  } = await prepareBackupArchive(options.archive);
   const target = await prepareRestoreTarget(targetPath);
 
-  let extractionError: unknown;
-  let extractionFailed = false;
   try {
-    await extractBackupArchive(verified.archivePath, targetPath);
-  } catch (caughtExtractionError) {
-    extractionError = caughtExtractionError;
-    extractionFailed = true;
-  }
-  if (extractionFailed) {
-    let cleanupError: unknown;
-    let cleanupFailed = false;
+    await extractBackupArchive(
+      verified.archivePath,
+      targetPath,
+      hardlinkTargets,
+      new Set(symbolicLinks.map(({ entryPath }) => entryPath)),
+    );
+    // Materialize all parents before links: filesystem aliases then collide with
+    // directories instead of letting an earlier link redirect a later write.
+    for (const { entryPath } of symbolicLinks) {
+      await fs.mkdir(path.dirname(path.join(targetPath, entryPath)), { recursive: true });
+    }
+    for (const { entryPath, linkpath } of symbolicLinks) {
+      await fs.symlink(linkpath, path.join(targetPath, entryPath));
+    }
+  } catch (extractionError) {
     try {
       await cleanupFailedRestore(targetPath, target.created);
-    } catch (caughtCleanupError) {
-      cleanupError = caughtCleanupError;
-      cleanupFailed = true;
-    }
-    if (cleanupFailed) {
-      // Extraction stays the primary cause; cleanup rides along as the second AggregateError entry.
+    } catch (cleanupError) {
+      // Both errors are retained; extraction remains the primary cause, not cleanup.
+      // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors preserves the cleanup error.
       throw new AggregateError(
         [extractionError, cleanupError],
         `Backup restore failed and the incomplete target could not be cleaned: ${targetPath}. Cleanup error: ${formatErrorMessage(cleanupError)}`,
@@ -176,7 +188,13 @@ export async function backupRestoreCommand(
   const result: BackupRestoreResult = {
     ...verified,
     targetPath,
-    warnings: [...BACKUP_RESTORE_WARNINGS],
+    warnings: [
+      ...BACKUP_RESTORE_WARNINGS,
+      ...(verified.externalSymbolicLinks ?? []).map(
+        ({ entryPath, linkpath }) =>
+          `External link restored (target not copied through link): ${JSON.stringify(entryPath)} -> ${JSON.stringify(linkpath)}`,
+      ),
+    ],
   };
   if (options.json) {
     writeRuntimeJson(runtime, result);

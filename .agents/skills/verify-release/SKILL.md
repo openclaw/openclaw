@@ -49,10 +49,16 @@ Use these checks only for the regular orchestrated release track.
    - Get exact tag metadata from GitHub, not the local checkout when dirty:
      download `https://api.github.com/repos/openclaw/openclaw/tarball/v<VERSION>`
      into `/tmp/openclaw-v<VERSION>-src`.
-   - Count `extensions/*/package.json` with
-     `openclaw.release.publishToNpm === true` and
-     `openclaw.release.publishToClawHub === true`.
-   - Compare expected counts to workflow job counts:
+   - Derive the full expected npm and ClawHub package sets for the release track
+     with the canonical publication planners/collector from the recorded release
+     Tooling SHA, using the exact tag's package metadata.
+     Do not count raw publish flags: `openclaw.build.bundledDist === true`
+     explicitly defers external publication even when publish flags are set.
+     Record deferred package names and reasons separately.
+   - Reconcile expected package identities, versions, and counts across original
+     publication, previously published versions, and selected recovery runs using
+     immutable publication plans, registry readback, and workflow jobs. A selected
+     recovery subset must not narrow the full expected release set:
      `gh api repos/openclaw/openclaw/actions/runs/<RUN>/jobs --paginate`.
    - Each expected npm plugin must have version `<VERSION>` and
      `dist-tags.latest === <VERSION>`.
@@ -60,9 +66,11 @@ Use these checks only for the regular orchestrated release track.
    - Check the Plugin ClawHub Release workflow conclusion and publish job count.
    - Use OpenClaw itself for live registry proof:
      `openclaw plugins search <known-plugin> --json`.
-   - Install one official plugin from ClawHub in an isolated HOME:
-     `openclaw plugins install clawhub:@openclaw/matrix --pin`.
-     Prefer `matrix` unless that plugin is not in the expected set.
+   - Install one official plugin at the exact requested release version from
+     ClawHub in an isolated HOME:
+     `openclaw plugins install clawhub:@openclaw/matrix@<VERSION>`.
+     Prefer `matrix` unless that plugin is not in the expected set. ClawHub
+     versions belong in the spec; `--pin` is only supported for npm installs.
 5. Release workflows:
    - Verify conclusions for release notes evidence links:
      Full Release Validation, OpenClaw Release Checks, OpenClaw NPM Release,
@@ -117,7 +125,13 @@ After the track-specific publication checks pass:
 2. Dev Gateway live model smoke:
    - Use temp HOME/workspace, not the user's normal state:
      `HOME=/tmp/openclaw-release-smoke/home OPENCLAW_WORKSPACE=/tmp/openclaw-release-smoke/work pnpm openclaw --dev gateway run --auth none --force --verbose`.
-   - Health check via CLI: `openclaw --dev gateway health --json`.
+   - Resolve the launched Gateway's bound port from its startup output or log.
+   - For `--auth none`, require unauthenticated
+     `GET http://127.0.0.1:<PORT>/healthz` to return HTTP 200 with the exact JSON
+     object `{"ok":true,"status":"live"}`.
+   - Reserve `gateway health --json` for intentionally credentialed or
+     device-paired smoke, passing the explicit credential required by that
+     Gateway.
    - Run one Gateway-backed agent turn with inherited `OPENAI_API_KEY`, short
      prompt, explicit session key, JSON output, and a known-available model.
    - If the configured default model fails as unavailable, record that caveat
@@ -135,5 +149,5 @@ After the track-specific publication checks pass:
 - Divergent checkout caveat: say when local source SHA differs from release tag
   or origin and which live sources were used instead.
 - Smoke caveat: distinguish Gateway-backed agent success from local embedded
-  fallback. A valid Gateway smoke has health OK plus gateway log/run id for the
-  agent call.
+  fallback. A valid auth-none live smoke has the exact `/healthz` result plus a
+  successful Gateway-backed agent turn and the Gateway log/run id for that call.

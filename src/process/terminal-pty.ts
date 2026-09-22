@@ -19,14 +19,18 @@ import {
 } from "./windows-command.js";
 
 /** Live PTY handle shared by gateway terminals and node-host commands. */
-type TerminalPtyHandle = {
+export type TerminalPtySubscription = { dispose(): void };
+
+export type TerminalPtyHandle = {
   pid: number;
-  write(data: string): void;
+  write(data: string | Buffer): void;
   resize(cols: number, rows: number): void;
   pause(): void;
   resume(): void;
-  onData(listener: (chunk: string) => void): void;
-  onExit(listener: (event: { exitCode: number; signal?: number }) => void): void;
+  onData(listener: (chunk: string) => void): TerminalPtySubscription | void;
+  onExit(
+    listener: (event: { exitCode: number; signal?: number }) => void,
+  ): TerminalPtySubscription | void;
   kill(signal?: string): void;
 };
 
@@ -49,9 +53,8 @@ function resolveTerminalPtyInvocation(params: {
   file: string;
   args: string[];
   platform?: NodeJS.Platform;
-  comSpec?: string;
   env: NodeJS.ProcessEnv;
-}): { file: string; args: string[] } {
+}): { file: string; args: string[] | string } {
   const platform = params.platform ?? process.platform;
   if (!isWindowsBatchCommand(params.file, platform)) {
     return { file: params.file, args: params.args };
@@ -73,32 +76,56 @@ function resolveTerminalPtyInvocation(params: {
     return { file: invocation.command, args: invocation.argv };
   }
   return {
-    file: params.comSpec?.trim() || resolveTrustedWindowsCmdExe(platform),
-    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(params.file, params.args)],
+    file:
+      resolveEnvironmentValue(params.env, "COMSPEC")?.trim() ||
+      resolveTrustedWindowsCmdExe(platform),
+    // node-pty preserves string tails verbatim; arrays would escape the prepared cmd quotes again.
+    args: `/d /s /c ${buildWindowsCmdExeCommandLine(params.file, params.args)}`,
   };
 }
 
-export async function spawnTerminalPty(params: {
+export type TerminalPtySpawnParams = {
   file: string;
   args: string[];
   cwd?: string;
-  env: Record<string, string>;
+  env?: Record<string, string>;
+  name?: string;
   cols: number;
   rows: number;
-}): Promise<TerminalPtyHandle> {
+};
+
+export async function spawnTerminalPty(
+  params: TerminalPtySpawnParams,
+  lifecycle?: { abortSignal?: AbortSignal; assertCurrent?: () => void },
+): Promise<TerminalPtyHandle> {
+  const assertCurrent = () => {
+    lifecycle?.assertCurrent?.();
+    if (lifecycle?.abortSignal?.aborted) {
+      throw new Error("PTY construction aborted");
+    }
+  };
+  if (process.versions.bun && process.platform !== "win32") {
+    // Bun closes node-pty's nonblocking tty.ReadStream on EAGAIN, hanging up the child.
+    const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
+    assertCurrent();
+    return await spawnNodeTerminalPty(params, assertCurrent);
+  }
   const { spawn } = await import("@lydell/node-pty");
-  const env = { ...params.env };
+  const env = params.env ? { ...params.env } : undefined;
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
-  const terminalName = resolvePtyTerminalName(readPtyTerminalName(env, process.platform));
-  setPtyTerminalName({ env, name: terminalName, platform: process.platform });
-  const comSpec = resolveEnvironmentValue(env, "COMSPEC");
+  const terminalName = resolvePtyTerminalName(
+    params.name ?? readPtyTerminalName(env ?? process.env, process.platform),
+  );
+  if (env) {
+    setPtyTerminalName({ env, name: terminalName, platform: process.platform });
+  }
   const invocation = resolveTerminalPtyInvocation({
     file: params.file,
     args: params.args,
-    env,
-    ...(comSpec ? { comSpec } : {}),
+    env: env ?? process.env,
   });
+  assertCurrent();
   const pty = spawn(invocation.file, invocation.args, {
     name: terminalName,
     cols: params.cols,
@@ -110,16 +137,13 @@ export async function spawnTerminalPty(params: {
     get pid() {
       return pty.pid;
     },
-    write: (data) => pty.write(data),
+    // SAFETY: node-pty accepts Buffer input at runtime although its declaration exposes string.
+    write: (data) => pty.write(data as string),
     resize: (cols, rows) => pty.resize(cols, rows),
     pause: () => pty.pause(),
     resume: () => pty.resume(),
-    onData: (listener) => {
-      pty.onData(listener);
-    },
-    onExit: (listener) => {
-      pty.onExit(listener);
-    },
+    onData: (listener) => pty.onData(listener),
+    onExit: (listener) => pty.onExit(listener),
     kill: (signal) => killPtyTree(pty, signal),
   } satisfies TerminalPtyHandle;
 }

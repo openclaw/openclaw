@@ -2,7 +2,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { testing as externalAuthTesting } from "./auth-profiles/external-auth.test-support.js";
 import {
@@ -10,12 +10,11 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
-import {
-  planOpenClawModelsJsonWithDeps,
-  resolveProvidersForModelsJsonWithDeps,
-} from "./models-config.plan.test-support.js";
+import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
+import * as modelsConfigProviders from "./models-config.providers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js";
+import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   normalizeProviderConfigWithPlugin: vi.fn<
@@ -31,12 +30,17 @@ vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
 }));
 
+vi.mock("../plugins/provider-external-auth-core.js", () => ({
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: () => [],
+  }),
+}));
+
 // These planner tests exercise no plugin-owned auth policy. Keep their exact
 // provider markers local instead of loading the bundled plugin/runtime catalog.
 vi.mock("../plugins/provider-runtime.js", () => ({
   normalizeProviderConfigWithPlugin: providerRuntimeMocks.normalizeProviderConfigWithPlugin,
   resolveProviderConfigApiKeyWithPlugin: providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin,
-  resolveExternalAuthProfilesWithPlugins: () => [],
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));
 
@@ -60,6 +64,7 @@ vi.mock("./model-auth-env-vars.js", () => ({
 const TEST_ENV_VAR = "OPENCLAW_MODELS_CONFIG_TEST_ENV";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   providerRuntimeMocks.normalizeProviderConfigWithPlugin.mockReset();
   providerRuntimeMocks.normalizeProviderConfigWithPlugin.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReset();
@@ -124,30 +129,6 @@ function createImplicitGoogleVertexProvider(): ProviderConfig {
   };
 }
 
-async function resolveProvidersForConfigEnvTest(params: {
-  cfg: OpenClawConfig;
-  onResolveImplicitProviders: (env: NodeJS.ProcessEnv) => void;
-}) {
-  // Config env vars are materialized into the discovery env before implicit
-  // provider resolution.
-  const env = createConfigRuntimeEnv(params.cfg);
-  return await resolveProvidersForModelsJsonWithDeps(
-    {
-      cfg: params.cfg,
-      agentDir: "/tmp/openclaw-models-config-env-vars-test",
-      env,
-    },
-    {
-      resolveImplicitProviders: async ({ env: discoveryEnv }) => {
-        params.onResolveImplicitProviders(discoveryEnv);
-        return {
-          openrouter: createImplicitOpenRouterProvider(),
-        };
-      },
-    },
-  );
-}
-
 function createConfigEnvVarsConfig(): OpenClawConfig {
   return {
     models: { providers: {} },
@@ -160,18 +141,7 @@ function createConfigEnvVarsConfig(): OpenClawConfig {
   };
 }
 
-async function resolveProvidersAndCaptureDiscoveryEnv(cfg: OpenClawConfig) {
-  let discoveryEnv: NodeJS.ProcessEnv | undefined;
-  const providers = await resolveProvidersForConfigEnvTest({
-    cfg,
-    onResolveImplicitProviders: (env) => {
-      discoveryEnv = env;
-    },
-  });
-  return { discoveryEnv, providers };
-}
-
-let unauthenticatedProviderWritePlan: Awaited<ReturnType<typeof planOpenClawModelsJsonWithDeps>>;
+let unauthenticatedProviderWritePlan: Awaited<ReturnType<typeof planModelsJsonForTest>>;
 let unauthenticatedProviderParsed: { providers?: Record<string, unknown> };
 let googleVertexProfileCatalogPlan: Awaited<ReturnType<typeof planGoogleVertexProfileCatalog>>;
 
@@ -198,30 +168,21 @@ async function planGoogleVertexProfileCatalog() {
       },
     ]);
 
-    return await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: {
-          agents: {
-            defaults: {
-              models: {
-                "google-vertex/gemini-2.5-pro": {},
-              },
-              model: { primary: "google-vertex/gemini-2.5-pro" },
+    return await planModelsJsonForTest({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "google-vertex/gemini-2.5-pro": {},
             },
+            model: { primary: "google-vertex/gemini-2.5-pro" },
           },
-          models: { providers: {} },
         },
-        agentDir,
-        env: {},
-        existingRaw: "",
-        existingParsed: null,
+        models: { providers: {} },
       },
-      {
-        resolveImplicitProviders: async () => ({
-          "google-vertex": createImplicitGoogleVertexProvider(),
-        }),
-      },
-    );
+      agentDir,
+      env: {},
+    });
   } finally {
     externalAuthTesting.resetResolveExternalAuthProfilesForTest();
     clearRuntimeAuthProfileStoreSnapshots();
@@ -229,183 +190,141 @@ async function planGoogleVertexProfileCatalog() {
 }
 
 beforeAll(async () => {
-  // Reused no-auth write plan proves generated providers stay serializable
-  // even when discovery returns auth-only provider shells.
-  unauthenticatedProviderWritePlan = await planOpenClawModelsJsonWithDeps(
-    {
+  const discovery = vi.spyOn(modelsConfigProviders, "resolveImplicitProviders");
+  try {
+    // Reused no-auth write plan proves generated providers stay serializable
+    // even when discovery returns auth-only provider shells.
+    discovery.mockResolvedValue({
+      openai: createImplicitOpenAiProvider(),
+      oauth: createImplicitOpenAiProvider({ auth: "oauth" }),
+      role: createImplicitOpenAiProvider({ auth: "aws-sdk" }),
+      empty: createImplicitOpenAiProvider({ apiKey: "" }),
+      "auth-only": createImplicitOpenAiProvider({
+        baseUrl: "https://auth.example/v1",
+        api: "openai-responses",
+        models: [],
+      }),
+    });
+    unauthenticatedProviderWritePlan = await planModelsJsonForTest({
       cfg: { models: { providers: {} } },
       agentDir: "/tmp/openclaw-models-config-env-vars-test",
       env: {},
       existingRaw: "",
-      existingParsed: null,
-    },
-    {
-      resolveImplicitProviders: async () => ({
-        openai: createImplicitOpenAiProvider(),
-        "auth-only": createImplicitOpenAiProvider({
-          baseUrl: "https://auth.example/v1",
-          api: "openai-responses",
-          models: [],
-        }),
-      }),
-    },
-  );
-  if (unauthenticatedProviderWritePlan.action !== "write") {
-    throw new Error("Expected models.json write plan");
+      existingParsed: {
+        providers: {
+          retained: createImplicitOpenAiProvider({ auth: "oauth" }),
+          "empty-existing": createImplicitOpenAiProvider({ apiKey: "" }),
+        },
+      },
+    });
+    if (unauthenticatedProviderWritePlan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    unauthenticatedProviderParsed = JSON.parse(unauthenticatedProviderWritePlan.contents) as {
+      providers?: Record<string, unknown>;
+    };
+    // Retain this expensive plan so the assertion test does not repeat the same
+    // auth-profile and catalog planning pass.
+    discovery.mockResolvedValue({ "google-vertex": createImplicitGoogleVertexProvider() });
+    googleVertexProfileCatalogPlan = await planGoogleVertexProfileCatalog();
+  } finally {
+    discovery.mockRestore();
   }
-  unauthenticatedProviderParsed = JSON.parse(unauthenticatedProviderWritePlan.contents) as {
-    providers?: Record<string, unknown>;
-  };
-  // Retain this expensive plan so the assertion test does not repeat the same
-  // auth-profile and catalog planning pass.
-  googleVertexProfileCatalogPlan = await planGoogleVertexProfileCatalog();
 });
 
 describe("models-config", () => {
   it("keeps the implicit provider catalog when explicit baseUrl is blank", async () => {
-    let observedConfig: OpenClawConfig | undefined;
-    const providers = await resolveProvidersForModelsJsonWithDeps(
-      {
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "   ",
-                apiKey: "OPENAI_API_KEY",
-                models: [],
-              },
+    const discovery = vi
+      .spyOn(modelsConfigProviders, "resolveImplicitProviders")
+      .mockResolvedValue({ openai: createImplicitOpenAiProvider() });
+    const plan = await planModelsJsonForTest({
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "   ",
+              apiKey: "OPENAI_API_KEY",
+              models: [],
             },
           },
         },
-        agentDir: "/tmp/openclaw-models-config-env-vars-test",
-        env: {},
       },
-      {
-        resolveImplicitProviders: async ({ config }) => {
-          observedConfig = config;
-          return { openai: createImplicitOpenAiProvider() };
-        },
-      },
-    );
+      agentDir: "/tmp/openclaw-models-config-env-vars-test",
+      env: {},
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+    });
 
-    expect(observedConfig?.models?.providers?.openai?.baseUrl).toBeUndefined();
+    expect(discovery.mock.calls[0]?.[0].config?.models?.providers?.openai?.baseUrl).toBeUndefined();
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const { providers } = JSON.parse(plan.contents) as {
+      providers: Record<string, ProviderConfig>;
+    };
     expect(providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY");
     expect(providers.openai?.models?.[0]?.id).toBe("gpt-5.5");
   });
 
-  it("threads plugin metadata snapshots into implicit provider discovery", async () => {
-    const pluginMetadataSnapshot = {
-      index: { plugins: [{ pluginId: "zai", enabled: true }] },
-      normalizePluginId: (pluginId: string) => pluginId,
-      manifestRegistry: { plugins: [], diagnostics: [] },
-      owners: { providers: new Map() },
-    } as unknown as Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
-    let observedSnapshot:
-      | Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">
-      | undefined;
-
-    await resolveProvidersForModelsJsonWithDeps(
-      {
-        cfg: { models: { providers: {} } },
-        agentDir: "/tmp/openclaw-models-config-env-vars-test",
-        env: {},
-        pluginMetadataSnapshot,
-      },
-      {
-        resolveImplicitProviders: async ({ pluginMetadataSnapshot: receivedSnapshot }) => {
-          observedSnapshot = receivedSnapshot;
-          return {};
-        },
-      },
-    );
-
-    expect(observedSnapshot).toBe(pluginMetadataSnapshot);
-  });
-
   it("threads workspace scope into implicit provider discovery", async () => {
-    let observedWorkspaceDir: string | undefined;
+    const discovery = vi
+      .spyOn(modelsConfigProviders, "resolveImplicitProviders")
+      .mockResolvedValue({});
 
-    await resolveProvidersForModelsJsonWithDeps(
-      {
-        cfg: { models: { providers: {} } },
-        agentDir: "/tmp/openclaw-models-config-env-vars-test",
-        env: {},
-        workspaceDir: "/tmp/openclaw-workspace",
-      },
-      {
-        resolveImplicitProviders: async ({ workspaceDir }) => {
-          observedWorkspaceDir = workspaceDir;
-          return {};
-        },
-      },
+    await planModelsJsonForTest({
+      cfg: { models: { providers: {} } },
+      agentDir: "/tmp/openclaw-models-config-env-vars-test",
+      env: {},
+      workspaceDir: "/tmp/openclaw-workspace",
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+    });
+
+    expect(discovery).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-workspace" }),
     );
-
-    expect(observedWorkspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
   it("threads startup provider discovery scope into implicit provider discovery", async () => {
-    let observedProviderIds: readonly string[] | undefined;
-    let observedEntriesOnly: boolean | undefined;
-    let observedTimeoutMs: number | undefined;
+    const discovery = vi
+      .spyOn(modelsConfigProviders, "resolveImplicitProviders")
+      .mockResolvedValue({});
 
-    await resolveProvidersForModelsJsonWithDeps(
-      {
-        cfg: { models: { providers: {} } },
-        agentDir: "/tmp/openclaw-models-config-env-vars-test",
-        env: {},
+    await planModelsJsonForTest({
+      cfg: { models: { providers: {} } },
+      agentDir: "/tmp/openclaw-models-config-env-vars-test",
+      env: {},
+      providerDiscoveryProviderIds: ["openai"],
+      providerDiscoveryEntriesOnly: true,
+      providerDiscoveryTimeoutMs: 5000,
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+    });
+
+    expect(discovery).toHaveBeenCalledWith(
+      expect.objectContaining({
         providerDiscoveryProviderIds: ["openai"],
         providerDiscoveryEntriesOnly: true,
         providerDiscoveryTimeoutMs: 5000,
-      },
-      {
-        resolveImplicitProviders: async ({
-          providerDiscoveryProviderIds,
-          providerDiscoveryEntriesOnly,
-          providerDiscoveryTimeoutMs,
-        }) => {
-          observedProviderIds = providerDiscoveryProviderIds;
-          observedEntriesOnly = providerDiscoveryEntriesOnly;
-          observedTimeoutMs = providerDiscoveryTimeoutMs;
-          return {};
-        },
-      },
+      }),
     );
-
-    expect(observedProviderIds).toEqual(["openai"]);
-    expect(observedEntriesOnly).toBe(true);
-    expect(observedTimeoutMs).toBe(5000);
   });
 
   it("threads plugin metadata snapshots through models.json planning", async () => {
-    const pluginMetadataSnapshot = {
-      index: { plugins: [{ pluginId: "zai", enabled: true }] },
-      normalizePluginId: (pluginId: string) => pluginId,
-      manifestRegistry: { plugins: [], diagnostics: [] },
-      owners: { providers: new Map() },
-    } as unknown as Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
-    let observedSnapshot:
-      | Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">
-      | undefined;
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "zai" }],
+    });
+    const discovery = vi
+      .spyOn(modelsConfigProviders, "resolveImplicitProviders")
+      .mockResolvedValue({});
 
-    await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: { models: { providers: {} } },
-        agentDir: "/tmp/openclaw-models-config-env-vars-test",
-        env: {},
-        existingRaw: "",
-        existingParsed: null,
-        pluginMetadataSnapshot,
-      },
-      {
-        resolveImplicitProviders: async ({ pluginMetadataSnapshot: receivedSnapshot }) => {
-          observedSnapshot = receivedSnapshot;
-          return {};
-        },
-      },
-    );
+    await planModelsJsonForTest({
+      cfg: { models: { providers: {} } },
+      agentDir: "/tmp/openclaw-models-config-env-vars-test",
+      env: {},
+      pluginMetadataSnapshot,
+    });
 
-    expect(observedSnapshot).toBe(pluginMetadataSnapshot);
+    expect(discovery.mock.calls[0]?.[0].pluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
   });
 
   it.each([
@@ -414,42 +333,27 @@ describe("models-config", () => {
   ])(
     "threads provider policy metadata only from a $label plugin snapshot",
     async ({ pluginIds, expectedRegistry }) => {
-      const manifestRegistry = { plugins: [], diagnostics: [] };
       const pluginMetadataSnapshot = {
-        index: { plugins: [] },
-        manifestRegistry,
-        owners: {
-          providers: new Map(),
-          modelCatalogProviders: new Map(),
-          setupProviders: new Map(),
-        },
+        ...createPluginMetadataSnapshotFixture(),
         ...(pluginIds ? { pluginIds } : {}),
-      } as unknown as Pick<
-        PluginMetadataSnapshot,
-        "index" | "manifestRegistry" | "owners" | "pluginIds"
-      >;
+      };
+      const { manifestRegistry } = pluginMetadataSnapshot;
       providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReturnValue(
         "POLICY_ALIAS_API_KEY",
       );
+      vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue({
+        "policy-alias": createImplicitOpenAiProvider({
+          baseUrl: "https://policy.example/v1",
+          apiKey: undefined,
+        }),
+      });
 
-      await planOpenClawModelsJsonWithDeps(
-        {
-          cfg: { models: { providers: {} } },
-          agentDir: "/tmp/openclaw-models-config-policy-registry-test",
-          env: {},
-          existingRaw: "",
-          existingParsed: null,
-          pluginMetadataSnapshot,
-        },
-        {
-          resolveImplicitProviders: async () => ({
-            "policy-alias": createImplicitOpenAiProvider({
-              baseUrl: "https://policy.example/v1",
-              apiKey: undefined,
-            }),
-          }),
-        },
-      );
+      await planModelsJsonForTest({
+        cfg: { models: { providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-policy-registry-test",
+        env: {},
+        pluginMetadataSnapshot,
+      });
 
       const normalizeParams =
         providerRuntimeMocks.normalizeProviderConfigWithPlugin.mock.calls.find(
@@ -466,26 +370,55 @@ describe("models-config", () => {
     },
   );
 
-  it("does not write unauthenticated model providers that would invalidate models.json", async () => {
-    expect(unauthenticatedProviderWritePlan.action).toBe("write");
-    expect(unauthenticatedProviderParsed.providers?.openai).toBeUndefined();
-    expect(unauthenticatedProviderParsed.providers?.["auth-only"]).toBeDefined();
+  it.each(["openai", "oauth", "role", "retained"])(
+    "publishes %s catalog rows without requiring an inline API key",
+    (provider) => {
+      expect(unauthenticatedProviderParsed.providers?.[provider]).toMatchObject({
+        models: [{ id: "gpt-5.5" }],
+      });
+      expect(unauthenticatedProviderParsed.providers?.[provider]).not.toHaveProperty("apiKey");
+    },
+  );
+
+  it.each(["empty", "empty-existing"])("rejects an explicitly empty key in %s", (provider) => {
+    expect(unauthenticatedProviderParsed.providers?.[provider]).toBeUndefined();
+  });
+
+  it("leaves keyless catalog authentication to the registry auth owner", async () => {
+    await withTempEnv(["OPENAI_API_KEY"], async () => {
+      unsetEnv(["OPENAI_API_KEY"]);
+      expect(unauthenticatedProviderWritePlan.action).toBe("write");
+      expect(unauthenticatedProviderParsed.providers?.["auth-only"]).toBeDefined();
+      if (unauthenticatedProviderWritePlan.action !== "write") {
+        throw new Error("Expected models.json write plan");
+      }
+      const auth = AuthStorage.inMemory();
+      const registry = ModelRegistry.create(auth, "/tmp/openclaw-keyless-catalog/models.json", {
+        includePluginCatalogs: false,
+        modelsJsonContents: unauthenticatedProviderWritePlan.contents,
+      });
+      const model = registry.find("openai", "gpt-5.5");
+      expect(registry.getError()).toBeUndefined();
+      expect(model).toBeDefined();
+      expect(registry.getAvailable()).not.toContain(model);
+      auth.setRuntimeApiKey("openai", "synthetic-runtime-key");
+      expect(registry.getAvailable()).toContain(model);
+    });
   });
 
   it("treats empty replace-mode provider sets as authoritative", async () => {
-    const plan = await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: { models: { mode: "replace", providers: {} } },
-        agentDir: "/tmp/openclaw-models-config-env-vars-test",
-        env: {},
-        existingRaw: `${JSON.stringify({ providers: { stale: {} } }, null, 2)}\n`,
-        existingParsed: { providers: { stale: {} } },
-      },
-      {
-        resolveImplicitProviders: async () => ({}),
-      },
-    );
+    const discovery = vi
+      .spyOn(modelsConfigProviders, "resolveImplicitProviders")
+      .mockResolvedValue({});
+    const plan = await planModelsJsonForTest({
+      cfg: { models: { mode: "replace", providers: {} } },
+      agentDir: "/tmp/openclaw-models-config-env-vars-test",
+      env: {},
+      existingRaw: `${JSON.stringify({ providers: { stale: {} } }, null, 2)}\n`,
+      existingParsed: { providers: { stale: {} } },
+    });
 
+    expect(discovery).not.toHaveBeenCalled();
     expect(plan.action).toBe("write");
     if (plan.action !== "write") {
       throw new Error("Expected models.json write plan");
@@ -495,38 +428,25 @@ describe("models-config", () => {
   });
 
   it("moves plugin-owned provider catalogs into plugin-scoped files", async () => {
-    const pluginMetadataSnapshot = {
-      index: { plugins: [{ pluginId: "zai", enabled: true }] },
-      normalizePluginId: (pluginId: string) => pluginId,
-      manifestRegistry: { plugins: [], diagnostics: [] },
-      owners: {
-        providers: new Map([["zai", ["zai"]]]),
-        modelCatalogProviders: new Map([["zai", ["zai"]]]),
-        setupProviders: new Map(),
-      },
-    } as unknown as Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
-    const plan = await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: { models: { providers: {} } },
-        agentDir: "/tmp/openclaw-models-config-env-vars-test",
-        env: { ZAI_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
-        existingRaw: "",
-        existingParsed: null,
-        pluginMetadataSnapshot,
-      },
-      {
-        resolveImplicitProviders: async () => ({
-          zai: createImplicitOpenAiProvider({
-            baseUrl: "https://api.z.ai/api/paas/v4",
-            apiKey: "ZAI_API_KEY",
-          }),
-          custom: createImplicitOpenAiProvider({
-            baseUrl: "https://custom.example/v1",
-            apiKey: "CUSTOM_API_KEY",
-          }),
-        }),
-      },
-    );
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "zai", providers: ["zai"] }],
+    });
+    vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue({
+      zai: createImplicitOpenAiProvider({
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        apiKey: "ZAI_API_KEY",
+      }),
+      custom: createImplicitOpenAiProvider({
+        baseUrl: "https://custom.example/v1",
+        apiKey: "CUSTOM_API_KEY",
+      }),
+    });
+    const plan = await planModelsJsonForTest({
+      cfg: { models: { providers: {} } },
+      agentDir: "/tmp/openclaw-models-config-env-vars-test",
+      env: { ZAI_API_KEY: "sk-test" },
+      pluginMetadataSnapshot,
+    });
 
     expect(plan.action).toBe("write");
     if (plan.action !== "write") {
@@ -545,20 +465,14 @@ describe("models-config", () => {
   });
 
   it("falls back to canonical env markers when provider runtime has no api-key policy", async () => {
-    const plan = await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: { models: { providers: {} } },
-        agentDir: "/tmp/openclaw-models-config-env-vars-test",
-        env: { OPENAI_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
-        existingRaw: "",
-        existingParsed: null,
-      },
-      {
-        resolveImplicitProviders: async () => ({
-          openai: createImplicitOpenAiProvider(),
-        }),
-      },
-    );
+    vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue({
+      openai: createImplicitOpenAiProvider(),
+    });
+    const plan = await planModelsJsonForTest({
+      cfg: { models: { providers: {} } },
+      agentDir: "/tmp/openclaw-models-config-env-vars-test",
+      env: { OPENAI_API_KEY: "sk-test" },
+    });
 
     expect(plan.action).toBe("write");
     if (plan.action !== "write") {
@@ -571,50 +485,30 @@ describe("models-config", () => {
   });
 
   it("normalizes retired Gemini ids preserved from existing models.json rows", async () => {
-    const plan = await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: { models: { mode: "merge", providers: {} } },
-        agentDir: "/tmp/openclaw-models-config-env-vars-test",
-        env: {},
-        existingRaw: "",
-        existingParsed: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              api: "google-generative-ai",
-              apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
-              models: [
-                {
-                  id: "gemini-3-pro-preview",
-                  name: "Gemini 3 Pro",
-                  input: ["text"],
-                },
-              ],
-            },
-          },
-        },
-      },
-      {
-        resolveImplicitProviders: async () => ({
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-responses",
-            apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
+    vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue({
+      openai: createImplicitOpenAiProvider({ apiKey: "OPENAI_API_KEY" }),
+    });
+    const plan = await planModelsJsonForTest({
+      cfg: { models: { mode: "merge", providers: {} } },
+      agentDir: "/tmp/openclaw-models-config-env-vars-test",
+      env: {},
+      existingParsed: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            api: "google-generative-ai",
+            apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
             models: [
               {
-                id: "gpt-5.5",
-                name: "GPT-5.5",
+                id: "gemini-3-pro-preview",
+                name: "Gemini 3 Pro",
                 input: ["text"],
-                reasoning: true,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 400000,
-                maxTokens: 128000,
               },
             ],
           },
-        }),
+        },
       },
-    );
+    });
 
     expect(plan.action).toBe("write");
     if (plan.action !== "write") {
@@ -649,35 +543,29 @@ describe("models-config", () => {
   });
 
   it("keeps google-vertex static catalog rows when discovery supplies the ADC marker", async () => {
-    const plan = await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: {
-          agents: {
-            defaults: {
-              models: {
-                "google-vertex/gemini-2.5-pro": {},
-              },
-              model: { primary: "google-vertex/gemini-2.5-pro" },
+    // Provider discovery owns ADC detection; this planner test only proves
+    // the resulting marker and static rows survive models.json planning.
+    vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue({
+      "google-vertex": {
+        ...createImplicitGoogleVertexProvider(),
+        apiKey: "gcp-vertex-credentials",
+      },
+    });
+    const plan = await planModelsJsonForTest({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "google-vertex/gemini-2.5-pro": {},
             },
+            model: { primary: "google-vertex/gemini-2.5-pro" },
           },
-          models: { providers: {} },
         },
-        agentDir: "/tmp/openclaw-google-vertex-adc-models",
-        env: {},
-        existingRaw: "",
-        existingParsed: null,
+        models: { providers: {} },
       },
-      {
-        // Provider discovery owns ADC detection; this planner test only proves
-        // the resulting marker and static rows survive models.json planning.
-        resolveImplicitProviders: async () => ({
-          "google-vertex": {
-            ...createImplicitGoogleVertexProvider(),
-            apiKey: "gcp-vertex-credentials",
-          },
-        }),
-      },
-    );
+      agentDir: "/tmp/openclaw-google-vertex-adc-models",
+      env: {},
+    });
 
     expect(plan.action).toBe("write");
     if (plan.action !== "write") {
@@ -697,11 +585,26 @@ describe("models-config", () => {
   });
 
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
+    const discovery = vi
+      .spyOn(modelsConfigProviders, "resolveImplicitProviders")
+      .mockResolvedValue({ openrouter: createImplicitOpenRouterProvider() });
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       unsetEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR]);
-      const { discoveryEnv, providers } = await resolveProvidersAndCaptureDiscoveryEnv(
-        createConfigEnvVarsConfig(),
-      );
+      const cfg = createConfigEnvVarsConfig();
+      const plan = await planModelsJsonForTest({
+        cfg,
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: createConfigRuntimeEnv(cfg),
+        pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+      });
+      const discoveryEnv = discovery.mock.calls[0]?.[0].env;
+      expect(plan.action).toBe("write");
+      if (plan.action !== "write") {
+        throw new Error("Expected models.json write plan");
+      }
+      const { providers } = JSON.parse(plan.contents) as {
+        providers: Record<string, ProviderConfig>;
+      };
 
       expect(process.env.OPENROUTER_API_KEY).toBeUndefined();
       expect(process.env[TEST_ENV_VAR]).toBeUndefined();
@@ -712,6 +615,9 @@ describe("models-config", () => {
   });
 
   it("does not overwrite already-set host env vars while ensuring models.json", async () => {
+    const discovery = vi
+      .spyOn(modelsConfigProviders, "resolveImplicitProviders")
+      .mockResolvedValue({ openrouter: createImplicitOpenRouterProvider() });
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       await withEnvAsync(
         {
@@ -719,9 +625,21 @@ describe("models-config", () => {
           [TEST_ENV_VAR]: "from-host",
         },
         async () => {
-          const { discoveryEnv, providers } = await resolveProvidersAndCaptureDiscoveryEnv(
-            createConfigEnvVarsConfig(),
-          );
+          const cfg = createConfigEnvVarsConfig();
+          const plan = await planModelsJsonForTest({
+            cfg,
+            agentDir: "/tmp/openclaw-models-config-env-vars-test",
+            env: createConfigRuntimeEnv(cfg),
+            pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+          });
+          const discoveryEnv = discovery.mock.calls[0]?.[0].env;
+          expect(plan.action).toBe("write");
+          if (plan.action !== "write") {
+            throw new Error("Expected models.json write plan");
+          }
+          const { providers } = JSON.parse(plan.contents) as {
+            providers: Record<string, ProviderConfig>;
+          };
 
           expect(discoveryEnv?.OPENROUTER_API_KEY).toBe("from-host");
           expect(discoveryEnv?.[TEST_ENV_VAR]).toBe("from-host");

@@ -1,5 +1,6 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
 import {
+  CLAUDE_FABLE_5_THINKING_PROFILE,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
@@ -21,6 +22,7 @@ import type {
   StopReason,
 } from "../types.js";
 export {
+  bindsClaudeThinkingPrefix,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
@@ -104,7 +106,7 @@ export function requiresClaudeAdaptiveThinking(model: {
   return requiresClaudeMandatoryAdaptiveThinking(model);
 }
 
-/** Return whether omitted thinking should default to adaptive/high. */
+/** Return whether omitted thinking should default to adaptive mode. */
 export function defaultsClaudeAdaptiveThinking(model: {
   id?: string;
   params?: Record<string, unknown>;
@@ -123,7 +125,11 @@ export function resolveAnthropicThinkingEffort(
   model: Model<"anthropic-messages">,
   level: SimpleStreamOptions["reasoning"],
 ): AnthropicEffort {
-  const requestedLevel = level as ModelThinkingLevel | undefined;
+  const requestedLevel: ModelThinkingLevel | undefined =
+    level ??
+    (resolveClaudeFable5ModelIdentity(model)
+      ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
+      : undefined);
   const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
   const clampModel = {
     ...model,
@@ -247,6 +253,24 @@ function resolveReplayModelBoundIdentity(ref: ReplayModelRef): string | undefine
   return sonnetIdentity ? `sonnet:${sonnetIdentity}` : undefined;
 }
 
+/**
+ * Fable 5.1 reads thinking from every earlier Claude generation (verified live:
+ * Opus 5, Sonnet 5, Opus 4.8 replay with no drops), while the API silently
+ * drops anything it cannot read. Moving onto it therefore keeps prior reasoning;
+ * every other cross-identity move, including unregistered Mythos targets, is
+ * still dropped here until its replay contract is proven separately.
+ */
+function readsPriorClaudeThinking(targetIdentity: string | undefined): boolean {
+  return (
+    targetIdentity !== undefined && /^fable:claude-fable-5-1(?=$|[^a-z0-9])/.test(targetIdentity)
+  );
+}
+
+function isClaudeReplaySource(ref: ReplayModelRef): boolean {
+  const modelId = hasConcreteResponseModel(ref) ? ref.responseModelId : ref.modelId;
+  return /(?:^|[-/])claude-/.test(normalizeModelId(modelId));
+}
+
 export function resolveModelBoundThinkingReplayMode(params: {
   source: ReplayModelRef;
   target: ReplayModelRef;
@@ -262,6 +286,13 @@ export function resolveModelBoundThinkingReplayMode(params: {
     normalizeModelId(params.source.modelId) === normalizeModelId(params.target.modelId);
   if (!sourceIdentity && !targetIdentity) {
     return "default";
+  }
+  if (
+    sourceApi === targetApi &&
+    readsPriorClaudeThinking(targetIdentity) &&
+    isClaudeReplaySource(params.source)
+  ) {
+    return "preserve";
   }
   if (!sourceIdentity && !hasConcreteResponseModel(params.source) && targetIdentity && sameRoute) {
     return "preserve";

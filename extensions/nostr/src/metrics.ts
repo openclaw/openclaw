@@ -89,72 +89,7 @@ type OnMetricCallback = (event: MetricEvent) => void;
 // Metrics Snapshot (for getMetrics())
 // ============================================================================
 
-export interface MetricsSnapshot {
-  /** Total events received (before any filtering) */
-  eventsReceived: number;
-  /** Events successfully processed */
-  eventsProcessed: number;
-  /** Duplicate events skipped */
-  eventsDuplicate: number;
-  /** Events rejected by reason */
-  eventsRejected: {
-    invalidShape: number;
-    wrongKind: number;
-    stale: number;
-    future: number;
-    rateLimited: number;
-    invalidSignature: number;
-    oversizedCiphertext: number;
-    oversizedPlaintext: number;
-    decryptFailed: number;
-    selfMessage: number;
-  };
-
-  /** Relay stats by URL */
-  relays: Record<string, RelayMetrics>;
-
-  /** Rate limiting stats */
-  rateLimiting: {
-    perSenderHits: number;
-    globalHits: number;
-  };
-
-  /** Decrypt stats */
-  decrypt: {
-    success: number;
-    failure: number;
-  };
-
-  /** Memory/capacity stats */
-  memory: {
-    seenTrackerSize: number;
-    rateLimiterEntries: number;
-  };
-
-  /** Snapshot timestamp */
-  snapshotAt: number;
-}
-
-// ============================================================================
-// Metrics Collector
-// ============================================================================
-
-export interface NostrMetrics {
-  /** Emit a metric event */
-  emit: (name: MetricName, value?: number, labels?: Record<string, string | number>) => void;
-
-  /** Get current metrics snapshot */
-  getSnapshot: () => MetricsSnapshot;
-
-  /** Reset all metrics to zero */
-  reset: () => void;
-}
-
-type MetricsState = Omit<MetricsSnapshot, "relays" | "snapshotAt"> & {
-  relays: Map<string, RelayMetrics>;
-};
-
-function createZeroMetricsState(): MetricsState {
+function createZeroMetricsState() {
   return {
     eventsReceived: 0,
     eventsProcessed: 0,
@@ -171,15 +106,17 @@ function createZeroMetricsState(): MetricsState {
       decryptFailed: 0,
       selfMessage: 0,
     },
-    relays: new Map(),
+    relays: new Map<string, RelayMetrics>(),
     rateLimiting: { perSenderHits: 0, globalHits: 0 },
     decrypt: { success: 0, failure: 0 },
     memory: { seenTrackerSize: 0, rateLimiterEntries: 0 },
   };
 }
 
-function createMetricsSnapshot(state: MetricsState, snapshotAt?: number): MetricsSnapshot {
-  const relays: MetricsSnapshot["relays"] = {};
+type MetricsState = ReturnType<typeof createZeroMetricsState>;
+
+function createMetricsSnapshot(state: MetricsState, snapshotAt?: number) {
+  const relays: Record<string, RelayMetrics> = {};
   for (const [url, stats] of state.relays) {
     relays[url] = { ...stats, messagesReceived: { ...stats.messagesReceived } };
   }
@@ -199,7 +136,7 @@ function createMetricsSnapshot(state: MetricsState, snapshotAt?: number): Metric
  * Create a metrics collector instance.
  * Optionally pass an onMetric callback to receive real-time metric events.
  */
-export function createMetrics(onMetric?: OnMetricCallback): NostrMetrics {
+export function createMetrics(onMetric?: OnMetricCallback) {
   let state = createZeroMetricsState();
 
   function getOrCreateRelay(url: string) {
@@ -390,6 +327,9 @@ export function createMetrics(onMetric?: OnMetricCallback): NostrMetrics {
 
   return { emit, getSnapshot, reset };
 }
+
+export type MetricsSnapshot = ReturnType<typeof createMetricsSnapshot>;
+export type NostrMetrics = ReturnType<typeof createMetrics>;
 
 /**
  * Create a no-op metrics instance (for when metrics are disabled).

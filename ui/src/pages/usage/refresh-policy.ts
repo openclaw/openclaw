@@ -38,15 +38,13 @@ function decideUsageRefresh(params: {
 
 type UsageRefreshPolicyOptions = {
   isLoading: () => boolean;
-  reload: () => void | Promise<void>;
+  reload: (reason: UsageRefreshReason) => void | Promise<void>;
   onIncompleteUsageExhausted?: () => void;
 };
 
 /** Owns Usage's page-specific TTL, interruption, and refresh coalescing policy. */
 export class UsageRefreshPolicy {
   private lastLoadedAtMs: number | null = null;
-  private providerConvergenceOutstanding = false;
-  private providerConvergenceConnection: unknown;
   private pendingAutomaticRefresh = false;
   private reloadPending = false;
   private readonly incompleteUsageRetry = new IncompleteUsageRetry({
@@ -67,10 +65,6 @@ export class UsageRefreshPolicy {
     return this.applyLoadState(value, params?.incomplete === true, params?.connection);
   }
 
-  markLoaded(params?: { incomplete?: boolean; connection?: unknown }): UsageRetryState {
-    return this.applyLoadState(Date.now(), params?.incomplete === true, params?.connection);
-  }
-
   markProviderUsage(
     result: ProviderUsageRequestResult | null,
     value: number | null,
@@ -87,8 +81,6 @@ export class UsageRefreshPolicy {
   }
 
   dispose(): void {
-    this.providerConvergenceOutstanding = false;
-    this.providerConvergenceConnection = undefined;
     this.incompleteUsageRetry.dispose();
   }
 
@@ -98,25 +90,9 @@ export class UsageRefreshPolicy {
     connection?: unknown,
   ): UsageRetryState {
     const state = this.incompleteUsageRetry.observe(incomplete, connection);
-    this.providerConvergenceOutstanding = incomplete;
-    this.providerConvergenceConnection = incomplete ? connection : undefined;
-    // Incomplete provider usage must not start the TTL or focus/reconnect can skip recovery.
+    // Incomplete usage must not start the TTL or focus/reconnect can skip recovery.
     this.lastLoadedAtMs = state === "complete" ? loadedAtMs : null;
     return state;
-  }
-
-  /** Keeps an existing provider convergence cycle alive across aggregate load failures. */
-  markLoadFailed(connection?: unknown): void {
-    if (!this.providerConvergenceOutstanding) {
-      return;
-    }
-    if (connection !== this.providerConvergenceConnection) {
-      this.providerConvergenceOutstanding = false;
-      this.providerConvergenceConnection = undefined;
-      this.incompleteUsageRetry.useConnection(connection);
-      return;
-    }
-    this.incompleteUsageRetry.observe(true, connection);
   }
 
   interrupt(): void {
@@ -129,15 +105,6 @@ export class UsageRefreshPolicy {
 
   beginLoad(): void {
     this.reloadPending = false;
-  }
-
-  reload(): void {
-    void this.reloadAndWait();
-  }
-
-  private async reloadAndWait(): Promise<void> {
-    this.pendingAutomaticRefresh = false;
-    await this.options.reload();
   }
 
   request(reason: UsageRefreshReason): void {
@@ -161,7 +128,7 @@ export class UsageRefreshPolicy {
       if (reason !== "poll") {
         this.incompleteUsageRetry.startCycle();
       }
-      await this.reloadAndWait();
+      await this.options.reload(reason);
     }
   }
 

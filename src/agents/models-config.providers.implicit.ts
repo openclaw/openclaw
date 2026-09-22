@@ -7,12 +7,13 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { withProviderCatalogExpiry } from "../plugins/provider-catalog-expiry.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
+import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -23,15 +24,23 @@ import {
   type PreparedProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
 import { matchesProviderPluginRef } from "../plugins/provider-registry-shared.js";
-import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { prepareProviderExternalAuthWithPlugin } from "../plugins/provider-runtime.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { resolveManifestSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
+import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { mergeProviderModels, type SourceModelFields } from "./models-config.merge.js";
 import {
-  isNonSecretApiKeyMarker,
-  resolveNonEnvSecretRefApiKeyMarker,
-} from "./model-auth-markers.js";
-import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
-import { mergeProviderModels } from "./models-config.merge.js";
+  buildPluginCatalogConfig,
+  prepareProviderCatalogRun,
+  reportProviderCatalogSecretFailure,
+} from "./models-config.providers.catalog-context.js";
+import {
+  resolveImplicitProviderDiscoveryScope,
+  type ProviderDiscoveryScope,
+} from "./models-config.providers.discovery-scope.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -42,6 +51,10 @@ import {
   createProviderAuthResolver,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secrets.js";
+import {
+  createProviderModelMembership,
+  type ProviderCatalogInventoryCapture,
+} from "./provider-model-membership.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 
@@ -61,6 +74,8 @@ type ImplicitProviderParams = {
   authStore?: AuthProfileStore;
   config?: OpenClawConfig;
   discoveryAuthConfig?: OpenClawConfig;
+  discoveryAuthEnv?: NodeJS.ProcessEnv;
+  sourceConfigForSecrets?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -71,6 +86,8 @@ type ImplicitProviderParams = {
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
+  sourceModelFields?: SourceModelFields;
+  providerCatalogInventory?: ProviderCatalogInventoryCapture;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -80,8 +97,6 @@ type ImplicitProviderContext = ImplicitProviderParams & {
   resolveProviderApiKey: ProviderApiKeyResolver;
   resolveProviderAuth: ProviderAuthResolver;
 };
-
-type ProviderDiscoveryScope = ReadonlyMap<string, readonly string[]>;
 
 function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
   const live =
@@ -95,156 +110,6 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   }
   const parsed = Number(raw);
   return /^[+]?\d+$/.test(raw) && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 15_000;
-}
-
-function resolveProviderDiscoveryScope(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  resolveOwners?: (provider: string) => readonly string[] | undefined;
-  providerIds?: readonly string[];
-}): ProviderDiscoveryScope | undefined {
-  const { config, workspaceDir, env } = params;
-  const scopedProviderIds =
-    params.providerIds !== undefined
-      ? normalizeStringEntries([...params.providerIds])
-          .map(normalizeProviderId)
-          .filter(Boolean)
-      : undefined;
-  if (scopedProviderIds) {
-    return buildProviderDiscoveryScope({
-      providerIds: scopedProviderIds,
-      config,
-      workspaceDir,
-      env,
-      resolveOwners: params.resolveOwners,
-    });
-  }
-  const live =
-    env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
-  if (!live) {
-    return undefined;
-  }
-  const rawValues = [
-    env.OPENCLAW_LIVE_PROVIDERS?.trim(),
-    env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim(),
-  ].filter((value): value is string => Boolean(value && value !== "all"));
-  if (rawValues.length === 0) {
-    return undefined;
-  }
-  const ids = normalizeStringEntries(rawValues.flatMap((value) => value.split(",")))
-    .map(normalizeProviderId)
-    .filter(Boolean);
-  if (ids.length === 0) {
-    return undefined;
-  }
-  return buildProviderDiscoveryScope({
-    providerIds: ids,
-    config,
-    workspaceDir,
-    env,
-    resolveOwners: params.resolveOwners,
-  });
-}
-
-function buildProviderDiscoveryScope(params: {
-  providerIds: readonly string[];
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  resolveOwners?: (provider: string) => readonly string[] | undefined;
-}): ProviderDiscoveryScope {
-  const providerIds = [...new Set(params.providerIds)];
-  const providerIdsByPluginId = new Map<string, string[]>();
-  for (const id of providerIds) {
-    const owners =
-      params.resolveOwners?.(id) ??
-      resolveOwningPluginIdsForProviderRef({
-        provider: id,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      }) ??
-      [];
-    for (const pluginId of owners.length > 0 ? owners : [id]) {
-      const ownedProviderIds = providerIdsByPluginId.get(pluginId) ?? [];
-      if (!ownedProviderIds.includes(id)) {
-        ownedProviderIds.push(id);
-        providerIdsByPluginId.set(pluginId, ownedProviderIds);
-      }
-    }
-  }
-  return new Map(
-    [...providerIdsByPluginId.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
-  );
-}
-
-function resolvePluginMetadataProviderOwners(
-  pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
-  provider: string,
-): readonly string[] | undefined {
-  if (!pluginMetadataSnapshot) {
-    return undefined;
-  }
-  const normalizedProvider = normalizeProviderId(provider);
-  if (!normalizedProvider) {
-    return undefined;
-  }
-  const owners = new Set<string>();
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.providers ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.modelCatalogProviders ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.setupProviders ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.cliBackends ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  return owners.size > 0
-    ? [...owners].toSorted((left, right) => left.localeCompare(right))
-    : undefined;
-}
-
-function appendNormalizedPluginMetadataOwners(
-  target: Set<string>,
-  ownerMap: ReadonlyMap<string, readonly string[]>,
-  provider: string,
-  normalizedProvider: string,
-): void {
-  for (const owner of ownerMap.get(provider) ?? []) {
-    target.add(owner);
-  }
-  if (normalizedProvider !== provider) {
-    for (const owner of ownerMap.get(normalizedProvider) ?? []) {
-      target.add(owner);
-    }
-  }
-  for (const [ownedId, owners] of ownerMap.entries()) {
-    if (
-      ownedId !== provider &&
-      ownedId !== normalizedProvider &&
-      normalizeProviderId(ownedId) === normalizedProvider
-    ) {
-      for (const owner of owners) {
-        target.add(owner);
-      }
-    }
-  }
 }
 
 function mergeImplicitProviderSet(
@@ -263,7 +128,9 @@ function mergeImplicitProviderConfig(params: {
   providerId: string;
   existing: ProviderConfig | undefined;
   implicit: ProviderConfig;
-  dynamicProviderModels?: boolean;
+  resolveMembership: ReturnType<typeof createProviderModelMembership>;
+  providerCatalogInventory?: ProviderCatalogInventoryCapture;
+  sourceModelFields?: SourceModelFields;
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
   if (!existing) {
@@ -273,19 +140,17 @@ function mergeImplicitProviderConfig(params: {
   if (merge) {
     return merge({ existing, implicit });
   }
-  if (params.dynamicProviderModels) {
-    // Wildcard-visible providers preserve discovered catalog updates while
-    // keeping explicit user config authoritative for non-model fields.
-    return mergeProviderModels(implicit, existing);
-  }
-  return {
-    ...implicit,
-    ...existing,
-    models:
-      Array.isArray(existing.models) && existing.models.length > 0
-        ? existing.models
-        : implicit.models,
-  };
+  const capturedIds = params.providerCatalogInventory?.configuredProviderModelIds.get(providerId);
+  const configuredModelIds =
+    capturedIds ?? (Array.isArray(existing.models) ? existing.models.map(({ id }) => id) : []);
+  params.providerCatalogInventory?.configuredProviderModelIds.set(providerId, configuredModelIds);
+  return mergeProviderModels(implicit, existing, {
+    providerId,
+    sourceModelFields: params.sourceModelFields,
+    preserveConfiguredModelMembership:
+      params.resolveMembership(providerId, configuredModelIds) !== undefined,
+    retainDiscoveredModels: params.providerCatalogInventory !== undefined,
+  });
 }
 
 function resolveImplicitProviderAuthMarker(params: {
@@ -333,15 +198,6 @@ function resolveExistingImplicitProviderFromContext(params: {
   );
 }
 
-function hasProviderWildcardVisibility(params: {
-  config?: OpenClawConfig;
-  providerId: string;
-}): boolean {
-  return parseConfiguredModelVisibilityEntries({ cfg: params.config }).providerWildcards.has(
-    normalizeProviderId(params.providerId),
-  );
-}
-
 function hasRuntimeProviderCatalog(
   provider: import("../plugins/types.js").ProviderPlugin,
 ): boolean {
@@ -359,7 +215,10 @@ async function resolvePluginImplicitProviders(
 ): Promise<Record<string, ProviderConfig> | undefined> {
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
-  const catalogConfig = buildPluginCatalogConfig(ctx);
+  const resolveMembership = createProviderModelMembership({
+    cfg: ctx.config,
+    agentId: ctx.providerCatalogInventory?.agentId,
+  });
   const selectedProviderIds = ctx.providerDiscoveryScope
     ? new Set([...ctx.providerDiscoveryScope.values()].flat())
     : undefined;
@@ -374,15 +233,35 @@ async function resolvePluginImplicitProviders(
   for (const provider of byOrder[order]) {
     const pluginId = provider.pluginId ?? normalizeProviderId(provider.id);
     const ownerProviderIds = ctx.providerDiscoveryScope?.get(pluginId);
-    const providerIds =
+    const manifest = ctx.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
+      (plugin) => plugin.id === pluginId,
+    );
+    const includeProvider = (providerId: string) =>
+      isProviderCatalogSourceAllowed({
+        provider: providerId,
+        config: ctx.config,
+        plugin: manifest,
+      });
+    const scopedProviderIds =
       ctx.providerDiscoveryScope === undefined
         ? undefined
         : catalogCountsByPluginId.get(pluginId) === 1
           ? (ownerProviderIds ?? [])
           : (ownerProviderIds ?? []).filter((id) => matchesProviderPluginRef(provider, id));
-    if (providerIds?.length === 0) {
+    const providerIds = scopedProviderIds?.filter(includeProvider);
+    const catalogProviderRefs = [
+      provider.id,
+      ...(provider.aliases ?? []),
+      ...(provider.hookAliases ?? []),
+      ...(catalogCountsByPluginId.get(pluginId) === 1 ? (manifest?.providers ?? []) : []),
+    ];
+    if (
+      providerIds?.length === 0 ||
+      (providerIds === undefined && !catalogProviderRefs.some(includeProvider))
+    ) {
       continue;
     }
+    const catalogConfig = buildPluginCatalogConfig(ctx, provider);
     const resolveCatalogProviderApiKey = (providerId?: string) => {
       const resolvedProviderId = providerId?.trim() || provider.id;
       const resolved = ctx.resolveProviderApiKey(resolvedProviderId);
@@ -431,38 +310,45 @@ async function resolvePluginImplicitProviders(
     // Static catalogs are preferred for entries-only discovery and as a fallback
     // when runtime discovery produces no usable provider config.
     const hasPreparedStaticResult = preparedStaticResults?.has(provider) === true;
-    let result;
-    if (useStaticCatalog) {
-      result = hasPreparedStaticResult
-        ? preparedStaticResults.get(provider)
-        : await runProviderStaticCatalog({ provider });
-    } else {
-      result = await runProviderCatalogWithTimeout({
-        provider,
-        ...(providerIds !== undefined ? { providerIds } : {}),
-        config: catalogConfig,
-        agentDir: ctx.agentDir,
-        workspaceDir: ctx.workspaceDir,
-        env: ctx.env,
-        resolveProviderApiKey: resolveCatalogProviderApiKey,
-        resolveProviderAuth: (providerId, options) =>
-          ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
-        reportCatalogOutcome: ctx.onProviderCatalogOutcome,
-        timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
-      });
-    }
-    if (!result && !useStaticCatalog && provider.staticCatalog) {
-      result = await runProviderStaticCatalog({ provider });
-    }
-    if (!result) {
+    const normalizedResult = await withProviderCatalogExpiry(
+      async () => {
+        let result;
+        if (useStaticCatalog) {
+          result = hasPreparedStaticResult
+            ? preparedStaticResults.get(provider)
+            : await runProviderStaticCatalog({ provider });
+        } else {
+          result = await runProviderCatalogWithTimeout({
+            provider,
+            authStore: ctx.authStore,
+            ...(providerIds !== undefined ? { providerIds } : {}),
+            config: catalogConfig,
+            agentDir: ctx.agentDir,
+            workspaceDir: ctx.workspaceDir,
+            env: ctx.env,
+            resolveProviderApiKey: resolveCatalogProviderApiKey,
+            resolveProviderAuth: (providerId, options) =>
+              ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+            reportCatalogOutcome: ctx.onProviderCatalogOutcome,
+            timeoutMs:
+              ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
+          });
+        }
+        if (!result && !useStaticCatalog && provider.staticCatalog) {
+          result = await runProviderStaticCatalog({ provider });
+        }
+        return result ? normalizePluginDiscoveryResult({ provider, result }) : undefined;
+      },
+      (acceptedProviders) => Object.keys(acceptedProviders ?? {}),
+    );
+    if (!normalizedResult) {
       continue;
     }
-    const normalizedResult = normalizePluginDiscoveryResult({
-      provider,
-      result,
-    });
     for (const [providerId, implicitProvider] of Object.entries(normalizedResult)) {
-      if (selectedProviderIds && !selectedProviderIds.has(normalizeProviderId(providerId))) {
+      if (
+        !includeProvider(providerId) ||
+        (selectedProviderIds && !selectedProviderIds.has(normalizeProviderId(providerId)))
+      ) {
         continue;
       }
       const mergedProvider = mergeImplicitProviderConfig({
@@ -479,10 +365,9 @@ async function resolvePluginImplicitProviders(
             ],
           }),
         implicit: implicitProvider,
-        dynamicProviderModels: hasProviderWildcardVisibility({
-          config: ctx.config,
-          providerId,
-        }),
+        resolveMembership,
+        providerCatalogInventory: ctx.providerCatalogInventory,
+        sourceModelFields: ctx.sourceModelFields,
       });
       discovered[providerId] = resolveImplicitProviderAuthMarker({
         ctx,
@@ -494,61 +379,74 @@ async function resolvePluginImplicitProviders(
   return Object.keys(discovered).length > 0 ? discovered : undefined;
 }
 
-function buildPluginCatalogConfig(ctx: ImplicitProviderContext): OpenClawConfig {
-  if (!ctx.explicitProviders || Object.keys(ctx.explicitProviders).length === 0) {
-    return ctx.config ?? {};
-  }
-  return {
-    ...ctx.config,
-    models: {
-      ...ctx.config?.models,
-      providers: {
-        ...ctx.config?.models?.providers,
-        ...ctx.explicitProviders,
-      },
-    },
-  };
-}
-
 async function runProviderCatalogWithTimeout(
   params: Parameters<typeof runProviderCatalog>[0] & {
+    agentDir: string;
+    authStore: AuthProfileStore;
     timeoutMs: number | null;
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
   const timeoutMs = params.timeoutMs ?? undefined;
-  if (!timeoutMs) {
-    return await runProviderCatalog(params);
-  }
-
   const timeoutError = new Error(
     `provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`,
   );
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let active = true;
+  const catalogParams = {
+    ...params,
+    isActive: () => active,
+    reportCatalogOutcome: (outcome: ProviderCatalogOutcome) => {
+      if (active) {
+        params.reportCatalogOutcome?.(outcome);
+      }
+    },
+  };
+  const runCatalog = async () => {
+    const prepared = await prepareProviderCatalogRun(catalogParams);
+    if (!active) {
+      return undefined;
+    }
+    const result = await runProviderCatalog({ ...prepared, isActive: catalogParams.isActive });
+    if (!active) {
+      return undefined;
+    }
+    return prepared.finalizeCatalogResult ? prepared.finalizeCatalogResult(result) : result;
+  };
   try {
-    const catalogRun = runProviderCatalog(params);
+    if (!timeoutMs) {
+      return await runCatalog();
+    }
+    const catalogRun = runCatalog();
     // Live discovery should not hang startup; a timeout skips this provider while
     // preserving the rest of the prepared catalog.
     return await Promise.race([
       catalogRun,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
+          active = false;
           reject(timeoutError);
         }, timeoutMs);
         timer.unref?.();
       }),
     ]);
   } catch (error) {
-    if (error === timeoutError) {
-      const message = formatErrorMessage(error);
-      params.reportCatalogOutcome?.({
-        provider: params.provider.id,
-        status: "unavailable",
-      });
-      log.warn(`${message}; skipping provider discovery`);
+    if (await reportProviderCatalogSecretFailure(error, params)) {
       return undefined;
     }
-    throw error;
+    if (error !== timeoutError) {
+      throw error;
+    }
+    for (const provider of params.providerIds ?? [params.provider.id]) {
+      params.reportCatalogOutcome?.({ provider, status: "unavailable" });
+    }
+    if (error === timeoutError) {
+      const message = formatErrorMessage(error);
+      log.warn(`${message}; skipping provider discovery`);
+    }
+    return undefined;
   } finally {
+    // A timed-out hook can still finish; its late reports no longer own this publication.
+    active = false;
     if (timer) {
       clearTimeout(timer);
     }
@@ -568,15 +466,7 @@ export async function prepareImplicitProviderStaticCatalog(
   >,
 ): Promise<PreparedProviderStaticCatalog> {
   const env = params.env ?? process.env;
-  const discoveryScope = resolveProviderDiscoveryScope({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-    resolveOwners: params.pluginMetadataSnapshot
-      ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
-      : undefined,
-    providerIds: params.providerDiscoveryProviderIds,
-  });
+  const discoveryScope = resolveImplicitProviderDiscoveryScope(params);
   const providers = await resolveRuntimePluginDiscoveryProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -585,15 +475,40 @@ export async function prepareImplicitProviderStaticCatalog(
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
       : {}),
-    discoveryEntriesOnly: true,
+    discoveryEntriesOnly: !getPluginRuntimeGenerationRegistry(),
     includeSyntheticAuthProviders: true,
   });
   const staticCatalogProviderIds = params.staticCatalogProviderIds
     ? new Set(params.staticCatalogProviderIds.map((provider) => normalizeProviderId(provider)))
     : undefined;
+  const eligibleProviders = providers.filter((provider) => {
+    const pluginId = provider.pluginId ?? normalizeProviderId(provider.id);
+    const plugin = params.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
+      (candidate) => candidate.id === pluginId,
+    );
+
+    const soleStaticCatalog =
+      providers.filter(
+        (candidate) =>
+          (candidate.pluginId ?? normalizeProviderId(candidate.id)) === pluginId &&
+          candidate.staticCatalog,
+      ).length === 1;
+    const providerRefs = discoveryScope?.get(pluginId) ?? [
+      provider.id,
+      ...(provider.aliases ?? []),
+      ...(provider.hookAliases ?? []),
+      ...(soleStaticCatalog ? (plugin?.providers ?? []) : []),
+    ];
+    // A shared static hook can still serve an eligible selected sibling identity.
+    return providerRefs.some(
+      (providerRef) =>
+        (soleStaticCatalog || matchesProviderPluginRef(provider, providerRef)) &&
+        isProviderCatalogSourceAllowed({ provider: providerRef, config: params.config, plugin }),
+    );
+  });
   const prepared = await prepareProviderStaticCatalog({
     providers: staticCatalogProviderIds
-      ? providers.filter((provider) => {
+      ? eligibleProviders.filter((provider) => {
           if ([...staticCatalogProviderIds].some((id) => matchesProviderPluginRef(provider, id))) {
             return true;
           }
@@ -608,13 +523,30 @@ export async function prepareImplicitProviderStaticCatalog(
             ).length === 1
           );
         })
-      : providers,
+      : eligibleProviders,
   });
   // Synthetic auth consumes the complete configured provider entrypoint set. Static results may
   // be narrower because startup only executes hooks for unresolved configured model refs.
   return Object.freeze({
     providers: Object.freeze(providers),
-    entries: prepared.entries,
+    // Record excluded hooks as empty so later static consumers cannot execute them again.
+    entries: Object.freeze([
+      ...prepared.entries.map((entry) => {
+        const plugin = params.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
+          (candidate) => candidate.id === (entry.provider.pluginId ?? entry.provider.id),
+        );
+        const providerEntries = Object.entries(normalizePluginDiscoveryResult(entry));
+        const eligible = providerEntries.filter(([provider]) =>
+          isProviderCatalogSourceAllowed({ provider, config: params.config, plugin }),
+        );
+        return eligible.length === providerEntries.length
+          ? entry
+          : { provider: entry.provider, result: { providers: Object.fromEntries(eligible) } };
+      }),
+      ...providers
+        .filter((provider) => provider.staticCatalog && !eligibleProviders.includes(provider))
+        .map((provider) => ({ provider, result: { providers: {} } })),
+    ]),
   });
 }
 
@@ -630,19 +562,23 @@ export async function resolveImplicitProviders(
       allowKeychainPrompt: false,
       externalCliProviderIds: params.providerDiscoveryProviderIds,
     }));
-  const discoveryScope = resolveProviderDiscoveryScope({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-    resolveOwners: params.pluginMetadataSnapshot
-      ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
-      : undefined,
-    providerIds: params.providerDiscoveryProviderIds,
-  });
+  const discoveryScope = resolveImplicitProviderDiscoveryScope(params);
   const discoveryPluginIds = discoveryScope ? [...discoveryScope.keys()] : undefined;
   // The runtime config has already resolved SecretRefs at its owning boundary.
   // Re-resolving source refs here would execute unrelated file/exec providers on catalog reads.
   const discoveryAuthConfig = params.discoveryAuthConfig ?? params.config;
+  const discoveryAuthEnv = params.discoveryAuthEnv ?? env;
+  const sourceConfigForSecrets = params.providerDiscoveryEntriesOnly
+    ? undefined
+    : (params.sourceConfigForSecrets ?? params.config);
+  const authInputs = [
+    env,
+    getAuthStore,
+    discoveryAuthConfig,
+    sourceConfigForSecrets,
+    params.workspaceDir,
+    discoveryAuthEnv,
+  ] as const;
   const context: ImplicitProviderContext = {
     ...params,
     get authStore() {
@@ -650,8 +586,8 @@ export async function resolveImplicitProviders(
     },
     env,
     ...(discoveryScope ? { providerDiscoveryScope: discoveryScope } : {}),
-    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, discoveryAuthConfig),
-    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, discoveryAuthConfig),
+    resolveProviderApiKey: createProviderApiKeyResolver(...authInputs),
+    resolveProviderAuth: createProviderAuthResolver(...authInputs),
   };
   const preparedStaticEntries = params.preparedStaticProviderCatalog
     ? params.preparedStaticProviderCatalog.entries.filter(
@@ -695,6 +631,52 @@ export async function resolveImplicitProviders(
       ]),
     ).values(),
   ];
+  const syntheticRefs = resolveManifestSyntheticAuthProviderRefState({
+    config: discoveryAuthConfig,
+    env,
+    workspaceDir: params.workspaceDir,
+    ...(params.pluginMetadataSnapshot ? { index: params.pluginMetadataSnapshot.index } : {}),
+  }).refs.map(normalizeProviderId);
+  const syntheticProviders = discoveryProviders.filter((provider) =>
+    syntheticRefs.some((ref) => matchesProviderPluginRef(provider, ref)),
+  );
+  const configuredSyntheticRefs = Object.entries(
+    discoveryAuthConfig?.models?.providers ?? {},
+  ).flatMap(([provider, { api }]) =>
+    api &&
+    (syntheticRefs.includes(normalizeProviderId(api)) ||
+      syntheticProviders.some((candidate) => matchesProviderPluginRef(candidate, api)))
+      ? [normalizeProviderId(provider)]
+      : [],
+  );
+  const scopedRefs = discoveryScope ? new Set([...discoveryScope.values()].flat()) : undefined;
+  // Prepare declared native refs and their configured API aliases without reopening
+  // unrelated discovery. Already-resolved descriptors retain hook-alias matching.
+  for (const provider of new Set([...syntheticRefs, ...configuredSyntheticRefs])) {
+    if (scopedRefs && !scopedRefs.has(provider)) {
+      continue;
+    }
+    await prepareProviderExternalAuthWithPlugin({
+      config: discoveryAuthConfig,
+      env: discoveryAuthEnv,
+      workspaceDir: params.workspaceDir,
+      provider,
+      context: {
+        config: discoveryAuthConfig,
+        provider,
+        providerConfig: findNormalizedProviderValue(
+          discoveryAuthConfig?.models?.providers,
+          provider,
+        ),
+      },
+    });
+  }
+  const hasLiveCatalog = discoveryProviders.some(hasRuntimeProviderCatalog);
+  if (params.providerDiscoveryEntriesOnly !== true && hasLiveCatalog) {
+    const { prepareProviderDiscoveryAuth } =
+      await import("./models-config.providers.discovery-auth.runtime.js");
+    Object.assign(context, await prepareProviderDiscoveryAuth(context, discoveryAuthConfig));
+  }
   const preparedStaticResultsByProvider = new Map(
     preparedStaticEntries?.map(({ provider, result }) => [
       `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,

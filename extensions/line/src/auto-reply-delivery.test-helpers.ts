@@ -1,20 +1,39 @@
 // Shared fixtures for LINE auto-reply delivery tests.
 import type { messagingApi } from "@line/bot-sdk";
-import { vi, type Mock } from "vitest";
-import { deliverLineAutoReply } from "./auto-reply-delivery.js";
-import { createLineSendReceipt } from "./send-receipt.js";
+import * as replyRuntime from "openclaw/plugin-sdk/reply-runtime";
+import { afterEach, vi, type Mock, type MockInstance } from "vitest";
+import { lineResult } from "./channel.sendPayload.test-support.js";
+import * as markdown from "./markdown-to-line.js";
+import * as media from "./outbound-media.js";
+import * as send from "./send.js";
+import * as templates from "./template-messages.js";
 
-export type LineAutoReplyDeps = Parameters<typeof deliverLineAutoReply>[0]["deps"];
+export type LineAutoReplyDeps = {
+  buildTemplateMessageFromPayload: typeof templates.buildTemplateMessageFromPayload;
+  processLineMessage: typeof markdown.processLineMessage;
+  chunkMarkdownText: typeof replyRuntime.chunkMarkdownText;
+  replyMessageLine: typeof send.replyMessageLine;
+  pushMessagesLine: typeof send.pushMessagesLine;
+  createFlexMessage: typeof send.createFlexMessage;
+  buildMediaMessage: typeof media.buildLineMediaMessage;
+  createLocationMessage: typeof send.createLocationMessage;
+};
 
 type LineAutoReplyTestDeps = {
-  deps: LineAutoReplyDeps;
   replyMessageLine: Mock<LineAutoReplyDeps["replyMessageLine"]>;
-  createQuickReplyItems: Mock<(labels: string[]) => { items: string[] }>;
   buildMediaMessage: (
     ...args: Parameters<LineAutoReplyDeps["buildMediaMessage"]>
   ) => Promise<messagingApi.Message>;
   pushMessagesLine: Mock<LineAutoReplyDeps["pushMessagesLine"]>;
 };
+
+const moduleMocks: MockInstance[] = [];
+
+afterEach(() => {
+  for (const mock of moduleMocks.splice(0).toReversed()) {
+    mock.mockRestore();
+  }
+});
 
 export const LINE_TEST_CFG = { channels: { line: { accounts: { acc: {} } } } };
 
@@ -27,10 +46,21 @@ export const baseDeliveryParams = {
   textLimit: 5000,
 };
 
-export const createFlexMessage = (altText: string, contents: unknown) => ({
-  type: "flex" as const,
+export const createFlexMessage = (
+  altText: string,
+  contents: messagingApi.FlexContainer,
+): messagingApi.FlexMessage => ({
+  type: "flex",
   altText,
   contents,
+});
+
+/** LINE's wire shape for label-only quick replies, as the plugin builds them. */
+export const createQuickReply = (...labels: string[]) => ({
+  items: labels.map((label) => ({
+    type: "action" as const,
+    action: { type: "message" as const, label, text: label },
+  })),
 });
 
 export const createImageMessage = (url: string) => ({
@@ -45,8 +75,7 @@ const createLocationMessage: LineAutoReplyDeps["createLocationMessage"] = (locat
 });
 
 export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoReplyTestDeps {
-  const replyMessageLine = vi.fn<LineAutoReplyDeps["replyMessageLine"]>(async () => ({}));
-  const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
+  const replyMessageLine = vi.fn<LineAutoReplyDeps["replyMessageLine"]>(async () => {});
   const buildMediaMessage: LineAutoReplyDeps["buildMediaMessage"] = vi.fn(
     async (mediaUrl, options) => {
       switch (options.mediaKind) {
@@ -72,28 +101,46 @@ export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoRepl
       }
     },
   );
-  const pushMessagesLine = vi.fn<LineAutoReplyDeps["pushMessagesLine"]>(async () => ({
-    messageId: "push",
-    chatId: "u1",
-    receipt: createLineSendReceipt({ messageId: "push", chatId: "u1", kind: "text" }),
-  }));
+  const pushMessagesLine = vi.fn<LineAutoReplyDeps["pushMessagesLine"]>(async () =>
+    lineResult("push", "u1"),
+  );
   const deps: LineAutoReplyDeps = {
     buildTemplateMessageFromPayload: () => null,
     processLineMessage: (text) => ({ text, flexMessages: [] }),
     chunkMarkdownText: (text) => [text],
     replyMessageLine,
-    createQuickReplyItems: createQuickReplyItems as LineAutoReplyDeps["createQuickReplyItems"],
     pushMessagesLine,
-    createFlexMessage: createFlexMessage as LineAutoReplyDeps["createFlexMessage"],
+    createFlexMessage,
     buildMediaMessage,
     createLocationMessage,
     ...overrides,
   };
 
+  // Capture per-case implementations before installing spies so real-renderer
+  // overrides retain the original function instead of calling their own spy.
+  moduleMocks.push(
+    vi
+      .spyOn(templates, "buildTemplateMessageFromPayload")
+      .mockImplementation(deps.buildTemplateMessageFromPayload),
+  );
+  moduleMocks.push(
+    vi.spyOn(markdown, "processLineMessage").mockImplementation(deps.processLineMessage),
+  );
+  moduleMocks.push(
+    vi.spyOn(replyRuntime, "chunkMarkdownText").mockImplementation(deps.chunkMarkdownText),
+  );
+  moduleMocks.push(vi.spyOn(send, "replyMessageLine").mockImplementation(deps.replyMessageLine));
+  moduleMocks.push(vi.spyOn(send, "pushMessagesLine").mockImplementation(deps.pushMessagesLine));
+  moduleMocks.push(vi.spyOn(send, "createFlexMessage").mockImplementation(deps.createFlexMessage));
+  moduleMocks.push(
+    vi.spyOn(media, "buildLineMediaMessage").mockImplementation(deps.buildMediaMessage),
+  );
+  moduleMocks.push(
+    vi.spyOn(send, "createLocationMessage").mockImplementation(deps.createLocationMessage),
+  );
+
   return {
-    deps,
     replyMessageLine,
-    createQuickReplyItems,
     buildMediaMessage,
     pushMessagesLine,
   };

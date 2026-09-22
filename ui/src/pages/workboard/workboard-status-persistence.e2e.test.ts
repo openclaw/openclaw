@@ -1,11 +1,13 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 // Control UI tests cover workboard status persistence behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { WorkboardCard } from "../../lib/workboard/index.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -15,13 +17,14 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.join(
+const artifactParent = path.join(
   process.cwd(),
   ".artifacts",
   "control-ui-e2e",
@@ -96,7 +99,7 @@ const editedCard = {
 const draggedRunningCard = {
   ...editedCard,
   status: "running",
-  position: 4_000,
+  position: 6_000,
   updatedAt: draggedRunningAt,
   events: [
     ...editedCard.events,
@@ -132,42 +135,6 @@ function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function workboardField(scope: Page | Locator, label: string) {
-  return scope.locator(".workboard-field").filter({
-    hasText: new RegExp(`^\\s*${escapeRegExp(label)}\\b`, "u"),
-  });
-}
-
-async function chooseWorkboardSelectOption(
-  scope: Page | Locator,
-  label: string,
-  optionLabel: string,
-): Promise<void> {
-  const field = workboardField(scope, label);
-  expect(await field.count()).toBe(1);
-  const optionValue = await field.locator("wa-option").evaluateAll((options, optionText) => {
-    const option = options.find(
-      (candidate) => (candidate as HTMLElement & { label?: string }).label === optionText,
-    );
-    return option?.getAttribute("value") ?? null;
-  }, optionLabel);
-  expect(optionValue).not.toBeNull();
-  await field.locator("wa-select").evaluate((select, value) => {
-    (select as HTMLElement & { value: string }).value = String(value);
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  }, optionValue);
-}
-
-async function workboardSelectValue(scope: Page | Locator, label: string): Promise<string> {
-  const field = workboardField(scope, label);
-  expect(await field.count()).toBe(1);
-  return field.getByRole("combobox").inputValue();
-}
-
 function workboardColumn(page: Page, title: string) {
   return page.locator(".workboard-column", {
     has: page.getByRole("heading", { name: title }),
@@ -176,6 +143,12 @@ function workboardColumn(page: Page, title: string) {
 
 function workboardCard(page: Page, columnTitle: string, title: string) {
   return workboardColumn(page, columnTitle).locator(".workboard-card", { hasText: title });
+}
+
+async function openCardEditor(card: Locator): Promise<void> {
+  await card.hover();
+  await card.getByRole("button", { name: "Card actions", exact: true }).click();
+  await card.getByRole("button", { name: "Edit card", exact: true }).click();
 }
 
 async function dispatchHtml5Drag(source: Locator, target: Locator): Promise<void> {
@@ -187,7 +160,14 @@ async function dispatchHtml5Drag(source: Locator, target: Locator): Promise<void
   try {
     await sourceHandle.evaluate((sourceElement, targetElement) => {
       const dataTransfer = new DataTransfer();
-      const init = { bubbles: true, cancelable: true, dataTransfer };
+      const targetRect = targetElement.getBoundingClientRect();
+      const init = {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer,
+        clientX: targetRect.x + targetRect.width / 2,
+        clientY: targetRect.top + 1,
+      };
       sourceElement.dispatchEvent(new DragEvent("dragstart", init));
       targetElement.dispatchEvent(new DragEvent("dragover", init));
       targetElement.dispatchEvent(new DragEvent("drop", init));
@@ -233,9 +213,6 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
         `Playwright Chromium is not installed at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
       );
     }
-    if (captureUiProofEnabled) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
@@ -275,6 +252,7 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      ...workboardUi,
       methodResponses: {
         "config.get": {
           config: {
@@ -338,12 +316,17 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       });
       await executionCard.waitFor({ timeout: 10_000 });
 
-      await executionCard.locator('button[aria-label="Edit card"]').click();
+      await openCardEditor(executionCard);
       const editDialog = page.getByRole("dialog", { name: "Edit card" });
       await editDialog.waitFor({ timeout: 10_000 });
       await expect
-        .poll(() => workboardSelectValue(page, "Session"))
-        .toBe("Execution linked session");
+        .poll(() =>
+          page
+            .locator(".workboard-card-draft")
+            .getByRole("button", { name: "Session: Execution linked session", exact: true })
+            .isVisible(),
+        )
+        .toBe(true);
 
       await page.getByLabel("Title").fill(updatedCard.title);
       await page.getByRole("button", { name: "Save" }).click();
@@ -364,6 +347,9 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
   });
 
   it("persists edit/reopen fields and does not bounce a dragged linked card from stale lifecycle", async () => {
+    const artifactDir = captureUiProofEnabled
+      ? createControlUiE2eArtifactDir("workboard-status-persistence", artifactParent)
+      : "";
     const context = await browser.newContext({
       locale: "en-US",
       recordVideo: captureUiProofEnabled
@@ -374,6 +360,7 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      ...workboardUi,
       methodResponses: {
         "config.get": {
           config: {
@@ -467,14 +454,16 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await expect.poll(() => page.getByText(archivedDefaultRunningCard.title).count()).toBe(0);
       await waitForRequestCount(gateway, "workboard.cards.update", 0);
 
-      await workboardCard(page, "Todo", "Persist queue status")
-        .locator('button[aria-label="Edit card"]')
-        .click();
+      await openCardEditor(workboardCard(page, "Todo", "Persist queue status"));
       const editDialog = page.getByRole("dialog", { name: "Edit card" });
       await editDialog.waitFor({ timeout: 10_000 });
       await page.getByLabel("Title").fill("Persisted renamed card");
       await page.getByLabel("Notes").fill("Edited notes survive reopening.");
-      await chooseWorkboardSelectOption(page, "Priority", "High");
+      await page
+        .locator(".workboard-card-draft")
+        .getByRole("radio", { name: "High", exact: true })
+        .focus();
+      await page.keyboard.press("Space");
       await page.getByRole("button", { name: "Save" }).click();
 
       const updateRequests = await waitForRequestCount(gateway, "workboard.cards.update", 1);
@@ -498,23 +487,31 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       }
       await workboardCard(page, "Todo", "Persisted renamed card").waitFor({ timeout: 10_000 });
 
-      await workboardCard(page, "Todo", "Persisted renamed card")
-        .locator('button[aria-label="Edit card"]')
-        .click();
+      await openCardEditor(workboardCard(page, "Todo", "Persisted renamed card"));
       await editDialog.waitFor({ timeout: 10_000 });
       await expect.poll(() => page.getByLabel("Title").inputValue()).toBe("Persisted renamed card");
       await expect
         .poll(() => page.getByLabel("Notes").inputValue())
         .toBe("Edited notes survive reopening.");
-      await expect.poll(() => workboardSelectValue(page, "Priority")).toBe("High");
+      await expect
+        .poll(() =>
+          page
+            .locator(".workboard-card-draft")
+            .getByRole("radio", { name: "High", exact: true })
+            .isChecked(),
+        )
+        .toBe(true);
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "workboard-edit-reopen.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "workboard-edit-reopen.png"),
+          await takeControlUiViewportScreenshot(page, editDialog, [
+            page.getByLabel("Title"),
+            page.getByLabel("Notes"),
+          ]),
+        );
       }
       await page
-        .locator('openclaw-modal-dialog[label="Edit card"] .workboard-modal__actions')
+        .locator(".workboard-draft > .workboard-modal__actions")
         .last()
         .getByRole("button", { name: "Cancel" })
         .click();
@@ -522,23 +519,35 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
 
       await dispatchHtml5Drag(
         workboardCard(page, "Todo", "Persisted renamed card"),
-        workboardColumn(page, "Running").locator(".workboard-column__cards"),
+        workboardCard(page, "Running", productRunningCard.title),
       );
       const moveRequest = await gateway.waitForRequest("workboard.cards.move");
-      expect(requestParams(moveRequest)).toMatchObject({
+      const move = requestParams(moveRequest);
+      expect(move).toMatchObject({
         id: "card-1",
-        position: 4_000,
         status: "running",
       });
+      expect(move.position).toBeGreaterThan(archivedDefaultRunningCard.position);
+      expect(move.position).toBeLessThan(productRunningCard.position);
       await workboardCard(page, "Running", "Persisted renamed card").waitFor({
         timeout: 10_000,
       });
+      await expect
+        .poll(() =>
+          workboardColumn(page, "Running")
+            .locator(".workboard-card")
+            .getByRole("heading")
+            .allTextContents(),
+        )
+        .toEqual([editedCard.title, productRunningCard.title]);
       await waitForRequestCount(gateway, "workboard.cards.update", 1);
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "workboard-drag-running-persisted.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "workboard-drag-running-persisted.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            workboardCard(page, "Running", "Persisted renamed card"),
+          ]),
+        );
       }
     } finally {
       await context.close();

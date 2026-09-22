@@ -59,12 +59,13 @@ type RequestLifecycle = {
   assertListenersRemoved(): void;
 };
 
-function completedResponse(init?: ResponseInit): Response {
+function completedResponse(init?: ResponseInit, eventHeaders?: Record<string, string>): Response {
   const response = {
     id: "resp_response_hook",
     object: "response",
     status: "completed",
     model: openAIModel.id,
+    ...(eventHeaders ? { headers: eventHeaders } : {}),
     output: [
       {
         id: "msg_response_hook",
@@ -211,6 +212,55 @@ afterEach(() => {
   configureAiTransportHost(previousHost);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+describe.each([
+  {
+    name: "OpenAI",
+    model: openAIModel,
+    createStream: managedOpenAIStream,
+    defaultEncoding: "identity",
+  },
+  { name: "Azure", model: azureModel, createStream: managedAzureStream, defaultEncoding: null },
+])("$name Responses encoding", ({ model, createStream, defaultEncoding }) => {
+  it.each([
+    { source: "default", key: "Accept-Encoding", expected: "identity" },
+    { source: "environment", key: "aCcEpT-EnCoDiNg", expected: "gzip" },
+    { source: "model", key: "accept-encoding", expected: "gzip" },
+    { source: "caller", key: "ACCEPT-ENCODING", expected: "br" },
+    { source: "turn", key: "Accept-Encoding", expected: "gzip, br" },
+  ])(
+    "preserves the $source encoding on the final SDK request",
+    async ({ source, key, expected }) => {
+      vi.stubEnv(
+        "OPENAI_CUSTOM_HEADERS",
+        source === "default"
+          ? undefined
+          : `${key}: ${source === "environment" ? expected : "deflate"}`,
+      );
+      const fetchMock = vi.fn<typeof fetch>(async () => completedResponse());
+      configureAiTransportHost({
+        buildModelFetch: () => fetchMock,
+        plugin: {
+          ...previousHost.plugin,
+          resolveTransportTurnState: () =>
+            source === "turn" ? { headers: { [key]: expected } } : undefined,
+        },
+      });
+      const stream = createManagedFixtureStream(
+        createStream,
+        { ...model, ...(source === "model" ? { headers: { [key]: expected } } : {}) },
+        source === "caller" ? { headers: { [key]: expected } } : undefined,
+      );
+      expect((await stream.result()).stopReason).toBe("stop");
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(headers.get("accept-encoding")).toBe(
+        source === "default" ? defaultEncoding : expected,
+      );
+    },
+  );
 });
 
 describe.each(fixtures)("$name response hook", ({ createStream, installResponse, model }) => {
@@ -360,8 +410,96 @@ describe.each(fixtures)("$name response hook", ({ createStream, installResponse,
   );
 });
 
+describe("managed ChatGPT OAuth response model", () => {
+  it("preserves the concrete model reported by the managed response header", async () => {
+    const responseModel = "gpt-5.6-luna-2026-08-01";
+    const tracked = trackedFetch(() =>
+      completedResponse({ headers: { "openai-model": responseModel } }),
+    );
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result.responseModel).toBe(responseModel);
+  });
+
+  it("preserves the provider model reported by managed Responses lifecycle events", async () => {
+    const tracked = trackedFetch(completedResponse);
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result.responseModel).toBe(openAIModel.id);
+  });
+
+  it("preserves the concrete model reported by managed SSE event headers", async () => {
+    const responseModel = "gpt-5.6-luna-2026-08-02";
+    const tracked = trackedFetch(() =>
+      completedResponse(undefined, { "x-openai-model": responseModel }),
+    );
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result.responseModel).toBe(responseModel);
+  });
+
+  it("fails closed when managed HTTP and SSE model attestations conflict", async () => {
+    const tracked = trackedFetch(() =>
+      completedResponse(
+        { headers: { "openai-model": "gpt-5.6-sol" } },
+        { "x-openai-model": "gpt-5.6-terra-2026-08-01" },
+      ),
+    );
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Conflicting OpenAI response model attestations",
+    });
+    expect(result.responseModel).toBeUndefined();
+  });
+
+  it("fails closed when one managed SSE event has conflicting model attestations", async () => {
+    const tracked = trackedFetch(() =>
+      completedResponse(undefined, {
+        "openai-model": "gpt-5.6-sol",
+        "x-openai-model": "gpt-5.6-terra-2026-08-01",
+      }),
+    );
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Conflicting OpenAI response model attestations",
+    });
+    expect(result.responseModel).toBeUndefined();
+  });
+
+  it("fails closed when repeated managed HTTP model headers conflict", async () => {
+    const headers = new Headers({ "openai-model": "gpt-5.6-sol" });
+    headers.append("openai-model", "gpt-5.6-terra-2026-08-01");
+    const tracked = trackedFetch(() => completedResponse({ headers }));
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Conflicting OpenAI response model attestations",
+    });
+    expect(result.responseModel).toBeUndefined();
+  });
+});
+
 describe("native ChatGPT SSE non-success response hooks", () => {
-  it("runs the hook for every retry response before the successful SSE stream", async () => {
+  it("runs the hook for the failing response and surfaces the error without retrying", async () => {
+    // The embedded runner owns transient retries; the transport must expose
+    // the first non-success response to the hook and then fail the stream.
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -374,13 +512,12 @@ describe("native ChatGPT SSE non-success response hooks", () => {
     const result = await streamOpenAICodexResponses(chatGptModel, context, {
       apiKey: chatGptToken,
       transport: "sse",
-      maxRetries: 1,
       onResponse,
     }).result();
 
-    expect(result.stopReason).toBe("stop");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(onResponse.mock.calls.map(([response]) => response.status)).toEqual([503, 202]);
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onResponse.mock.calls.map(([response]) => response.status)).toEqual([503]);
   });
 
   it("cancels a terminal non-success body when its hook rejects", async () => {
@@ -408,7 +545,6 @@ describe("native ChatGPT SSE non-success response hooks", () => {
       streamOpenAICodexResponses(chatGptModel, context, {
         apiKey: chatGptToken,
         transport: "sse",
-        maxRetries: 0,
         onResponse: async () => {
           throw new Error("non-success response hook failed");
         },
@@ -438,7 +574,6 @@ describe("native ChatGPT SSE non-success response hooks", () => {
       streamOpenAICodexResponses(chatGptModel, context, {
         apiKey: chatGptToken,
         transport: "sse",
-        maxRetries: 0,
         firstEventTimeoutMs: 20,
         onFirstEventTimeout,
         onResponse: () => new Promise<void>(() => {}),

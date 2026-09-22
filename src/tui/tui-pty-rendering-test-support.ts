@@ -1,5 +1,7 @@
 import { writeFile } from "node:fs/promises";
+import { expect } from "vitest";
 import {
+  readFixtureLog,
   type StartTuiPtyFixture,
   waitForSynchronizedFrameRows,
 } from "./tui-pty-harness-assertion-test-support.js";
@@ -63,20 +65,76 @@ async function withFixture(
     await fixture.cleanup();
   }
 }
-export async function exerciseStreamingRendering(start: StartTuiPtyFixture, timeoutMs: number) {
+export async function exerciseStreamingRendering(
+  start: StartTuiPtyFixture,
+  timeoutMs: number,
+  ctrlC?: "clear" | "warn",
+) {
   await withFixture(start, {}, timeoutMs, async (fixture) => {
+    const runCalls = async () =>
+      (await readFixtureLog(fixture.logPath)).filter((entry) =>
+        ["sendChat", "abortChat", "stop"].includes(entry.method),
+      );
+    const expectedCalls = [{ method: "sendChat", payload: { message: STREAM_PROMPT } }];
     await fixture.run.write(`${STREAM_PROMPT}\r`, { delay: false });
-    await waitForSynchronizedFrameRows(
+    try {
+      await waitForSynchronizedFrameRows(fixture.run, streamingPrefixFrame, timeoutMs);
+      if (ctrlC) {
+        const draft = "CTRL_C_UNSUBMITTED_DRAFT";
+        if (ctrlC === "clear") {
+          await fixture.run.write(draft, { delay: false });
+          await waitForSynchronizedFrameRows(
+            fixture.run,
+            (rows) => streamingPrefixFrame(rows) && text(rows).includes(draft),
+            timeoutMs,
+          );
+        }
+        await fixture.run.write("\x03", { delay: false });
+        const hint =
+          ctrlC === "clear"
+            ? "cleared input; press ctrl+c again to exit"
+            : "press ctrl+c again to exit";
+        const rows = await waitForSynchronizedFrameRows(
+          fixture.run,
+          (frame) => text(frame).includes(hint),
+          timeoutMs,
+        );
+        const calls = await runCalls();
+        console.log(
+          `[behavior-evidence] tui-ctrl-c ${JSON.stringify({ ctrlC, phase: "hint", rows, calls, pid: fixture.run.pid, logPath: fixture.logPath })}`,
+        );
+        expect(text(rows)).not.toContain(draft);
+        expect(calls).toMatchObject(expectedCalls);
+        // Keep the baseline failure while still proving final delivery and graceful exit.
+        expect
+          .soft(streamingPrefixFrame(rows), "Ctrl+C hint must preserve the busy frame")
+          .toBe(true);
+      }
+    } finally {
+      await release(fixture, "streaming");
+    }
+    const rows = await waitForSynchronizedFrameRows(
       fixture.run,
-      (rows) => streamingPrefixFrame(rows),
+      (frame) =>
+        tokens(frame).join(",") === TOKENS.join(",") && text(frame).includes("local ready | idle"),
       timeoutMs,
     );
-    await release(fixture, "streaming");
-    await waitForSynchronizedFrameRows(
-      fixture.run,
-      (rows) => tokens(rows).join(",") === TOKENS.join(",") && text(rows).includes("idle"),
-      timeoutMs,
-    );
+    if (ctrlC) {
+      const calls = await runCalls();
+      console.log(
+        `[behavior-evidence] tui-ctrl-c ${JSON.stringify({ ctrlC, phase: "final", rows, calls })}`,
+      );
+      expect(calls).toMatchObject(expectedCalls);
+      await fixture.run.write("/exit\r", { delay: false });
+      const exit = await fixture.run.waitForExit();
+      const exitCalls = await runCalls();
+      console.log(
+        `[behavior-evidence] tui-ctrl-c ${JSON.stringify({ ctrlC, phase: "native-exit", exit, calls: exitCalls })}`,
+      );
+      expect(exit.exitCode).toBe(0);
+      expect(exit.signal ?? 0).toBe(0);
+      expect(exitCalls.filter((entry) => entry.method !== "stop")).toMatchObject(expectedCalls);
+    }
   });
 }
 export async function exerciseToolCardRendering(start: StartTuiPtyFixture, timeoutMs: number) {
@@ -100,12 +158,13 @@ export const TUI_PTY_RENDERING_FIXTURE_SCRIPT = `
   async function waitForRenderingRelease(gate: string) {
     const target = actionLogPath + "." + gate + ".release";
     if (existsSync(target)) return;
-    await new Promise<void>((resolve, reject) => {
-      const watcher = watch(dirname(target), () => {
-        if (existsSync(target)) { watcher.close(); resolve(); }
-      });
-      watcher.on("error", (error) => { watcher.close(); reject(error); });
-      if (existsSync(target)) { watcher.close(); resolve(); }
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (existsSync(target)) { unwatchFile(target, check); resolve(); }
+      };
+      // Release is file state; native watch delivery can outlast the fixture budget.
+      watchFile(target, { interval: 50, persistent: false }, check);
+      check();
     });
   }
   function emitAssistant(backend, runId, sessionKey, state, value) {

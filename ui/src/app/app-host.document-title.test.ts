@@ -53,7 +53,7 @@ describe("OpenClaw shell document title", () => {
         snapshot: { approvalQueue: Array.from({ length: options.approvalCount ?? 0 }) },
       },
       sessions: {
-        state: { result: options.sessions ? { sessions: options.sessions } : null },
+        presentation: { result: options.sessions ? { sessions: options.sessions } : null },
       },
     } as unknown as ApplicationContext;
   }
@@ -65,13 +65,6 @@ describe("OpenClaw shell document title", () => {
     shell.routeState = {};
     shell.syncDocumentTitle();
     expect(document.title).toBe("OpenClaw Control");
-  });
-
-  it("uses the route title for a connected route", () => {
-    const shell = createShell(createContext({ sessions: null }));
-    shell.routeState = { routeId: "usage" };
-    shell.syncDocumentTitle();
-    expect(document.title).toBe("Usage — OpenClaw");
   });
 
   it("does not read stored outboxes for a connected document title", () => {

@@ -1,11 +1,13 @@
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
   createStorageMock,
   installSafeLocalStorageForTesting,
 } from "../../test-helpers/storage.ts";
+import { registerBackgroundTasksEnglish } from "../locales/en-background-tasks.ts";
 import { createI18nManagerForTesting } from "./translate.test-support.ts";
 import type { Locale, TranslationMap } from "./types.ts";
 
@@ -25,16 +27,6 @@ function createManager() {
     loadTranslation,
     manager,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
 }
 
 describe("I18nManager pending locale retry", () => {
@@ -113,6 +105,31 @@ describe("I18nManager pending locale retry", () => {
 
     expect(manager.getLocale()).toBe("de");
     expect(loadTranslation).not.toHaveBeenCalled();
+  });
+
+  it("looks up only the active locale when a caller owns its fallback", async () => {
+    const { manager } = createManager();
+    manager.registerTranslation("de", german);
+    await manager.setLocale("de");
+
+    expect(manager.translateActive("common.health")).toBe("Gesundheit");
+    expect(manager.translateActive("common.connected")).toBeUndefined();
+  });
+
+  it("uses lazy task English as fallback without replacing the active language", async () => {
+    const { manager } = createManager();
+    manager.registerTranslation("de", {
+      chat: { backgroundTasks: { waiting: "Warten" } },
+    });
+    await manager.setLocale("de");
+
+    registerBackgroundTasksEnglish();
+
+    expect(manager.t("chat.backgroundTasks.waiting")).toBe("Warten");
+    expect(manager.t("chat.backgroundTasks.waitingChildren")).toBe("Waiting for children");
+    expect(manager.t("chat.backgroundTasks.deliveryQueued")).toBe("Queued for parent");
+    await manager.setLocale("en");
+    expect(manager.t("chat.backgroundTasks.waiting")).toBe("Waiting");
   });
 
   it("deduplicates an in-flight target and permits retry after the shared load settles", async () => {

@@ -16,11 +16,14 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
   stop: () => Promise<void>;
 } {
   let activeWorker: ChildProcess | undefined;
+  let activeRun: Promise<void> | undefined;
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const schedule = (delayMs: number) => {
-    timer = setTimeout(() => void run(), delayMs);
+    timer = setTimeout(() => {
+      activeRun = run();
+    }, delayMs);
     timer.unref?.();
   };
   const run = async () => {
@@ -34,7 +37,7 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
           },
         });
         if (!stopped) {
-          applyOpenClawDatabaseVerificationResults({ ...options, results, targets });
+          await applyOpenClawDatabaseVerificationResults({ ...options, results, targets });
         }
       }
     } catch (error) {
@@ -57,10 +60,14 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
         clearTimeout(timer);
         timer = undefined;
       }
-      if (activeWorker) {
-        await terminateDatabaseVerifyWorker(activeWorker);
+      try {
+        if (activeWorker) {
+          await terminateDatabaseVerifyWorker(activeWorker);
+        }
+      } finally {
+        // Worker exit can precede async confirmation and result application.
+        await activeRun;
       }
-      activeWorker = undefined;
     },
   };
 }

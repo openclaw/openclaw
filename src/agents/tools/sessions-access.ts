@@ -25,11 +25,15 @@ import {
   type AgentToAgentPolicy,
   type SessionAccessAction,
   type SessionToolsVisibility,
+  type SessionVisibilityRow,
 } from "../../plugin-sdk/session-visibility.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
-import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
 import {
   lookupRequesterSessionOwnership,
   resolveInternalSessionKey,
@@ -54,6 +58,26 @@ export type SessionToolActionOperation =
   | "restore"
   | "send";
 export type SessionToolActionFact = "committed" | "conflict" | "no-op" | "scheduled";
+
+type DescribedSessionVisibilityRow = SessionVisibilityRow & { sessionId?: string };
+
+function readDescribedSessionVisibilityRow(value: unknown): DescribedSessionVisibilityRow | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const key = normalizeOptionalString(value.key);
+  if (!key) {
+    return null;
+  }
+  return {
+    key,
+    agentId: normalizeOptionalString(value.agentId),
+    ownerSessionKey: normalizeOptionalString(value.ownerSessionKey),
+    spawnedBy: normalizeOptionalString(value.spawnedBy),
+    parentSessionKey: normalizeOptionalString(value.parentSessionKey),
+    sessionId: normalizeOptionalString(value.sessionId),
+  };
+}
 
 /** Render operator guidance only when a tool presents a private access decision. */
 export const formatSessionToolAccessDenial = renderSessionVisibilityDenial;
@@ -194,6 +218,7 @@ export async function resolveSessionToolAccess(params: {
   displayAction?: SessionAccessAction | "search";
   requesterAgentId: string;
   requesterSessionKey: string;
+  sessionReadScopeKey?: string;
   mainSessionKey?: string;
   authorizationTargetSessionKey?: string;
   targetAgentId: string;
@@ -214,7 +239,22 @@ export async function resolveSessionToolAccess(params: {
     });
     return denial;
   };
-  const scoped = createSessionVisibilityChecker.resolveScopedAccess({
+  if (params.sessionReadScopeKey) {
+    // Invocation read caps are ceilings: a grant held by the observed session
+    // must not widen the auxiliary reader beyond that selected session.
+    const capped = createSessionVisibilityDecisionChecker({
+      action: params.action,
+      defaultAgentId: params.targetAgentId,
+      requesterAgentId: params.requesterAgentId,
+      requesterSessionKey: params.sessionReadScopeKey,
+      visibility: "self",
+      a2aPolicy: params.a2aPolicy,
+    }).check({ key: authorizationTargetSessionKey, agentId: params.targetAgentId });
+    if (!capped.allowed) {
+      return deny(capped);
+    }
+  }
+  const scoped = await createSessionVisibilityChecker.resolveScopedAccessAsync({
     action: params.action,
     requesterSessionKey: params.requesterSessionKey,
     // A bare key is not globally unique under explicit ownership. Callers
@@ -255,6 +295,32 @@ export async function resolveSessionToolAccess(params: {
   // lookup failure replace a deterministic self/A2A policy denial.
   if (!requesterOwnedAccess.allowed) {
     return deny(initial);
+  }
+  if (
+    params.action === "history" &&
+    params.displayAction !== "search" &&
+    authorizationTargetSessionKey === params.targetSessionKey
+  ) {
+    try {
+      const described = await (params.callGateway ?? callAgentToolGatewayRequest)<{
+        session?: unknown;
+      }>({
+        method: "sessions.describe",
+        params: { key: params.targetSessionKey },
+      });
+      const row = readDescribedSessionVisibilityRow(described?.session);
+      if (row?.key === params.targetSessionKey) {
+        const access = decisionChecker.check(row);
+        if (!access.allowed) {
+          return deny(access);
+        }
+        if (row.sessionId) {
+          return { allowed: true, expectedSessionId: row.sessionId };
+        }
+      }
+    } catch {
+      // Older or temporarily unavailable gateways keep the existing fail-closed lookup below.
+    }
   }
   const ownership = await lookupRequesterSessionOwnership({
     requesterSessionKey: params.requesterSessionKey,

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import type { CronJob } from "../cron/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 
 type SessionAutomationSource = {
   /** Current in-memory cron jobs; undefined until the cron store is loaded. */
@@ -11,16 +12,11 @@ type SessionAutomationSource = {
 };
 
 let source: SessionAutomationSource | null = null;
-// Bumped on every cron service event so in-place job mutations (enable/disable,
-// auto-disable during runs) invalidate the memo even when the array identity
-// and config reference stay stable.
-let sourceVersion = 0;
 let epochCounter = 0;
 let registeredEpoch = 0;
 
 let memo: {
   jobs: readonly CronJob[];
-  version: number;
   cfg: OpenClawConfig;
   keys: ReadonlySet<string>;
 } | null = null;
@@ -45,8 +41,7 @@ export function registerSessionAutomationSource(
   }
   registeredEpoch = effectiveEpoch;
   source = next;
-  memo = null;
-  sourceVersion += 1;
+  invalidateSessionAutomationIndex();
 }
 
 /**
@@ -58,19 +53,13 @@ export function unregisterSessionAutomationSource(owner: SessionAutomationSource
     return;
   }
   source = null;
-  memo = null;
-  sourceVersion += 1;
+  invalidateSessionAutomationIndex();
 }
 
 /** Called from the cron onEvent hook after any job/store change. */
-export function bumpSessionAutomationVersion(): void {
-  sourceVersion += 1;
-}
-
-/** sessions.list cache fence input: hasAutomation is projected per row from
- * this index, so cached lists are stale the moment a binding changes. */
-export function readSessionAutomationVersion(): number {
-  return sourceVersion;
+export function invalidateSessionAutomationIndex(): void {
+  memo = null;
+  sessionChanges.emit({ all: true, scope: "automation" });
 }
 
 function buildAutomationKeys(
@@ -105,10 +94,9 @@ export function sessionHasAutomation(
   if (!source || !jobs || jobs.length === 0) {
     return false;
   }
-  if (!memo || memo.jobs !== jobs || memo.version !== sourceVersion || memo.cfg !== cfg) {
+  if (!memo || memo.jobs !== jobs || memo.cfg !== cfg) {
     memo = {
       jobs,
-      version: sourceVersion,
       cfg,
       keys: buildAutomationKeys(jobs, cfg, source.getDefaultAgentId()),
     };

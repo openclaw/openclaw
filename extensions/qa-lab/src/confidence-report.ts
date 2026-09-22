@@ -360,29 +360,22 @@ type QaConfidenceLaneEvaluation = {
   verdict?: QaConfidenceVerdict;
 };
 
+// Explicit unknown evidence bypasses failureVerdict; status-less failures are classified separately.
+function unknownLaneEvaluation(details: string): QaConfidenceLaneEvaluation {
+  return { passed: false, status: "unknown", details };
+}
+
 function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
   if (!isRecord(payload)) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "qa-suite-summary payload was not an object",
-    };
+    return unknownLaneEvaluation("qa-suite-summary payload was not an object");
   }
   const completionError = findQaSuiteSummaryCompletionError(payload);
   if (completionError) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: `qa-suite-summary ${completionError}`,
-    };
+    return unknownLaneEvaluation(`qa-suite-summary ${completionError}`);
   }
   const accountingError = findQaSuiteSummaryAccountingError(payload);
   if (accountingError) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: `qa-suite-summary ${accountingError}`,
-    };
+    return unknownLaneEvaluation(`qa-suite-summary ${accountingError}`);
   }
   const counts = isRecord(payload.counts) ? payload.counts : undefined;
   const totalCount = readCount(counts?.total);
@@ -420,13 +413,11 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
     );
     const suiteHasFailures = (failedCount ?? 0) > 0 || failedScenarioCount > 0;
     if (allEnvironmentBlocked && suiteHasFailures) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: `gateway log sentinel(s): ${formatGatewayLogSentinelSummary(
+      return unknownLaneEvaluation(
+        `gateway log sentinel(s): ${formatGatewayLogSentinelSummary(
           gatewayLogSentinels,
         )}; suite also reports failures`,
-      };
+      );
     }
     const firstBlockingSentinel =
       gatewayLogSentinels.find((finding) => finding.verdict !== "environment-blocked") ??
@@ -445,35 +436,23 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
     scenarios !== undefined &&
     Math.floor(failedCount) !== failedScenarioCount
   ) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: `qa-suite-summary count/scenario mismatch: counts.failed=${Math.max(
+    return unknownLaneEvaluation(
+      `qa-suite-summary count/scenario mismatch: counts.failed=${Math.max(
         0,
         Math.floor(failedCount),
       )}, failed scenarios=${failedScenarioCount}`,
-    };
+    );
   }
   if (unknownBlockingScenarioCount > 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: `qa-suite-summary has ${unknownBlockingScenarioCount} scenario row(s) with unsupported non-pass status`,
-    };
+    return unknownLaneEvaluation(
+      `qa-suite-summary has ${unknownBlockingScenarioCount} scenario row(s) with unsupported non-pass status`,
+    );
   }
   if (failedCount === undefined && scenarios === undefined) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "qa-suite-summary missing counts.failed and scenarios[]",
-    };
+    return unknownLaneEvaluation("qa-suite-summary missing counts.failed and scenarios[]");
   }
   if (!hasExecutedScenarios) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "qa-suite-summary has no executed scenarios",
-    };
+    return unknownLaneEvaluation("qa-suite-summary has no executed scenarios");
   }
   if (failedCount !== undefined) {
     const inferredSkippedCount =
@@ -531,17 +510,9 @@ function evaluatePassSummary(payload: unknown): QaConfidenceLaneEvaluation {
     if (status === "fail" || status === "failed" || status === "error") {
       return { passed: false, details: `summary status=${status}` };
     }
-    return {
-      passed: false,
-      status: "unknown",
-      details: `summary status=${status}`,
-    };
+    return unknownLaneEvaluation(`summary status=${status}`);
   }
-  return {
-    passed: false,
-    status: "unknown",
-    details: "summary did not expose an explicit pass signal",
-  };
+  return unknownLaneEvaluation("summary did not expose an explicit pass signal");
 }
 
 function evaluateTokenEfficiencySummary(
@@ -578,28 +549,16 @@ function evaluateTokenEfficiencySummary(
 
 function evaluateJsonlReplaySummary(payload: unknown): QaConfidenceLaneEvaluation {
   if (!isRecord(payload) || !Array.isArray(payload.transcripts)) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "jsonl replay summary missing transcripts array",
-    };
+    return unknownLaneEvaluation("jsonl replay summary missing transcripts array");
   }
   if (payload.transcripts.length === 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "jsonl replay summary has no transcripts",
-    };
+    return unknownLaneEvaluation("jsonl replay summary has no transcripts");
   }
   let drifted = 0;
   let replayedUserTurns = 0;
   for (const transcript of payload.transcripts) {
     if (!isRecord(transcript)) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: "jsonl replay summary has an invalid transcript row",
-      };
+      return unknownLaneEvaluation("jsonl replay summary has an invalid transcript row");
     }
     const userTurnCount = readNumber(transcript.userTurnCount);
     if (userTurnCount !== undefined && userTurnCount > 0) {
@@ -607,18 +566,12 @@ function evaluateJsonlReplaySummary(payload: unknown): QaConfidenceLaneEvaluatio
     }
     const hasFirstDrift = transcript.firstDriftAtTurn !== undefined;
     if (!Array.isArray(transcript.drift)) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: "jsonl replay transcript missing drift array",
-      };
+      return unknownLaneEvaluation("jsonl replay transcript missing drift array");
     }
     if (userTurnCount !== undefined && transcript.drift.length !== userTurnCount) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: "jsonl replay transcript drift count does not match userTurnCount",
-      };
+      return unknownLaneEvaluation(
+        "jsonl replay transcript drift count does not match userTurnCount",
+      );
     }
     const drift = transcript.drift;
     const hasDrift = drift.some((entry) => entry !== "none");
@@ -627,11 +580,7 @@ function evaluateJsonlReplaySummary(payload: unknown): QaConfidenceLaneEvaluatio
     }
   }
   if (replayedUserTurns === 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "jsonl replay summary has no replayed user turns",
-    };
+    return unknownLaneEvaluation("jsonl replay summary has no replayed user turns");
   }
   return {
     passed: drifted === 0,
@@ -641,18 +590,10 @@ function evaluateJsonlReplaySummary(payload: unknown): QaConfidenceLaneEvaluatio
 
 function evaluateSelfTestSummary(payload: unknown): QaConfidenceLaneEvaluation {
   if (!isRecord(payload) || !Array.isArray(payload.canaries)) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "confidence self-test summary missing canaries array",
-    };
+    return unknownLaneEvaluation("confidence self-test summary missing canaries array");
   }
   if (payload.canaries.length === 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "confidence self-test summary has no canaries",
-    };
+    return unknownLaneEvaluation("confidence self-test summary has no canaries");
   }
   const canariesById = new Map(
     payload.canaries
@@ -663,11 +604,9 @@ function evaluateSelfTestSummary(payload: unknown): QaConfidenceLaneEvaluation {
     (canaryId) => !canariesById.has(canaryId),
   );
   if (missingExpected.length > 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: `confidence self-test missing expected canaries: ${missingExpected.join(", ")}`,
-    };
+    return unknownLaneEvaluation(
+      `confidence self-test missing expected canaries: ${missingExpected.join(", ")}`,
+    );
   }
   const missed = QA_CONFIDENCE_SELF_TEST_CANARY_IDS.filter(
     (canaryId) => canariesById.get(canaryId)?.detected !== true,
@@ -939,7 +878,7 @@ export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): st
   ];
   for (const lane of report.lanes) {
     lines.push(
-      `| ${escapeTableCell(lane.id)} | ${lane.status} | ${formatVerdict(lane)} | ${lane.productImpact ?? ""} | ${lane.qaImpact ?? ""} | ${escapeTableCell(lane.details)} |`,
+      `| ${escapeTableCell(lane.id)} | ${lane.status} | ${formatVerdict(lane)} | ${escapeTableCell(lane.productImpact ?? "")} | ${escapeTableCell(lane.qaImpact ?? "")} | ${escapeTableCell(lane.details)} |`,
     );
   }
   if (report.failures.length > 0) {

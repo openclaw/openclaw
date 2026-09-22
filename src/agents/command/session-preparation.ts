@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
@@ -24,7 +25,7 @@ export async function prepareEmbeddedSessionState(params: {
   lifecycleGeneration: string;
   runId: string;
   workspaceDir: string;
-  executionSkillsDir: string;
+  executionWorkspaceDir: string;
   watchSkills: boolean;
   isNewSession: boolean;
   isSubagentLaneTurn: boolean;
@@ -41,6 +42,7 @@ export async function prepareEmbeddedSessionState(params: {
   const requestedThinkLevel = params.thinkOnce ?? params.thinkOverride ?? params.persistedThinking;
   const resolvedVerboseLevel =
     params.verboseOverride ?? params.persistedVerbose ?? params.verboseDefault;
+  const coordination = isSubagentCoordinationInputProvenance(params.opts.inputProvenance);
 
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
   if (params.sessionKey || params.suppressVisibleSessionEffects) {
@@ -49,7 +51,10 @@ export async function prepareEmbeddedSessionState(params: {
       agentId: params.sessionAgentId,
       lifecycleGeneration: params.lifecycleGeneration,
       verboseLevel: resolvedVerboseLevel,
-      isControlUiVisible: !params.suppressVisibleSessionEffects,
+      isControlUiVisible: !params.suppressVisibleSessionEffects && !coordination,
+      ...(coordination ? { projectSessionMessages: false } : {}),
+      // Node and local command ingress may not have a separate chat activity owner.
+      projectSessionActive: !params.suppressVisibleSessionEffects && !coordination,
     });
   }
 
@@ -66,20 +71,24 @@ export async function prepareEmbeddedSessionState(params: {
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
   });
-  const skillSnapshotState = resolveReusableWorkspaceSkillSnapshot({
+  const skillSnapshotState = await resolveReusableWorkspaceSkillSnapshot({
     workspaceDir: params.workspaceDir,
-    executionSkillsDir: params.executionSkillsDir,
+    executionWorkspaceDir: params.executionWorkspaceDir,
     config: params.cfg,
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,
+    librarySelections: sessionEntry?.skillLibrarySelections,
     skillFilter,
-    eligibility: {
+    assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
+    resolveEligibility: () => ({
       nodeSkills: nodeSkillsEligibility,
       remote: getRemoteSkillEligibility({
         advertiseExecNode: nodeSkillsEligibility.canExec,
       }),
-    },
-    watch: params.watchSkills,
+    }),
+    // A one-shot caller has no later turn to consume invalidations; persistent
+    // watchers would keep its process alive after the reply has completed.
+    watch: params.watchSkills && params.opts.oneShotCliRun !== true,
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
       : {}),

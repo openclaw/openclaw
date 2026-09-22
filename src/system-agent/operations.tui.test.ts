@@ -56,6 +56,38 @@ describe("system-agent TUI operations", () => {
     });
   });
 
+  it.each([undefined, "fixture/primary"])(
+    "checks the requested utility agent's primary before launching its TUI: %s",
+    async (model) => {
+      const { runtime } = createSystemAgentTestRuntime();
+      const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
+      const overview: SystemAgentOverview = {
+        ...createOverview(true),
+        defaultModel: "fixture/primary",
+        agents: [
+          { id: "main", isDefault: true, model: "fixture/primary" },
+          { id: "work", isDefault: false, utilityModel: "fixture/utility", model },
+        ],
+      };
+      const result = await executeSystemAgentOperation(
+        { kind: "open-tui", agentId: "work" },
+        runtime,
+        {
+          deps: { runTui, loadOverview: async () => overview },
+        },
+      );
+      if (model) {
+        expect(runTui).toHaveBeenCalledOnce();
+      } else {
+        expect(runTui).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          applied: false,
+          message: expect.stringContaining("needs a primary model"),
+        });
+      }
+    },
+  );
+
   it("returns from the agent TUI back to OpenClaw", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     const runTui = vi.fn(async () => ({

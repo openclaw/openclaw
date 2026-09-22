@@ -1,43 +1,16 @@
 // State database path helpers resolve shared OpenClaw state DB paths.
-import os from "node:os";
 import path from "node:path";
-import { isMainThread, threadId } from "node:worker_threads";
-import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { resolveStateDir } from "../config/paths.js";
-
-/**
- * Path helpers for the shared OpenClaw SQLite state database.
- *
- * Tests get worker-scoped temp state roots unless they explicitly provide
- * `OPENCLAW_STATE_DIR`, which prevents parallel Vitest workers from sharing WAL files.
- */
-function resolveOpenClawStateRootDir(env: NodeJS.ProcessEnv): string {
-  if (env.OPENCLAW_STATE_DIR?.trim()) {
-    return resolveStateDir(env);
-  }
-  if (env.VITEST || env.NODE_ENV === "test") {
-    const workerId = parseStrictNonNegativeInteger(
-      env.VITEST_WORKER_ID ?? env.VITEST_POOL_ID ?? "",
-    );
-    const shardSuffix =
-      workerId !== undefined
-        ? `${process.pid}-${workerId}`
-        : isMainThread
-          ? String(process.pid)
-          : `${process.pid}-${threadId}`;
-    return path.join(os.tmpdir(), "openclaw-test-state", shardSuffix);
-  }
-  return resolveStateDir(env);
-}
+import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 
 /** Resolve the directory that contains the shared state SQLite file. */
 export function resolveOpenClawStateSqliteDir(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveOpenClawStateRootDir(env), "state");
+  return path.join(resolveStateDir(env), "state");
 }
 
 /** Resolve the shared state SQLite file path. */
 export function resolveOpenClawStateSqlitePath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveOpenClawStateSqliteDir(env), "openclaw.sqlite");
+  return path.join(resolveStateDir(env), "state", "openclaw.sqlite");
 }
 
 /** Resolve the state owner directory for a canonical or explicit shared database path. */
@@ -51,15 +24,26 @@ export function resolveOpenClawAgentDatabaseStoredPath(
   registryDatabasePath: string,
   agentDatabasePath: string,
 ): string {
-  const stateDir = resolveOpenClawStateDirForDatabasePath(registryDatabasePath);
+  const rawStateDir = resolveOpenClawStateDirForDatabasePath(registryDatabasePath);
+  const stateDir =
+    process.platform === "win32" ? normalizeWindowsPathPreservingCase(rawStateDir) : rawStateDir;
   const absolutePath = path.resolve(agentDatabasePath);
-  const relativePath = path.relative(stateDir, absolutePath);
+  const comparisonPath =
+    process.platform === "win32" ? normalizeWindowsPathPreservingCase(absolutePath) : absolutePath;
+  // Device namespaces without a plain drive/share spelling retain their original locator.
+  if (!path.isAbsolute(stateDir) || !path.isAbsolute(comparisonPath)) {
+    return absolutePath;
+  }
+  const relativePath = path.relative(stateDir, comparisonPath);
   if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
     return absolutePath;
   }
-  const statePrefix = `${stateDir}${stateDir.endsWith(path.sep) ? "" : path.sep}`;
-  return path.isAbsolute(agentDatabasePath) && agentDatabasePath.startsWith(statePrefix)
-    ? agentDatabasePath.slice(statePrefix.length)
+  // Preserve raw traversal tokens after the root; only namespace spelling is an alias.
+  const rawPrefix = [stateDir, path.toNamespacedPath(stateDir)]
+    .map((root) => `${root}${root.endsWith(path.sep) ? "" : path.sep}`)
+    .find((prefix) => agentDatabasePath.startsWith(prefix));
+  return path.isAbsolute(agentDatabasePath) && rawPrefix !== undefined
+    ? agentDatabasePath.slice(rawPrefix.length)
     : relativePath;
 }
 

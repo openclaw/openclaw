@@ -99,12 +99,13 @@ export function createTelegramInboundProcessing({
     createSpooledReplayParticipantForBufferedWork,
   } = message;
   const {
+    cancelPending,
     inboundDebouncer,
     resolveTelegramDebounceEntryMs,
     shouldDebounceTelegramEntry,
     resolveTelegramDebounceLane,
     handleTextFragment,
-  } = createTelegramInboundBuffers({ params: { cfg, bot, runtime, opts }, message });
+  } = createTelegramInboundBuffers({ params: { cfg, accountId, bot, runtime, opts }, message });
 
   const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition } = createTelegramInboundMedia({
     params: {
@@ -167,7 +168,6 @@ export function createTelegramInboundProcessing({
         senderId,
         effectiveDmAllow,
         effectiveGroupAllow,
-        ownerAccess: { ownerList: [], senderIsOwner: false },
         eventKind: "message",
         allowTextCommands: true,
         hasControlCommand: true,
@@ -177,6 +177,10 @@ export function createTelegramInboundProcessing({
       return abortControlAuthorized;
     };
 
+    if (await isAuthorizedAbortControlMessage()) {
+      cancelPending({ chatId, threadSpec, senderId });
+    }
+
     if (
       await handleTextFragment({
         ctx,
@@ -185,7 +189,6 @@ export function createTelegramInboundProcessing({
         threadSpec,
         storeAllowFrom,
         isAbortControlMessage,
-        isAuthorizedAbortControlMessage,
         promptContextMinTimestampMs,
         promptContextAmbientWatermark,
         dispatchDedupeClaims,
@@ -342,18 +345,6 @@ export function createTelegramInboundProcessing({
           debounceLane,
         })
       : null;
-    if (senderId && (await isAuthorizedAbortControlMessage())) {
-      for (const lane of ["default", "forward"] as const) {
-        inboundDebouncer.cancelKey(
-          buildTelegramInboundDebounceKey({
-            accountId,
-            conversationKey,
-            senderId,
-            debounceLane: lane,
-          }),
-        );
-      }
-    }
     const debounceEntry: TelegramDebounceEntry = {
       ctx,
       msg,

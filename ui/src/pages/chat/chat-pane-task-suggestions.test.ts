@@ -9,6 +9,10 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
 const suggestion: TaskSuggestion = {
@@ -23,6 +27,164 @@ const suggestion: TaskSuggestion = {
 };
 
 describe("chat pane task suggestion lifecycle", () => {
+  it("keeps dismissed cards hidden across pending and late list responses", async () => {
+    const dismissed = createDeferred<{ taskId: string; dismissed: boolean }>();
+    const listed = createDeferred<TaskSuggestionsListResult>();
+    let dismissedOnServer = false;
+    const request = createGatewayRequestMock((method) =>
+      method === "taskSuggestions.dismiss"
+        ? dismissed.promise
+        : dismissedOnServer
+          ? Promise.resolve({ suggestions: [] })
+          : listed.promise,
+    );
+    const { pane } = createTestChatPane({
+      client: createTestGatewayClient(request),
+      sessions: {} as SessionCapability,
+    });
+    pane.taskSuggestions = [suggestion];
+
+    const oldList = pane.refreshTaskSuggestions();
+    const pending = pane.dismissTaskSuggestion(suggestion);
+    expect(pane.taskSuggestions).toEqual([]);
+    await pane.dismissTaskSuggestion(suggestion);
+    expect(
+      request.mock.calls.filter(([method]) => method === "taskSuggestions.dismiss"),
+    ).toHaveLength(1);
+
+    const pendingList = pane.refreshTaskSuggestions();
+    dismissedOnServer = true;
+    dismissed.resolve({ taskId: suggestion.id, dismissed: true });
+    await pending;
+    listed.resolve({ suggestions: [suggestion] });
+    await Promise.all([oldList, pendingList]);
+    expect(pane.taskSuggestions).toEqual([]);
+  });
+
+  it("restores a failed dismissal without losing newly arrived suggestions", async () => {
+    const dismissed = createDeferred<never>();
+    const next = { ...suggestion, id: "task_next", title: "Next task" };
+    let suggestions = [suggestion];
+    const request = createGatewayRequestMock((method) =>
+      method === "taskSuggestions.dismiss" ? dismissed.promise : Promise.resolve({ suggestions }),
+    );
+    const { pane, state } = createTestChatPane({
+      client: createTestGatewayClient(request),
+      sessions: {} as SessionCapability,
+    });
+    pane.taskSuggestions = [suggestion];
+
+    const pending = pane.dismissTaskSuggestion(suggestion);
+    expect(pane.taskSuggestions).toEqual([]);
+    await pane.refreshTaskSuggestions();
+    expect(pane.taskSuggestions).toEqual([]);
+    suggestions = [suggestion, next];
+    pane.taskSuggestions = [next];
+    dismissed.reject(new Error("Dismissal unavailable"));
+    await pending;
+
+    expect(pane.taskSuggestions).toEqual([suggestion, next]);
+    expect(state.chatError).toBe("Dismissal unavailable");
+  });
+
+  it("does not restore a resolved card when the dismiss response is lost", async () => {
+    const dismissed = createDeferred<never>();
+    const request = createGatewayRequestMock((method) =>
+      method === "taskSuggestions.dismiss"
+        ? dismissed.promise
+        : Promise.resolve({ suggestions: [] }),
+    );
+    const { pane, state } = createTestChatPane({
+      client: createTestGatewayClient(request),
+      sessions: {} as SessionCapability,
+    });
+    pane.taskSuggestions = [suggestion];
+    const pending = pane.dismissTaskSuggestion(suggestion);
+    pane.handleTaskSuggestionEvent({
+      action: "resolved",
+      taskId: suggestion.id,
+      resolution: "dismissed",
+    });
+    dismissed.reject(new Error("Response lost"));
+    await pending;
+
+    expect(pane.taskSuggestions).toEqual([]);
+    expect(state.chatError).toBeNull();
+  });
+
+  it.each(["session", "connection"])(
+    "does not restore a dismissal in a newer %s",
+    async (change) => {
+      const dismissed = createDeferred<never>();
+      const { pane, state } = createTestChatPane({
+        client: createTestGatewayClient(createGatewayRequestMock(() => dismissed.promise)),
+        sessions: {} as SessionCapability,
+      });
+      pane.taskSuggestions = [suggestion];
+      const pending = pane.dismissTaskSuggestion(suggestion);
+      if (change === "connection") {
+        pane.connectionGeneration += 1;
+      } else {
+        state.sessionKey = "agent:main:other";
+      }
+      const next = { ...suggestion, id: "task_other", sessionKey: state.sessionKey };
+      pane.taskSuggestions = [next];
+      dismissed.reject(new Error("Old dismissal failed"));
+      await pending;
+
+      expect(pane.taskSuggestions).toEqual([next]);
+      expect(state.chatError).toBeNull();
+    },
+  );
+
+  it("reconciles a refused dismissal with the authoritative suggestion list", async () => {
+    const request = createGatewayRequestMock((method) =>
+      Promise.resolve(
+        method === "taskSuggestions.dismiss"
+          ? { taskId: suggestion.id, dismissed: false }
+          : { suggestions: [suggestion] },
+      ),
+    );
+    const { pane } = createTestChatPane({
+      client: createTestGatewayClient(request),
+      sessions: {} as SessionCapability,
+    });
+    pane.taskSuggestions = [suggestion];
+    await pane.dismissTaskSuggestion(suggestion);
+    await vi.waitFor(() => expect(pane.taskSuggestions).toEqual([suggestion]));
+  });
+
+  it("preserves refused-dismissal reconciliation when another dismissal succeeds", async () => {
+    const next = { ...suggestion, id: "task_next", title: "Next task" };
+    const firstDismiss = createDeferred<{ taskId: string; dismissed: boolean }>();
+    const secondDismiss = createDeferred<{ taskId: string; dismissed: boolean }>();
+    const oldList = createDeferred<TaskSuggestionsListResult>();
+    let listCount = 0;
+    let dismissCount = 0;
+    const request = createGatewayRequestMock((method) => {
+      if (method === "taskSuggestions.dismiss") {
+        dismissCount += 1;
+        return dismissCount === 1 ? firstDismiss.promise : secondDismiss.promise;
+      }
+      listCount += 1;
+      return listCount === 1 ? oldList.promise : Promise.resolve({ suggestions: [suggestion] });
+    });
+    const { pane } = createTestChatPane({
+      client: createTestGatewayClient(request),
+      sessions: {} as SessionCapability,
+    });
+    pane.taskSuggestions = [suggestion, next];
+    const first = pane.dismissTaskSuggestion(suggestion);
+    const second = pane.dismissTaskSuggestion(next);
+    firstDismiss.resolve({ taskId: suggestion.id, dismissed: false });
+    await first;
+    secondDismiss.resolve({ taskId: next.id, dismissed: true });
+    await second;
+    oldList.resolve({ suggestions: [suggestion, next] });
+
+    await vi.waitFor(() => expect(pane.taskSuggestions).toEqual([suggestion]));
+  });
+
   it("surfaces clipboard failure through the pane error path", async () => {
     const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
     const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
@@ -45,6 +207,10 @@ describe("chat pane task suggestion lifecycle", () => {
     try {
       await pane.copyTaskSuggestionPrompt(suggestion);
     } finally {
+      // The fallback restores focus on the next turn; drain it before jsdom teardown.
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 0);
+      });
       if (originalClipboard) {
         Object.defineProperty(navigator, "clipboard", originalClipboard);
       } else {
@@ -65,24 +231,31 @@ describe("chat pane task suggestion lifecycle", () => {
 
   it("keeps accept ownership when the resolved event arrives before the response", async () => {
     const accepted = createDeferred<TaskSuggestionsAcceptResult>();
-    const client = {
-      request: vi.fn((method: string) =>
-        method === "taskSuggestions.accept"
-          ? accepted.promise
-          : Promise.resolve({ suggestions: [] } satisfies TaskSuggestionsListResult),
-      ),
-    } as unknown as GatewayBrowserClient;
+    const request = createGatewayRequestMock((method) =>
+      method === "taskSuggestions.accept"
+        ? accepted.promise
+        : Promise.resolve({ suggestions: [] } satisfies TaskSuggestionsListResult),
+    );
+    const client = createTestGatewayClient(request);
     const sessions = {} as SessionCapability;
     const { pane } = createTestChatPane({ client, sessions });
     const navigate = vi.fn();
     pane.onPaneSessionChange = navigate;
 
-    const pending = pane.acceptTaskSuggestion(suggestion, "worktree");
+    const pending = pane.acceptTaskSuggestion(suggestion);
     pane.handleTaskSuggestionEvent({
       action: "resolved",
       taskId: suggestion.id,
       resolution: "accepted",
     });
+    await pane.acceptTaskSuggestion(suggestion);
+    expect(request).toHaveBeenCalledWith("taskSuggestions.accept", {
+      taskId: suggestion.id,
+      mode: "local",
+    });
+    expect(
+      request.mock.calls.filter(([method]) => method === "taskSuggestions.accept"),
+    ).toHaveLength(1);
     accepted.resolve({ taskId: suggestion.id, key: "agent:main:task" });
 
     await pending;
@@ -99,27 +272,11 @@ describe("chat pane task suggestion lifecycle", () => {
     const navigate = vi.fn();
     pane.onPaneSessionChange = navigate;
 
-    const pending = pane.acceptTaskSuggestion(suggestion, "worktree");
+    const pending = pane.acceptTaskSuggestion(suggestion);
     pane.connectionGeneration += 1;
     accepted.resolve({ taskId: suggestion.id, key: "agent:main:stale" });
 
     await pending;
-    expect(navigate).not.toHaveBeenCalled();
-  });
-
-  it("keeps session-mode acceptance in the source pane", async () => {
-    const request = vi.fn().mockResolvedValue({ taskId: suggestion.id, key: "agent:main:task" });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-
-    await pane.acceptTaskSuggestion(suggestion, "session");
-
-    expect(request).toHaveBeenCalledWith("taskSuggestions.accept", {
-      taskId: suggestion.id,
-      mode: "session",
-    });
     expect(navigate).not.toHaveBeenCalled();
   });
 

@@ -90,6 +90,8 @@ type SubstituteOptions = {
   onMissing?: (warning: EnvSubstitutionWarning) => void;
   /** Records exact env SecretRef shorthand that substitution did not materialize. */
   onPendingEnvSecretRef?: (id: string, configPath: string) => void;
+  /** Records the source of an exact env SecretRef shorthand that substitution materialized. */
+  onResolvedEnvSecretRef?: (id: string, configPath: string) => void;
 };
 
 function substituteString(
@@ -135,6 +137,9 @@ function substituteString(
           continue;
         }
         throw new MissingEnvVarError(token.name, configPath);
+      }
+      if (authoredRef?.id === token.name) {
+        opts?.onResolvedEnvSecretRef?.(token.name, configPath);
       }
       chunks.push(envValue);
       i = token.end;
@@ -190,16 +195,7 @@ function substituteAny(
   if (isPlainObject(value)) {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
-      const isPluginConfigPath =
-        path === "plugins.entries" ||
-        path.startsWith("plugins.entries.") ||
-        path.startsWith("plugins.entries[");
-      const childPath = isPluginConfigPath
-        ? appendConfigPathSegment(path, key)
-        : path
-          ? `${path}.${key}`
-          : key;
-      result[key] = substituteAny(val, env, childPath, opts);
+      result[key] = substituteAny(val, env, appendConfigPathSegment(path, key), opts);
     }
     return result;
   }

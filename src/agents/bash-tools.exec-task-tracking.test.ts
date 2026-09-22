@@ -19,40 +19,55 @@ describe("background exec task tracking", () => {
     taskRuntime.finalizeTaskRunByRunId.mockReset();
   });
 
-  it("creates a silent CLI ledger row without persisting command text", () => {
-    taskRuntime.createRunningTaskRun.mockReturnValue({ taskId: "task-1" });
+  it.each([
+    {
+      command: "pnpm test src/agents/example.test.ts",
+      label: "pnpm test src/agents/example.test.ts",
+    },
+    { command: "\u001b[32mpnpm\u001b[0m\n  run\tbuild ", label: "pnpm run build" },
+    {
+      command: `curl --token ${"x".repeat(140)} https://example.com`,
+      label: "curl --token xxxxxx…xxxx https://example.com",
+    },
+    { command: `echo ${"x".repeat(130)}`, label: `echo ${"x".repeat(114)}…` },
+    { command: " \n\t ", label: "CLI command" },
+  ])(
+    "creates a silent CLI ledger row with a bounded, redacted command: $label",
+    ({ command, label }) => {
+      taskRuntime.createRunningTaskRun.mockReturnValue({ taskId: "task-1" });
 
-    const handle = createBackgroundExecTask({
-      processSessionId: "amber-reef",
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      startedAt: 100,
-    });
+      const handle = createBackgroundExecTask({
+        processSessionId: "amber-reef",
+        command,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        startedAt: 100,
+      });
 
-    expect(handle).toEqual({
-      taskId: "task-1",
-      runId: "exec:amber-reef",
-      sessionKey: "agent:main:main",
-    });
-    expect(taskRuntime.createRunningTaskRun).toHaveBeenCalledWith({
-      runtime: "cli",
-      taskKind: "exec",
-      sourceId: "amber-reef",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      agentId: "main",
-      requesterAgentId: "main",
-      runId: "exec:amber-reef",
-      label: "CLI command",
-      task: "Background CLI command",
-      notifyPolicy: "silent",
-      deliveryStatus: "not_applicable",
-      startedAt: 100,
-      lastEventAt: 100,
-      progressSummary: "Command running",
-    });
-  });
+      expect(handle).toEqual({
+        taskId: "task-1",
+        runId: "exec:amber-reef",
+        sessionKey: "agent:main:main",
+      });
+      expect(taskRuntime.createRunningTaskRun).toHaveBeenCalledWith({
+        runtime: "cli",
+        taskKind: "exec",
+        sourceId: "amber-reef",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        agentId: "main",
+        requesterAgentId: "main",
+        runId: "exec:amber-reef",
+        label,
+        task: label,
+        notifyPolicy: "silent",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+        lastEventAt: 100,
+      });
+    },
+  );
 
   it.each([
     {

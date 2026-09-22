@@ -2,20 +2,52 @@
 
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  canRecoverSessionProjectionFinal,
+  hasSessionProjectionAcceptedFinal,
+  findUniqueSnapshotTerminalMatch,
+  isUnsequencedLiveTerminal,
+  isSessionProjectionToolContinuation,
+  isToolUsePersistedFinalRow,
+  readFinalContentIdentity,
+  readSessionProjectionFinalMessageIdentity,
+} from "./session-projection-final-identity.js";
+import {
+  hasDisplayableSessionMessage,
+  isSessionProjectionErrorMessage,
+} from "./session-projection-message-content.js";
+import {
+  createSessionProjectionEntry as createEntry,
+  isLocallyOptimisticSessionMessage,
+  sameTranscriptIdentity,
   normalizeSessionProjectionRunId,
-  readSessionMessageIdentity,
+  readAssistantStreamSegmentIdentity,
+  sameAssistantPersistenceReceipt,
   readSessionProjectionString as readNonemptyString,
   type SessionMessageEnvelope,
   type SessionMessageIdentity,
+  type SessionProjectionEntry,
 } from "./session-projection-message-identity.js";
-import { reduceSessionProjectionRunEventImpl } from "./session-projection-run-event.js";
+import { retainSessionProjectionRuns } from "./session-projection-run-retention.js";
+export {
+  hasSessionProjectionAcceptedFinal,
+  readSessionProjectionFinalMessageIdentity,
+} from "./session-projection-final-identity.js";
+export {
+  reduceSessionProjectionRunEvent,
+  type SessionProjectionGatewayRunEvent,
+  type SessionProjectionRunTransition,
+} from "./session-projection-run-event.js";
 
 export {
+  isLocallyOptimisticSessionMessage,
   normalizeSessionProjectionRunId,
+  readAssistantStreamSegmentIdentity,
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "./session-projection-message-identity.js";
+export { isSessionProjectionErrorMessage } from "./session-projection-message-content.js";
 export type {
+  SessionProjectionEntry,
   SessionMessageEnvelope,
   SessionMessageIdentity,
 } from "./session-projection-message-identity.js";
@@ -42,31 +74,17 @@ export type SessionProjectionRunStatus =
 
 export type SessionProjectionRun = {
   runId: string;
+  seq?: number;
   status: SessionProjectionRunStatus;
   message?: unknown;
   acceptedFinalMessageIdentities?: readonly string[];
+  inferredSnapshotTerminal?: {
+    entry: SessionProjectionEntry;
+    matchedIdentity: SessionMessageIdentity;
+  };
   stopReason?: string;
   errorKind?: string;
   errorMessage?: string;
-};
-
-export type SessionProjectionGatewayRunEvent = {
-  state?: unknown;
-  yielded?: unknown;
-} & Partial<Record<"runId" | "message" | "stopReason" | "errorKind" | "errorMessage", unknown>>;
-
-export type SessionProjectionRunTransition = {
-  projection: SessionProjectionState;
-  previousRun: SessionProjectionRun | undefined;
-  currentRun: SessionProjectionRun | undefined;
-};
-
-export type SessionProjectionEntry = {
-  message: unknown;
-  identity: SessionMessageIdentity | null;
-  live: boolean;
-  pending: boolean;
-  pendingRunId: string | null;
 };
 
 export type SessionProjectionState = {
@@ -77,8 +95,6 @@ export type SessionProjectionState = {
   hasTransportGap: boolean;
 };
 
-const MAX_TRACKED_SESSION_RUNS = 200;
-const RETAINED_SESSION_RUNS = 150;
 const MAX_ACCEPTED_FINAL_MESSAGES_PER_RUN = 32;
 const SESSION_PROJECTION_SCOPE_KEYS = [
   "sessionKey",
@@ -110,7 +126,7 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
         previousRunId?: string;
       }
     | { type: "sendFailed"; runId: string }
-    | { type: "runDelta"; runId: string; message?: unknown }
+    | { type: "runDelta"; runId: string; seq?: number; message?: unknown }
     | (Omit<SessionProjectionRun, "acceptedFinalMessageIdentities"> & {
         type: "runTerminal";
         status: Exclude<SessionProjectionRunStatus, "streaming">;
@@ -119,35 +135,6 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
     | { type: "transportGap" }
     | { type: "reconnected" }
   );
-
-/** Local turns have no durable transcript metadata beyond their own optional send key. */
-export function isLocallyOptimisticSessionMessage(message: unknown): boolean {
-  const identity = readSessionMessageIdentity(message);
-  if (!identity || (identity.role !== "user" && identity.role !== "assistant")) {
-    return false;
-  }
-  const metadata = readRecord(readRecord(message)?.["__openclaw"]);
-  return !metadata || Object.keys(metadata).every((key) => key === "idempotencyKey");
-}
-
-function createEntry(
-  message: unknown,
-  options?: { envelope?: SessionMessageEnvelope; live?: boolean; pendingRunId?: string | null },
-): SessionProjectionEntry {
-  const identity = readSessionMessageIdentity(message, options?.envelope);
-  const inferredPendingRunId =
-    options?.live !== true && isLocallyOptimisticSessionMessage(message) ? identity?.runId : null;
-  const pendingRunId = normalizeSessionProjectionRunId(
-    options?.pendingRunId ?? inferredPendingRunId,
-  );
-  return {
-    message,
-    identity,
-    live: options?.live === true,
-    pending: pendingRunId !== null,
-    pendingRunId,
-  };
-}
 
 function createProjectionEntries(messages: readonly unknown[]): SessionProjectionEntry[] {
   let pendingUserRunId: string | null = null;
@@ -202,60 +189,83 @@ function readEventScope(event: ScopedSessionProjectionEvent): SessionProjectionS
   return scope;
 }
 
-function sameTranscriptIdentity(
-  left: SessionMessageIdentity | null,
-  right: SessionMessageIdentity | null,
-): boolean {
-  if (!left || !right || left.role !== right.role) {
-    return false;
-  }
-  if (left.isImported || right.isImported) {
-    if (!left.isImported || !right.isImported) {
-      return false;
-    }
-    if (left.externalSource || right.externalSource) {
-      return Boolean(left.externalSource && left.externalSource === right.externalSource);
-    }
-    // Partial provider IDs are unsafe, but a same-scope persisted sequence is authoritative.
-    return left.sequence !== null && right.sequence !== null && left.sequence === right.sequence;
-  }
-  if (left.id || right.id) {
-    // A missing durable ID cannot adopt another canonical row by sequence alone.
-    return Boolean(left.id && right.id && left.id === right.id);
-  }
-  // A run can publish several durable messages; its ID identifies ownership, not a row.
-  return left.sequence !== null && right.sequence !== null && left.sequence === right.sequence;
-}
-
 function entryMatches(
   left: SessionProjectionEntry,
   right: SessionProjectionEntry,
   allowSnapshotPromotion = false,
 ): boolean {
+  const leftSegment = readAssistantStreamSegmentIdentity(left.message);
+  const rightSegment = readAssistantStreamSegmentIdentity(right.message);
+  // One transcript row can contain separate commentary and tool display parts.
+  if (leftSegment?.itemId !== rightSegment?.itemId) {
+    return false;
+  }
   if (sameTranscriptIdentity(left.identity, right.identity)) {
     return true;
+  }
+  if (sameAssistantPersistenceReceipt(left.identity, right.identity)) {
+    return true;
+  }
+  if (
+    left.identity?.role === "assistant" &&
+    right.identity?.role === "assistant" &&
+    left.identity.idempotencyKey &&
+    right.identity.idempotencyKey &&
+    left.identity.idempotencyKey !== right.identity.idempotencyKey
+  ) {
+    return false;
   }
   const durableEntry = left.identity?.id ? left : right.identity?.id ? right : null;
   const provisionalEntry = durableEntry === left ? right : durableEntry === right ? left : null;
   const durableMetadata = readRecord(readRecord(durableEntry?.message)?.["__openclaw"]);
   if (
-    durableEntry?.live &&
-    provisionalEntry?.live &&
-    durableEntry.identity?.role === "assistant" &&
-    provisionalEntry.identity?.role === "assistant" &&
+    durableEntry?.identity?.role === "assistant" &&
+    provisionalEntry?.identity?.role === "assistant" &&
     !durableEntry.identity.isImported &&
     !provisionalEntry.identity.isImported &&
-    !provisionalEntry.identity.id &&
-    durableEntry.identity.runId &&
-    durableEntry.identity.runId === provisionalEntry.identity.runId &&
-    (readNonemptyString(durableMetadata?.mirrorOrigin) === null ||
-      durableMetadata?.runTerminal === true)
+    !provisionalEntry.identity.id
   ) {
-    return true;
+    const durableSegment = durableEntry === left ? leftSegment : rightSegment;
+    const provisionalSegment = durableEntry === left ? rightSegment : leftSegment;
+    // Terminal cleanup can materialize commentary before cursor history catches up.
+    // Adopt its exact item/run without joining distinct durable rows or equal prose.
+    if (
+      provisionalEntry.identity.sequence === null &&
+      durableSegment?.runId &&
+      durableSegment.runId === provisionalSegment?.runId &&
+      durableSegment.itemId === provisionalSegment.itemId
+    ) {
+      return true;
+    }
+    // Commentary and tool continuations cannot own an unkeyed final answer.
+    if (
+      provisionalEntry.live &&
+      !durableSegment &&
+      !isSessionProjectionToolContinuation(durableEntry.message) &&
+      // Admitting a text-only toolUse-persisted final must not let it merge
+      // with a *different* same-run answer in either direction: the kept side
+      // suppresses or replaces the other without any content comparison
+      // downstream. Scope the content requirement to that newly admitted
+      // class only; pre-existing matches (identity promotions, non-toolUse
+      // rows) keep their established semantics.
+      (!isToolUsePersistedFinalRow(durableEntry.message) ||
+        readFinalContentIdentity(durableEntry.message) ===
+          readFinalContentIdentity(provisionalEntry.message)) &&
+      provisionalEntry.identity.sequence === null &&
+      (provisionalEntry.afterSequence === undefined ||
+        (provisionalEntry.afterSequence !== null &&
+          durableEntry.identity.sequence !== null &&
+          durableEntry.identity.sequence > provisionalEntry.afterSequence)) &&
+      durableEntry.identity.runId &&
+      durableEntry.identity.runId === provisionalEntry.identity.runId &&
+      (readNonemptyString(durableMetadata?.mirrorOrigin) === null ||
+        durableMetadata?.runTerminal === true)
+    ) {
+      return true;
+    }
   }
   const persisted = left.identity;
   const observed = right.identity;
-  const persistedMetadata = readRecord(readRecord(left.message)?.["__openclaw"]);
   if (
     allowSnapshotPromotion &&
     right.live &&
@@ -266,15 +276,10 @@ function entryMatches(
     !observed.isImported &&
     persisted.id &&
     !observed.id &&
-    ((persisted.sequence !== null && persisted.sequence === observed.sequence) ||
-      (persisted.role === "assistant" &&
-        observed.sequence === null &&
-        persisted.runId !== null &&
-        persisted.runId === observed.runId &&
-        (readNonemptyString(persistedMetadata?.mirrorOrigin) === null ||
-          persistedMetadata?.runTerminal === true)))
+    persisted.sequence !== null &&
+    persisted.sequence === observed.sequence
   ) {
-    // Only current-scope history can promote an observed native sequence or assistant run.
+    // Only current-scope history can promote an observed native sequence.
     return true;
   }
   if (left.pending && right.pending) {
@@ -295,7 +300,7 @@ function entryMatches(
     !pending.identity.isImported &&
     !authoritative.identity.isImported &&
     pending.pendingRunId &&
-    pending.pendingRunId === authoritative.identity.runId &&
+    pending.pendingRunId === (authoritative.identity.sendId ?? authoritative.identity.runId) &&
     (pending.identity.sequence === null ||
       authoritative.identity.sequence === null ||
       pending.identity.sequence === authoritative.identity.sequence),
@@ -322,14 +327,29 @@ function insertEntry(
           const candidate = entry.identity?.sequence;
           return candidate !== undefined && candidate !== null && candidate > sequence;
         });
-  if (nextIndex < 0 && incoming.identity?.role === "user" && incoming.identity.runId) {
+  if (sequence !== undefined && sequence !== null && nextIndex < 0) {
+    nextIndex = entries.length;
+  }
+  if (incoming.identity?.role === "user" && incoming.identity.runId) {
     const runId = incoming.identity.runId;
     const terminalMessage = runs?.[runId]?.message;
-    nextIndex = entries.findIndex(
-      (entry) =>
-        entry.identity?.role === "assistant" &&
-        (entry.identity.runId === runId || entry.message === terminalMessage),
-    );
+    const belongsToRun = (entry: SessionProjectionEntry) =>
+      entry.identity?.role === "assistant" &&
+      (entry.identity.runId === runId || entry.message === terminalMessage);
+    if (sequence !== undefined && sequence !== null) {
+      // A run can deliver several replies before its prompt. Move every early
+      // unsequenced reply together; durable sequence always wins over run ownership.
+      const before: SessionProjectionEntry[] = [];
+      const replies: SessionProjectionEntry[] = [];
+      for (const entry of entries.slice(0, nextIndex)) {
+        (entry.identity?.sequence === null && belongsToRun(entry) ? replies : before).push(entry);
+      }
+      return [...before, incoming, ...replies, ...entries.slice(nextIndex)];
+    }
+    const terminalIndex = entries.findIndex(belongsToRun);
+    if (terminalIndex >= 0 && (nextIndex < 0 || terminalIndex < nextIndex)) {
+      nextIndex = terminalIndex;
+    }
   }
   return nextIndex < 0
     ? [...entries, incoming]
@@ -337,11 +357,12 @@ function insertEntry(
 }
 
 export function projectLiveSessionMessage(
-  state: SessionProjectionState,
+  initialState: SessionProjectionState,
   message: unknown,
   envelope?: SessionMessageEnvelope,
   scope: SessionProjectionScope = {},
 ): SessionProjectionState {
+  let state = initialState;
   if (!scopesMatch(state.scope, scope)) {
     return state;
   }
@@ -349,20 +370,57 @@ export function projectLiveSessionMessage(
   if (!incoming.identity) {
     return state;
   }
-  const existingIndex = state.entries.findIndex((entry) => entryMatches(entry, incoming));
-  if (existingIndex < 0) {
+  const matches = state.entries.filter((entry) => entryMatches(entry, incoming));
+  const existing =
+    matches.find((entry) => sameTranscriptIdentity(entry.identity, incoming.identity)) ??
+    (matches.length === 1 ? matches[0] : undefined);
+  if (
+    existing &&
+    !sameTranscriptIdentity(existing.identity, incoming.identity) &&
+    !sameAssistantPersistenceReceipt(existing.identity, incoming.identity)
+  ) {
+    const durable = existing.identity?.id ? existing : incoming.identity.id ? incoming : null;
+    const provisional = durable === existing ? incoming : existing;
+    if (durable && isToolUsePersistedFinalRow(durable.message)) {
+      // Exact durable identities and persistence receipts never need inference.
+      // For provisional adoption,
+      // use the snapshot owner in both arrival orders, excluding the live copy
+      // itself from the history that can contradict the terminal position.
+      const history = state.entries.filter((entry) => entry !== provisional);
+      const snapshot = durable === incoming ? insertEntry(history, durable) : history;
+      const runId = provisional.identity?.runId;
+      const run = runId ? state.runs[runId] : undefined;
+      const terminalMatch = findUniqueSnapshotTerminalMatch(provisional, [durable], run, snapshot);
+      if (!terminalMatch) {
+        return withEntries(state, insertEntry(state.entries, incoming, state.runs));
+      }
+      if (terminalMatch.inferred && durable.identity && runId && run) {
+        // Keep the original live entry until authoritative history confirms
+        // the inference or restores it after revealing a later assistant row.
+        const inferredSnapshotTerminal = { entry: provisional, matchedIdentity: durable.identity };
+        state = {
+          ...state,
+          runs: { ...state.runs, [runId]: { ...run, inferredSnapshotTerminal } },
+        };
+      }
+    }
+  }
+  if (!existing) {
     return withEntries(state, insertEntry(state.entries, incoming, state.runs));
   }
-  const existing = state.entries[existingIndex];
-  if (existing && existing.message === message && existing.live && !existing.pending) {
+  const existingIndex = state.entries.indexOf(existing);
+  if (existing.message === message && existing.live && !existing.pending) {
     return state;
   }
-  if (existing && !existing.pending && existing.identity?.id && !incoming.identity.id) {
+  if (!existing.pending && existing.identity?.id && !incoming.identity.id) {
     // A terminal projection carries no transcript identity; adopting it over the
     // durable row would lose the ID every later snapshot reconciles against.
     return state;
   }
-  if (existing?.pending && incoming.identity.sequence !== null) {
+  if (
+    incoming.identity.sequence !== null &&
+    (existing.pending || existing.identity?.sequence === null)
+  ) {
     const sequence = incoming.identity.sequence;
     const violatesOrder = state.entries.some(
       ({ identity }, index) =>
@@ -380,11 +438,7 @@ export function projectLiveSessionMessage(
         : state.entries.toSpliced(existingIndex, 1, incoming),
     );
   }
-  return withEntries(state, [
-    ...state.entries.slice(0, existingIndex),
-    incoming,
-    ...state.entries.slice(existingIndex + 1),
-  ]);
+  return withEntries(state, state.entries.toSpliced(existingIndex, 1, incoming));
 }
 
 /** Only observed live events and this client's pending turns may survive an older snapshot. */
@@ -401,108 +455,70 @@ export function reconcileSessionProjectionSnapshot(
     return createSessionProjection(scope, visibleMessages);
   }
   let entries = createProjectionEntries(visibleMessages);
+  const runs: Record<string, SessionProjectionRun> = { ...state.runs };
   for (const current of state.entries) {
     if (
       (!current.live && !current.pending) ||
-      options.shouldIncludeMessage?.(current.message) === false ||
-      entries.filter((entry) => entryMatches(entry, current, true)).length === 1
+      options.shouldIncludeMessage?.(current.message) === false
     ) {
       continue;
     }
-    entries = insertEntry(entries, current, state.runs);
+    const matches = entries.filter((entry) => entryMatches(entry, current, true));
+    const uniqueMatch = matches.length === 1 ? matches[0] : undefined;
+    const run = current.identity?.runId ? runs[current.identity.runId] : undefined;
+    const terminalMatch = findUniqueSnapshotTerminalMatch(current, matches, run, entries);
+    if (
+      (uniqueMatch &&
+        (sameAssistantPersistenceReceipt(uniqueMatch.identity, current.identity) ||
+          !isUnsequencedLiveTerminal(current, run))) ||
+      terminalMatch
+    ) {
+      if (
+        terminalMatch?.inferred &&
+        terminalMatch.entry.identity &&
+        current.identity?.runId &&
+        run
+      ) {
+        // Tentative history matches retain their original live ordering until confirmed.
+        runs[current.identity.runId] = {
+          ...run,
+          inferredSnapshotTerminal: {
+            entry: current,
+            matchedIdentity: terminalMatch.entry.identity,
+          },
+        };
+      }
+      continue;
+    }
+    entries = insertEntry(entries, current, runs);
+  }
+  for (const [runId, run] of Object.entries(runs)) {
+    const inferred = run.inferredSnapshotTerminal;
+    if (!inferred) {
+      continue;
+    }
+    // Removal and visibility policy retire a candidate; neither contradicts its identity.
+    const candidateRemains = entries.some((entry) =>
+      sameTranscriptIdentity(entry.identity, inferred.matchedIdentity),
+    );
+    const visible = options.shouldIncludeMessage?.(inferred.entry.message) !== false;
+    const matches = entries.filter((entry) => entryMatches(entry, inferred.entry, true));
+    const terminalMatch = findUniqueSnapshotTerminalMatch(inferred.entry, matches, run, entries);
+    if (candidateRemains && visible && terminalMatch?.inferred) {
+      continue;
+    }
+    if (candidateRemains && visible && !terminalMatch) {
+      entries = insertEntry(entries, inferred.entry, runs);
+    }
+    const { inferredSnapshotTerminal: _inferred, ...settledRun } = run;
+    runs[runId] = settledRun;
   }
   return {
     ...withEntries(state, entries),
+    runs,
     scope: { ...state.scope, ...scope },
     hasTransportGap: false,
   };
-}
-
-function hasDisplayableSessionMessage(message: unknown): boolean {
-  if (typeof message === "string") {
-    return message.trim().length > 0;
-  }
-  const record = readRecord(message);
-  if (!record) {
-    return false;
-  }
-  const displayableBlocks =
-    Array.isArray(record.content) &&
-    record.content.some((block) => {
-      const entry = readRecord(block);
-      return entry
-        ? entry.type !== "text" || readNonemptyString(entry.text) !== null
-        : typeof block === "string" && block.trim().length > 0;
-    });
-  const media = readRecord(record["__openclaw"])?.media;
-  return Boolean(
-    (typeof record.content === "string" && record.content.trim()) ||
-    displayableBlocks ||
-    (Array.isArray(media) && media.length > 0),
-  );
-}
-
-function readSessionProjectionFinalMessageIdentity(message: unknown): string | null {
-  if (!hasDisplayableSessionMessage(message)) {
-    return null;
-  }
-  const identity = readSessionMessageIdentity(message);
-  if (identity?.externalSource) {
-    return `import:${identity.role}:${identity.externalSource}`;
-  }
-  if (identity?.id && !identity.isImported) {
-    return `id:${identity.role}:${identity.id}`;
-  }
-  if (identity?.sequence !== null && identity?.sequence !== undefined) {
-    return `seq:${identity.role}:${identity.sequence}`;
-  }
-  const record = readRecord(message);
-  const metadata = readRecord(record?.["__openclaw"]);
-  try {
-    return `content:${JSON.stringify([
-      identity?.role ?? "assistant",
-      typeof message === "string" ? message : (record?.content ?? null),
-      metadata?.media ?? null,
-      identity?.isImported
-        ? [
-            metadata?.importedFrom ?? null,
-            metadata?.cliSessionId ?? null,
-            metadata?.externalId ?? null,
-          ]
-        : null,
-    ])}`;
-  } catch {
-    return null;
-  }
-}
-
-/** Replayed finals are recognized against this run's bounded canonical terminal history. */
-export function hasSessionProjectionAcceptedFinal(
-  run: SessionProjectionRun | undefined,
-  message: unknown,
-): boolean {
-  const identity = readSessionProjectionFinalMessageIdentity(message);
-  return Boolean(
-    identity &&
-    run &&
-    (run.acceptedFinalMessageIdentities?.includes(identity) ||
-      readSessionProjectionFinalMessageIdentity(run.message) === identity),
-  );
-}
-
-function retainSessionProjectionRuns(
-  runs: Readonly<Record<string, SessionProjectionRun>>,
-): Readonly<Record<string, SessionProjectionRun>> {
-  const entries = Object.entries(runs);
-  if (entries.length <= MAX_TRACKED_SESSION_RUNS) {
-    return runs;
-  }
-  const active = entries.filter(([, run]) => run.status === "streaming");
-  const terminal = entries.filter(([, run]) => run.status !== "streaming");
-  const terminalLimit = Math.max(0, RETAINED_SESSION_RUNS - active.length);
-  const retainedTerminal = terminalLimit > 0 ? terminal.slice(-terminalLimit) : [];
-  // Live streams are never expendable; completed runs are retained by completion order.
-  return Object.fromEntries([...active, ...retainedTerminal]);
 }
 
 function updateRun(
@@ -510,29 +526,48 @@ function updateRun(
   incoming: SessionProjectionRun,
 ): SessionProjectionState {
   const incomingErrorMessage = readNonemptyString(incoming.errorMessage);
-  const normalizedIncoming = { ...incoming };
+  const incomingSeq =
+    typeof incoming.seq === "number" && Number.isSafeInteger(incoming.seq) && incoming.seq >= 0
+      ? incoming.seq
+      : undefined;
+  const normalizedIncoming = { ...incoming, seq: incomingSeq };
   if (incomingErrorMessage) {
     normalizedIncoming.errorMessage = incomingErrorMessage;
   } else {
     delete normalizedIncoming.errorMessage;
   }
   const current = state.runs[incoming.runId];
-  if (current && current.status !== "streaming") {
+  // Only newer run-event order can distinguish resumed output from buffered stale deltas.
+  const resumesErrorProjection =
+    current?.status === "error" &&
+    incoming.status === "streaming" &&
+    current.seq !== undefined &&
+    incomingSeq !== undefined &&
+    incomingSeq > current.seq &&
+    isSessionProjectionErrorMessage(current.message, current.errorMessage);
+  if (current && current.status !== "streaming" && !resumesErrorProjection) {
     const incomingFinalIdentity = readSessionProjectionFinalMessageIdentity(incoming.message);
     const incomingIsFinal = incoming.status === "completed" || incoming.status === "yielded";
-    const canRecoverFinal =
-      !hasDisplayableSessionMessage(current.message) ||
-      (current.acceptedFinalMessageIdentities?.length ?? 0) > 0;
+    const currentHasDisplayableMessage = hasDisplayableSessionMessage(current.message);
+    const canAcceptFinal = currentHasDisplayableMessage
+      ? current.status === incoming.status ||
+        (current.acceptedFinalMessageIdentities?.length ?? 0) > 0
+      : canRecoverSessionProjectionFinal(current.message, incoming.message);
     const acceptFinal =
       incomingIsFinal &&
-      (current.status === incoming.status || canRecoverFinal) &&
+      canAcceptFinal &&
       incomingFinalIdentity !== null &&
       !hasSessionProjectionAcceptedFinal(current, incoming.message);
     // Distinct valid finals are remembered; the first delivered reply remains immutable.
-    const recoverMessage = acceptFinal && !hasDisplayableSessionMessage(current.message);
+    const recoverMessage = acceptFinal && !currentHasDisplayableMessage;
     const recoverError =
       readNonemptyString(current.errorMessage) === null && incomingErrorMessage !== null;
-    if (!acceptFinal && !recoverError) {
+    const updateTerminalSequence =
+      incoming.status !== "streaming" &&
+      (incomingSeq === undefined
+        ? current.seq !== undefined
+        : current.seq === undefined || incomingSeq > current.seq);
+    if (!acceptFinal && !recoverError && !updateTerminalSequence) {
       return state;
     }
     const firstFinalIdentity = readSessionProjectionFinalMessageIdentity(current.message);
@@ -544,6 +579,7 @@ function updateRun(
         ...state.runs,
         [incoming.runId]: {
           ...current,
+          ...(updateTerminalSequence ? { seq: incomingSeq } : {}),
           ...(recoverMessage ? { message: incoming.message } : {}),
           ...(acceptFinal && incomingFinalIdentity
             ? {
@@ -563,6 +599,20 @@ function updateRun(
       },
     };
   }
+  const resumedState = resumesErrorProjection
+    ? withEntries(
+        state,
+        state.entries.filter(
+          (entry) =>
+            !(
+              (entry.identity?.runId === incoming.runId || entry.message === current.message) &&
+              (readRecord(entry.message)?.stopReason === "error" ||
+                entry.message === current.message) &&
+              isSessionProjectionErrorMessage(entry.message, current.errorMessage)
+            ),
+        ),
+      )
+    : state;
   // Completing a previously active run moves it behind older completed diagnostics.
   const previousRuns =
     current && current.status === "streaming" && incoming.status !== "streaming"
@@ -573,16 +623,18 @@ function updateRun(
       ? readSessionProjectionFinalMessageIdentity(incoming.message)
       : null;
   return {
-    ...state,
+    ...resumedState,
     runs: retainSessionProjectionRuns({
       ...previousRuns,
       [incoming.runId]: {
-        ...current,
+        ...(resumesErrorProjection ? {} : current),
         ...normalizedIncoming,
         ...(acceptedFinalIdentity
           ? { acceptedFinalMessageIdentities: [acceptedFinalIdentity] }
           : {}),
-        ...(incoming.message === undefined && current?.message !== undefined
+        ...(!resumesErrorProjection &&
+        incoming.message === undefined &&
+        current?.message !== undefined
           ? { message: current.message }
           : {}),
       },
@@ -673,12 +725,14 @@ export function reduceSessionProjection(
     case "runDelta":
       return updateRun(state, {
         runId: event.runId,
+        seq: event.seq,
         status: "streaming",
         ...(event.message === undefined ? {} : { message: event.message }),
       });
     case "runTerminal":
       return updateRun(state, {
         runId: event.runId,
+        seq: event.seq,
         status: event.status,
         ...(event.message === undefined ? {} : { message: event.message }),
         ...(event.stopReason === undefined ? {} : { stopReason: event.stopReason }),
@@ -693,13 +747,4 @@ export function reduceSessionProjection(
     default:
       return state;
   }
-}
-
-/** Normalizes Gateway run envelopes once for every browser and terminal adapter. */
-export function reduceSessionProjectionRunEvent(
-  projection: SessionProjectionState,
-  event: SessionProjectionGatewayRunEvent,
-  scope: SessionProjectionScope = {},
-): SessionProjectionRunTransition | null {
-  return reduceSessionProjectionRunEventImpl(projection, event, scope);
 }

@@ -7,6 +7,7 @@ import {
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveValidatedMatrixHomeserverUrl } from "./config.js";
 import {
@@ -92,5 +93,6 @@ export async function createMatrixClient(params: {
     ssrfPolicy:
       params.ssrfPolicy ?? ssrfPolicyFromDangerouslyAllowPrivateNetwork(params.allowPrivateNetwork),
     dispatcherPolicy: params.dispatcherPolicy,
+    stateRuntime: getMatrixRuntime().state,
   });
 }

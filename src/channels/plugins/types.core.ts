@@ -4,11 +4,11 @@
  * Defines channel metadata, capabilities, action discovery, setup, status, and runtime contexts.
  */
 import type { TSchema } from "typebox";
+import type { AgentTool, AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type {
   GatewayClientMode,
   GatewayClientName,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import type { AgentTool, AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
@@ -55,6 +55,7 @@ export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => Chan
  */
 export type ChannelMessageActionDiscoveryContext = {
   cfg: OpenClawConfig;
+  chatType?: ChatType | null;
   currentChannelId?: string | null;
   currentChannelProvider?: string | null;
   currentThreadTs?: string | null;
@@ -212,6 +213,7 @@ export type ChannelAccountSnapshot = {
   appTokenStatus?: string;
   signingSecretStatus?: string;
   userTokenStatus?: string;
+  apiCredentialStatus?: "available" | "configured_unavailable" | "missing";
   identity?: string;
   credentialSource?: string;
   secretSource?: string;
@@ -436,10 +438,14 @@ export type ChannelThreadingAdapter = {
   resolveReplyTransport?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
+    /** Originating inbound message in this routed channel; not an explicit reply target. */
+    currentMessageId?: string;
     threadId?: string | number | null;
     replyToId?: string | null;
     /** True when replyToId came from an explicit payload target or reply tag. */
     replyToIsExplicit?: boolean;
+    /** Existing payload intent to reply to the current conversation, not an arbitrary target. */
+    replyToCurrent?: boolean;
     replyDelivery?: ReplyDeliveryContext;
   }) => ChannelReplyTransport | null;
   resolveFocusedBinding?: (params: {
@@ -665,6 +671,8 @@ export type ChannelMessagingAdapter = {
     agentId: string;
     accountId?: string | null;
     target: string;
+    /** Identifies implicit operator delivery; other callers must supply their own destination. */
+    deliveryPurpose?: "heartbeat-owner";
     currentSessionKey?: string;
     resolvedTarget?: {
       to: string;
@@ -754,6 +762,12 @@ export type ChannelMessageActionContext = {
    * them. Plugins forward it into durable sends so recovery does not replay too.
    */
   deliveryRetryOwner?: "caller";
+  /** Host-owned live authority check; never read from model-controlled params. */
+  onPlatformSendDispatch?: () => Promise<void>;
+  /** Revalidate the same owner synchronously after waits and immediately before platform I/O. */
+  assertDirectAdapterHandoff?: () => void;
+  /** Ephemeral-authority sends must not enter replayable recovery. */
+  skipQueue?: boolean;
 };
 
 export type ChannelToolSend = {
@@ -786,8 +800,22 @@ export type ChannelMessageActionAdapter = {
   describeMessageTool: (
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
-  /** Delegate conversation-read authorization to this adapter for bundled registrations only. */
+  /** Delegate conversation-read admission to the provider for registrations the host permits. */
   providerOwnedReadGates?: true | readonly ChannelMessageActionName[];
+  /**
+   * Opt into these host-fenced context actions for loader-verified official installs.
+   * Every provider request must captureChannelReadAuthority() at submission and
+   * invoke that check immediately before each I/O attempt, including queued retries.
+   * Does not extend conversation-read mutation authority or bypass provider policy.
+   */
+  readAuthorityActions?: readonly ChannelMessageActionName[];
+  /**
+   * Declare write actions that preserve the host's live request authority.
+   * Invoke assertDirectAdapterHandoff after asynchronous preparation and
+   * immediately before every provider request, including queued retries.
+   * Does not grant authority or bypass current requester/provider permissions.
+   */
+  writeAuthorityActions?: readonly ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {
@@ -809,12 +837,24 @@ export type ChannelMessageActionAdapter = {
         /**
          * Prove that provider-native aliases name the trusted current conversation.
          * Core consults this only for host-owned bundled registrations.
+         * @deprecated Prefer matchesCurrentConversationAsync for storage-backed matching.
+         * Keep this callback synchronous for hosts that predate the async companion.
          */
         matchesCurrentConversation?: (params: {
           args: Record<string, unknown>;
           accountId: string;
           toolContext: ChannelThreadingToolContext;
         }) => boolean;
+        /**
+         * Await provider-owned alias proof after host context and target checks.
+         * Preferred over the synchronous callback when present; false or rejection
+         * never falls back to the synchronous matcher.
+         */
+        matchesCurrentConversationAsync?: (params: {
+          args: Record<string, unknown>;
+          accountId: string;
+          toolContext: ChannelThreadingToolContext;
+        }) => Promise<boolean>;
       }
     >
   >;
@@ -865,6 +905,7 @@ export type ChannelPollContext = Pick<
   | "isAnonymous"
   | "gatewayClientScopes"
   | "onPlatformSendDispatch"
+  | "assertDirectAdapterHandoff"
 > & {
   content?: string;
   /** Trusted originating turn context for channel-owned delivery correlation. */

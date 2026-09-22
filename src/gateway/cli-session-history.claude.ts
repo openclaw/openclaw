@@ -7,7 +7,12 @@ import {
   asFiniteNumber,
   parseDateStringTimestampMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  readCliImageTurnContext,
+  stripCliImageTurnContext,
+} from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
@@ -35,6 +40,7 @@ export type ClaudeCliProjectEntry = {
   isMeta?: unknown;
   isCompactSummary?: unknown;
   isVisibleInTranscriptOnly?: unknown;
+  origin?: unknown;
   message?: {
     role?: unknown;
     content?: unknown;
@@ -275,16 +281,23 @@ type ClaudeCliPromptTextCandidate = {
   blockIndex?: number;
 };
 
-// Claude marks harness-written user turns with isMeta (skill instruction
-// bodies, injected notices), isCompactSummary (compaction summaries), and
-// isVisibleInTranscriptOnly (transcript-only synthetic rows); its own UI
-// groups these flags as "not a real operator turn" (verified against the
-// v2.1.246 bundle). The operator never typed these rows.
-function isClaudeCliHarnessInjectedEntry(entry: ClaudeCliProjectEntry): boolean {
+// Claude keeps compact summaries and transcript-only rows as visible harness
+// context. isMeta rows are private injections and never reach this projection.
+function isClaudeCliVisibleHarnessContext(entry: ClaudeCliProjectEntry): boolean {
+  return entry.isCompactSummary === true || entry.isVisibleInTranscriptOnly === true;
+}
+
+function isClaudeCliTaskNotification(
+  entry: ClaudeCliProjectEntry,
+  content: string | unknown[],
+): boolean {
+  // Native origin establishes authorship; operator-pasted XML must stay a user turn.
   return (
-    entry.isMeta === true ||
-    entry.isCompactSummary === true ||
-    entry.isVisibleInTranscriptOnly === true
+    isRecord(entry.origin) &&
+    entry.origin.kind === "task-notification" &&
+    typeof content === "string" &&
+    content.startsWith("<task-notification>") &&
+    content.endsWith("</task-notification>")
   );
 }
 
@@ -292,7 +305,7 @@ export function resolveClaudeCliPromptTextCandidates(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
 ): ClaudeCliPromptTextCandidate[] {
-  if (isClaudeCliHarnessInjectedEntry(entry)) {
+  if (entry.isMeta === true || isClaudeCliVisibleHarnessContext(entry)) {
     return [];
   }
   if (typeof content === "string") {
@@ -328,7 +341,12 @@ export function parseClaudeCliHistoryEntry(
     reseedState?: ReseedImportState;
   },
 ): TranscriptLikeMessage | null {
-  if (entry.isSidechain === true || !entry.message || typeof entry.message !== "object") {
+  if (
+    entry.isSidechain === true ||
+    entry.isMeta === true ||
+    !entry.message ||
+    typeof entry.message !== "object"
+  ) {
     return null;
   }
   const type = typeof entry.type === "string" ? entry.type : undefined;
@@ -410,19 +428,26 @@ export function parseClaudeCliHistoryEntry(
         }
       }
     }
-    // Record provenance here, where the native flags are known, so downstream
+    const cliImageTurnKey =
+      typeof content === "string" ? readCliImageTurnContext(content) : undefined;
+    if (cliImageTurnKey && typeof content === "string") {
+      content = stripCliImageTurnContext(content, cliImageTurnKey);
+    }
+    // Record provenance here, where the native row shape is known, so downstream
     // display never has to infer operator authorship from message text.
-    const harnessInjected = isClaudeCliHarnessInjectedEntry(entry);
+    const sourceTool = isClaudeCliTaskNotification(entry, content)
+      ? "claude_cli_task_notification"
+      : isClaudeCliVisibleHarnessContext(entry)
+        ? "cli_harness_context"
+        : undefined;
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
         content,
-        ...(harnessInjected
-          ? { provenance: { kind: "internal_system", sourceTool: "cli_harness_context" } }
-          : {}),
+        ...(sourceTool ? { provenance: { kind: "internal_system", sourceTool } } : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       },
-      baseMeta,
+      { ...baseMeta, ...(cliImageTurnKey ? { cliImageTurnKey } : {}) },
     ) as TranscriptLikeMessage;
   }
 
@@ -445,7 +470,7 @@ export function parseClaudeCliHistoryEntry(
   ) as TranscriptLikeMessage;
 }
 
-export function resolveClaudeCliSessionFilePath(params: {
+function resolveClaudeCliSessionFilePath(params: {
   cliSessionId: string;
   homeDir?: string;
 }): string | undefined {
@@ -468,6 +493,53 @@ export function resolveClaudeCliSessionFilePath(params: {
     const projectDir = path.join(projectsDir, entry.name);
     const candidate = resolveClaudeSessionCandidate(projectDir, sessionId);
     if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+export async function resolveClaudeCliSessionFilePathAsync(params: {
+  cliSessionId: string;
+  homeDir?: string;
+}): Promise<string | undefined> {
+  const sessionId = normalizeClaudeCliSessionId(params.cliSessionId);
+  if (!sessionId) {
+    return undefined;
+  }
+  const projectsDir = resolveClaudeProjectsDir(params.homeDir);
+  let projectEntries: fs.Dirent[];
+  try {
+    projectEntries = await fs.promises.readdir(projectsDir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+
+  // Bound filesystem work while preserving the first match in directory order.
+  const batchSize = 16;
+  for (let offset = 0; offset < projectEntries.length; offset += batchSize) {
+    const candidates = await Promise.all(
+      projectEntries.slice(offset, offset + batchSize).map(async (entry) => {
+        if (!entry.isDirectory()) {
+          return undefined;
+        }
+        const candidate = resolveClaudeSessionCandidate(
+          path.join(projectsDir, entry.name),
+          sessionId,
+        );
+        if (!candidate) {
+          return undefined;
+        }
+        try {
+          await fs.promises.access(candidate);
+          return candidate;
+        } catch {
+          return undefined;
+        }
+      }),
+    );
+    const candidate = candidates.find((value) => value !== undefined);
+    if (candidate) {
       return candidate;
     }
   }

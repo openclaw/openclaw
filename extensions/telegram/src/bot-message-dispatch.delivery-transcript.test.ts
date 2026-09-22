@@ -249,7 +249,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     });
 
     expect(recordResults).toEqual([true, true]);
-    expect(wasSentByBot("123", 1497, { session: { store: storePath } })).toBe(true);
+    expect(await wasSentByBot("123", 1497, { session: { store: storePath } })).toBe(true);
 
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),

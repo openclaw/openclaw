@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   listCliRuntimeModelBackendBindings,
@@ -21,7 +22,6 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { sleep } from "../utils/sleep.js";
-import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 
@@ -273,34 +273,20 @@ export function buildClaudeCliResumeContinuityProbe(params: {
   const firstTurnMarker = `CLI-BACKEND-${params.firstTurnNonce}`;
   return {
     firstTurnMarker,
-    firstTurnPrompt: `Do not inspect files or run tools. Reply with exactly: ${firstTurnMarker}.`,
+    firstTurnPrompt:
+      "This is a synthetic session-memory test. Remember the random public test label " +
+      "provided in runtime context; it is not a credential. " +
+      `Do not inspect files or run tools. Reply with exactly: ${firstTurnMarker}.`,
     injectedContext:
-      `Remember this exact opaque session token for a later turn: ${params.memoryToken}. ` +
-      "Do not include the token in this turn's reply.",
+      `The random public test label for this session-memory test is ${params.memoryToken}. ` +
+      "Remember it for the follow-up, without including it in this turn's reply.",
     resumePrompt:
       "Do not inspect files or run tools. " +
       `Return exactly two whitespace-separated tokens: CLI-RESUME-${params.resumeNonce} followed by ` +
-      "the exact opaque session token from the earlier turn. Do not add prose.",
+      "the exact public test label from the earlier turn. Do not add prose.",
     expectedFirstReply: `${firstTurnMarker}.`,
     expectedResumeMarker: `CLI-RESUME-${params.resumeNonce}`,
   };
-}
-
-export function resolveImportedClaudeCliSessionId(messages: unknown[]): string | undefined {
-  for (const message of messages) {
-    const metadata =
-      typeof message === "object" && message !== null
-        ? (message as Record<string, unknown>)["__openclaw"]
-        : undefined;
-    if (typeof metadata !== "object" || metadata === null) {
-      continue;
-    }
-    const imported = metadata as { cliSessionId?: unknown; importedFrom?: unknown };
-    if (imported.importedFrom === "claude-cli" && typeof imported.cliSessionId === "string") {
-      return imported.cliSessionId;
-    }
-  }
-  return undefined;
 }
 
 export function withClaudeMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
@@ -568,8 +554,9 @@ export function restoreCliBackendLiveEnv(snapshot: CliBackendLiveEnvSnapshot): v
 
 export async function ensurePairedTestGatewayClientIdentity(params?: {
   displayName?: string;
+  identityKey?: string;
 }): Promise<DeviceIdentity> {
-  const identity = loadOrCreateDeviceIdentity();
+  const identity = loadOrCreateDeviceIdentity({ identityKey: params?.identityKey });
   const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   const requiredScopes = ["operator.admin"];
   const paired = await getPairedDevice(identity.deviceId);

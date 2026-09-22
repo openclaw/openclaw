@@ -68,7 +68,7 @@ Per-capability (`image`/`audio`/`video`) keys:
 | `echoTranscript` | `boolean` | `false`                                | Audio only: echo the transcript before agent processing              |
 | `echoFormat`     | `string`  | `'📝 "{transcript}"'`                  | Audio only: format for the echoed transcript                         |
 
-Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured.
+Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured. A model list selects which entries run; it does not hide other enabled providers from provider discovery.
 
 ### Model entries
 
@@ -80,7 +80,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     {
       type: "provider", // default if omitted
       provider: "openai",
-      model: "gpt-5.6-sol",
+      model: "gpt-6-astra",
       prompt: "Describe the image in <= 500 chars.",
       maxChars: 500,
       maxBytes: 10485760,
@@ -110,7 +110,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     }
     ```
 
-    CLI templates can also use `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension). The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` names remain deprecated compatibility aliases.
+    CLI templates can also use `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension). The `{{Attachment*}}` names replaced `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` in 2026.8.1. The older names remain deprecated compatibility aliases under the `media-legacy-projection` record: its approved `removeAfter` date is 2026-10-01, with removal additionally gated on a clean published-plugin artifact sweep. Migrate before that date - see [Media legacy projection](/plugins/sdk-migration/compatibility-policy#media-legacy-projection).
 
   </Tab>
 </Tabs>
@@ -216,7 +216,7 @@ Set `capabilities` on a `models[]` entry to restrict it to specific media types.
 | `groq`, `xai`, `deepgram`, `senseaudio`                                  | audio                 |
 | Any `models.providers.<id>.models[]` catalog with an image-capable model | image                 |
 
-For CLI entries, set `capabilities` explicitly to avoid surprising matches; if omitted, the entry is eligible for every capability list it appears in.
+CLI entries require explicit `capabilities`; entries without valid capability tags are skipped. Provider entries without valid explicit tags use their registered capability metadata.
 
 ## Provider support matrix
 
@@ -265,7 +265,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 - Files rejected by an operator-configured `allowedMimes` list get `[Attachment type not allowed: <mime>]` instead, so the prompt never claims support the active configuration disables.
 - Read failures get `[Attachment could not be read]`.
 - URL attachments get `[Attachment skipped: URL file sources are disabled]` when URL file sources are disabled.
-- A file with no extractable text gets `[No extractable text]`.
+- A file with no extractable text, including an empty local text file, gets `[No extractable text]` and does not consume the skip-marker budget.
 - At most five skip markers render per message; further skipped attachments collapse into one reason-neutral `[<n> more attachments skipped]` summary so junk attachments cannot grow the prompt without bound. File and image, audio, or video markers share this five-marker budget.
 - If a PDF falls back to rendered page images, OpenClaw forwards those images to vision-capable reply models and keeps the placeholder `[PDF content rendered to images]` in the file block.
 - Image, audio, and video decisions record one closed disposition for every attachment candidate: handled, handed to native vision, not selected after the attachment limit, disabled, missing a model, denied by chat scope, or failed.
@@ -280,7 +280,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
       tools: {
         media: {
           models: [
-            { provider: "openai", model: "gpt-5.6-sol", capabilities: ["image"] },
+            { provider: "openai", model: "gpt-6-astra", capabilities: ["image"] },
             {
               provider: "google",
               model: "gemini-3-flash-preview",
@@ -363,7 +363,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
       tools: {
         media: {
           models: [
-            { provider: "openai", model: "gpt-5.6-sol", capabilities: ["image"] },
+            { provider: "openai", model: "gpt-6-astra", capabilities: ["image"] },
             { provider: "anthropic", model: "claude-opus-5", capabilities: ["image"] },
             {
               type: "cli",
@@ -412,8 +412,13 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 When media understanding runs, `/status` includes a per-capability summary line:
 
 ```
-📎 Media: image ok (openai/gpt-5.6-sol) · audio ok (whisper-cli observed=metal)
+📎 Media: image ok (openai/gpt-6-astra) · audio ok (whisper-cli observed=metal)
 ```
+
+Auto-detected local audio tools report their resolved executable path as the
+result's `model`, so status and verbose summaries can include that path alongside
+the tool family and backend. Explicit CLI entries retain their authored command;
+preflight inventory keeps the logical tool names.
 
 For preflight inventory, run `openclaw capability audio providers`. Local rows show the local fallback winner separately from global provider selection, readiness, and separate capable/requested/observed backend fields. The same local selection is available as an informational doctor finding:
 
@@ -431,3 +436,10 @@ openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-mi
 
 - [Configuration](/gateway/configuration)
 - [Image & media support](/nodes/images)
+- [Audio and voice notes](/nodes/audio)
+- [Camera capture](/nodes/camera)
+- [Media playback](/nodes/media-playback)
+- [Talk mode](/nodes/talk)
+- [Voice wake](/nodes/voicewake)
+- [Mistral](/providers/mistral) — Voxtral audio transcription, one of the audio-capable providers above
+- [Media overview](/tools/media-overview) — how the media tools fit together

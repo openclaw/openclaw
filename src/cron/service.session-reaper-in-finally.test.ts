@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   listSessionEntriesCore,
   replaceSessionEntry,
@@ -12,9 +13,11 @@ import {
   withCronServiceStateForTest,
 } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
+import { ensureLoaded } from "./service/store.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { resetReaperThrottle } from "./session-reaper.test-support.js";
-import { saveCronStore } from "./store.js";
+import * as cronStoreModule from "./store.js";
+import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
@@ -39,6 +42,24 @@ function createDueIsolatedJob(params: { id: string; nowMs: number }): CronJob {
   };
 }
 
+async function seedReaperSessions(storePath: string, now: number) {
+  const fresh = {
+    sessionKey: "agent:main:cron:failing-job:run:fresh",
+    entry: { sessionId: "fresh-run", updatedAt: now, delivery: { kind: "none" as const } },
+  };
+  for (const { sessionKey, entry } of [
+    {
+      sessionKey: "agent:main:cron:failing-job:run:stale",
+      entry: { sessionId: "stale-run", updatedAt: now - 25 * 3_600_000 },
+    },
+    fresh,
+  ]) {
+    await replaceSessionEntry({ agentId: "main", storePath, sessionKey }, entry);
+  }
+  expect(listSessionEntriesCore({ agentId: "main", storePath })).toHaveLength(2);
+  return fresh;
+}
+
 describe("CronService - session reaper runs in finally block (#31946)", () => {
   beforeEach(() => {
     noopLogger.debug.mockClear();
@@ -49,7 +70,113 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
+  });
+
+  it("admits timer maintenance before checking availability, including re-enable and rollback", async () => {
+    const store = await makeStorePath();
+    let now = Date.now();
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    await saveCronStore(store.storePath, { version: 1, jobs: [] });
+    await seedReaperSessions(sessionStorePath, now);
+    const listSessions = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+    const isAgentAvailable = vi.fn(() => true);
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      cronConfig: { sessionRetention: false },
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+      defaultAgentId: "main",
+      sessionStorePath,
+      isAgentAvailable,
+    });
+
+    await withCronServiceStateForTest(state, async () => {
+      await onTimer(state);
+      await onTimer(state);
+      expect(isAgentAvailable).not.toHaveBeenCalled();
+      expect(listSessions).not.toHaveBeenCalled();
+
+      state.deps.cronConfig = { sessionRetention: "24h" };
+      await onTimer(state);
+      expect(isAgentAvailable).toHaveBeenCalledExactlyOnceWith("main");
+      expect(listSessions).toHaveBeenCalledOnce();
+      expect(listSessionEntriesCore({ agentId: "main", storePath: sessionStorePath })).toHaveLength(
+        1,
+      );
+
+      await seedReaperSessions(sessionStorePath, now - 3_600_000);
+      now += 1_000;
+      await onTimer(state);
+      expect(isAgentAvailable).toHaveBeenCalledOnce();
+      expect(listSessions).toHaveBeenCalledOnce();
+      expect(listSessionEntriesCore({ agentId: "main", storePath: sessionStorePath })).toHaveLength(
+        2,
+      );
+
+      now -= 3_600_000;
+      await onTimer(state);
+      expect(isAgentAvailable).toHaveBeenCalledTimes(2);
+      expect(listSessions).toHaveBeenCalledTimes(2);
+      expect(listSessionEntriesCore({ agentId: "main", storePath: sessionStorePath })).toHaveLength(
+        1,
+      );
+    });
+  });
+
+  it("runs a recovered agent's scheduled job while its maintenance attempt is throttled", async () => {
+    const store = await makeStorePath();
+    let now = Date.now();
+    let available = false;
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    const job = {
+      ...createDueIsolatedJob({ id: "recovered-agent", nowMs: now }),
+      agentId: "main",
+      state: { nextRunAtMs: now + 1_000 },
+    };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    await seedReaperSessions(sessionStorePath, now);
+    const listSessions = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+      defaultAgentId: "main",
+      sessionStorePath,
+      isAgentAvailable: () => available,
+    });
+
+    await withCronServiceStateForTest(state, async () => {
+      await onTimer(state);
+      expect(listSessions).not.toHaveBeenCalled();
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+
+      available = true;
+      now += 1_000;
+      await onTimer(state);
+      expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+      expect(listSessions).not.toHaveBeenCalled();
+      expect(listSessionEntriesCore({ agentId: "main", storePath: sessionStorePath })).toHaveLength(
+        2,
+      );
+
+      now += 5 * 60_000 - 1_000;
+      await onTimer(state);
+      expect(listSessions).toHaveBeenCalledOnce();
+      expect(listSessionEntriesCore({ agentId: "main", storePath: sessionStorePath })).toHaveLength(
+        1,
+      );
+    });
   });
 
   it("runs explicit-agent jobs when no default reaper agent exists", async () => {
@@ -139,17 +266,18 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     },
   );
 
-  it("session reaper runs even when job execution throws", async () => {
+  it("prunes expired run sessions after a job execution error", async () => {
     const store = await makeStorePath();
-    const now = Date.parse("2026-02-10T10:00:00.000Z");
+    const now = Date.now();
 
     await saveCronStore(store.storePath, {
       version: 1,
       jobs: [createDueIsolatedJob({ id: "failing-job", nowMs: now })],
     });
 
-    // Create a mock sessionStorePath to track if the reaper is called.
     const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    const fresh = await seedReaperSessions(sessionStorePath, now);
+    const runIsolatedAgentJob = vi.fn().mockRejectedValue(new Error("gateway down"));
 
     const state = createCronServiceState({
       storePath: store.storePath,
@@ -158,8 +286,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
-      // This will throw, simulating a failure during job execution.
-      runIsolatedAgentJob: vi.fn().mockRejectedValue(new Error("gateway down")),
+      runIsolatedAgentJob,
       defaultAgentId: "main",
       sessionStorePath,
     });
@@ -167,13 +294,64 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     await withCronServiceStateForTest(state, async () => {
       await onTimer(state);
 
-      // After onTimer finishes (even with a job error), state.running must be
-      // false — proving the finally block executed.
+      expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+      expect(noopLogger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining("cron: job core rejected after"),
+      );
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+        lastRunStatus: "error",
+        lastError: "gateway down",
+      });
+      expect(listSessionEntriesCore({ agentId: "main", storePath: sessionStorePath })).toEqual([
+        fresh,
+      ]);
       expect(state.running).toBe(false);
 
-      // The timer must be re-armed.
       if (state.timer === null) {
         throw new Error("expected timer to be re-armed");
+      }
+    });
+  });
+
+  it("prunes expired run sessions while propagating a cron store load failure", async () => {
+    const store = await makeStorePath();
+    const now = Date.now();
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [createDueIsolatedJob({ id: "failing-job", nowMs: now })],
+    });
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    const fresh = await seedReaperSessions(sessionStorePath, now);
+    const runIsolatedAgentJob = vi.fn();
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+      defaultAgentId: "main",
+      sessionStorePath,
+    });
+
+    await withCronServiceStateForTest(state, async () => {
+      await ensureLoaded(state, { skipRecompute: true });
+      const failure = new Error("cron store unavailable");
+      const loadSpy = vi
+        .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+        .mockRejectedValueOnce(failure);
+      try {
+        await expect(onTimer(state)).rejects.toBe(failure);
+        expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+        expect(listSessionEntriesCore({ agentId: "main", storePath: sessionStorePath })).toEqual([
+          fresh,
+        ]);
+        expect(state.running).toBe(false);
+        expect(state.timer).not.toBeNull();
+      } finally {
+        loadSpy.mockRestore();
       }
     });
   });
@@ -360,14 +538,8 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       },
       { sessionId: "live-expired", updatedAt: now - 25 * 3_600_000 },
     );
-    const resolveSessionStorePath = vi.fn((agentId?: string) => {
-      if (agentId === unavailableAgentId) {
-        throw new Error(
-          `OpenClaw agent database is unavailable while agent ${unavailableAgentId} is deleted.`,
-        );
-      }
-      return sessionStorePath;
-    });
+    const listSessions = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+    const isAgentAvailable = vi.fn((agentId: string) => agentId === liveAgentId);
     const state = createCronServiceState({
       storePath: store.storePath,
       cronEnabled: true,
@@ -378,15 +550,18 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       runIsolatedAgentJob: vi.fn(),
       resolveDefaultAgentId: () => undefined,
       resolveSessionStoreAgentIds: () => [liveAgentId, unavailableAgentId],
-      isAgentAvailable: (agentId) => agentId === liveAgentId,
-      resolveSessionStorePath,
+      isAgentAvailable,
+      resolveSessionStorePath: () => sessionStorePath,
     });
 
     await withCronServiceStateForTest(state, async () => {
       await onTimer(state);
       await onTimer(state);
 
-      expect(resolveSessionStorePath.mock.calls).toEqual([[liveAgentId], [liveAgentId]]);
+      expect(isAgentAvailable.mock.calls).toEqual([[liveAgentId], [unavailableAgentId]]);
+      expect(listSessions.mock.calls).toEqual([
+        [{ agentId: liveAgentId, storePath: sessionStorePath }],
+      ]);
       expect(listSessionEntriesCore({ agentId: liveAgentId, storePath: sessionStorePath })).toEqual(
         [],
       );

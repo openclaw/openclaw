@@ -76,6 +76,27 @@ execution provenance and must not be passed as `channelIngress`. When a channel
 batches several admitted messages, pass their exact results in source order;
 the finalized context message id identifies the last source result.
 
+### Product participant identity
+
+An identity descriptor may provide `resolveParticipant(subject)`, returning
+`{ domain, idKind, id }` only when the plugin can prove those remote facts.
+The domain belongs to the remote service: for example, a Slack workspace or
+an application-scoped identity issuer. It is not OpenClaw's local `accountId`.
+Keep user IDs, bot IDs, and proxy identities distinct when the service gives
+them different meanings. Names and successful Gateway profile lookups are
+not identity evidence.
+
+Pass the exact resolver result through the host-injected context builder.
+The host carries product facts privately until accepted input is recorded in
+the session participant aggregate. Raw product identity is not added to the
+public diagnostic result. An unqualified producer retains an unresolved
+observation instead of becoming a Gateway profile or an invented remote
+subject. Product participation does not grant access.
+
+This product path is independent of execution-identity audit collection:
+it neither enables that collection nor reuses its HMAC references or opaque
+diagnostic carriers. Audit's separate evidence contract is described below.
+
 ## Result
 
 Bundled plugins should consume modern projections directly:
@@ -122,7 +143,7 @@ The audit states are distinct:
   yield a present invoker and enforced or attribution-only coverage.
 - **unknown**: a supported handoff was missing, stale, fake, reused, mixed, or
   otherwise failed host validation. Unknown never means allowed.
-- **unsupported**: a named path has no Phase 0 authoritative integration and
+- **unsupported**: a named path has no authoritative ingress-resolver integration and
   explicitly passes `channelIngress: "unsupported"`. Unsupported never means
   allowed and is not a shortcut for incomplete wiring.
 
@@ -134,6 +155,10 @@ channel authorization only. It is not a principal, grant, relationship, or
 execution-identity assurance strength. In particular, an identifier claim of
 `verified` never becomes execution assurance `boundary-verified` or
 `cryptographic`.
+
+Import the type and `meetsIdentifierAuthentication(actual, minimum)` from
+`openclaw/plugin-sdk/channel-ingress-runtime`. Downstream authentication mappers
+should use this boolean comparator instead of maintaining their own rank tables.
 
 The meanings are normative:
 
@@ -271,3 +296,9 @@ diagnostic ids.
 pnpm test src/channels/message-access/message-access.test.ts src/plugin-sdk/channel-ingress-runtime.test.ts
 pnpm plugin-sdk:api:diff --base "$(git merge-base origin/main HEAD)" --head HEAD
 ```
+
+## Related
+
+- [Channel inbound API](/plugins/sdk-channel-inbound) — the receive path that consumes this resolver result as `channelIngress`
+- [Channel outbound API](/plugins/sdk-channel-outbound) — the send side of the same channel plugin
+- [Building channel plugins](/plugins/sdk-channel-plugins) — the full channel plugin walkthrough

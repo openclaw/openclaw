@@ -1,6 +1,7 @@
 // Resolves package version metadata for CLI and library callers.
 import { createRequire } from "node:module";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveLoadedCommitHash } from "./infra/git-commit.js";
 
 const CORE_PACKAGE_NAME = "openclaw";
 
@@ -90,9 +91,12 @@ export function readBuildIdFromBuildInfoForModuleUrl(moduleUrl: string): string 
 }
 
 export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
+  // build-info.json records the version this artifact was built from, so it wins:
+  // a git checkout whose source moved ahead of dist must not report the unbuilt
+  // source version. Source runs have no build-info and fall back to package.json.
   return (
-    readVersionFromPackageJsonForModuleUrl(moduleUrl) ||
-    readVersionFromBuildInfoForModuleUrl(moduleUrl)
+    readVersionFromBuildInfoForModuleUrl(moduleUrl) ||
+    readVersionFromPackageJsonForModuleUrl(moduleUrl)
   );
 }
 
@@ -113,7 +117,7 @@ export type RuntimeVersionEnv = {
   [key: string]: string | undefined;
 };
 
-export const RUNTIME_SERVICE_VERSION_FALLBACK = "unknown";
+const RUNTIME_SERVICE_VERSION_FALLBACK = "unknown";
 type RuntimeVersionPreference = "env-first" | "runtime-first";
 
 export function resolveUsableRuntimeVersion(version: string | undefined): string | undefined {
@@ -153,12 +157,17 @@ export function resolveRuntimeServiceVersion(
   });
 }
 
-// Generated build provenance is immutable for a process. Resolve it once so
-// handshakes never poll the filesystem on the connection hot path.
+// Loaded build provenance is immutable for a process. Resolve it once so a
+// checkout update cannot change the identity reported by the running service.
 const RUNTIME_SERVICE_BUILD_ID = readBuildIdFromBuildInfoForModuleUrl(import.meta.url);
+const RUNTIME_SERVICE_COMMIT = resolveLoadedCommitHash({ moduleUrl: import.meta.url });
 
 export function resolveRuntimeServiceBuildId(): string | null {
   return RUNTIME_SERVICE_BUILD_ID;
+}
+
+export function resolveRuntimeServiceCommit(): string | null {
+  return RUNTIME_SERVICE_COMMIT;
 }
 
 export function resolveCompatibilityHostVersion(

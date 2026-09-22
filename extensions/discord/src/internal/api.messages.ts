@@ -8,6 +8,14 @@ import {
 import type { RequestQuery } from "./rest-scheduler.js";
 import type { RequestClient, RequestData } from "./rest.js";
 
+export function normalizeDiscordMessageId(messageId: string): string {
+  const normalized = messageId.trim();
+  if (!/^[0-9]+$/u.test(normalized)) {
+    throw new Error("Invalid Discord message ID. Expected decimal digits.");
+  }
+  return normalized;
+}
+
 export async function getChannel(rest: RequestClient, channelId: string): Promise<APIChannel> {
   return (await rest.get(Routes.channel(channelId))) as APIChannel;
 }
@@ -45,7 +53,9 @@ export async function getChannelMessage(
   channelId: string,
   messageId: string,
 ): Promise<APIMessage> {
-  return (await rest.get(Routes.channelMessage(channelId, messageId))) as APIMessage;
+  return (await rest.get(
+    Routes.channelMessage(channelId, normalizeDiscordMessageId(messageId)),
+  )) as APIMessage;
 }
 
 export async function createChannelMessage<T extends object = APIMessage>(
@@ -62,7 +72,10 @@ export async function editChannelMessage(
   messageId: string,
   data: RequestData,
 ): Promise<APIMessage> {
-  return (await rest.patch(Routes.channelMessage(channelId, messageId), data)) as APIMessage;
+  return (await rest.patch(
+    Routes.channelMessage(channelId, normalizeDiscordMessageId(messageId)),
+    data,
+  )) as APIMessage;
 }
 
 export async function deleteChannelMessage(
@@ -70,7 +83,7 @@ export async function deleteChannelMessage(
   channelId: string,
   messageId: string,
 ): Promise<void> {
-  await rest.delete(Routes.channelMessage(channelId, messageId));
+  await rest.delete(Routes.channelMessage(channelId, normalizeDiscordMessageId(messageId)));
 }
 
 export async function pinChannelMessage(
@@ -78,7 +91,7 @@ export async function pinChannelMessage(
   channelId: string,
   messageId: string,
 ): Promise<void> {
-  await rest.put(Routes.channelPin(channelId, messageId));
+  await rest.put(Routes.channelPin(channelId, normalizeDiscordMessageId(messageId)));
 }
 
 export async function unpinChannelMessage(
@@ -86,7 +99,7 @@ export async function unpinChannelMessage(
   channelId: string,
   messageId: string,
 ): Promise<void> {
-  await rest.delete(Routes.channelPin(channelId, messageId));
+  await rest.delete(Routes.channelPin(channelId, normalizeDiscordMessageId(messageId)));
 }
 
 export async function listChannelPins(
@@ -106,7 +119,10 @@ export async function createThread<T extends object = APIChannel>(
   data: RequestData,
   messageId?: string,
 ): Promise<T> {
-  const route = messageId ? Routes.threads(channelId, messageId) : Routes.threads(channelId);
+  const route =
+    messageId === undefined
+      ? Routes.threads(channelId)
+      : Routes.threads(channelId, normalizeDiscordMessageId(messageId));
   return (await rest.post(route, data)) as T;
 }
 

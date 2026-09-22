@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
+import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
 
 type SkipInventoryKind = "alias" | "call";
 type SkipInventoryReason =
@@ -383,61 +384,6 @@ export function renderTestSkipInventoryReport(
   return `${lines.join("\n")}\n`;
 }
 
-function readNonNegativeIntArg(raw: string | undefined): number {
-  if (!raw || raw.startsWith("--") || !/^\d+$/u.test(raw)) {
-    throw new Error("--limit expects a non-negative integer");
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    throw new Error("--limit expects a non-negative integer");
-  }
-  return value;
-}
-
-function parseArgs(argv: string[]): {
-  help: boolean;
-  json: boolean;
-  limit: number;
-  repoRoot: string;
-} {
-  let help = false;
-  let json = false;
-  let limit = 120;
-  let repoRoot = process.cwd();
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      continue;
-    }
-    if (arg === "--help" || arg === "-h") {
-      help = true;
-      continue;
-    }
-    if (arg === "--json") {
-      json = true;
-      continue;
-    }
-    if (arg === "--limit") {
-      limit = readNonNegativeIntArg(argv[index + 1]);
-      index += 1;
-      continue;
-    }
-    if (arg === "--repo-root") {
-      const value = argv[index + 1];
-      if (!value || value.startsWith("-")) {
-        throw new Error("--repo-root expects a path");
-      }
-      repoRoot = value;
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-
-  return { help, json, limit, repoRoot };
-}
-
 function printHelp(): void {
   process.stdout.write(`OpenClaw test skip inventory
 
@@ -453,7 +399,7 @@ Options:
 }
 
 export function main(argv = process.argv.slice(2)): number {
-  const args = parseArgs(argv);
+  const args = parseInventoryReportCliArgs(argv);
   if (args.help) {
     printHelp();
     return 0;

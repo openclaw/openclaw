@@ -1,6 +1,7 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { renderBackgroundTasksRail } from "./chat-background-tasks-render.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
@@ -134,6 +135,17 @@ it("uses the shared surface empty state when no background tasks exist", async (
   expect(container.querySelector(".chat-tasks-rail__scroll")?.hasAttribute("hidden")).toBe(true);
 });
 
+it("renders task-shaped placeholders while the initial task list loads", async () => {
+  const container = renderTaskRail({ loading: true, tasks: null });
+
+  const skeleton = container.querySelector("openclaw-panel-loading-skeleton");
+  expect(skeleton).toBeInstanceOf(HTMLElement);
+  await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+  expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("tasks");
+  expect(skeleton?.shadowRoot?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
+  expect(container.textContent).not.toContain("Loading tasks");
+});
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -155,6 +167,127 @@ describe("background tasks rail state", () => {
     expect(rail.textContent).not.toContain("sk-1234567890abcdef");
   });
 
+  it("retries a transient task snapshot without publishing an error", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = makeTask({ id: "task-retried" });
+      const pendingRecent = deferred<{ tasks: TaskSummary[] }>();
+      let requestCount = 0;
+      const { host, request } = createHost({
+        request: (_method, params) => {
+          requestCount += 1;
+          if (requestCount === 1) {
+            return Promise.reject(
+              new GatewayRequestError({
+                code: "UNAVAILABLE",
+                message: "task registry changed during tasks.list; retry",
+                retryable: true,
+                retryAfterMs: 10,
+              }),
+            );
+          }
+          if (
+            (params as { status?: string[] }).status?.includes("completed") &&
+            requestCount === 2
+          ) {
+            return pendingRecent.promise;
+          }
+          return Promise.resolve({ tasks: [running] });
+        },
+      });
+
+      createBackgroundTasksProps(host);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(createBackgroundTasksProps(host)).toMatchObject({ loading: true, error: null });
+      pendingRecent.resolve({ tasks: [running] });
+      await vi.advanceTimersByTimeAsync(10);
+
+      const props = createBackgroundTasksProps(host);
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(props.error).toBeNull();
+      expect(props.tasks?.map((task) => task.id)).toEqual([running.id]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { paused: false, replacement: null },
+    { paused: true, replacement: null },
+    { paused: true, replacement: "refresh" },
+    { paused: true, replacement: "restore" },
+  ] as const)(
+    "shows exhausted retry guidance and recovers on manual refresh (paused: $paused, replacement: $replacement)",
+    async ({ paused, replacement }) => {
+      vi.useFakeTimers();
+      try {
+        const running = makeTask({ id: "task-recovered" });
+        let unavailable = true;
+        const error = new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
+          retryable: true,
+          retryAfterMs: 10,
+        });
+        const { host, request } = createHost({
+          request: () =>
+            unavailable ? Promise.reject(error) : Promise.resolve({ tasks: [running] }),
+        });
+        let admitted = true;
+        host.chatSecondaryReadsReady = () => admitted;
+
+        createBackgroundTasksProps(host);
+        await vi.advanceTimersByTimeAsync(0);
+        const preRestore = makeTask({ id: "before-restore", status: "completed" });
+        handleBackgroundTasksEvent(host, { action: "upserted", task: preRestore });
+        if (replacement === "refresh") {
+          createBackgroundTasksProps(host).onRefresh();
+        } else if (replacement === "restore") {
+          handleBackgroundTasksEvent(host, { action: "restored" });
+        }
+        const observed = makeTask({ id: "observed-completion", status: "completed" });
+        handleBackgroundTasksEvent(host, { action: "upserted", task: observed });
+        if (paused) {
+          admitted = false;
+          await vi.advanceTimersByTimeAsync(10);
+          expect(request).toHaveBeenCalledTimes(2);
+          expect(createBackgroundTasksProps(host)).toMatchObject({ loading: false, error: null });
+          admitted = true;
+          createBackgroundTasksProps(host);
+        }
+        await vi.advanceTimersByTimeAsync(10);
+
+        let props = createBackgroundTasksProps(host);
+        expect(request).toHaveBeenCalledTimes(replacement ? 6 : 4);
+        expect(props.error).toBe(error.message);
+        expect(
+          props.tasks
+            ?.toSorted((left, right) => left.id.localeCompare(right.id))
+            .map((task) => [task.id, task.status]),
+        ).toEqual(
+          replacement === "restore"
+            ? [[observed.id, "completed"]]
+            : [
+                [preRestore.id, "completed"],
+                [observed.id, "completed"],
+              ],
+        );
+        const rail = renderTaskRail({ ...props, collapsed: false });
+        expect(rail.querySelector('[role="alert"]')?.textContent).toContain(error.message);
+
+        unavailable = false;
+        props.onRefresh();
+        await vi.runAllTimersAsync();
+        props = createBackgroundTasksProps(host);
+        expect(props.error).toBeNull();
+        expect(props.tasks?.map((task) => task.id)).toEqual([running.id]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("loads session-scoped tasks eagerly while the rail is collapsed", async () => {
     const { host, request } = createHost({
       request: (method, params) => {
@@ -175,12 +308,26 @@ describe("background tasks rail state", () => {
     expect(props.activeCount).toBe(1);
   });
 
-  it("keeps the later recent page's equally current running progress", async () => {
+  it("reports refresh loading before the snapshot settles", async () => {
+    const pending = deferred<{ tasks: TaskSummary[] }>();
+    const { host, requestUpdate } = createHost({ request: () => pending.promise });
+
+    const initial = createBackgroundTasksProps(host);
+
+    expect(initial.loading).toBe(true);
+    expect(requestUpdate).toHaveBeenCalled();
+    pending.resolve({ tasks: [] });
+    await flushAsync();
+    expect(createBackgroundTasksProps(host).loading).toBe(false);
+  });
+
+  it("keeps a terminal snapshot when the active page is stale", async () => {
     const recent = makeTask({
       id: "task-1",
+      status: "completed",
       toolUseCount: 2,
       lastToolName: "write",
-      progressSummary: "Finishing the concurrent task report",
+      terminalSummary: "Finished the concurrent task report",
     });
     const active = makeTask({
       id: "task-1",
@@ -192,7 +339,7 @@ describe("background tasks rail state", () => {
       request: (method, params) => {
         expect(method).toBe("tasks.list");
         const status = (params as { status?: string[] }).status;
-        return Promise.resolve({ tasks: [status ? active : recent] });
+        return Promise.resolve({ tasks: [status?.includes("running") ? active : recent] });
       },
     });
 
@@ -200,7 +347,10 @@ describe("background tasks rail state", () => {
     await flushAsync();
 
     expect(request.mock.calls[0]?.[1]).toMatchObject({ status: ["queued", "running"] });
-    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("status");
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      status: ["completed", "failed", "timed_out", "cancelled"],
+      sortBy: "endedAt",
+    });
     expect(createBackgroundTasksProps(host).tasks).toEqual([recent]);
   });
 
@@ -730,7 +880,7 @@ describe("running-tasks status row", () => {
     });
 
     const elapsed = container.querySelector<HTMLElement & { startMs: number | null }>(
-      "openclaw-elapsed-time",
+      ".chat-tasks-status__time openclaw-elapsed-time",
     );
     expect(elapsed?.startMs).toBe(4_000);
     expect(
@@ -747,7 +897,7 @@ describe("running-tasks status row", () => {
 
     const row = container.querySelector(".chat-tasks-status");
     expect(row).not.toBeNull();
-    expect(row?.querySelector("openclaw-elapsed-time")).not.toBeNull();
+    expect(row?.querySelector(".chat-tasks-status__time openclaw-elapsed-time")).not.toBeNull();
     const liveStatus = row?.querySelector('[role="status"]');
     expect(liveStatus?.textContent?.trim()).toBe("1 running task");
     expect(liveStatus?.querySelector("openclaw-elapsed-time")).toBeNull();

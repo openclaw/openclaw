@@ -1,9 +1,9 @@
 // Tests session update fanout and persisted lifecycle records.
-import { expectDefined } from "@openclaw/normalization-core";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 
-const TEST_WORKSPACE_DIR = "/tmp/workspace";
+const TEST_WORKSPACE_DIR = path.resolve("/tmp/workspace");
 
 const {
   buildWorkspaceSkillSnapshotMock,
@@ -11,10 +11,8 @@ const {
   getSkillsSnapshotVersionMock,
   shouldRefreshSnapshotForVersionMock,
   getRemoteSkillEligibilityMock,
-  resolveAgentConfigMock,
-  resolveSessionAgentIdMock,
-  resolveAgentIdFromSessionKeyMock,
   updateSessionEntryMock,
+  loadSessionEntryMock,
   resolveNodeExecEligibilityMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
@@ -30,16 +28,9 @@ const {
     hasBin: () => false,
     hasAnyBin: () => false,
   })),
-  resolveAgentConfigMock: vi.fn(() => undefined),
-  resolveSessionAgentIdMock: vi.fn(() => "writer"),
-  resolveAgentIdFromSessionKeyMock: vi.fn(() => "main"),
   updateSessionEntryMock: vi.fn(),
+  loadSessionEntryMock: vi.fn(),
   resolveNodeExecEligibilityMock: vi.fn(() => ({ canExec: false })),
-}));
-
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentConfig: resolveAgentConfigMock,
-  resolveSessionAgentId: resolveSessionAgentIdMock,
 }));
 
 vi.mock("../../agents/exec-defaults.js", () => ({
@@ -70,14 +61,13 @@ vi.mock("../../config/sessions.js", () => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: loadSessionEntryMock,
   patchSessionEntryCore: vi.fn(),
-  updateSessionEntry: updateSessionEntryMock,
-}));
-
-vi.mock("../../routing/session-key.js", () => ({
-  normalizeAgentId: vi.fn((id: string) => id),
-  normalizeMainKey: (key?: string) => key ?? "main",
-  resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyMock,
+  updateSessionEntry: async (...args: unknown[]) => {
+    const entry = await updateSessionEntryMock(...args);
+    loadSessionEntryMock.mockReturnValue(entry ?? undefined);
+    return entry;
+  },
 }));
 
 const { ensureSkillSnapshot } = await import("./session-updates.js");
@@ -93,10 +83,8 @@ describe("ensureSkillSnapshot", () => {
       hasBin: () => false,
       hasAnyBin: () => false,
     });
-    resolveAgentConfigMock.mockReturnValue(undefined);
-    resolveSessionAgentIdMock.mockReturnValue("writer");
-    resolveAgentIdFromSessionKeyMock.mockReturnValue("main");
     updateSessionEntryMock.mockReset();
+    loadSessionEntryMock.mockReset();
     updateSessionEntryMock.mockResolvedValue(null);
     resolveNodeExecEligibilityMock.mockReturnValue({ canExec: false });
   });
@@ -105,47 +93,38 @@ describe("ensureSkillSnapshot", () => {
     vi.unstubAllEnvs();
   });
 
-  it("uses config-aware session agent resolution for legacy session keys", async () => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+  it.each(["agent:writer:main", "global"])(
+    "keeps the prepared skill owner for %s",
+    async (sessionKey) => {
+      vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+      const workspaceDir = path.join(TEST_WORKSPACE_DIR, sessionKey);
 
-    await ensureSkillSnapshot({
-      sessionKey: "main",
-      isFirstTurnInSession: false,
-      workspaceDir: TEST_WORKSPACE_DIR,
-      cfg: {
-        agents: {
-          list: [{ id: "writer", default: true }],
+      await ensureSkillSnapshot({
+        agentId: "writer",
+        sessionKey,
+        isFirstTurnInSession: false,
+        workspaceDir,
+        cfg: {
+          agents: {
+            ownership: "explicit",
+            entries: { writer: {}, reader: {} },
+          },
         },
-      },
-      execOverrides: { host: "node", node: "build-node", security: "allowlist" },
-    });
-
-    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
-      sessionKey: "main",
-      config: {
-        agents: {
-          list: [{ id: "writer", default: true }],
-        },
-      },
-    });
-    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
-    const [workspaceDir, snapshotParams] = expectDefined(
-      (
-        buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
-          [string, { agentId?: string }]
-        >
-      )[0],
-      "(buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<\n        [string, { agentId?: string }]\n      >)[0] test invariant",
-    );
-    expect(workspaceDir).toBe(TEST_WORKSPACE_DIR);
-    expect(snapshotParams.agentId).toBe("writer");
-    expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
-    expect(resolveNodeExecEligibilityMock).toHaveBeenCalledWith(
-      expect.objectContaining({
         execOverrides: { host: "node", node: "build-node", security: "allowlist" },
-      }),
-    );
-  });
+      });
+
+      expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
+        workspaceDir,
+        expect.objectContaining({ agentId: "writer" }),
+      );
+      expect(resolveNodeExecEligibilityMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "writer",
+          execOverrides: { host: "node", node: "build-node", security: "allowlist" },
+        }),
+      );
+    },
+  );
 
   it("does not keep a deleted first-turn session entry when persisting skills", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
@@ -162,6 +141,7 @@ describe("ensureSkillSnapshot", () => {
     });
 
     const result = await ensureSkillSnapshot({
+      agentId: "main",
       sessionEntry,
       sessionEntryHandle,
       sessionStore,
@@ -205,6 +185,7 @@ describe("ensureSkillSnapshot", () => {
     });
 
     const result = await ensureSkillSnapshot({
+      agentId: "main",
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -248,6 +229,7 @@ describe("ensureSkillSnapshot", () => {
     });
 
     const result = await ensureSkillSnapshot({
+      agentId: "main",
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -290,6 +272,7 @@ describe("ensureSkillSnapshot", () => {
     });
 
     const result = await ensureSkillSnapshot({
+      agentId: "main",
       sessionEntry: staleEntry,
       sessionStore,
       sessionKey,

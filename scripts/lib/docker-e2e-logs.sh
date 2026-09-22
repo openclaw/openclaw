@@ -4,6 +4,17 @@
 # They centralize temporary log naming and the small success/failure print
 # pattern used by Docker scenario scripts.
 
+docker_e2e_lifecycle_trace_enabled() {
+  case "${OPENCLAW_PLUGIN_LIFECYCLE_TRACE:-}" in
+    1 | true | TRUE | yes | YES)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 docker_e2e_normalize_positive_int_value() {
   local label="${1:?missing value label}"
   local value="${2-}"
@@ -142,6 +153,9 @@ run_logged_print_heartbeat() {
     if kill -0 "$command_pid" 2>/dev/null; then
       terminate_heartbeat_command
       wait "$command_pid" 2>/dev/null || true
+    fi
+    if [ "$cleanup_status" -ne 0 ]; then
+      docker_e2e_print_log "$log_file" || true
     fi
     rm -f "$log_file"
     restore_heartbeat_traps

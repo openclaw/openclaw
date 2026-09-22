@@ -14,6 +14,32 @@ export const UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV =
 export const UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV =
   "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION";
 
+function isExplicitOptOutEnvValue(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  // Update handoff predates canonical opt-in flags: every non-false value means the
+  // parent opted in, so preserve its broad acceptance until that protocol is retired.
+  const normalized = value.trim().toLowerCase();
+  return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+export function shouldSkipLegacyUpdateDoctorConfigWrite(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isExplicitOptOutEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) &&
+    !isExplicitOptOutEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])
+  );
+}
+
+/** Shipped canaries clear IN_PROGRESS for lint but retain the writable-parent marker. */
+export function isUpdateDoctorLintPass(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]) ||
+    isPostCoreConvergencePass(env) ||
+    isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])
+  );
+}
+
 /**
  * True iff the caller is the doctor pass that runs WHILE the core package
  * files are actively being swapped (e.g. inside `runGlobalPackageUpdateSteps`'

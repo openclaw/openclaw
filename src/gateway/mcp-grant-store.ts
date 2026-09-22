@@ -1,11 +1,15 @@
 import crypto from "node:crypto";
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
+import type { DelegationCapability } from "../agents/delegation-capability.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { PreparedQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
+import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type {
   SourceReplyDeliveryMode,
@@ -13,10 +17,13 @@ import type {
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
+import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
+import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
@@ -31,9 +38,14 @@ export type McpLoopbackRequestContext = {
   cwd?: string;
   modelProvider?: string;
   modelId?: string;
+  /** Prepared current-turn identity supplied only by the Gateway-launched run owner. */
+  requesterModel?: ProviderModelRef;
   modelHasVision?: boolean;
   messageProvider?: string;
   clientCaps?: string[];
+  gatewayUiCommandTarget?: import("./ui-command-target.types.js").GatewayUiCommandTarget;
+  /** Host-selected pinned authoring capability; never sourced from MCP request headers. */
+  pinnedWidgetAuthoring?: boolean;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string;
@@ -54,7 +66,17 @@ export type McpLoopbackRequestContext = {
    * hard enforcement. Unset keeps the full session-scoped surface.
    */
   toolsAllow?: string[];
-  skillWorkshop?: SkillWorkshopRunOptions;
+  /** Canonical observed native authority; null awaits this turn's initialization. */
+  nativeCronCreatorToolAllowlist?: string[] | null;
+  skillWorkshop?: Pick<SkillWorkshopRunOptions, "proposalRevision">;
+  /**
+   * Attempt-local authority to start or redirect delegated work, stamped into
+   * the grant so a fallback completion-report turn running on a CLI backend
+   * gets the same gate as an embedded attempt. The loopback surface enforces
+   * it on both tools/list and tools/call, so CLI-side advisory flags cannot
+   * reopen it. Unset keeps the full delegation surface.
+   */
+  delegationCapability?: DelegationCapability;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Host-owned creator origin; child MCP request fields cannot widen it. */
   cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
@@ -105,7 +127,23 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   runtimeOwnerToken: string;
   /** Exact host admission retained outside the child-visible request context. */
   admittedRunContext?: AdmittedRunContext;
+  /** Trusted source-turn authority retained only by the host. */
+  messageActionTurnCapability?: string;
+  /** Original native creator scope, kept outside all child-visible context. */
+  cronRequesterGrantIssuer?: (
+    authority: AgentRunDelegatedAuthority,
+    signal?: AbortSignal,
+    isCurrent?: () => boolean,
+  ) => CronCreatorAuthorityGrant;
+  abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
+  /** Original CLI policy, rebound only to this stored row's exact lifetime. */
+  bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
+  skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+  rootedExecution?: PreparedRootedExecutionCapability;
   activeCaptureKey?: string;
+  /** Effective attempt authority, including plugin-owned timeout and cancellation. */
+  assertCaptureCurrent?: () => void;
   toolAuth?: McpLoopbackToolAuth;
 };
 
@@ -213,6 +251,13 @@ export function mintMcpLoopbackClientGrant(params: {
   context: McpLoopbackRequestContext;
   runtimeOwnerToken: string;
   admittedRunContext?: AdmittedRunContext;
+  messageActionTurnCapability?: string;
+  cronRequesterGrantIssuer?: StoredMcpLoopbackClientGrant["cronRequesterGrantIssuer"];
+  abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
+  bindQuestionAnswerAuthority?: StoredMcpLoopbackClientGrant["bindQuestionAnswerAuthority"];
+  skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+  rootedExecution?: PreparedRootedExecutionCapability;
   toolAuth?: McpLoopbackToolAuth;
 }): McpLoopbackClientGrant {
   const sessionKey = params.context.sessionKey.trim();
@@ -228,6 +273,19 @@ export function mintMcpLoopbackClientGrant(params: {
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
     ...(params.admittedRunContext ? { admittedRunContext: params.admittedRunContext } : {}),
+    ...(params.messageActionTurnCapability
+      ? { messageActionTurnCapability: params.messageActionTurnCapability }
+      : {}),
+    ...(params.cronRequesterGrantIssuer
+      ? { cronRequesterGrantIssuer: params.cronRequesterGrantIssuer }
+      : {}),
+    abortSignal: params.abortSignal,
+    assertCurrent: params.assertCurrent,
+    bindQuestionAnswerAuthority: params.bindQuestionAnswerAuthority,
+    ...(params.skillLibraryAuthoring
+      ? { skillLibraryAuthoring: params.skillLibraryAuthoring }
+      : {}),
+    ...(params.rootedExecution ? { rootedExecution: params.rootedExecution } : {}),
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
@@ -235,6 +293,36 @@ export function mintMcpLoopbackClientGrant(params: {
     token: grant.token,
     context: grant.context,
   });
+}
+
+function replaceMcpLoopbackClientGrant(grant: StoredMcpLoopbackClientGrant): void {
+  clientGrantsByToken.set(grant.token, grant);
+  // Cached tools capture a row's authority even when token and capture strings stay unchanged.
+  notifyMcpLoopbackClientGrantRevoked({
+    token: grant.token,
+    runtimeOwnerToken: grant.runtimeOwnerToken,
+  });
+}
+
+function isMcpLoopbackClientGrantCurrent(
+  grant: StoredMcpLoopbackClientGrant,
+  authority: AgentRunDelegatedAuthority | undefined,
+): boolean {
+  if (!grant.admittedRunContext || !authority || grant.abortSignal?.aborted) {
+    return false;
+  }
+  try {
+    grant.assertCurrent?.();
+    grant.assertCaptureCurrent?.();
+  } catch {
+    return false;
+  }
+  // Caller assertions can revoke or replace the row while checking their own owner.
+  return (
+    getAdmittedRunDelegatedAuthority(grant.admittedRunContext) === authority &&
+    !grant.abortSignal?.aborted &&
+    clientGrantsByToken.get(grant.token) === grant
+  );
 }
 
 /** Attaches the exact late CLI admission before the grant can execute tools. */
@@ -251,10 +339,7 @@ export function bindMcpLoopbackClientGrantAdmission(params: {
   ) {
     return false;
   }
-  clientGrantsByToken.set(params.token, {
-    ...grant,
-    admittedRunContext: params.admittedRunContext,
-  });
+  replaceMcpLoopbackClientGrant({ ...grant, admittedRunContext: params.admittedRunContext });
   return true;
 }
 
@@ -263,7 +348,8 @@ export function activateMcpLoopbackClientGrantCapture(params: {
   token: string;
   runtimeOwnerToken: string;
   captureKey: string;
-}): boolean {
+  assertCurrent?: () => void;
+}): false | { captureNativeToolAuthority: (toolNames: readonly string[] | null) => boolean } {
   const captureKey = params.captureKey.trim();
   if (!captureKey) {
     throw new Error("activateMcpLoopbackClientGrantCapture: captureKey is required");
@@ -272,8 +358,44 @@ export function activateMcpLoopbackClientGrantCapture(params: {
   if (!grant || grant.runtimeOwnerToken !== params.runtimeOwnerToken) {
     return false;
   }
-  clientGrantsByToken.set(params.token, { ...grant, activeCaptureKey: captureKey });
-  return true;
+  let activeGrant = {
+    ...grant,
+    activeCaptureKey: captureKey,
+    assertCaptureCurrent: params.assertCurrent,
+    context: {
+      ...grant.context,
+      ...(grant.context.nativeCronCreatorToolAllowlist !== undefined
+        ? { nativeCronCreatorToolAllowlist: null }
+        : {}),
+    },
+  };
+  replaceMcpLoopbackClientGrant(activeGrant);
+  const admission = grant.admittedRunContext;
+  const authority = admission && getAdmittedRunDelegatedAuthority(admission);
+  return {
+    captureNativeToolAuthority: (toolNames) => {
+      // The closure owns this exact activation, including across warm-process turns.
+      // Rebinding, deactivation, or admission closure fences retained observers.
+      if (
+        !authority ||
+        !admission ||
+        !isMcpLoopbackClientGrantCurrent(activeGrant, authority) ||
+        activeGrant.context.nativeCronCreatorToolAllowlist === undefined
+      ) {
+        return false;
+      }
+      activeGrant = {
+        ...activeGrant,
+        context: {
+          ...activeGrant.context,
+          nativeCronCreatorToolAllowlist: toolNames === null ? null : [...toolNames],
+        },
+      };
+      // Discovery can precede native initialization; discard its earlier cap snapshot.
+      replaceMcpLoopbackClientGrant(activeGrant);
+      return true;
+    },
+  };
 }
 
 /** Release only the attempt that still owns this grant's active capture. */
@@ -290,8 +412,12 @@ export function deactivateMcpLoopbackClientGrantCapture(params: {
   ) {
     return false;
   }
-  const { activeCaptureKey: _activeCaptureKey, ...inactiveGrant } = grant;
-  clientGrantsByToken.set(params.token, inactiveGrant);
+  const {
+    activeCaptureKey: _activeCaptureKey,
+    assertCaptureCurrent: _assertCaptureCurrent,
+    ...inactiveGrant
+  } = grant;
+  replaceMcpLoopbackClientGrant(inactiveGrant);
   return true;
 }
 
@@ -316,7 +442,11 @@ export function transferMcpLoopbackClientGrant(params: {
   // The child cannot replace its bearer after launch. Turn cleanup may already
   // have revoked that bearer, so recreate it only from this fresh admitted grant.
   // An existing bearer owned by another runtime is never replaceable.
-  const { activeCaptureKey: _activeCaptureKey, ...inactiveSource } = source;
+  const {
+    activeCaptureKey: _activeCaptureKey,
+    assertCaptureCurrent: _assertCaptureCurrent,
+    ...inactiveSource
+  } = source;
   clientGrantsByToken.set(params.targetToken, {
     ...inactiveSource,
     token: params.targetToken,
@@ -344,27 +474,65 @@ export function resolveMcpLoopbackClientGrant(params: {
   | {
       context: McpLoopbackRequestContext;
       captureKey: string;
-      admittedRunContext?: AdmittedRunContext;
+      admittedRunContext: AdmittedRunContext;
+      messageActionTurnCapability?: string;
+      mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
+      questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
+      skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+      rootedExecution?: PreparedRootedExecutionCapability;
+      isCurrent: () => boolean;
       toolAuth?: McpLoopbackToolAuth;
     }
   | undefined {
-  const grant = clientGrantsByToken.get(params.token);
+  const { token, runtimeOwnerToken, captureKey } = params;
+  const grant = clientGrantsByToken.get(token);
+  const admittedRunContext = grant?.admittedRunContext;
+  const delegatedAuthority =
+    admittedRunContext && getAdmittedRunDelegatedAuthority(admittedRunContext);
   if (
     !grant ||
-    grant.runtimeOwnerToken !== params.runtimeOwnerToken ||
-    !grant.admittedRunContext ||
-    !getAdmittedRunDelegatedAuthority(grant.admittedRunContext) ||
+    grant.runtimeOwnerToken !== runtimeOwnerToken ||
+    !admittedRunContext ||
+    !delegatedAuthority ||
     !grant.activeCaptureKey ||
-    grant.activeCaptureKey !== params.captureKey
+    grant.activeCaptureKey !== captureKey
   ) {
     return undefined;
   }
+  // Every bind, capture change, and transfer replaces the row, fencing even same-reference reuse.
+  const isCurrent = () => isMcpLoopbackClientGrantCurrent(grant, delegatedAuthority);
+  if (!isCurrent()) {
+    return undefined;
+  }
+  const questionAnswerAuthority = grant.bindQuestionAnswerAuthority?.(() => {
+    if (!isCurrent()) {
+      throw new Error("question creator MCP grant is no longer active");
+    }
+  });
+  const issueCronRequesterGrant = grant.cronRequesterGrantIssuer;
   // Cached tools and OAuth refreshes must share the prepared store for this
   // grant; cloning on each request would discard refreshed credentials.
   return {
     context: structuredClone(grant.context),
     captureKey: grant.activeCaptureKey,
-    ...(grant.admittedRunContext ? { admittedRunContext: grant.admittedRunContext } : {}),
+    admittedRunContext,
+    ...(grant.messageActionTurnCapability
+      ? { messageActionTurnCapability: grant.messageActionTurnCapability }
+      : {}),
+    ...(issueCronRequesterGrant
+      ? {
+          mintCronRequesterGrant: (signal?: AbortSignal) => {
+            if (!isCurrent()) {
+              throw new Error("cron requester MCP grant is no longer active");
+            }
+            return issueCronRequesterGrant(delegatedAuthority, signal, isCurrent);
+          },
+        }
+      : {}),
+    questionAnswerAuthority,
+    ...(grant.skillLibraryAuthoring ? { skillLibraryAuthoring: grant.skillLibraryAuthoring } : {}),
+    isCurrent,
+    ...(grant.rootedExecution ? { rootedExecution: grant.rootedExecution } : {}),
     ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),
   };
 }

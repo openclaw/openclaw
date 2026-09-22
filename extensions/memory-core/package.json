@@ -1,24 +1,25 @@
 {
   "name": "@openclaw/memory-core",
-  "version": "2026.8.1",
+  "version": "2026.9.4",
   "private": true,
   "description": "OpenClaw core memory search plugin",
   "type": "module",
   "exports": {
-    "./api.js": "./api.ts"
+    "./api.js": "./api.ts",
+    "./session-search-visibility-api.js": "./session-search-visibility-api.ts"
   },
   "dependencies": {
     "chokidar": "5.0.0",
     "json5": "2.2.3",
-    "p-limit": "7.3.1",
-    "typebox": "1.3.16"
+    "p-limit": "7.3.2",
+    "typebox": "1.3.30"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.9.4"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -26,6 +27,13 @@
     }
   },
   "openclaw": {
+    "build": {
+      "workerEntries": [
+        "./src/memory/manager-search.worker.ts",
+        "./src/memory/manager-index.worker.ts",
+        "./src/memory/manager-publication.worker.ts"
+      ]
+    },
     "extensions": [
       "./index.ts"
     ]

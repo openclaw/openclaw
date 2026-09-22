@@ -177,6 +177,8 @@ describe("fetchBrowserJson loopback auth", () => {
     const init = requireFetchInit(fetchMock);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBeNull();
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.getBridgeAuthForPort).not.toHaveBeenCalled();
   });
 
   it("keeps caller-supplied auth header", async () => {
@@ -224,6 +226,133 @@ describe("fetchBrowserJson loopback auth", () => {
     const headers = new Headers(init?.headers);
     expect(mocks.getBridgeAuthForPort).not.toHaveBeenCalled();
     expect(headers.get("authorization")).toBeNull();
+  });
+
+  type AuthBoundaryCase = {
+    name: string;
+    headers?: Record<string, string>;
+    auth?: BrowserControlAuth;
+    bridge?: BridgeAuth;
+    configThrows?: boolean;
+    resolverThrows?: boolean;
+    registryThrows?: boolean;
+    authorization: string | null;
+    password: string | null;
+    calls: string[];
+  };
+  const authBoundaryCases: AuthBoundaryCase[] = [
+    {
+      name: "preserves a caller password without implicit credential lookup",
+      headers: { "x-openclaw-password": "fixture-caller-password" },
+      authorization: null,
+      password: "fixture-caller-password",
+      calls: [],
+    },
+    {
+      name: "preserves an empty caller authorization header",
+      headers: { Authorization: "" },
+      authorization: "",
+      password: null,
+      calls: [],
+    },
+    {
+      name: "preserves an empty caller password header",
+      headers: { "x-openclaw-password": "" },
+      authorization: null,
+      password: "",
+      calls: [],
+    },
+    {
+      name: "uses configured password before the bridge registry",
+      auth: { password: "fixture-config-password" },
+      bridge: { token: "fixture-unused-bridge-token" },
+      authorization: null,
+      password: "fixture-config-password",
+      calls: ["config", "resolve"],
+    },
+    {
+      name: "uses configured token before the bridge registry",
+      auth: { token: "fixture-config-token" },
+      bridge: { password: "fixture-unused-bridge-password" },
+      authorization: "Bearer fixture-config-token",
+      password: null,
+      calls: ["config", "resolve"],
+    },
+    {
+      name: "uses a bridge token after empty configured auth",
+      bridge: { token: "fixture-bridge-token" },
+      authorization: "Bearer fixture-bridge-token",
+      password: null,
+      calls: ["config", "resolve", "registry"],
+    },
+    {
+      name: "uses a bridge password after empty configured auth",
+      bridge: { password: "fixture-bridge-password" },
+      authorization: null,
+      password: "fixture-bridge-password",
+      calls: ["config", "resolve", "registry"],
+    },
+    {
+      name: "uses the bridge registry after config lookup fails",
+      configThrows: true,
+      bridge: { token: "fixture-bridge-token" },
+      authorization: "Bearer fixture-bridge-token",
+      password: null,
+      calls: ["config", "registry"],
+    },
+    {
+      name: "uses the bridge registry after auth resolution fails",
+      resolverThrows: true,
+      bridge: { password: "fixture-bridge-password" },
+      authorization: null,
+      password: "fixture-bridge-password",
+      calls: ["config", "resolve", "registry"],
+    },
+    {
+      name: "keeps the unauthenticated request when registry lookup fails",
+      registryThrows: true,
+      authorization: null,
+      password: null,
+      calls: ["config", "resolve", "registry"],
+    },
+  ];
+
+  it.each(authBoundaryCases)("$name", async (testCase) => {
+    const calls: string[] = [];
+    mocks.loadConfig.mockImplementation(() => {
+      calls.push("config");
+      if (testCase.configThrows) {
+        throw new Error("fixture config unavailable");
+      }
+      return {};
+    });
+    mocks.resolveBrowserControlAuth.mockImplementation(() => {
+      calls.push("resolve");
+      if (testCase.resolverThrows) {
+        throw new Error("fixture auth unavailable");
+      }
+      return testCase.auth ?? {};
+    });
+    mocks.getBridgeAuthForPort.mockImplementation(() => {
+      calls.push("registry");
+      if (testCase.registryThrows) {
+        throw new Error("fixture registry unavailable");
+      }
+      return testCase.bridge;
+    });
+    const fetchMock = stubJsonFetchOk();
+
+    await expect(
+      fetchBrowserJson("http://127.0.0.1:18888/", { headers: testCase.headers }),
+    ).resolves.toEqual({ ok: true });
+
+    const headers = new Headers(requireFetchInit(fetchMock)?.headers);
+    expect(headers.get("authorization")).toBe(testCase.authorization);
+    expect(headers.get("x-openclaw-password")).toBe(testCase.password);
+    expect(calls).toEqual(testCase.calls);
+    if (testCase.calls.includes("registry")) {
+      expect(mocks.getBridgeAuthForPort).toHaveBeenCalledWith(18888);
+    }
   });
 
   it("preserves dispatcher timeout context with retry-once hint", async () => {

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 type StatusOverrides = Omit<Partial<DaemonStatus>, "service"> & {
   service?: Omit<DaemonStatus["service"], "loaded">;
@@ -47,11 +48,7 @@ function createStatus(overrides: StatusOverrides = {}): DaemonStatus {
   };
 }
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
 describe("ensureGatewayReadyForOperation", () => {
   beforeEach(() => {
@@ -80,6 +77,35 @@ describe("ensureGatewayReadyForOperation", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
+  it.each(["timeout", "gateway closed (1006): "])(
+    "does not start over a busy listener after an inconclusive %s probe",
+    async (error) => {
+      const status = createStatus({
+        port: { port: 18789, status: "busy", listeners: [], hints: [] },
+        rpc: { ok: false, error },
+      });
+      const confirm = vi.fn().mockResolvedValue(false);
+      const installGateway = vi.fn();
+      const startGateway = vi.fn();
+      const result = await ensureGatewayReadyForOperation({
+        runtime,
+        operation: "open the dashboard",
+        readyWhenReachable: true,
+        interactive: true,
+        deps: { gatherStatus: async () => status, confirm, installGateway, startGateway },
+      });
+
+      expect(result).toMatchObject({ ready: false, recoverable: false });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(installGateway).not.toHaveBeenCalled();
+      expect(startGateway).not.toHaveBeenCalled();
+      const output = runtime.log.mock.calls.flat().join("\n");
+      expect(output).toContain("Gateway probe failed:");
+      expect(output).not.toContain("Gateway is not running");
+      expect(output).not.toContain("gateway start");
+    },
+  );
+
   it("prints diagnosis and skips recovery when an interactive user declines", async () => {
     const gatherStatus = vi.fn().mockResolvedValue(createStatus());
     const confirm = vi.fn().mockResolvedValue(false);
@@ -93,7 +119,7 @@ describe("ensureGatewayReadyForOperation", () => {
 
     expect(result.ready).toBe(false);
     expect(confirm).toHaveBeenCalledWith(
-      "Gateway is not installed. Install and start it now so OpenClaw can open the dashboard?",
+      "No background Gateway service was detected for this profile. Install and start one to open the dashboard?",
       true,
     );
     expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
@@ -264,6 +290,7 @@ describe("ensureGatewayReadyForOperation", () => {
       rpc: {
         ok: false,
         error: "gateway closed (1008): auth failed",
+        gatewayReached: true,
         url: "ws://127.0.0.1:49876",
       },
     });
@@ -296,6 +323,7 @@ describe("ensureGatewayReadyForOperation", () => {
       rpc: {
         ok: false,
         error: "device identity required",
+        gatewayReached: true,
         url: "ws://127.0.0.1:18789",
       },
     });
@@ -328,6 +356,7 @@ describe("ensureGatewayReadyForOperation", () => {
       rpc: {
         ok: false,
         error: "connect failed",
+        gatewayReached: true,
         connectFailure: { kind: "pairing-required", detailCode: "PAIRING_REQUIRED" },
         url: "ws://127.0.0.1:18789",
       },
@@ -361,6 +390,7 @@ describe("ensureGatewayReadyForOperation", () => {
         ok: false,
         error: "connect failed",
         connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
+        gatewayReached: true,
         url: "ws://127.0.0.1:18789",
       },
     });

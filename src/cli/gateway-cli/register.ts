@@ -17,7 +17,7 @@ import type {
 } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output.js";
@@ -38,28 +38,26 @@ import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
-const configModuleLoader = createLazyImportLoader(
+const loadConfigModule = createLazyPromise(
   () => import("../../config/read-best-effort-config.runtime.js"),
 );
-const gatewayStatusModuleLoader = createLazyImportLoader(
-  () => import("../../commands/gateway-status.js"),
-);
-const gatewayHealthModuleLoader = createLazyImportLoader(() => import("../../commands/health.js"));
-const bonjourDiscoveryModuleLoader = createLazyImportLoader(
+const loadGatewayStatusModule = createLazyPromise(() => import("../../commands/gateway-status.js"));
+const loadGatewayHealthModule = createLazyPromise(() => import("../../commands/health.js"));
+const loadBonjourDiscoveryModule = createLazyPromise(
   () => import("../../infra/bonjour-discovery.js"),
 );
-const wideAreaDnsModuleLoader = createLazyImportLoader(() => import("../../infra/widearea-dns.js"));
-const healthStyleModuleLoader = createLazyImportLoader(
+const loadWideAreaDnsModule = createLazyPromise(() => import("../../infra/widearea-dns.js"));
+const loadHealthStyleModule = createLazyPromise(
   () => import("../../../packages/terminal-core/src/health-style.js"),
 );
-const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
-const stabilityBundleModuleLoader = createLazyImportLoader(
+const loadUsageFormatModule = createLazyPromise(() => import("../../utils/usage-format.js"));
+const loadStabilityBundleModule = createLazyPromise(
   () => import("../../logging/diagnostic-stability-bundle.js"),
 );
-const supportExportModuleLoader = createLazyImportLoader(
+const loadSupportExportModule = createLazyPromise(
   () => import("../../logging/diagnostic-support-export.js"),
 );
-const daemonStatusGatherModuleLoader = createLazyImportLoader(
+const loadDaemonStatusGatherModule = createLazyPromise(
   () => import("../daemon-cli/status.gather.js"),
 );
 
@@ -69,46 +67,6 @@ type GatewayCliDependencies = {
   loadGatewayHealthModule?: typeof loadGatewayHealthModule;
   loadHealthStyleModule?: typeof loadHealthStyleModule;
 };
-
-function loadConfigModule() {
-  return configModuleLoader.load();
-}
-
-function loadGatewayStatusModule() {
-  return gatewayStatusModuleLoader.load();
-}
-
-function loadGatewayHealthModule() {
-  return gatewayHealthModuleLoader.load();
-}
-
-function loadBonjourDiscoveryModule() {
-  return bonjourDiscoveryModuleLoader.load();
-}
-
-function loadWideAreaDnsModule() {
-  return wideAreaDnsModuleLoader.load();
-}
-
-function loadHealthStyleModule() {
-  return healthStyleModuleLoader.load();
-}
-
-function loadUsageFormatModule() {
-  return usageFormatModuleLoader.load();
-}
-
-function loadStabilityBundleModule() {
-  return stabilityBundleModuleLoader.load();
-}
-
-function loadSupportExportModule() {
-  return supportExportModuleLoader.load();
-}
-
-function loadDaemonStatusGatherModule() {
-  return daemonStatusGatherModuleLoader.load();
-}
 
 function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TIMEOUT_MS): Command {
   return addGatewayClientOptions(cmd, { timeoutMs: defaultTimeoutMs }).option(
@@ -189,12 +147,13 @@ async function renderCostUsageSummaryAsync(
   rich: boolean,
 ): Promise<string[]> {
   const { formatMissingCostEntries } = await import("../../infra/session-cost-usage-totals.js");
-  const { formatTokenCount, formatUsd } = await loadUsageFormatModule();
+  const { formatCostUsageCachePrefix, formatTokenCount, formatUsd } = await loadUsageFormatModule();
   const totalCost = formatUsd(summary.totals.totalCost) ?? "$0.00";
   const totalTokens = formatTokenCount(summary.totals.totalTokens) ?? "0";
+  const cachePrefix = formatCostUsageCachePrefix(summary.cacheStatus);
   const lines = [
     colorize(rich, theme.heading, `Usage cost (${days} days)`),
-    `${colorize(rich, theme.muted, "Total:")} ${totalCost} · ${totalTokens} tokens`,
+    `${cachePrefix}${colorize(rich, theme.muted, "Total:")} ${totalCost} · ${totalTokens} tokens`,
   ];
 
   if (summary.totals.missingCostEntries > 0) {
@@ -435,7 +394,7 @@ function resolveSupportExportRpcOptions(
 }
 
 function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined) {
     return undefined;
   }
   const parsed = parseStrictPositiveInteger(raw);
@@ -531,6 +490,10 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .command("call")
       .description("Call a Gateway method")
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
+      .option(
+        "--expect-url <url>",
+        "Fail if the resolved Gateway URL differs; preserves configured authentication",
+      )
       .option("--params <json>", "JSON object string for params", "{}")
       .action(async (method, opts, command) => {
         await runGatewayCommand(
@@ -873,15 +836,9 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
         async () => {
           const [
             { readSourceConfigBestEffort },
-            { discoverGatewayBeacons },
+            { discoverGatewayBeacons, resolveGatewayDiscoveryEndpoint },
             { resolveWideAreaDiscoveryDomain },
-            {
-              dedupeBeacons,
-              parseDiscoverTimeoutMs,
-              pickBeaconHost,
-              pickGatewayPort,
-              renderBeaconLines,
-            },
+            { dedupeBeacons, parseDiscoverTimeoutMs, renderBeaconLines },
             { withProgress },
           ] = await Promise.all([
             loadConfigModule(),
@@ -911,12 +868,10 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
           );
 
           if (opts.json) {
-            const enriched = deduped.map((b) => {
-              const host = pickBeaconHost(b);
-              const port = pickGatewayPort(b);
-              const scheme = b.gatewayTls === true ? "wss" : "ws";
-              return { ...b, wsUrl: host ? `${scheme}://${host}:${port}` : null };
-            });
+            const enriched = deduped.map((beacon) => ({
+              ...beacon,
+              wsUrl: resolveGatewayDiscoveryEndpoint(beacon)?.wsUrl ?? null,
+            }));
             defaultRuntime.writeJson({
               timeoutMs,
               domains,

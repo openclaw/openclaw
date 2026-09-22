@@ -1,6 +1,8 @@
 import type { Event } from "nostr-tools";
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/directory-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { applyBuzzDirectoryQueryAndLimit } from "./directory-query.js";
+import { isNewerBuzzRevision } from "./event-order.js";
 import type { BuzzMentionMember } from "./mentions.js";
 import type { BuzzRoomMembership } from "./room-membership.js";
 import { buildBuzzTarget, parseBuzzTarget } from "./target.js";
@@ -57,46 +59,8 @@ function readPreferredString(params: {
   return normalizeBoundedString(params.content[params.fallback], params.maxChars);
 }
 
-function isNewerEvent(
-  candidate: { createdAt: number; eventId: string },
-  current: { createdAt: number; eventId: string } | undefined,
-): boolean {
-  return (
-    !current ||
-    candidate.createdAt > current.createdAt ||
-    (candidate.createdAt === current.createdAt && candidate.eventId < current.eventId)
-  );
-}
-
 function fallbackPublicKeyLabel(publicKey: string): string {
   return `${publicKey.slice(0, 8)}...${publicKey.slice(-6)}`;
-}
-
-function matchesDirectoryQuery(entry: ChannelDirectoryEntry, query: string): boolean {
-  if (!query) {
-    return true;
-  }
-  return [entry.id, entry.name, entry.handle].some((value) => value?.toLowerCase().includes(query));
-}
-
-function applyQueryAndLimit(
-  entries: ChannelDirectoryEntry[],
-  params: { query?: string | null; limit?: number | null },
-): ChannelDirectoryEntry[] {
-  const query = params.query?.trim().toLowerCase() ?? "";
-  const limit =
-    typeof params.limit === "number" && params.limit > 0 ? Math.floor(params.limit) : undefined;
-  const result: ChannelDirectoryEntry[] = [];
-  for (const entry of entries) {
-    if (!matchesDirectoryQuery(entry, query)) {
-      continue;
-    }
-    result.push(entry);
-    if (limit !== undefined && result.length >= limit) {
-      break;
-    }
-  }
-  return result;
 }
 
 function parseBuzzDirectoryProfileEvent(event: Event): BuzzDirectoryProfile | undefined {
@@ -257,7 +221,7 @@ export class BuzzDirectoryState {
     if (
       !profile ||
       !this.#profilePublicKeys.has(profile.publicKey) ||
-      !isNewerEvent(profile, this.#profiles.get(profile.publicKey))
+      !isNewerBuzzRevision(profile, this.#profiles.get(profile.publicKey))
     ) {
       return false;
     }
@@ -270,7 +234,7 @@ export class BuzzDirectoryState {
     if (
       !room ||
       !this.#configuredRoomIds.has(room.roomId) ||
-      !isNewerEvent(room, this.#rooms.get(room.roomId))
+      !isNewerBuzzRevision(room, this.#rooms.get(room.roomId))
     ) {
       return false;
     }
@@ -308,14 +272,14 @@ export class BuzzDirectoryState {
     const entries = [...peers]
       .map((publicKey) => this.#buildUserEntry(publicKey))
       .toSorted(compareDirectoryEntries);
-    return applyQueryAndLimit(entries, params);
+    return applyBuzzDirectoryQueryAndLimit(entries, params);
   }
 
   listGroups(params: { query?: string | null; limit?: number | null }): ChannelDirectoryEntry[] {
     const entries = this.activeRoomIds()
       .map((roomId) => this.#buildRoomEntry(roomId))
       .toSorted(compareDirectoryEntries);
-    return applyQueryAndLimit(entries, params);
+    return applyBuzzDirectoryQueryAndLimit(entries, params);
   }
 
   listGroupMembers(params: { groupId: string; limit?: number | null }): ChannelDirectoryEntry[] {
@@ -343,7 +307,7 @@ export class BuzzDirectoryState {
         return entry;
       })
       .toSorted(compareDirectoryEntries);
-    return applyQueryAndLimit(entries, { limit: params.limit });
+    return applyBuzzDirectoryQueryAndLimit(entries, { limit: params.limit });
   }
 
   mentionMembers(roomId: string): BuzzMentionMember[] | undefined {

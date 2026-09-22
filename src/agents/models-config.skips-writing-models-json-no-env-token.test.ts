@@ -16,14 +16,10 @@ import {
 import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.secrets.js";
 import {
   encodePluginModelCatalogRelativePath,
-  loadPersistedPluginModelCatalogs,
+  loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
-
-function listPersistedPluginModelCatalogs(agentDir: string) {
-  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
-}
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   listExternalCliSyncProviderIds: () => [],
@@ -57,6 +53,8 @@ vi.mock("./models-config.providers.js", async () => {
     }: {
       providers: Record<string, ModelsProviderConfig>;
     }) => providers,
+    materializeConfiguredProviderCatalogModels: (providers: Record<string, ModelsProviderConfig>) =>
+      providers,
     normalizeProviders: ({ providers }: { providers: Record<string, ModelsProviderConfig> }) =>
       providers,
     normalizeProviderCatalogModelsForConfig: (providers: Record<string, ModelsProviderConfig>) =>
@@ -119,7 +117,7 @@ async function readGeneratedProviders(
   const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
   const parsed = JSON.parse(raw) as { providers?: Record<string, ParsedProviderConfig> };
   const providers = { ...parsed.providers };
-  for (const { contents } of listPersistedPluginModelCatalogs(agentDir)) {
+  for (const { contents } of loadPersistedPluginModelCatalogsReadOnly(agentDir)) {
     const catalog = JSON.parse(contents) as {
       generatedBy?: string;
       providers?: Record<string, ParsedProviderConfig>;
@@ -272,7 +270,7 @@ describe("models-config", () => {
         pluginMetadataSnapshot,
       });
 
-      const persistedCatalog = listPersistedPluginModelCatalogs(agentDir).find(
+      const persistedCatalog = loadPersistedPluginModelCatalogsReadOnly(agentDir).find(
         (catalog) => catalog.pluginId === "deepseek",
       );
       expect(persistedCatalog).toBeDefined();

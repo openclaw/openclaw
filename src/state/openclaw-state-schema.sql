@@ -39,11 +39,51 @@ CREATE TABLE IF NOT EXISTS skill_usage (
 CREATE INDEX IF NOT EXISTS idx_skill_usage_key
   ON skill_usage(skill_key, skill_file);
 
+-- Profile-owned skill library: additive, absent until first publication/import.
+CREATE TABLE IF NOT EXISTS skill_library_entries (
+  skill_id TEXT NOT NULL PRIMARY KEY,
+  owner_profile_id TEXT,
+  author_profile_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  current_revision TEXT NOT NULL,
+  shared INT NOT NULL,
+  enabled INT NOT NULL,
+  removed INT NOT NULL,
+  created_at INT NOT NULL,
+  updated_at INT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS skill_library_revisions (
+  skill_id TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  description TEXT NOT NULL,
+  files_json TEXT NOT NULL,
+  created_at INT NOT NULL,
+  PRIMARY KEY (skill_id, revision)
+) STRICT;
+CREATE TABLE IF NOT EXISTS skill_library_events (
+  event_id TEXT NOT NULL PRIMARY KEY,
+  skill_id TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  action TEXT NOT NULL,
+  actor_profile_id TEXT NOT NULL,
+  created_at INT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS skill_library_uploads (
+  upload_id TEXT NOT NULL PRIMARY KEY,
+  owner_profile_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  size_bytes INT NOT NULL,
+  sha256 TEXT NOT NULL,
+  archive_blob BLOB NOT NULL,
+  expires_at INT NOT NULL,
+  published_skill_id TEXT
+) STRICT;
+-- End profile-owned skill library.
+
 CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   proposal_id TEXT NOT NULL PRIMARY KEY,
   record_json TEXT NOT NULL,
   owner_agent_id TEXT,
-  workspace_dir TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('create', 'update')),
   status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected', 'quarantined', 'stale')),
   created_at TEXT NOT NULL,
@@ -57,13 +97,12 @@ CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   rejected_at TEXT,
   quarantined_at TEXT,
   stale_at TEXT,
-  status_reason TEXT,
-  claim_released_time INTEGER
+  status_reason TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (
   review_id TEXT NOT NULL PRIMARY KEY,
-  workspace_dir TEXT NOT NULL,
+  owner_agent_id TEXT NOT NULL,
   backup_id TEXT NOT NULL,
   create_time INTEGER NOT NULL,
   kept_names_json TEXT NOT NULL,
@@ -71,8 +110,8 @@ CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (
   dropped_json TEXT NOT NULL
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_skill_workshop_collection_reviews_workspace_time
-  ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC);
+CREATE INDEX IF NOT EXISTS idx_skill_workshop_collection_reviews_owner_time
+  ON skill_workshop_collection_reviews(owner_agent_id, create_time DESC, review_id);
 
 CREATE TABLE IF NOT EXISTS skill_workshop_proposal_rollbacks (
   proposal_id TEXT NOT NULL PRIMARY KEY,
@@ -519,7 +558,7 @@ CREATE TABLE IF NOT EXISTS operator_approval_standing_grants (
   job_config_revision TEXT NOT NULL CHECK (length(job_config_revision) > 0),
   operation_binding TEXT NOT NULL CHECK (length(operation_binding) > 0),
   created_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= created_at_ms),
+  expires_at_ms INTEGER CHECK (expires_at_ms IS NULL OR expires_at_ms >= created_at_ms),
   revoked_at_ms INTEGER,
   revoked_by TEXT,
   last_used_at_ms INTEGER,
@@ -804,12 +843,29 @@ CREATE TABLE IF NOT EXISTS web_push_subscriptions (
   endpoint TEXT NOT NULL,
   p256dh TEXT NOT NULL,
   auth TEXT NOT NULL,
+  device_id TEXT,
+  user_profile_id TEXT,
+  preferences_json TEXT,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_web_push_subscriptions_updated
   ON web_push_subscriptions(updated_at_ms DESC, subscription_id);
+
+CREATE TABLE IF NOT EXISTS web_push_approval_deliveries (
+  approval_id TEXT NOT NULL
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  subscription_id TEXT NOT NULL
+    REFERENCES web_push_subscriptions(subscription_id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  user_profile_id TEXT,
+  prepared_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (approval_id, subscription_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
+  ON web_push_approval_deliveries(subscription_id, approval_id);
 
 CREATE TABLE IF NOT EXISTS apns_registrations (
   node_id TEXT NOT NULL PRIMARY KEY,
@@ -1014,6 +1070,33 @@ CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
 CREATE INDEX IF NOT EXISTS idx_official_external_plugin_catalog_snapshots_updated
   ON official_external_plugin_catalog_snapshots(updated_at_ms DESC, feed_url);
 
+CREATE TABLE IF NOT EXISTS update_runs (
+  run_id TEXT PRIMARY KEY NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  trigger TEXT NOT NULL CHECK (trigger IN ('chat', 'control-ui', 'cli', 'campaign', 'mac-app', 'api')),
+  phase TEXT NOT NULL CHECK (phase IN ('requested', 'staging', 'validating', 'repairing', 'activating', 'restarting', 'verifying', 'finished')),
+  status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'rolled-back', 'skipped')),
+  reason TEXT,
+  origin_json TEXT NOT NULL CHECK (length(CAST(origin_json AS BLOB)) <= 16384),
+  target_json TEXT NOT NULL CHECK (length(CAST(target_json AS BLOB)) <= 16384),
+  before_json TEXT NOT NULL CHECK (length(CAST(before_json AS BLOB)) <= 16384),
+  after_json TEXT NOT NULL CHECK (length(CAST(after_json AS BLOB)) <= 16384),
+  steps_json TEXT NOT NULL CHECK (length(CAST(steps_json AS BLOB)) <= 16384),
+  verification_json TEXT NOT NULL CHECK (length(CAST(verification_json AS BLOB)) <= 16384),
+  repair_json TEXT NOT NULL CHECK (length(CAST(repair_json AS BLOB)) <= 16384),
+  confirmed_at_ms INTEGER,
+  finished_at_ms INTEGER,
+  downtime_ms INTEGER,
+  CHECK ((status = 'running' AND phase != 'finished' AND finished_at_ms IS NULL) OR
+    (status != 'running' AND phase = 'finished' AND finished_at_ms IS NOT NULL))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_update_runs_created
+  ON update_runs(created_at_ms DESC, run_id);
+CREATE INDEX IF NOT EXISTS idx_update_runs_active
+  ON update_runs(status, created_at_ms DESC, run_id);
+
 CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (
   sentinel_key TEXT NOT NULL PRIMARY KEY,
   version INTEGER NOT NULL,
@@ -1191,7 +1274,7 @@ CREATE INDEX IF NOT EXISTS idx_plugin_state_expiry
   WHERE expires_at IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_plugin_state_listing
-  ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);
+  ON plugin_state_entries(plugin_id, namespace, created_at, entry_key, expires_at);
 
 CREATE TABLE IF NOT EXISTS channel_ingress_events (
   queue_name TEXT NOT NULL,
@@ -1411,6 +1494,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_run_receipts_active_job
 CREATE INDEX IF NOT EXISTS idx_cron_run_receipts_job_history
   ON cron_run_receipts(store_key, job_id, started_at_ms DESC, receipt_id DESC);
 
+-- Retirement follows the receipt's retention without changing its released shape.
+CREATE TABLE IF NOT EXISTS cron_run_trigger_state_retirements (
+  receipt_id TEXT PRIMARY KEY
+    REFERENCES cron_run_receipts(receipt_id) ON DELETE CASCADE
+) STRICT;
+
 -- Runtime-private authority is independent of job_json so downgraded writers
 -- can rewrite recognized job config without erasing or silently widening it.
 CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (
@@ -1498,6 +1587,9 @@ CREATE TABLE IF NOT EXISTS task_runs (
   agent_id TEXT,
   requester_agent_id TEXT,
   run_id TEXT,
+  execution_owner_host TEXT,
+  execution_owner_pid INTEGER,
+  execution_owner_start_identity INTEGER,
   label TEXT,
   task TEXT NOT NULL,
   status TEXT NOT NULL,
@@ -1549,8 +1641,6 @@ CREATE INDEX IF NOT EXISTS idx_subagent_runs_controller_session_key
 CREATE TABLE IF NOT EXISTS current_conversation_bindings (
   binding_key TEXT NOT NULL PRIMARY KEY,
   binding_id TEXT NOT NULL,
-  target_agent_id TEXT NOT NULL,
-  target_session_id TEXT,
   target_session_key TEXT NOT NULL,
   channel TEXT NOT NULL,
   account_id TEXT NOT NULL,
@@ -1567,7 +1657,7 @@ CREATE TABLE IF NOT EXISTS current_conversation_bindings (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_target
-  ON current_conversation_bindings(target_agent_id, target_session_key, updated_at DESC, binding_key);
+  ON current_conversation_bindings(target_session_key, updated_at DESC, binding_key);
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_conversation
   ON current_conversation_bindings(channel, account_id, conversation_kind, conversation_id);
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_expires
@@ -1759,6 +1849,21 @@ CREATE TABLE IF NOT EXISTS worktree_provisioned_file_chunks (
   PRIMARY KEY (worktree_id, path, chunk_index)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS worktree_templates (
+  cache_key TEXT NOT NULL PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  repo_root TEXT NOT NULL,
+  common_dir TEXT NOT NULL,
+  worktree_root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  source_commit TEXT NOT NULL,
+  content_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('preparing', 'ready')),
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT NOT NULL PRIMARY KEY,
   display_name TEXT NOT NULL,
@@ -1795,6 +1900,26 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   provider_id TEXT NOT NULL,
   profile_id TEXT NOT NULL,
   profile_snapshot_json TEXT NOT NULL,
+  last_activated_at_ms INTEGER,
+  preparation_key TEXT,
+  preparation_purpose TEXT,
+  preparation_demand_at_ms INTEGER,
+  preparation_expires_at_ms INTEGER,
+  preparation_consumed_at_ms INTEGER CHECK (
+    (preparation_key IS NULL AND preparation_demand_at_ms IS NULL
+      AND preparation_expires_at_ms IS NULL AND preparation_consumed_at_ms IS NULL)
+    OR
+    (preparation_key IS NOT NULL AND length(preparation_key) = 64
+      AND preparation_key NOT GLOB '*[^0-9a-f]*'
+      AND preparation_demand_at_ms IS NOT NULL
+      AND preparation_demand_at_ms BETWEEN 0 AND 9007199254740991
+      AND preparation_expires_at_ms IS NOT NULL
+      AND preparation_expires_at_ms > preparation_demand_at_ms
+      AND preparation_expires_at_ms <= 9007199254740991
+      AND (preparation_consumed_at_ms IS NULL
+        OR (preparation_consumed_at_ms >= preparation_demand_at_ms
+          AND preparation_consumed_at_ms < preparation_expires_at_ms)))
+  ),
   provision_operation_id TEXT NOT NULL UNIQUE,
   lease_id TEXT,
   node_setup_id TEXT,
@@ -1843,6 +1968,51 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
 CREATE INDEX IF NOT EXISTS idx_worker_environments_terminal_changed
   ON worker_environments(state_changed_at_ms, environment_id);
 
+-- A dedicated node registers its fixed build paths before ready, then binds
+-- them once. The environment belongs to the Gateway's separate database.
+CREATE TABLE IF NOT EXISTS node_worker_prepared_workspaces (
+  preparation_key TEXT NOT NULL PRIMARY KEY CHECK (
+    length(preparation_key) = 64 AND preparation_key NOT GLOB '*[^0-9a-f]*'
+  ),
+  cache_key TEXT NOT NULL CHECK (
+    length(cache_key) = 64 AND cache_key NOT GLOB '*[^0-9a-f]*'
+  ),
+  gateway_namespace TEXT NOT NULL CHECK (length(gateway_namespace) > 0),
+  workspace_dir TEXT NOT NULL UNIQUE CHECK (length(workspace_dir) > 0),
+  home_dir TEXT NOT NULL CHECK (length(home_dir) > 0),
+  source_manifest_ref TEXT NOT NULL CHECK (
+    length(source_manifest_ref) = 71 AND substr(source_manifest_ref, 1, 7) = 'sha256:'
+      AND substr(source_manifest_ref, 8) NOT GLOB '*[^0-9a-f]*'
+  ),
+  prepared_manifest_ref TEXT NOT NULL CHECK (
+    length(prepared_manifest_ref) = 71 AND substr(prepared_manifest_ref, 1, 7) = 'sha256:'
+      AND substr(prepared_manifest_ref, 8) NOT GLOB '*[^0-9a-f]*'
+  ),
+  state TEXT NOT NULL CHECK (state IN ('available', 'bound', 'retiring', 'retired')),
+  environment_id TEXT NOT NULL CHECK (length(environment_id) > 0),
+  session_id TEXT,
+  session_key TEXT,
+  owner_epoch INTEGER CHECK (owner_epoch BETWEEN 1 AND 9007199254740991),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms BETWEEN 0 AND 9007199254740991),
+  bound_at_ms INTEGER CHECK (bound_at_ms BETWEEN created_at_ms AND 9007199254740991),
+  retired_at_ms INTEGER CHECK (
+    retired_at_ms BETWEEN coalesce(bound_at_ms, created_at_ms) AND 9007199254740991
+  ),
+  CHECK (
+    (session_id IS NULL AND session_key IS NULL AND owner_epoch IS NULL AND bound_at_ms IS NULL)
+    OR
+    (session_id IS NOT NULL AND length(session_id) > 0
+      AND session_key IS NOT NULL AND length(session_key) > 0
+      AND owner_epoch IS NOT NULL AND bound_at_ms IS NOT NULL)
+  ),
+  CHECK (
+    (state = 'available' AND bound_at_ms IS NULL AND retired_at_ms IS NULL)
+    OR (state = 'bound' AND bound_at_ms IS NOT NULL AND retired_at_ms IS NULL)
+    OR (state = 'retiring' AND retired_at_ms IS NULL)
+    OR (state = 'retired' AND retired_at_ms IS NOT NULL)
+  )
+) STRICT;
+
 -- Provider-advertised fallback ports preserve stable retry order separately
 -- from the downgrade-sensitive canonical worker environment row.
 CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
@@ -1853,6 +2023,84 @@ CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
   UNIQUE (environment_id, port),
   FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
 ) STRICT;
+
+-- Logical sessions own repository intent and accepted artifact references,
+-- independently of the worker or rotating transcript session id.
+CREATE TABLE IF NOT EXISTS session_repository_workspaces (
+  workspace_id TEXT NOT NULL PRIMARY KEY CHECK (length(workspace_id) = 36),
+  agent_id TEXT NOT NULL CHECK (length(agent_id) BETWEEN 1 AND 128),
+  session_key TEXT NOT NULL CHECK (length(session_key) BETWEEN 1 AND 1024),
+  url TEXT NOT NULL CHECK (length(url) BETWEEN 1 AND 4096),
+  requested_ref TEXT CHECK (requested_ref IS NULL OR length(requested_ref) BETWEEN 1 AND 1024),
+  run_setup_script INTEGER NOT NULL DEFAULT 0 CHECK (run_setup_script IN (0, 1)),
+  base_commit TEXT CHECK (base_commit IS NULL OR length(base_commit) IN (40, 64)),
+  base_manifest_hash TEXT,
+  branch TEXT NOT NULL CHECK (length(branch) BETWEEN 1 AND 256),
+  checkpoint_ref TEXT,
+  manifest_hash TEXT,
+  revision INTEGER NOT NULL CHECK (revision >= 0),
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  UNIQUE (agent_id, session_key),
+  CHECK (base_manifest_hash IS NULL OR base_commit IS NOT NULL),
+  CHECK ((checkpoint_ref IS NULL AND manifest_hash IS NULL)
+    OR (checkpoint_ref IS NOT NULL AND manifest_hash IS NOT NULL AND base_manifest_hash IS NOT NULL))
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS github_repository_publication_requests (
+  request_id TEXT NOT NULL PRIMARY KEY,
+  owner_profile_id TEXT,
+  connection_generation TEXT,
+  idempotency_key TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  session_lifecycle_revision TEXT,
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  checkpoint_ref TEXT,
+  checkpoint_digest TEXT,
+  claim_id TEXT,
+  run_id TEXT,
+  environment_id TEXT,
+  owner_epoch INTEGER,
+  placement_generation INTEGER,
+  identity_source TEXT NOT NULL CHECK (identity_source IN ('system-detected', 'system-configured', 'agent-override', 'personal')),
+  identity_profile_id TEXT,
+  identity_account_id INTEGER NOT NULL,
+  identity_login TEXT NOT NULL,
+  title TEXT,
+  body TEXT,
+  status TEXT NOT NULL CHECK (status IN ('requested', 'publishing', 'needs_confirmation', 'published', 'failed')),
+  gateway_instance_id TEXT,
+  execution_id TEXT,
+  last_effect TEXT CHECK (last_effect IN ('push', 'pull_request')),
+  effect_state TEXT CHECK (effect_state IN ('dispatched', 'observed')),
+  push_repository TEXT,
+  repository TEXT,
+  branch TEXT NOT NULL,
+  base_branch TEXT,
+  source_head_commit TEXT,
+  source_index_tree TEXT,
+  workspace_tree TEXT,
+  previous_head_commit TEXT,
+  pushed_head_commit TEXT,
+  head_commit TEXT,
+  pull_request_url TEXT,
+  error_code TEXT,
+  next_action TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  reported_at_ms INTEGER,
+  CHECK ((identity_source = 'personal' AND owner_profile_id IS NOT NULL AND connection_generation IS NOT NULL)
+    OR (identity_source <> 'personal' AND owner_profile_id IS NULL AND connection_generation IS NULL)),
+  CHECK ((checkpoint_ref IS NULL AND checkpoint_digest IS NULL) OR (checkpoint_ref IS NOT NULL AND checkpoint_digest IS NOT NULL)),
+  CHECK ((last_effect IS NULL AND effect_state IS NULL) OR (last_effect IS NOT NULL AND effect_state IS NOT NULL))
+) STRICT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_github_repository_publication_shared_request
+  ON github_repository_publication_requests(session_id, idempotency_key) WHERE owner_profile_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_github_repository_publication_personal_request
+  ON github_repository_publication_requests(owner_profile_id, session_id, idempotency_key) WHERE owner_profile_id IS NOT NULL;
 
 -- Session placement lives in the shared state database so local admission,
 -- worker admission, and environment attachment use one durable authority.
@@ -1992,9 +2240,10 @@ CREATE TABLE IF NOT EXISTS worker_session_placement_moves (
   source_owner_epoch INTEGER NOT NULL CHECK (source_owner_epoch >= 1),
   target_kind TEXT NOT NULL CHECK (target_kind IN ('gateway', 'profile', 'device')),
   target_id TEXT,
-  -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the
-  -- same shape as fresh databases; placement-move code validates its value.
+  -- Keep these nullable columns constraint-free so lazy ALTER TABLE produces the
+  -- same shape as fresh databases; placement-move code validates their values.
   target_machine_class TEXT,
+  target_os TEXT,
   -- Explicit source abandonment is a durable operator decision. Keep the bit
   -- bare and nullable so same-version older readers can safely omit it.
   abandon_source INTEGER,
@@ -2076,6 +2325,7 @@ CREATE TABLE IF NOT EXISTS worker_workspace_pending_results (
   recovery_requested_at_ms INTEGER,
   workspace_accepted_at_ms INTEGER,
   staged_result_ref TEXT,
+  repository_workspace_id TEXT,
   created_at_ms INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
 ) STRICT;
@@ -2159,6 +2409,64 @@ CREATE TABLE IF NOT EXISTS github_publication_requests (
 
 CREATE INDEX IF NOT EXISTS idx_github_publication_requests_pending
   ON github_publication_requests(status, updated_at_ms, request_id);
+
+-- Personal requests cannot be interpreted or resumed by older shared publishers.
+CREATE TABLE IF NOT EXISTS github_personal_publication_requests (
+  request_id TEXT NOT NULL PRIMARY KEY CHECK (length(request_id) = 36),
+  owner_profile_id TEXT NOT NULL CHECK (length(owner_profile_id) BETWEEN 1 AND 128),
+  connection_generation TEXT NOT NULL CHECK (length(connection_generation) = 36),
+  idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) BETWEEN 1 AND 128),
+  request_digest TEXT NOT NULL CHECK (length(request_digest) = 64),
+  session_id TEXT NOT NULL CHECK (length(session_id) BETWEEN 1 AND 128),
+  session_key TEXT NOT NULL CHECK (length(session_key) BETWEEN 1 AND 1024),
+  agent_id TEXT NOT NULL CHECK (length(agent_id) BETWEEN 1 AND 128),
+  worktree_id TEXT NOT NULL CHECK (length(worktree_id) BETWEEN 1 AND 128),
+  repository_fingerprint TEXT NOT NULL CHECK (length(repository_fingerprint) BETWEEN 1 AND 256),
+  identity_source TEXT NOT NULL CHECK (identity_source = 'personal'),
+  identity_profile_id TEXT NOT NULL CHECK (length(identity_profile_id) = 36),
+  identity_account_id INTEGER NOT NULL CHECK (identity_account_id >= 1),
+  identity_login TEXT NOT NULL CHECK (length(identity_login) BETWEEN 1 AND 39),
+  title TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 256),
+  body TEXT CHECK (body IS NULL OR length(body) BETWEEN 1 AND 8192),
+  status TEXT NOT NULL CHECK (status IN ('requested', 'publishing', 'needs_confirmation', 'published', 'failed')),
+  gateway_instance_id TEXT CHECK (gateway_instance_id IS NULL OR length(gateway_instance_id) BETWEEN 1 AND 128),
+  execution_id TEXT CHECK (execution_id IS NULL OR length(execution_id) = 36),
+  last_effect TEXT CHECK (last_effect IS NULL OR last_effect IN ('push', 'pull_request')),
+  effect_state TEXT CHECK (effect_state IS NULL OR effect_state IN ('dispatched', 'observed')),
+  push_repository TEXT NOT NULL CHECK (length(push_repository) BETWEEN 3 AND 256),
+  repository TEXT NOT NULL CHECK (length(repository) BETWEEN 3 AND 256),
+  branch TEXT NOT NULL CHECK (length(branch) BETWEEN 1 AND 256),
+  base_branch TEXT NOT NULL CHECK (length(base_branch) BETWEEN 1 AND 256),
+  source_head_commit TEXT NOT NULL CHECK (length(source_head_commit) IN (40, 64)),
+  source_index_tree TEXT NOT NULL CHECK (length(source_index_tree) IN (40, 64)),
+  workspace_tree TEXT NOT NULL CHECK (length(workspace_tree) IN (40, 64)),
+  head_commit TEXT CHECK (head_commit IS NULL OR length(head_commit) IN (40, 64)),
+  pull_request_url TEXT CHECK (pull_request_url IS NULL OR length(pull_request_url) BETWEEN 1 AND 2048),
+  error_code TEXT CHECK (error_code IS NULL OR length(error_code) BETWEEN 1 AND 64),
+  next_action TEXT CHECK (next_action IS NULL OR length(next_action) BETWEEN 1 AND 1024),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
+  reported_at_ms INTEGER,
+  UNIQUE (owner_profile_id, session_id, idempotency_key),
+  CHECK ((status = 'publishing' AND gateway_instance_id IS NOT NULL AND execution_id IS NOT NULL) OR status <> 'publishing'),
+  CHECK ((last_effect IS NULL AND effect_state IS NULL) OR (last_effect IS NOT NULL AND effect_state IS NOT NULL)),
+  CHECK ((status = 'published' AND pull_request_url IS NOT NULL AND head_commit IS NOT NULL AND error_code IS NULL AND next_action IS NULL)
+    OR (status = 'failed' AND error_code IS NOT NULL AND next_action IS NOT NULL)
+    OR (status IN ('requested', 'publishing', 'needs_confirmation') AND error_code IS NULL AND next_action IS NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_github_personal_publication_owner_session
+  ON github_personal_publication_requests(owner_profile_id, session_id, created_at_ms);
+CREATE INDEX IF NOT EXISTS idx_github_personal_publication_pending
+  ON github_personal_publication_requests(status, updated_at_ms, request_id);
+
+-- Older readers validate both local receipt tables exactly. Their immutable
+-- lifecycle binding stays in a first-use companion so those schemas remain readable.
+CREATE TABLE IF NOT EXISTS github_publication_session_lifecycles (
+  publication_kind TEXT NOT NULL CHECK (publication_kind IN ('shared', 'personal')),
+  request_id TEXT NOT NULL,
+  lifecycle_revision TEXT,
+  PRIMARY KEY (publication_kind, request_id)
+) STRICT;
 
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.

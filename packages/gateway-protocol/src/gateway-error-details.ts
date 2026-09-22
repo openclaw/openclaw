@@ -1,4 +1,9 @@
 import { asProtocolRecord } from "./protocol-value-normalization.js";
+import type { SessionMoveExpectedSource } from "./schema/session-placement.js";
+
+/** Display projection for an assistant failure without visible reply content. */
+export const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT =
+  "The agent run failed before producing a reply.";
 
 /** Gateway JSON-RPC style error codes shared by clients and server handlers. */
 export const ErrorCodes = {
@@ -33,6 +38,9 @@ export const GatewayErrorDetailCodes = {
   PROJECT_CLONE_FAILED: "PROJECT_CLONE_FAILED",
   UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
   WIZARD_NOT_FOUND: "WIZARD_NOT_FOUND",
+  SETUP_ADMISSION_BUSY: "SETUP_ADMISSION_BUSY",
+  GITHUB_PUBLICATION_SELECTION_REJECTED: "GITHUB_PUBLICATION_SELECTION_REJECTED",
+  SESSION_WORKSPACE_RECOVERY_REQUIRED: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -69,6 +77,17 @@ export type UnknownAgentIdErrorDetails = {
   agentId: string;
 };
 
+/** Setup rejected before its task or wizard session was admitted. */
+export type SetupAdmissionBusyErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY;
+};
+
+/** This invocation rejected its selection before admission; earlier calls may still be pending. */
+export type GitHubPublicationSelectionRejectedErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED;
+  idempotencyKey: string;
+};
+
 /** Missing or expired process-local setup wizard session. */
 export type WizardNotFoundErrorDetails = {
   code: typeof GatewayErrorDetailCodes.WIZARD_NOT_FOUND;
@@ -94,6 +113,15 @@ export type SkillProposalRevisionChangedErrorDetails = {
   currentRevisionHash: string;
 };
 
+/** Exact retained workspace owner that must be recovered or explicitly abandoned. */
+export type SessionWorkspaceRecoveryRequiredErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.SESSION_WORKSPACE_RECOVERY_REQUIRED;
+  cause: "device_offline";
+  recoveryAction: "continue_on_gateway";
+  sessionId: string;
+  source: SessionMoveExpectedSource;
+};
+
 /** Structured details emitted by method-level failures. */
 export type GatewayErrorDetails =
   | CronJobNotFoundErrorDetails
@@ -104,7 +132,10 @@ export type GatewayErrorDetails =
   | SkillProposalRevisionChangedErrorDetails
   | ProjectCloneErrorDetails
   | UnknownAgentIdErrorDetails
-  | WizardNotFoundErrorDetails;
+  | WizardNotFoundErrorDetails
+  | SetupAdmissionBusyErrorDetails
+  | GitHubPublicationSelectionRejectedErrorDetails
+  | SessionWorkspaceRecoveryRequiredErrorDetails;
 
 type GatewayErrorLike = {
   code?: unknown;
@@ -115,6 +146,20 @@ type GatewayErrorLike = {
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*([a-z0-9._-]+)/i;
 const SHA256_PATTERN = /^[a-fA-F0-9]{64}$/;
+
+export function readGitHubPublicationSelectionRejectedError(
+  error: unknown,
+): GitHubPublicationSelectionRejectedErrorDetails | null {
+  const record = asProtocolRecord(error);
+  const details = asProtocolRecord(record?.details);
+  return record?.code === ErrorCodes.UNAVAILABLE &&
+    details?.code === GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED &&
+    Object.keys(details).length === 2 &&
+    typeof details.idempotencyKey === "string" &&
+    details.idempotencyKey.length > 0
+    ? { code: details.code, idempotencyKey: details.idempotencyKey }
+    : null;
+}
 
 /** Reads a typed cron lookup miss without parsing operator-facing prose. */
 export function readCronJobNotFoundError(error: unknown): CronJobNotFoundErrorDetails | null {

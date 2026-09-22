@@ -5,10 +5,79 @@ import Testing
 
 @MainActor
 struct ChatSessionSidebarModelTests {
+    @Test func `activity expires attention without mistaking child work for its finished parent`() {
+        let status = OpenClawChatSessionAgentStatus(note: "Choose a destination", expiresAt: 2000, attention: "hand")
+        let parent = self.entry(
+            key: "agent:research:parent", status: "done",
+            agentStatus: status,
+            observerDigest: .init(revision: 1, updatedAt: 1000, headline: "Parent finished", health: "done"),
+            hasActiveSubagentRun: true)
+        #expect(ChatSessionSidebarModel.activity(for: parent, now: 1000)?.kind == .attention)
+        let expired = ChatSessionSidebarModel.activity(for: parent, now: 3000)
+        #expect(expired?.kind == .running)
+        #expect(expired?.text == "Working")
+        #expect(ChatSessionSidebarModel.activity(for: self.entry(key: "unknown"), now: 3000) == nil)
+    }
+
+    @Test func `agent summaries count owned rows once and do not revive read failures`() {
+        var global = self.entry(key: "global", unread: true, status: "running", hasActiveRun: true)
+        global.agentId = "research"
+        var foreign = global
+        foreign.agentId = "main"
+        let attention = self.entry(
+            key: "agent:research:review", unread: true,
+            agentStatus: .init(note: "Review the result", expiresAt: 5000, attention: "hand"))
+        let queued = self.entry(key: "agent:research:queued", status: "queued", hasActiveRun: true)
+        let readFailure = self.entry(
+            key: "agent:research:old", updatedAt: 1000, lastReadAt: 2000,
+            status: "failed", lastRunError: "Old failure", endedAt: 1000)
+        let summary = ChatSessionSidebarModel.agentSummary(for: "research", sessions: [
+            global, foreign, attention, queued, queued, readFailure,
+            self.entry(key: "unknown", unread: true, status: "running"),
+            self.entry(key: "agent:research:onboarding", unread: true, status: "running"),
+            self.entry(key: "agent:research:archived", archived: true, unread: true, status: "failed"),
+        ], now: 3000)
+        #expect(summary?.runningCount == 1)
+        #expect(summary?.queuedCount == 1)
+        #expect(summary?.attentionCount == 1)
+        #expect(summary?.unreadCount == 2)
+        #expect(summary?.activity?.text == "Review the result")
+        #expect(ChatSessionSidebarModel.agentSummary(for: "research", sessions: [readFailure], now: 3000)?
+            .activity == nil)
+        #expect(ChatSessionSidebarModel.agentSummary(for: "unloaded", sessions: [global], now: 3000) == nil)
+    }
+
+    @Test func `message previews use recent visible prose and omit hidden reasoning and tool rows`() {
+        let answer = OpenClawChatMessage(role: "assistant", content: [
+            .init(
+                type: "text",
+                text: "<think>Private reasoning</think>**Ready** to review.\nNext step.",
+                mimeType: nil,
+                fileName: nil,
+                content: nil),
+        ], timestamp: 1)
+        let tool = OpenClawChatMessage(role: "tool", content: [
+            .init(type: "text", text: "Internal tool output", mimeType: nil, fileName: nil, content: nil),
+        ], timestamp: 2)
+        #expect(ChatSessionSidebarModel.messagePreview(from: [answer, tool]) == "Ready to review. Next step.")
+        let long = OpenClawChatMessage(role: "user", content: [
+            .init(
+                type: "text",
+                text: String(repeating: "word ", count: 10000),
+                mimeType: nil,
+                fileName: nil,
+                content: nil),
+        ], timestamp: 3)
+        let preview = ChatSessionSidebarModel.messagePreview(from: [answer, long])
+        #expect(preview?.hasPrefix("You: word") == true)
+        #expect((preview?.count ?? 0) <= 245)
+    }
+
     private func entry(
         key: String,
         displayName: String? = nil,
         label: String? = nil,
+        autoLabel: String? = nil,
         subject: String? = nil,
         sessionId: String? = nil,
         updatedAt: Double? = nil,
@@ -51,6 +120,7 @@ struct ChatSessionSidebarModelTests {
             model: nil,
             contextTokens: nil,
             label: label,
+            autoLabel: autoLabel,
             category: category,
             pinned: pinned,
             pinnedAt: pinnedAt,
@@ -229,11 +299,14 @@ struct ChatSessionSidebarModelTests {
     }
 
     @Test func `agent scope keeps active agent and unprefixed sessions`() {
+        var foreignGlobal = self.entry(key: "global", updatedAt: 250)
+        foreignGlobal.agentId = "other"
         let sections = ChatSessionSidebarModel.sections(
             sessions: [
                 self.entry(key: "agent:ops:main", updatedAt: 400),
                 self.entry(key: "agent:ops:deploy", updatedAt: 300),
                 self.entry(key: "agent:other:private", updatedAt: 200),
+                foreignGlobal,
                 self.entry(key: "global-tool", updatedAt: 100),
             ],
             currentSessionKey: "main",
@@ -275,7 +348,7 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:ops:child"])
     }
 
-    @Test func `global aliases select their agent wrapped row`() {
+    @Test func `bare global stays distinct from an ordinary qualified global row`() {
         let sessions = [
             self.entry(key: "global", updatedAt: 200),
             self.entry(key: "agent:ops:global", updatedAt: 100, archived: true),
@@ -291,8 +364,8 @@ struct ChatSessionSidebarModelTests {
             sessions: sessions,
             currentSessionKey: "global",
             mainSessionKey: "agent:main:main",
-            activeAgentID: "ops") == "agent:ops:global")
-        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:ops:global"])
+            activeAgentID: "ops") == "global")
+        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["global"])
     }
 
     @Test func `query filters on display name and key`() {
@@ -366,6 +439,40 @@ struct ChatSessionSidebarModelTests {
 
         let unnamed = self.entry(key: "agent:main:x")
         #expect(ChatSessionSidebarModel.displayName(for: unnamed) == "x")
+
+        let androidStamp = self.entry(
+            key: "agent:main:node-1234567890ab",
+            displayName: "Generated title",
+            autoLabel: "OpenClaw App · Pixel · 1234567890ab")
+        #expect(ChatSessionSidebarModel.displayName(for: androidStamp) == "Generated title")
+        let unnamedAndroidSession = self.entry(
+            key: "agent:main:node-1234567890ab",
+            autoLabel: "OpenClaw App · Pixel · 1234567890ab")
+        #expect(
+            ChatSessionSidebarModel.displayName(for: unnamedAndroidSession)
+                == "OpenClaw App · Pixel · 1234567890ab")
+
+        for label in [
+            "OpenClaw App",
+            "OpenClaw App · 1234567890ab",
+            "OpenClaw App · Pixel · 1234567890ab",
+            "OpenClaw App · Release planning · 1234567890ab",
+        ] {
+            let manuallyNamed = self.entry(
+                key: "agent:main:node-1234567890ab",
+                displayName: "Generated title",
+                label: label,
+                autoLabel: "OpenClaw App · Pixel · 1234567890ab")
+            #expect(ChatSessionSidebarModel.displayName(for: manuallyNamed) == label)
+        }
+
+        let manualPrefix = self.entry(
+            key: "agent:main:dashboard:fresh",
+            displayName: "Generated title",
+            label: "OpenClaw App · Release planning")
+        #expect(
+            ChatSessionSidebarModel.displayName(for: manualPrefix)
+                == "OpenClaw App · Release planning")
     }
 
     @Test func `delete excludes main aliases and allows ordinary or selected global sessions`() {
@@ -672,7 +779,7 @@ struct ChatSessionSidebarModelTests {
                     agentId: "work",
                     runId: "run-work",
                     revision: 3,
-                    updatedAt: 1_000,
+                    updatedAt: 1000,
                     headline: "Replayed work status",
                     health: "on-track")),
             to: foreign,
@@ -680,6 +787,39 @@ struct ChatSessionSidebarModelTests {
 
         #expect(replayed[0].observerDigest?.headline == "Current work status")
         #expect(replayed[0].observerDigest?.revision == 4)
+    }
+
+    @Test func `global observer events require the active agent owner`() {
+        let running = self.entry(
+            key: "global",
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"])
+        let accepted = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: "global",
+                agentid: "work",
+                runid: "run-work",
+                revision: 1,
+                updatedat: 100,
+                headline: "Work status",
+                health: .onTrack),
+            to: [running],
+            activeAgentId: "work")
+        let rejected = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: "global",
+                agentid: "main",
+                runid: "run-work",
+                revision: 2,
+                updatedat: 200,
+                headline: "Foreign status",
+                health: .stuck),
+            to: accepted,
+            activeAgentId: "work")
+
+        #expect(accepted[0].observerDigest?.headline == "Work status")
+        #expect(rejected[0].observerDigest?.headline == "Work status")
     }
 
     @Test func `run rollover clears a stale digest before the replacement event`() throws {
@@ -777,6 +917,30 @@ struct ChatSessionSidebarModelTests {
         #expect(cleared.lastRunError == nil)
     }
 
+    @Test(arguments: [false, true])
+    func `session color survives coding and partial events but clears on tombstone`(nested: Bool) throws {
+        let decoder = JSONDecoder()
+        let entry = try decoder.decode(
+            OpenClawChatSessionEntry.self,
+            from: Data(#"{"key":"agent:main:work","color":"red"}"#.utf8))
+        var sessions = try [decoder.decode(
+            OpenClawChatSessionEntry.self,
+            from: JSONEncoder().encode(entry))]
+        #expect(sessions[0].color == "red")
+        for (field, expected) in [
+            ("", "red"),
+            (#", "color":"blue""#, "blue"),
+            (#", "color":null"#, nil),
+            ("", nil),
+        ] as [(String, String?)] {
+            let row = #"{"key":"agent:main:work"\#(field)}"#
+            let payload = nested ? #"{"reason":"patch","session":\#(row)}"# : row
+            let change = try decoder.decode(OpenClawChatSessionsChangedEvent.self, from: Data(payload.utf8))
+            sessions = try #require(ChatSessionSidebarModel.applying(sessionChange: change, to: sessions))
+            #expect(sessions[0].color == expected)
+        }
+    }
+
     @Test func `active run id tombstone clears exact ids while omission is inert`() throws {
         let existing = self.entry(
             key: "agent:main:work",
@@ -788,7 +952,9 @@ struct ChatSessionSidebarModelTests {
 
         let omitted = try decoder.decode(
             OpenClawChatSessionsChangedEvent.self,
-            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":200,"hasActiveRun":true}}"#.utf8))
+            from: Data(
+                #"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":200,"hasActiveRun":true}}"#
+                    .utf8))
         let retained = try #require(ChatSessionSidebarModel.applying(
             sessionChange: omitted,
             to: [existing]))
@@ -796,7 +962,9 @@ struct ChatSessionSidebarModelTests {
 
         let tombstoned = try decoder.decode(
             OpenClawChatSessionsChangedEvent.self,
-            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":300,"hasActiveRun":true,"activeRunIds":null}}"#.utf8))
+            from: Data(
+                #"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":300,"hasActiveRun":true,"activeRunIds":null}}"#
+                    .utf8))
         let cleared = try #require(ChatSessionSidebarModel.applying(
             sessionChange: tombstoned,
             to: retained))

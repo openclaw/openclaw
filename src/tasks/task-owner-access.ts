@@ -1,6 +1,5 @@
 // Normalizes task owner keys and checks requester access to task records.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -13,6 +12,10 @@ import {
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
+import {
+  resolveTaskSessionAgentId,
+  resolveTaskSessionAgentIdAsync,
+} from "./task-session-identity.js";
 import { buildTaskStatusSnapshot } from "./task-status.js";
 
 type TaskOwnerIdentity = {
@@ -21,36 +24,57 @@ type TaskOwnerIdentity = {
   config?: OpenClawConfig;
 };
 
-function canOwnerAccessTask(task: TaskRecord, identity: TaskOwnerIdentity): boolean {
+function resolveTaskOwnerCallerAgentId(
+  task: TaskRecord,
+  identity: TaskOwnerIdentity,
+): string | undefined {
   if (
     task.scopeKind !== "session" ||
     normalizeOptionalString(task.ownerKey) !== normalizeOptionalString(identity.callerOwnerKey)
   ) {
-    return false;
+    return undefined;
   }
-  const callerAgentId =
+  return (
     normalizeOptionalString(identity.callerAgentId) ??
-    parseAgentSessionKey(identity.callerOwnerKey)?.agentId;
+    parseAgentSessionKey(identity.callerOwnerKey)?.agentId
+  );
+}
+
+function taskAgentMatchesCaller(taskAgentId: string | undefined, callerAgentId: string): boolean {
+  return (
+    Boolean(taskAgentId) &&
+    normalizeOptionalString(taskAgentId) === normalizeOptionalString(callerAgentId)
+  );
+}
+
+function canOwnerAccessTask(task: TaskRecord, identity: TaskOwnerIdentity): boolean {
+  const callerAgentId = resolveTaskOwnerCallerAgentId(task, identity);
   // Bare owner keys can collide across per-agent stores, so an unscoped caller
   // without a trusted agent identity must fail closed.
   if (!callerAgentId) {
     return false;
   }
-  let taskAgentId = task.requesterAgentId ?? parseAgentSessionKey(task.ownerKey)?.agentId;
-  if (!taskAgentId) {
-    try {
-      taskAgentId = resolveSessionAgentId({
-        sessionKey: task.ownerKey,
-        config: identity.config ?? getRuntimeConfig(),
-      });
-    } catch {
-      return false;
-    }
-  }
-  return (
-    Boolean(taskAgentId) &&
-    normalizeOptionalString(taskAgentId) === normalizeOptionalString(callerAgentId)
+  const taskAgentId = resolveTaskSessionAgentId(
+    task.ownerKey,
+    task.requesterAgentId,
+    identity.config ?? getRuntimeConfig,
   );
+  return taskAgentMatchesCaller(taskAgentId, callerAgentId);
+}
+
+export async function canOwnerAccessTaskAsync(
+  task: TaskRecord,
+  identity: TaskOwnerIdentity,
+  readConfig: () => Promise<OpenClawConfig>,
+): Promise<boolean> {
+  const callerAgentId = resolveTaskOwnerCallerAgentId(task, identity);
+  if (!callerAgentId) {
+    return false;
+  }
+  const taskAgentId = identity.config
+    ? resolveTaskSessionAgentId(task.ownerKey, task.requesterAgentId, identity.config)
+    : await resolveTaskSessionAgentIdAsync(task.ownerKey, task.requesterAgentId, readConfig);
+  return taskAgentMatchesCaller(taskAgentId, callerAgentId);
 }
 
 export function getTaskByIdForOwner(params: {

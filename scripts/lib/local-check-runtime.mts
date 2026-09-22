@@ -1,8 +1,10 @@
-// Applies local resource policy for expensive check commands.
+// Applies resource policy for expensive local and CI check commands.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const GIB = 1024 ** 3;
 const DEFAULT_LOCAL_GO_GC = "30";
@@ -11,6 +13,8 @@ const DEFAULT_LOCAL_GO_MEMORY_LIMIT = "3GiB";
 const DEFAULT_LOCAL_TSGO_BUILD_INFO_FILE = ".artifacts/tsgo-cache/root.tsbuildinfo";
 const DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * GIB;
 const DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS = 12;
+const CI_PARALLEL_MIN_CPUS = 8;
+export const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * GIB;
 
 type Env = NodeJS.ProcessEnv;
 type Resources = {
@@ -39,6 +43,14 @@ function isCiLikeEnv(env: Env = process.env) {
   return env.CI === "true" || env.GITHUB_ACTIONS === "true";
 }
 
+// Small CI runners share one constraint check for shard concurrency and Go memory policy.
+export function isConstrainedCiCheckHost(hostResources: Resources) {
+  return !(
+    hostResources.totalMemoryBytes >= CI_PARALLEL_MIN_MEMORY_BYTES &&
+    hostResources.logicalCpuCount >= CI_PARALLEL_MIN_CPUS
+  );
+}
+
 /** Ensure local check runs opt into safeguard environment outside CI. */
 export function resolveLocalCheckEnv(env: Env = process.env) {
   if (isCiLikeEnv(env) || isLocalCheckEnabled(env)) {
@@ -60,6 +72,26 @@ export function resolveRepoToolBinPath(
     resolveCommonDir = resolveGitCommonDir,
   }: RepoToolOptions = {},
 ) {
+  if (toolName === "tsgo") {
+    // TypeScript 6 owns the in-process compiler API; CLI checks use the stable
+    // native compiler explicitly, independent of either package's tsc bin link.
+    const require = createRequire(import.meta.url);
+    const {
+      createDeclarationInputBoundary,
+    }: typeof import("./tsdown-declaration-boundary.mts") = require("./tsdown-declaration-boundary.mts");
+    const inputs = createDeclarationInputBoundary(cwd);
+    const fromCheckout = createRequire(path.join(inputs.root, "package.json"));
+    const nativeRoot = path.dirname(
+      inputs.assert(fromCheckout.resolve("typescript-native/package.json")),
+    );
+    const getExePath: { default: () => string } = require(
+      inputs.assert(path.join(nativeRoot, "lib/getExePath.js")),
+    );
+    const executable = getExePath.default();
+    // Windows launches need the extended-length prefix; normalize only for admission.
+    inputs.assert(fileURLToPath(pathToFileURL(executable)));
+    return executable;
+  }
   const localPath = path.resolve(cwd, "node_modules", ".bin", toolName);
   if (fileExists(localPath)) {
     return localPath;
@@ -76,37 +108,7 @@ export function resolveRepoToolBinPath(
   return fileExists(primaryPath) ? primaryPath : localPath;
 }
 
-/** Link a dependency-less worktree to the primary checkout toolchain selected above. */
-export function ensureRepoToolNodeModulesLink(
-  toolPath: string,
-  {
-    cwd = process.cwd(),
-    fileExists = fs.existsSync,
-    resolveCommonDir = resolveGitCommonDir,
-    symlink = fs.symlinkSync,
-    platform = process.platform,
-  }: RepoToolOptions & NodeModulesLinkOptions = {},
-) {
-  const localNodeModules = path.resolve(cwd, "node_modules");
-  if (fileExists(localNodeModules)) {
-    return localNodeModules;
-  }
-
-  const commonDir = resolveCommonDir(cwd);
-  if (!commonDir || path.basename(commonDir) !== ".git") {
-    return null;
-  }
-
-  const primaryNodeModules = path.join(path.dirname(commonDir), "node_modules");
-  const toolNodeModules = path.dirname(path.dirname(path.resolve(toolPath)));
-  if (toolNodeModules !== path.resolve(primaryNodeModules) || !fileExists(primaryNodeModules)) {
-    return null;
-  }
-
-  return ensureRepoNodeModulesLink(primaryNodeModules, { cwd, fileExists, symlink, platform });
-}
-
-/** Make selected toolchain packages resolvable from dependency-less source paths. */
+/** Link explicitly provisioned dependencies for hydration or relocated declarations. */
 export function ensureRepoNodeModulesLink(
   modulesDir: string,
   {
@@ -176,11 +178,8 @@ export function applyLocalTsgoPolicy(args: string[], env: Env, hostResources: Re
     insertBeforeSeparator(nextArgs, "--declaration", "false");
   }
 
-  if (!isLocalCheckEnabled(nextEnv)) {
-    return { env: nextEnv, args: nextArgs };
-  }
-
-  if (defaultProjectRun) {
+  const localCheckEnabled = isLocalCheckEnabled(nextEnv);
+  if (localCheckEnabled && defaultProjectRun) {
     insertBeforeSeparator(nextArgs, "--incremental");
     insertBeforeSeparator(
       nextArgs,
@@ -190,19 +189,22 @@ export function applyLocalTsgoPolicy(args: string[], env: Env, hostResources: Re
   }
 
   const resolvedHostResources = resolveHostResources(hostResources);
-  if (shouldThrottleLocalChecks(nextEnv, resolvedHostResources, "auto")) {
+  if (
+    shouldThrottleLocalChecks(nextEnv, resolvedHostResources, "auto") ||
+    (isCiLikeEnv(nextEnv) && isConstrainedCiCheckHost(resolvedHostResources))
+  ) {
     insertBeforeSeparator(nextArgs, "--singleThreaded");
     insertBeforeSeparator(nextArgs, "--checkers", "1");
     applyThrottledGoRuntimeEnv(nextEnv, resolvedHostResources);
   }
-  if (nextEnv.OPENCLAW_TSGO_PPROF_DIR && !hasFlag(nextArgs, "--pprofDir")) {
+  if (localCheckEnabled && nextEnv.OPENCLAW_TSGO_PPROF_DIR && !hasFlag(nextArgs, "--pprofDir")) {
     insertBeforeSeparator(nextArgs, "--pprofDir", nextEnv.OPENCLAW_TSGO_PPROF_DIR);
   }
 
   return { env: nextEnv, args: nextArgs };
 }
 
-/** Apply local oxlint defaults for type-aware checking and throttled worker settings. */
+/** Apply oxlint defaults for type-aware checking and throttled worker settings. */
 export function applyLocalOxlintPolicy(args: string[], env: Env, hostResources: Resources) {
   const nextEnv = { ...env };
   const nextArgs = [...args];
@@ -219,7 +221,10 @@ export function applyLocalOxlintPolicy(args: string[], env: Env, hostResources: 
     insertBeforeSeparator(nextArgs, "--format", "stylish");
   }
 
-  if (shouldThrottleLocalChecks(nextEnv, hostResources)) {
+  if (
+    shouldThrottleLocalChecks(nextEnv, hostResources) ||
+    (isCiLikeEnv(nextEnv) && isConstrainedCiCheckHost(hostResources))
+  ) {
     if (!hasFlag(nextArgs, "--threads")) {
       insertBeforeSeparator(nextArgs, "--threads=1");
     }

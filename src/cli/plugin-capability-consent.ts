@@ -4,10 +4,8 @@ import {
 } from "../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import type {
-  PluginCapabilityConsentHandler,
-  PluginCapabilityConsentReview,
-} from "../plugins/capability-consent.js";
+import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
+import type { PluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { promptYesNo } from "./prompt.js";
 
@@ -91,7 +89,7 @@ export function formatPluginCapabilityConsentLines(
 /** Resolve explicit or interactive plugin capability consent at the CLI boundary. */
 export function resolvePluginCapabilityConsentCliOptions(params: {
   acceptCapabilities?: boolean;
-  action: "install" | "enable" | "update";
+  action: "install" | "enable" | "update" | "reload";
   allowPrompt?: boolean;
   runtime?: RuntimeEnv;
 }): PluginCapabilityConsentCliOptions {

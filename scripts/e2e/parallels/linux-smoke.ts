@@ -40,10 +40,13 @@ import {
   buildCommonSmokeSummary,
   expectedPackageBuildCommit,
   expectedPackageTargetVersion,
+  ensureSmokeGuestRuntime,
   extractLastOpenClawVersion,
+  installSmokeRuntimeCompanions,
   npmRegistryEnv,
   packAndServeSmokeArtifact,
   printSmokeTargetSummary,
+  posixAgentTurnScript,
   posixStopGatewayScript,
   parseSmokeCliArgs,
   SmokeRunController,
@@ -260,12 +263,26 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     );
     await this.phase("fresh.reset-state", 180, () => this.resetState());
     await this.phase("fresh.preflight", 90, () => this.logGuestPreflight());
-    await this.phase("fresh.install-latest-bootstrap", 420, () => this.installLatestRelease());
+    await this.phase("fresh.ensure-runtime", 420, () =>
+      ensureSmokeGuestRuntime({
+        runShell: (script) => this.guestBash(script),
+        bootstrap: () => this.installLatestRelease(),
+      }),
+    );
     await this.phase("fresh.install-main", 420, () =>
       this.installMainTgz("openclaw-main-fresh.tgz"),
     );
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 90, () => this.verifyTargetVersion());
+    await this.phase("fresh.install-companions", 600, () =>
+      installSmokeRuntimeCompanions({
+        provider: this.options.provider,
+        readCli: (args) => this.guestExec(["openclaw", ...args]),
+        installCli: (args) => {
+          this.guestExec(["openclaw", ...args]);
+        },
+      }),
+    );
     await this.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("fresh.inject-bad-plugin", 90, () =>
       this.maybeInjectBadPluginFixture("fresh"),
@@ -706,43 +723,14 @@ rm -f "$provider_config_batch"`);
     this.prepareAgentWorkspace();
     this.guestBash(
       `${posixCodexPlatformPackageRepairFunction()}
-agent_ok=false
-for attempt in 1 2; do
-  session_id="parallels-linux-smoke"
-  if [ "$attempt" -gt 1 ]; then session_id="parallels-linux-smoke-retry-$attempt"; fi
-  rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
-  output_file="$(mktemp)"
-  set +e
-  /usr/bin/env OPENCLAW_ALLOW_ROOT=1 ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id "$session_id" --message ${shellQuote(
+${posixAgentTurnScript({
+  command: `/usr/bin/env OPENCLAW_ALLOW_ROOT=1 ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
-  )} --thinking off --timeout ${resolveParallelsModelTimeoutSeconds("linux")} --json >"$output_file" 2>&1
-  rc=$?
-  set -e
-  cat "$output_file"
-  if [ "$rc" -ne 0 ]; then
-    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
-      rm -f "$output_file"
-      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
-      continue
-    fi
-    rm -f "$output_file"
-    exit "$rc"
-  fi
-  if grep -Eq '"finalAssistant(Raw|Visible)Text"[[:space:]]*:[[:space:]]*"OK"' "$output_file"; then
-    agent_ok=true
-    rm -f "$output_file"
-    break
-  fi
-  rm -f "$output_file"
-  if [ "$attempt" -lt 2 ]; then
-    echo "agent turn attempt $attempt finished without OK response; retrying"
-    sleep 3
-  fi
-done
-if [ "$agent_ok" != true ]; then
-  echo "openclaw agent finished without OK response" >&2
-  exit 1
-fi`,
+  )} --thinking off --timeout ${resolveParallelsModelTimeoutSeconds("linux")} --json`,
+  sessionIdExpression: '"parallels-linux-smoke"',
+  retrySessionIdExpression: '"parallels-linux-smoke-retry-$attempt"',
+  printOutput: "cat",
+})}`,
     );
   }
 

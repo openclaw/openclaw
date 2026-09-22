@@ -1,19 +1,44 @@
 // Codex tests cover index plugin behavior.
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createPluginRuntimeMock,
+  createCapturedPluginRegistration,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { ensureAuthProfileStore, resolveAuthProfileOrder } from "openclaw/plugin-sdk/provider-auth";
+import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import openAIPlugin from "../openai/index.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
 import {
+  CODEX_MANAGED_THREAD_NAMESPACE,
+  CODEX_MANAGED_THREAD_MAX_ENTRIES,
+  markStartedCodexManagedThread,
+  type StoredCodexManagedThread,
+} from "./src/app-server/managed-thread-store.js";
+import {
   createCodexAppServerBindingStore,
   sessionBindingIdentity,
+  type CodexAppServerBindingStore,
 } from "./src/app-server/session-binding.js";
 import {
   createCodexTestBindingStateStore,
   testCodexAppServerBindingStore,
 } from "./src/app-server/session-binding.test-helpers.js";
+import { createCodexSessionCatalogNodeHostCommands } from "./src/session-catalog-listing.js";
+import type { CodexSessionCatalogControl } from "./src/session-catalog-types.js";
 import { CODEX_SUPERVISION_COMPAT_TOOL_NAMES } from "./src/supervision-tools.js";
 
 const runCodexAppServerAttemptMock = vi.hoisted(() => vi.fn());
@@ -25,11 +50,14 @@ const explicitAgentConfig = {
   },
 } as OpenClawConfig;
 
+const modelAuth = { ensureAuthProfileStore, resolveAuthProfileOrder, resolveProviderIdForAuth };
+
 function createCodexTestRuntime(
   current?: () => unknown,
   stateStore = createCodexTestBindingStateStore(),
 ) {
   return {
+    modelAuth,
     ...(current ? { config: { current } } : {}),
     state: {
       openSyncKeyedStore: () => stateStore,
@@ -53,16 +81,25 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
 }
 
 describe("codex plugin", () => {
-  it("is opt-in and does not advertise a text provider", () => {
+  it("is opt-in and advertises its native authentication source", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
     ) as { enabledByDefault?: unknown; providers?: unknown };
 
     expect(manifest.enabledByDefault).toBeUndefined();
-    expect(manifest.providers).toBeUndefined();
+    expect(manifest.providers).toEqual(["codex"]);
+  });
+
+  it("keeps only Codex sub-plugin policy changes on the live thread-rotation path", () => {
+    expect(plugin.reload).toEqual({
+      noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
+    });
   });
 
   it("does not select an agent or open plugin state while registering", () => {
+    const openKeyedStore = vi.fn(() => {
+      throw new Error("state is unavailable during registration");
+    });
     const openSyncKeyedStore = vi.fn(() => {
       throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy");
     });
@@ -75,11 +112,140 @@ describe("codex plugin", () => {
           source: "test",
           config: explicitAgentConfig,
           pluginConfig: {},
-          runtime: { state: { openSyncKeyedStore } } as never,
+          runtime: { modelAuth, state: { openSyncKeyedStore, openKeyedStore } } as never,
         }),
       ),
     ).not.toThrow();
     expect(openSyncKeyedStore).not.toHaveBeenCalled();
+    expect(openKeyedStore).not.toHaveBeenCalled();
+  });
+
+  it("persists managed exclusions through the registered harness and catalog without parent SQLite", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-managed-worker-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const options = {
+      namespace: CODEX_MANAGED_THREAD_NAMESPACE,
+      maxEntries: CODEX_MANAGED_THREAD_MAX_ENTRIES,
+      overflowPolicy: "evict-oldest" as const,
+      env,
+    };
+    const native = createPluginStateSyncKeyedStoreForTests<StoredCodexManagedThread>(
+      "codex",
+      options,
+    );
+    const original = {
+      version: 1 as const,
+      kind: "managed-thread" as const,
+      sourceHomeId: "home",
+      threadId: "managed",
+      rolloutPath: "/first.jsonl",
+    };
+    const runtime = createPluginRuntimeMock();
+    runtime.state.openKeyedStore = <T>(
+      storeOptions: Parameters<typeof runtime.state.openKeyedStore>[0],
+    ) => createPluginStateKeyedStoreForTests<T>("codex", { ...storeOptions, env });
+    runtime.state.openSyncKeyedStore = <T>(
+      storeOptions: Parameters<typeof runtime.state.openSyncKeyedStore>[0],
+    ) => createPluginStateSyncKeyedStoreForTests<T>("codex", { ...storeOptions, env });
+    vi.spyOn(runtime.state, "openKeyedStore");
+    vi.spyOn(runtime.state, "openSyncKeyedStore");
+    const registerAgentHarness = vi.fn();
+    const sql = [
+      vi.spyOn(DatabaseSync.prototype, "prepare"),
+      vi.spyOn(DatabaseSync.prototype, "exec"),
+      ...(["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(StatementSync.prototype, method),
+      ),
+    ];
+    try {
+      const calibration = new DatabaseSync(":memory:");
+      try {
+        calibration.exec("CREATE TABLE calibration (value INTEGER)");
+        calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
+        const read = calibration.prepare("SELECT value FROM calibration");
+        read.get();
+        read.all();
+        expect([...read.iterate()]).toHaveLength(1);
+        for (const operation of sql) {
+          expect(operation).toHaveBeenCalled();
+          operation.mockClear();
+        }
+      } finally {
+        calibration.close();
+      }
+      plugin.register(createTestPluginApi({ id: "codex", runtime, registerAgentHarness }));
+      expect(runtime.state.openKeyedStore).not.toHaveBeenCalled();
+      expect(runtime.state.openSyncKeyedStore).not.toHaveBeenCalled();
+      const harness = mockCallArg(registerAgentHarness) as ReturnType<
+        typeof createCodexAppServerAgentHarness
+      >;
+      runCodexAppServerAttemptMock.mockResolvedValueOnce({ terminal: { kind: "ok" } });
+      await harness.runAttempt({ prompt: "synthetic catalog proof" } as never);
+      const { bindingStore } = mockCallArg(runCodexAppServerAttemptMock, -1, 1) as {
+        bindingStore: CodexAppServerBindingStore;
+      };
+      const managed = bindingStore.managedThreads!;
+      await markStartedCodexManagedThread(managed, original);
+      await expect(managed.mark({ ...original, rolloutPath: "/later.jsonl" })).resolves.toBe(true);
+      await expect(managed.has("home", "managed")).resolves.toBe(true);
+      const control: CodexSessionCatalogControl = {
+        listPage: async () => ({
+          sessions: [
+            { threadId: "managed", status: "idle", archived: false },
+            { threadId: "native", status: "idle", archived: false },
+          ],
+          managedThreads: [{ threadId: "backfilled" }],
+        }),
+        withPinnedConnection: async (run) => run(control),
+        requireEligibleThread: vi.fn(),
+        listDescendantPage: vi.fn(),
+        listTurnPage: vi.fn(),
+        listItemPage: vi.fn(),
+        forkThread: vi.fn(),
+        readThread: vi.fn(),
+        archiveThread: vi.fn(),
+      };
+      const command = createCodexSessionCatalogNodeHostCommands(
+        {
+          forRequest: () => control,
+          forNode: async () => ({ control, sourceHomeId: "home", codexHome: "/synthetic" }),
+          homesForAgent: async () => [],
+          forUpstream: async () => undefined,
+        },
+        bindingStore,
+      ).find((candidate) => candidate.command === "codex.appServer.threads.list.v1")!;
+      const page = JSON.parse(await command.handle(JSON.stringify({ limit: 2 })));
+      expect(page.sessions.map((entry: { threadId: string }) => entry.threadId)).toEqual([
+        "native",
+      ]);
+      await expect(managed.has("home", "backfilled")).resolves.toBe(true);
+      for (const operation of sql) {
+        expect(operation).not.toHaveBeenCalled();
+      }
+      expect(runtime.state.openKeyedStore).toHaveBeenCalledExactlyOnceWith({
+        namespace: CODEX_MANAGED_THREAD_NAMESPACE,
+        maxEntries: 20_000,
+        overflowPolicy: "evict-oldest",
+      });
+      expect(runtime.state.openSyncKeyedStore).not.toHaveBeenCalled();
+      // The retained sync adapter observes the same rows and preserves the first writer.
+      const rows = native.entries();
+      expect(rows).toHaveLength(2);
+      expect(rows.find((row) => row.value.threadId === "managed")).toMatchObject({
+        key: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        value: original,
+      });
+      expect(rows.every((row) => row.expiresAt === undefined)).toBe(true);
+      await closeOpenClawStateDatabaseAsync();
+      await expect(
+        createPluginStateKeyedStoreForTests<StoredCodexManagedThread>("codex", options).entries(),
+      ).resolves.toEqual(rows);
+    } finally {
+      vi.restoreAllMocks();
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("registers request-scoped surfaces with explicit multi-agent ownership", () => {
@@ -154,7 +320,13 @@ describe("codex plugin", () => {
       }),
     );
 
-    expect(registerService).toHaveBeenCalledTimes(2);
+    expect(registerService).toHaveBeenCalledTimes(3);
+    expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
+      expect.objectContaining({
+        id: "codex-app-server-process-reaper",
+        start: expect.any(Function),
+      }),
+    );
     expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
       expect.objectContaining({
         id: "codex-app-server-connection-health",
@@ -180,11 +352,15 @@ describe("codex plugin", () => {
         }),
       );
 
-      expect(registerService).toHaveBeenCalledOnce();
+      expect(registerService).toHaveBeenCalledTimes(2);
       expect(mockCallArg(registerService)).toMatchObject({
         id: "codex-desktop-generation",
         start: expect.any(Function),
         stop: expect.any(Function),
+      });
+      expect(mockCallArg(registerService, 1)).toMatchObject({
+        id: "codex-app-server-process-reaper",
+        start: expect.any(Function),
       });
     }
   });
@@ -234,7 +410,13 @@ describe("codex plugin", () => {
       | [unknown]
       | undefined;
 
-    expect(registerProvider).not.toHaveBeenCalled();
+    expect(registerProvider).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        id: "codex",
+        auth: [],
+        prepareSyntheticAuth: expect.any(Function),
+      }),
+    );
     expect(agentHarnessRegistration.id).toBe("codex");
     expect(agentHarnessRegistration.label).toBe("Codex agent harness");
     expect(agentHarnessRegistration.deliveryDefaults).toEqual({
@@ -247,7 +429,7 @@ describe("codex plugin", () => {
     expect(typeof agentHarnessRegistration.loadMcpToolCatalog).toBe("function");
     expect(mediaProviderRegistration?.id).toBe("codex");
     expect(mediaProviderRegistration?.capabilities).toEqual(["image"]);
-    expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-5.6-sol" });
+    expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-6-astra" });
     expect(typeof mediaProviderRegistration?.describeImage).toBe("function");
     expect(typeof mediaProviderRegistration?.describeImages).toBe("function");
     const webSearchRegistration = mockCallArg(registerWebSearchProvider) as
@@ -309,7 +491,13 @@ describe("codex plugin", () => {
     );
 
     expect(registerAgentHarness).toHaveBeenCalledOnce();
-    expect(registerProvider).not.toHaveBeenCalled();
+    expect(registerProvider).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        id: "codex",
+        auth: [],
+        prepareSyntheticAuth: expect.any(Function),
+      }),
+    );
     const nodeCommands = registerNodeHostCommand.mock.calls.map(
       ([command]) => (command as { command: string }).command,
     );
@@ -323,16 +511,16 @@ describe("codex plugin", () => {
     expect(registerSessionCatalog).not.toHaveBeenCalled();
   });
 
-  it("leaves OpenAI as the only text provider when both plugins register", () => {
-    const providers: Array<{ id: string }> = [];
-    const registerProvider = (provider: { id: string }) => providers.push(provider);
+  it("keeps native authentication separate from the OpenAI text provider", () => {
+    const providers: ProviderPlugin[] = [];
+    const registerProvider = (provider: ProviderPlugin) => providers.push(provider);
     openAIPlugin.register(
       createTestPluginApi({
         id: "openai",
         name: "OpenAI Provider",
         source: "test",
         config: {},
-        runtime: {} as never,
+        runtime: createCapturedPluginRegistration({ id: "openai" }).api.runtime,
         registerProvider,
       }),
     );
@@ -348,7 +536,10 @@ describe("codex plugin", () => {
       }),
     );
 
-    expect(providers.map((provider) => provider.id)).toEqual(["openai"]);
+    expect(providers.map((provider) => provider.id)).toEqual(["openai", "codex"]);
+    expect(providers[1]).toMatchObject({ auth: [], prepareSyntheticAuth: expect.any(Function) });
+    expect(providers[1]).not.toHaveProperty("resolveDynamicModel");
+    expect(providers[1]).not.toHaveProperty("catalog");
   });
 
   it("registers the five shipped supervision tools only when supervision is enabled", () => {
@@ -626,7 +817,13 @@ describe("codex plugin", () => {
     delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
 
     plugin.register(api);
-    expect(registerProvider).not.toHaveBeenCalled();
+    expect(registerProvider).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        id: "codex",
+        auth: [],
+        prepareSyntheticAuth: expect.any(Function),
+      }),
+    );
   });
 
   it("claims the Codex routing providers by default", () => {
@@ -705,7 +902,7 @@ describe("codex plugin", () => {
         { sessionId: "session-1", sessionKey: "agent:worker:session-1", reason },
         { agentId: "worker", sessionId: "session-1" },
       );
-      await expect(bindingStore.read(identity)).resolves.toMatchObject({ threadId: "thread-1" });
+      expect(bindingStore.read(identity)).toMatchObject({ threadId: "thread-1" });
     }
     for (const reason of ["new", "reset", "idle", "daily", "deleted"] as const) {
       await setBinding();
@@ -713,7 +910,7 @@ describe("codex plugin", () => {
         { sessionId: "session-1", sessionKey: "agent:worker:session-1", reason },
         { agentId: "worker", sessionId: "session-1" },
       );
-      await expect(bindingStore.read(identity)).resolves.toBeUndefined();
+      expect(bindingStore.read(identity)).toBeUndefined();
     }
 
     // Cross-key handoff (e.g. dashboard "New Chat"/fork): the parent's still-live
@@ -739,7 +936,7 @@ describe("codex plugin", () => {
       },
       { agentId: "worker", sessionId: "parent-1" },
     );
-    await expect(bindingStore.read(parent)).resolves.toMatchObject({ threadId: "thread-parent" });
+    expect(bindingStore.read(parent)).toMatchObject({ threadId: "thread-parent" });
 
     // In-place reset cleanup is awaited before the replacement starts. Its
     // delayed session_end event must not retire that same-id replacement.
@@ -761,7 +958,7 @@ describe("codex plugin", () => {
       },
       { agentId: "worker", sessionId: "in-place-1" },
     );
-    await expect(bindingStore.read(inPlace)).resolves.toMatchObject({
+    expect(bindingStore.read(inPlace)).toMatchObject({
       threadId: "thread-in-place-replacement",
     });
 
@@ -776,7 +973,7 @@ describe("codex plugin", () => {
       },
       { agentId: "worker", sessionId: "parent-1" },
     );
-    await expect(bindingStore.read(parent)).resolves.toBeUndefined();
+    expect(bindingStore.read(parent)).toBeUndefined();
 
     // Unknown current key: a handoff cannot be proven, so a successor key alone
     // must not skip cleanup — the conservative path retires as before #106778.
@@ -794,128 +991,7 @@ describe("codex plugin", () => {
       },
       { agentId: "worker", sessionId: "keyless-1" },
     );
-    await expect(bindingStore.read(keyless)).resolves.toBeUndefined();
-  });
-
-  it("adopts compaction successors before delayed lifecycle cleanup", async () => {
-    const stateStore = createCodexTestBindingStateStore();
-    const bindingStore = createCodexAppServerBindingStore(stateStore);
-    const on = vi.fn();
-    plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
-        pluginConfig: {},
-        runtime: createCodexTestRuntime(undefined, stateStore),
-        registerAgentHarness: vi.fn(),
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
-        on,
-      }),
-    );
-    const afterCompaction = on.mock.calls.find(([name]) => name === "after_compaction")?.[1] as
-      | ((
-          event: { previousSessionId?: string },
-          ctx: { agentId?: string; sessionId?: string; sessionKey?: string },
-        ) => Promise<void>)
-      | undefined;
-    const sessionEnd = on.mock.calls.find(([name]) => name === "session_end")?.[1] as
-      | ((
-          event: { sessionId: string; sessionKey?: string; reason?: string },
-          ctx: { agentId?: string; sessionId: string; sessionKey?: string },
-        ) => Promise<void>)
-      | undefined;
-    if (!afterCompaction || !sessionEnd) {
-      throw new Error("missing Codex compaction lifecycle hooks");
-    }
-    const sessionKey = "agent:worker:telegram:chat-1";
-    const previous = sessionBindingIdentity({
-      agentId: "worker",
-      sessionId: "session-1",
-      sessionKey,
-    });
-    const successor = sessionBindingIdentity({
-      agentId: "worker",
-      sessionId: "session-2",
-      sessionKey,
-    });
-    const newest = sessionBindingIdentity({
-      agentId: "worker",
-      sessionId: "session-3",
-      sessionKey,
-    });
-    await bindingStore.mutate(previous, {
-      kind: "set",
-      binding: { threadId: "thread-1", cwd: "/repo" },
-    });
-
-    await afterCompaction(
-      { previousSessionId: "session-1" },
-      { agentId: "worker", sessionId: "session-2", sessionKey },
-    );
-    await expect(bindingStore.read(previous)).resolves.toBeUndefined();
-    await expect(bindingStore.read(successor)).resolves.toMatchObject({ threadId: "thread-1" });
-
-    await afterCompaction(
-      { previousSessionId: "session-2" },
-      { agentId: "worker", sessionId: "session-3", sessionKey },
-    );
-    await afterCompaction(
-      { previousSessionId: "session-1" },
-      { agentId: "worker", sessionId: "session-2", sessionKey },
-    );
-    await expect(bindingStore.read(successor)).resolves.toBeUndefined();
-    await expect(bindingStore.read(newest)).resolves.toMatchObject({ threadId: "thread-1" });
-
-    await sessionEnd(
-      { sessionId: "session-1", sessionKey, reason: "reset" },
-      { agentId: "worker", sessionId: "session-1", sessionKey },
-    );
-    await sessionEnd(
-      { sessionId: "session-2", sessionKey, reason: "compaction" },
-      { agentId: "worker", sessionId: "session-2", sessionKey },
-    );
-    await expect(bindingStore.read(newest)).resolves.toMatchObject({ threadId: "thread-1" });
-    expect(stateStore.entries()).toHaveLength(1);
-  });
-
-  it("ignores compaction for a session without a Codex binding", async () => {
-    const warn = vi.fn();
-    const on = vi.fn();
-    plugin.register(
-      createTestPluginApi({
-        id: "codex",
-        name: "Codex",
-        source: "test",
-        config: {},
-        pluginConfig: {},
-        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
-        runtime: createCodexTestRuntime(),
-        registerAgentHarness: vi.fn(),
-        registerCommand: vi.fn(),
-        registerMediaUnderstandingProvider: vi.fn(),
-        registerMigrationProvider: vi.fn(),
-        registerProvider: vi.fn(),
-        on,
-      }),
-    );
-    const afterCompaction = on.mock.calls.find(([name]) => name === "after_compaction")?.[1] as
-      | ((event: object, ctx: { sessionId?: string; sessionKey?: string }) => Promise<void>)
-      | undefined;
-    if (!afterCompaction) {
-      throw new Error("missing Codex after_compaction hook");
-    }
-
-    await afterCompaction(
-      { previousSessionId: "session-1" },
-      { sessionId: "session-2", sessionKey: "agent:main:main" },
-    );
-
-    expect(warn).not.toHaveBeenCalled();
+    expect(bindingStore.read(keyless)).toBeUndefined();
   });
 
   it("enables the native hook relay for public Codex app-server attempts", async () => {
@@ -923,7 +999,7 @@ describe("codex plugin", () => {
       pluginConfig: { appServer: {} },
       bindingStore: testCodexAppServerBindingStore,
     });
-    const result = { success: true };
+    const result = { terminal: { kind: "ok" as const } };
     runCodexAppServerAttemptMock.mockResolvedValueOnce(result);
 
     await expect(harness.runAttempt({ prompt: "hello" } as never)).resolves.toBe(result);
@@ -989,7 +1065,7 @@ describe("codex plugin", () => {
     const harness = mockCallArg(registerAgentHarness) as ReturnType<
       typeof createCodexAppServerAgentHarness
     >;
-    const result = { success: true };
+    const result = { terminal: { kind: "ok" as const } };
     runCodexAppServerAttemptMock.mockResolvedValueOnce(result);
 
     await expect(harness.runAttempt({ prompt: "calendar" } as never)).resolves.toBe(result);

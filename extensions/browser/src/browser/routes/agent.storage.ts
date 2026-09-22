@@ -10,13 +10,18 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import type { PwAiModule } from "../pw-ai-module.js";
+import type { InteractionTargetOptions } from "../pw-tools-core.interactions.navigation.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   readBody,
+  resolveProfileContext,
   resolveTargetIdFromBody,
   resolveTargetIdFromQuery,
   withPlaywrightRouteContext,
 } from "./agent.shared.js";
+import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readOptionalRouteFiniteNumber, readRouteFiniteNumber } from "./route-numeric.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, readHttpOrigin, toBoolean, toStringOrEmpty } from "./utils.js";
@@ -43,10 +48,6 @@ type CookieSetOptions = {
   sameSite?: "Lax" | "None" | "Strict";
 };
 
-type PlaywrightStorageMutationContext = Parameters<
-  Parameters<typeof withPlaywrightRouteContext>[0]["run"]
->[0];
-
 /** Parse the supported browser storage bucket names. */
 function parseStorageKind(raw: string): StorageKind | null {
   if (raw === "local" || raw === "session") {
@@ -55,52 +56,16 @@ function parseStorageKind(raw: string): StorageKind | null {
   return null;
 }
 
-/** Parse an optional storage mutation request from a route body. */
-function parseStorageMutationRequest(
-  kindParam: unknown,
-  body: Record<string, unknown>,
-): { kind: StorageKind | null; targetId: string | undefined } {
-  return {
-    kind: parseStorageKind(toStringOrEmpty(kindParam)),
-    targetId: resolveTargetIdFromBody(body),
-  };
-}
-
-/** Parse a required storage mutation request and throw on invalid input. */
-function parseRequiredStorageMutationRequest(
-  kindParam: unknown,
-  body: Record<string, unknown>,
-): { kind: StorageKind; targetId: string | undefined } | null {
-  const parsed = parseStorageMutationRequest(kindParam, body);
-  if (!parsed.kind) {
-    return null;
-  }
-  return {
-    kind: parsed.kind,
-    targetId: parsed.targetId,
-  };
-}
-
-function parseStorageMutationOrRespond(
-  res: BrowserResponse,
-  kindParam: unknown,
-  body: Record<string, unknown>,
-) {
-  const parsed = parseRequiredStorageMutationRequest(kindParam, body);
-  if (!parsed) {
+/** Parse storage mutations once at the request boundary. */
+function parseStorageMutationFromRequest(req: BrowserRequest, res: BrowserResponse) {
+  const body = readBody(req);
+  const kind = parseStorageKind(toStringOrEmpty(req.params.kind));
+  const targetId = resolveTargetIdFromBody(body);
+  if (!kind) {
     jsonError(res, 400, "kind must be local|session");
     return null;
   }
-  return parsed;
-}
-
-function parseStorageMutationFromRequest(req: BrowserRequest, res: BrowserResponse) {
-  const body = readBody(req);
-  const parsed = parseStorageMutationOrRespond(res, req.params.kind, body);
-  if (!parsed) {
-    return null;
-  }
-  return { body, parsed };
+  return { body, parsed: { kind, targetId } };
 }
 
 function assertRange(
@@ -187,17 +152,44 @@ export function registerBrowserAgentStorageRoutes(
     res: BrowserResponse,
     targetId: string | undefined,
     feature: string,
-    run: (context: PlaywrightStorageMutationContext) => Promise<void | Record<string, unknown>>,
+    run: (
+      pw: PwAiModule,
+      target: InteractionTargetOptions,
+      signal: AbortSignal,
+    ) => Promise<void | Record<string, unknown>>,
+    existingSessionUnsupported?: string,
   ) => {
+    const profileCtx = existingSessionUnsupported
+      ? resolveProfileContext(req, res, ctx)
+      : undefined;
+    if (profileCtx === null) {
+      return;
+    }
+    if (
+      existingSessionUnsupported &&
+      profileCtx &&
+      getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp
+    ) {
+      return jsonError(res, 501, existingSessionUnsupported);
+    }
     // Mutations intentionally do not apply the tab-scoped read/export URL guard.
     await withPlaywrightRouteContext({
       req,
       res,
       ctx,
+      profileCtx,
       targetId,
       feature,
       run: async (context) => {
-        const result = await run(context);
+        const result = await run(
+          context.pw,
+          {
+            ...(context.assertCurrent ? { assertCurrent: context.assertCurrent } : {}),
+            cdpUrl: context.cdpUrl,
+            targetId: context.tab.targetId,
+          },
+          context.signal,
+        );
         context.signal.throwIfAborted();
         res.json({ ok: true, targetId: context.tab.targetId, ...result });
       },
@@ -238,10 +230,9 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, formatErrorMessage(err));
     }
 
-    await runMutation(req, res, targetId, "cookies set", async ({ cdpUrl, tab, pw }) => {
+    await runMutation(req, res, targetId, "cookies set", async (pw, target) => {
       await pw.cookiesSetViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
+        ...target,
         cookie: parsedCookie,
       });
     });
@@ -268,32 +259,22 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, formatErrorMessage(err));
     }
 
-    await runMutation(
-      req,
-      res,
-      targetId,
-      "cookies set-many",
-      async ({ cdpUrl, tab, pw, signal }) => {
-        const { added } = await pw.cookiesSetManyViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          cookies,
-          signal,
-        });
-        return { added };
-      },
-    );
+    await runMutation(req, res, targetId, "cookies set-many", async (pw, target, signal) => {
+      const { added } = await pw.cookiesSetManyViaPlaywright({
+        ...target,
+        cookies,
+        signal,
+      });
+      return { added };
+    });
   });
 
   app.post("/cookies/clear", async (req, res) => {
     const body = readBody(req);
     const targetId = resolveTargetIdFromBody(body);
 
-    await runMutation(req, res, targetId, "cookies clear", async ({ cdpUrl, tab, pw }) => {
-      await pw.cookiesClearViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
-      });
+    await runMutation(req, res, targetId, "cookies clear", async (pw, target) => {
+      await pw.cookiesClearViaPlaywright(target);
     });
   });
 
@@ -336,21 +317,14 @@ export function registerBrowserAgentStorageRoutes(
     }
     const value = typeof mutation.body.value === "string" ? mutation.body.value : "";
 
-    await runMutation(
-      req,
-      res,
-      mutation.parsed.targetId,
-      "storage set",
-      async ({ cdpUrl, tab, pw }) => {
-        await pw.storageSetViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          kind: mutation.parsed.kind,
-          key,
-          value,
-        });
-      },
-    );
+    await runMutation(req, res, mutation.parsed.targetId, "storage set", async (pw, target) => {
+      await pw.storageSetViaPlaywright({
+        ...target,
+        kind: mutation.parsed.kind,
+        key,
+        value,
+      });
+    });
   });
 
   app.post("/storage/:kind/clear", async (req, res) => {
@@ -359,19 +333,12 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
 
-    await runMutation(
-      req,
-      res,
-      mutation.parsed.targetId,
-      "storage clear",
-      async ({ cdpUrl, tab, pw }) => {
-        await pw.storageClearViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          kind: mutation.parsed.kind,
-        });
-      },
-    );
+    await runMutation(req, res, mutation.parsed.targetId, "storage clear", async (pw, target) => {
+      await pw.storageClearViaPlaywright({
+        ...target,
+        kind: mutation.parsed.kind,
+      });
+    });
   });
 
   app.post("/set/offline", async (req, res) => {
@@ -382,10 +349,9 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, "offline is required");
     }
 
-    await runMutation(req, res, targetId, "offline", async ({ cdpUrl, tab, pw }) => {
+    await runMutation(req, res, targetId, "offline", async (pw, target) => {
       await pw.setOfflineViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
+        ...target,
         offline,
       });
     });
@@ -409,10 +375,9 @@ export function registerBrowserAgentStorageRoutes(
       }
     }
 
-    await runMutation(req, res, targetId, "headers", async ({ cdpUrl, tab, pw }) => {
+    await runMutation(req, res, targetId, "headers", async (pw, target) => {
       await pw.setExtraHTTPHeadersViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
+        ...target,
         headers: parsed,
       });
     });
@@ -425,10 +390,9 @@ export function registerBrowserAgentStorageRoutes(
     const username = toStringOrEmpty(body.username) || undefined;
     const password = readStringValue(body.password);
 
-    await runMutation(req, res, targetId, "http credentials", async ({ cdpUrl, tab, pw }) => {
+    await runMutation(req, res, targetId, "http credentials", async (pw, target) => {
       await pw.setHttpCredentialsViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
+        ...target,
         username,
         password,
         clear,
@@ -446,10 +410,9 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, formatErrorMessage(err));
     }
 
-    await runMutation(req, res, targetId, "geolocation", async ({ cdpUrl, tab, pw }) => {
+    await runMutation(req, res, targetId, "geolocation", async (pw, target) => {
       await pw.setGeolocationViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
+        ...target,
         ...geolocation,
       });
     });
@@ -469,13 +432,19 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, "colorScheme must be dark|light|no-preference|none");
     }
 
-    await runMutation(req, res, targetId, "media emulation", async ({ cdpUrl, tab, pw }) => {
-      await pw.emulateMediaViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
-        colorScheme,
-      });
-    });
+    await runMutation(
+      req,
+      res,
+      targetId,
+      "media emulation",
+      async (pw, target) => {
+        await pw.emulateMediaViaPlaywright({
+          ...target,
+          colorScheme,
+        });
+      },
+      EXISTING_SESSION_LIMITS.emulation,
+    );
   });
 
   app.post("/set/timezone", async (req, res) => {
@@ -486,13 +455,19 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, "timezoneId is required");
     }
 
-    await runMutation(req, res, targetId, "timezone", async ({ cdpUrl, tab, pw }) => {
-      await pw.setTimezoneViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
-        timezoneId,
-      });
-    });
+    await runMutation(
+      req,
+      res,
+      targetId,
+      "timezone",
+      async (pw, target) => {
+        await pw.setTimezoneViaPlaywright({
+          ...target,
+          timezoneId,
+        });
+      },
+      EXISTING_SESSION_LIMITS.emulation,
+    );
   });
 
   app.post("/set/locale", async (req, res) => {
@@ -503,13 +478,19 @@ export function registerBrowserAgentStorageRoutes(
       return jsonError(res, 400, "locale is required");
     }
 
-    await runMutation(req, res, targetId, "locale", async ({ cdpUrl, tab, pw }) => {
-      await pw.setLocaleViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
-        locale,
-      });
-    });
+    await runMutation(
+      req,
+      res,
+      targetId,
+      "locale",
+      async (pw, target) => {
+        await pw.setLocaleViaPlaywright({
+          ...target,
+          locale,
+        });
+      },
+      EXISTING_SESSION_LIMITS.emulation,
+    );
   });
 
   app.post("/set/device", async (req, res) => {
@@ -525,14 +506,14 @@ export function registerBrowserAgentStorageRoutes(
       res,
       targetId,
       "device emulation",
-      async ({ cdpUrl, tab, pw, signal }) => {
+      async (pw, target, signal) => {
         await pw.setDeviceViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
+          ...target,
           name,
           signal,
         });
       },
+      EXISTING_SESSION_LIMITS.emulation,
     );
   });
 }

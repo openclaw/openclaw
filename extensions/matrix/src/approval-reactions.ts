@@ -194,7 +194,7 @@ function resolveMatrixApprovalReactionDecision(
   return null;
 }
 
-export function registerMatrixApprovalReactionTarget(params: {
+export async function registerMatrixApprovalReactionTarget(params: {
   accountId: string;
   roomId: string;
   eventId: string;
@@ -202,7 +202,7 @@ export function registerMatrixApprovalReactionTarget(params: {
   approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
-}): void {
+}): Promise<void> {
   const accountId = normalizeAccountId(params.accountId);
   const key = buildReactionTargetKey(accountId, params.roomId, params.eventId);
   const approvalId = params.approvalId.trim();
@@ -237,20 +237,20 @@ export function registerMatrixApprovalReactionTarget(params: {
     expiresAtMs: Date.now() + ttlMs,
   });
   pruneMatrixApprovalReactionTargetIndex();
-  matrixApprovalReactionTargets.register(key, target, { ttlMs });
+  await matrixApprovalReactionTargets.register(key, target, { ttlMs });
 }
 
-export function unregisterMatrixApprovalReactionTarget(params: {
+export async function unregisterMatrixApprovalReactionTarget(params: {
   accountId: string;
   roomId: string;
   eventId: string;
-}): void {
+}): Promise<void> {
   const key = buildReactionTargetKey(params.accountId, params.roomId, params.eventId);
   if (!key) {
     return;
   }
   matrixApprovalReactionTargetIndex.delete(key);
-  matrixApprovalReactionTargets.delete(key);
+  await matrixApprovalReactionTargets.delete(key);
 }
 
 /** Retires every Matrix reaction anchor bound to one canonical approval. */
@@ -297,10 +297,10 @@ export async function unregisterMatrixApprovalReactionTargetsForApproval(params:
     reportPersistentApprovalReactionError(error);
   }
 
-  const persistentDeletes: Promise<boolean>[] = [];
+  const persistentDeletes: Promise<void | boolean>[] = [];
   for (const [key] of matches) {
     matrixApprovalReactionTargetIndex.delete(key);
-    matrixApprovalReactionTargets.delete(key);
+    persistentDeletes.push(matrixApprovalReactionTargets.delete(key));
     if (persistentStore) {
       persistentDeletes.push(persistentStore.delete(key));
     }

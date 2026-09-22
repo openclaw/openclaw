@@ -1,14 +1,17 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { readSessionWorkspaceRecoveryRequiredError } from "../error-details.js";
 import {
   ErrorCodes,
   CronJobNotFoundErrorDetailsSchema,
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
+  GitHubPublicationSelectionRejectedErrorDetailsSchema,
   isMcpAppViewExpiredError,
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   OutboundDeliveryQueuedErrorDetailsSchema,
+  SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
   SkillProposalRevisionChangedErrorDetailsSchema,
   missingScopeErrorShape,
@@ -16,11 +19,67 @@ import {
   readMissingScopeError,
   readMissingScopeErrorDetails,
   readCronJobNotFoundError,
+  readGitHubPublicationSelectionRejectedError,
   UnknownAgentIdErrorDetailsSchema,
-  WizardNotFoundErrorDetailsSchema,
 } from "./error-codes.js";
+import { ErrorShapeSchema } from "./frames.js";
 
 describe("gateway error details", () => {
+  it("validates and reads exact pending workspace recovery routes", () => {
+    const details = {
+      code: GatewayErrorDetailCodes.SESSION_WORKSPACE_RECOVERY_REQUIRED,
+      cause: "device_offline" as const,
+      recoveryAction: "continue_on_gateway" as const,
+      sessionId: "session-1",
+      source: { generation: 5, environmentId: "environment-1", ownerEpoch: 70 },
+    };
+    const error = { code: ErrorCodes.UNAVAILABLE, message: "Recover workspace", details };
+
+    expect(Value.Check(SessionWorkspaceRecoveryRequiredErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(ErrorShapeSchema, error)).toBe(true);
+    expect(readSessionWorkspaceRecoveryRequiredError(error)).toEqual(details);
+    expect(
+      readSessionWorkspaceRecoveryRequiredError({
+        ...error,
+        details: { ...details, source: { ...details.source, ownerEpoch: 0 } },
+      }),
+    ).toBeNull();
+    expect(
+      readSessionWorkspaceRecoveryRequiredError({ ...error, code: ErrorCodes.FORBIDDEN }),
+    ).toBeNull();
+  });
+
+  it("reads only closed, keyed publication selection rejections", () => {
+    const details = {
+      code: GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED,
+      idempotencyKey: "publication-invocation",
+    };
+    const response = { code: ErrorCodes.UNAVAILABLE, message: "Review the publisher.", details };
+    expect(Value.Check(GitHubPublicationSelectionRejectedErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(ErrorShapeSchema, response)).toBe(true);
+    expect(readGitHubPublicationSelectionRejectedError(response)).toEqual(details);
+    for (const malformed of [
+      null,
+      [],
+      { ...details, idempotencyKey: "" },
+      { ...details, idempotencyKey: 1 },
+      { ...details, accepted: true },
+    ]) {
+      expect(Value.Check(GitHubPublicationSelectionRejectedErrorDetailsSchema, malformed)).toBe(
+        false,
+      );
+      expect(
+        readGitHubPublicationSelectionRejectedError({ ...response, details: malformed }),
+      ).toBeNull();
+    }
+    expect(
+      readGitHubPublicationSelectionRejectedError({ ...response, code: ErrorCodes.FORBIDDEN }),
+    ).toBeNull();
+    expect(readGitHubPublicationSelectionRejectedError(new Error(response.message))).toBeNull();
+  });
+
   it("validates and reads cron job lookup misses", () => {
     const details = {
       code: GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND,
@@ -71,13 +130,20 @@ describe("gateway error details", () => {
     expect(Value.Check(UnknownAgentIdErrorDetailsSchema, { ...details, agentId: "" })).toBe(false);
   });
 
-  it("validates missing wizard details", () => {
-    const details = { code: GatewayErrorDetailCodes.WIZARD_NOT_FOUND };
-    expect(Value.Check(WizardNotFoundErrorDetailsSchema, details)).toBe(true);
-    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
-    expect(Value.Check(WizardNotFoundErrorDetailsSchema, { ...details, sessionId: "stale" })).toBe(
-      false,
+  it.each(["WIZARD_NOT_FOUND", "SETUP_ADMISSION_BUSY"])("validates closed %s details", (code) => {
+    const details = { code };
+    expect(Value.Check(ErrorShapeSchema, { code: "UNAVAILABLE", message: "busy", details })).toBe(
+      true,
     );
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, { ...details, sessionId: "stale" })).toBe(false);
+    expect(
+      Value.Check(ErrorShapeSchema, {
+        code: "UNAVAILABLE",
+        message: "other failure",
+        details: { code: "future_detail", context: 1 },
+      }),
+    ).toBe(true);
   });
 
   it("validates typed project clone failures", () => {

@@ -19,7 +19,6 @@ import {
   isProviderApiKeyConfigured,
   normalizeGithubCopilotDomain,
   readClaudeCliCredentialsCached,
-  removeProviderAuthProfilesWithLock,
   resolveCopilotApiToken,
 } from "./provider-auth.js";
 
@@ -32,10 +31,6 @@ const TEST_GITHUB_TOKEN_FINGERPRINT = createHash("sha256").update(TEST_GITHUB_TO
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("provider auth public SDK", () => {
-  it("retains provider-scoped profile removal", () => {
-    expect(removeProviderAuthProfilesWithLock).toBeTypeOf("function");
-  });
-
   it("keeps the shipped Claude credential reader functional during its deprecation window", async () => {
     const homeDir = tempDirs.make("openclaw-sdk-claude-auth-");
     const credentialsDir = path.join(homeDir, ".claude");
@@ -424,9 +419,12 @@ async function runFallbackStoreCase(): Promise<FallbackStoreCaseResult> {
     },
   );
 
-  vi.doMock("../agents/agent-scope-config.js", () => ({
-    resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
-  }));
+  vi.doMock("../agents/agent-scope-config.js", async () => {
+    const { resolveAgentDir } = await vi.importActual<
+      typeof import("../agents/agent-scope-config.js")
+    >("../agents/agent-scope-config.js");
+    return { resolveAgentDir, resolveDefaultAgentDir: () => "/tmp/openclaw-agent" };
+  });
   vi.doMock("../agents/auth-profiles/oauth.js", () => ({
     resolveApiKeyForProfile,
   }));
@@ -436,13 +434,17 @@ async function runFallbackStoreCase(): Promise<FallbackStoreCaseResult> {
         .filter(([, profile]) => profile.provider === provider)
         .map(([profileId]) => profileId),
   }));
-  vi.doMock("../agents/auth-profiles/store.js", () => ({
-    ensureAuthProfileStore: vi.fn(() => primaryStore),
-    ensureAuthProfileStoreForLocalUpdate: vi.fn(() => primaryStore),
-    loadAuthProfileStoreForSecretsRuntime: vi.fn(() => primaryStore),
-    loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => fallbackStore),
-    updateAuthProfileStoreWithLock: vi.fn(),
-  }));
+  vi.doMock("../plugins/provider-auth-availability.js", async () => {
+    const { createProviderAuthAvailability } =
+      await import("../plugins/provider-auth-availability-core.js");
+    const { findPersistedAuthProfileCredential } = await import("../agents/auth-profiles/store.js");
+    return createProviderAuthAvailability({
+      findPersistedAuthProfileCredential,
+      ensureAuthProfileStore: vi.fn(() => primaryStore),
+      loadAuthProfileStoreForSecretsRuntime: vi.fn(() => primaryStore),
+      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => fallbackStore),
+    });
+  });
 
   const { listUsableProviderAuthProfileIds, resolveProviderAuthProfileApiKey } =
     await import("./provider-auth.js");
@@ -820,7 +822,7 @@ describe("provider auth profile helpers", () => {
     vi.doUnmock("../agents/auth-profiles/external-cli-discovery.js");
     vi.doUnmock("../agents/auth-profiles/oauth.js");
     vi.doUnmock("../agents/auth-profiles/order.js");
-    vi.doUnmock("../agents/auth-profiles/store.js");
+    vi.doUnmock("../plugins/provider-auth-availability.js");
     vi.resetModules();
   });
 
@@ -883,9 +885,12 @@ describe("provider auth profile helpers", () => {
       },
     );
 
-    vi.doMock("../agents/agent-scope-config.js", () => ({
-      resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
-    }));
+    vi.doMock("../agents/agent-scope-config.js", async () => {
+      const { resolveAgentDir } = await vi.importActual<
+        typeof import("../agents/agent-scope-config.js")
+      >("../agents/agent-scope-config.js");
+      return { resolveAgentDir, resolveDefaultAgentDir: () => "/tmp/openclaw-agent" };
+    });
     vi.doMock("../agents/auth-profiles/oauth.js", () => ({
       resolveApiKeyForProfile,
     }));
@@ -901,13 +906,18 @@ describe("provider auth profile helpers", () => {
           .filter(([, profile]) => profile.provider === provider)
           .map(([profileId]) => profileId),
     }));
-    vi.doMock("../agents/auth-profiles/store.js", () => ({
-      ensureAuthProfileStore: vi.fn(() => store),
-      ensureAuthProfileStoreForLocalUpdate: vi.fn(() => store),
-      loadAuthProfileStoreForSecretsRuntime: vi.fn(() => store),
-      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
-      updateAuthProfileStoreWithLock: vi.fn(),
-    }));
+    vi.doMock("../plugins/provider-auth-availability.js", async () => {
+      const { createProviderAuthAvailability } =
+        await import("../plugins/provider-auth-availability-core.js");
+      const { findPersistedAuthProfileCredential } =
+        await import("../agents/auth-profiles/store.js");
+      return createProviderAuthAvailability({
+        findPersistedAuthProfileCredential,
+        ensureAuthProfileStore: vi.fn(() => store),
+        loadAuthProfileStoreForSecretsRuntime: vi.fn(() => store),
+        loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
+      });
+    });
 
     const { resolveProviderAuthProfileApiKey } = await import("./provider-auth.js");
 
@@ -948,9 +958,12 @@ describe("provider auth profile helpers", () => {
         options?.externalCli ? externalStore : primaryStore,
     );
 
-    vi.doMock("../agents/agent-scope-config.js", () => ({
-      resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
-    }));
+    vi.doMock("../agents/agent-scope-config.js", async () => {
+      const { resolveAgentDir } = await vi.importActual<
+        typeof import("../agents/agent-scope-config.js")
+      >("../agents/agent-scope-config.js");
+      return { resolveAgentDir, resolveDefaultAgentDir: () => "/tmp/openclaw-agent" };
+    });
     vi.doMock("../agents/auth-profiles/external-cli-discovery.js", () => ({
       externalCliDiscoveryForProviderAuth: vi.fn(() => externalCli),
     }));
@@ -969,13 +982,18 @@ describe("provider auth profile helpers", () => {
           .filter(([, profile]) => profile.provider === provider)
           .map(([profileId]) => profileId),
     }));
-    vi.doMock("../agents/auth-profiles/store.js", () => ({
-      ensureAuthProfileStore: vi.fn(() => primaryStore),
-      ensureAuthProfileStoreForLocalUpdate: vi.fn(() => primaryStore),
-      loadAuthProfileStoreForSecretsRuntime,
-      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
-      updateAuthProfileStoreWithLock: vi.fn(),
-    }));
+    vi.doMock("../plugins/provider-auth-availability.js", async () => {
+      const { createProviderAuthAvailability } =
+        await import("../plugins/provider-auth-availability-core.js");
+      const { findPersistedAuthProfileCredential } =
+        await import("../agents/auth-profiles/store.js");
+      return createProviderAuthAvailability({
+        findPersistedAuthProfileCredential,
+        ensureAuthProfileStore: vi.fn(() => primaryStore),
+        loadAuthProfileStoreForSecretsRuntime,
+        loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
+      });
+    });
 
     const { isProviderAuthProfileConfigured } = await import("./provider-auth.js");
 
@@ -996,15 +1014,11 @@ describe("provider auth profile helpers", () => {
 
   it("accepts plus-signed Copilot token expiry strings", async () => {
     const saved: unknown[] = [];
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            token: "token;proxy-ep=proxy.individual.githubcopilot.com",
-            expires_at: "+2000000000",
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
+    const fetchImpl = vi.fn(async () =>
+      Response.json({
+        token: "token;proxy-ep=proxy.individual.githubcopilot.com",
+        expires_at: "+2000000000",
+      }),
     );
 
     const result = await resolveCopilotApiToken({
@@ -1448,15 +1462,11 @@ describe("provider auth profile helpers", () => {
 
   it("does not reuse a cached Copilot token from another GitHub credential", async () => {
     const saved: unknown[] = [];
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            token: "fresh;proxy-ep=proxy.individual.githubcopilot.com",
-            expires_at: "+2000000000",
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
+    const fetchImpl = vi.fn(async () =>
+      Response.json({
+        token: "fresh;proxy-ep=proxy.individual.githubcopilot.com",
+        expires_at: "+2000000000",
+      }),
     );
     const result = await resolveCopilotApiToken({
       githubToken: TEST_GITHUB_TOKEN,
@@ -1585,13 +1595,7 @@ describe("Copilot data-residency domain resolution", () => {
     const { resolveCopilotApiToken: resolveCopilotApiTokenWithLoggerMock } =
       await import("./provider-auth.js");
 
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ token: "tok", expires_at: "+2000000000" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    const fetchImpl = vi.fn(async () => Response.json({ token: "tok", expires_at: "+2000000000" }));
     const withDomain = (githubDomain: string) =>
       ({
         models: { providers: { "github-copilot": { params: { githubDomain } } } },
@@ -1649,13 +1653,9 @@ describe("Copilot data-residency domain resolution", () => {
   });
 
   it("targets the tenant token endpoint and copilot-api fallback for a GHE domain", async () => {
-    const fetchImpl = vi.fn(
-      async () =>
-        // GHE data-residency tokens carry a stamp but no proxy-ep hint.
-        new Response(JSON.stringify({ token: "ghe;st=prod-sdc-01", expires_at: "+2000000000" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+    const fetchImpl = vi.fn(async () =>
+      // GHE data-residency tokens carry a stamp but no proxy-ep hint.
+      Response.json({ token: "ghe;st=prod-sdc-01", expires_at: "+2000000000" }),
     );
 
     const result = await resolveCopilotApiToken({
@@ -1675,12 +1675,8 @@ describe("Copilot data-residency domain resolution", () => {
   });
 
   it("lets COPILOT_GITHUB_DOMAIN override the caller-provided domain", async () => {
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ token: "ghe;st=prod-sdc-01", expires_at: "+2000000000" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+    const fetchImpl = vi.fn(async () =>
+      Response.json({ token: "ghe;st=prod-sdc-01", expires_at: "+2000000000" }),
     );
 
     const result = await resolveCopilotApiToken({
@@ -1700,12 +1696,8 @@ describe("Copilot data-residency domain resolution", () => {
 
   it("does not reuse a cached token minted for a different domain", async () => {
     const saved: unknown[] = [];
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ token: "ghe;st=prod-sdc-01", expires_at: "+2000000000" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+    const fetchImpl = vi.fn(async () =>
+      Response.json({ token: "ghe;st=prod-sdc-01", expires_at: "+2000000000" }),
     );
 
     // A valid, unexpired public-github.com token sits in the cache, but the
@@ -1734,15 +1726,11 @@ describe("Copilot data-residency domain resolution", () => {
 
   it("re-exchanges legacy cache entries without a source credential fingerprint", async () => {
     const saved: unknown[] = [];
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            token: "fresh-public;proxy-ep=proxy.individual.githubcopilot.com",
-            expires_at: "+2000000000",
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
+    const fetchImpl = vi.fn(async () =>
+      Response.json({
+        token: "fresh-public;proxy-ep=proxy.individual.githubcopilot.com",
+        expires_at: "+2000000000",
+      }),
     );
     const result = await resolveCopilotApiToken({
       githubToken: "github-token",
@@ -1771,12 +1759,8 @@ describe("Copilot data-residency domain resolution", () => {
 
   it("does not reuse a legacy pre-domain cache entry for a tenant domain", async () => {
     const saved: unknown[] = [];
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ token: "ghe;st=prod-sdc-01", expires_at: "+2000000000" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+    const fetchImpl = vi.fn(async () =>
+      Response.json({ token: "ghe;st=prod-sdc-01", expires_at: "+2000000000" }),
     );
 
     const result = await resolveCopilotApiToken({

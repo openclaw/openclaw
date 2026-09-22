@@ -273,6 +273,19 @@ export function buildHarnessParityResult(params: {
       : ((params.right.tokenUsage.totalTokens - params.left.tokenUsage.totalTokens) /
           params.left.tokenUsage.totalTokens) *
         100;
+  const driftResult = (
+    drift: Exclude<HarnessParityDrift, "none">,
+    driftDetails: string,
+  ): HarnessParityResult => ({
+    scenarioId: params.scenarioId,
+    left: params.left,
+    right: params.right,
+    drift,
+    driftDetails,
+    promptDelta,
+    tokenDeltaPercent,
+    firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
+  });
   const failDetails =
     params.left.transportErrorClass || params.right.transportErrorClass
       ? "at least one harness variant hit a transport failure"
@@ -280,52 +293,16 @@ export function buildHarnessParityResult(params: {
         ? "at least one harness variant hit a runtime failure"
         : undefined;
   if (failDetails) {
-    return {
-      scenarioId: params.scenarioId,
-      left: params.left,
-      right: params.right,
-      drift: "failure-mode",
-      driftDetails: failDetails,
-      promptDelta,
-      tokenDeltaPercent,
-      firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
-    };
+    return driftResult("failure-mode", failDetails);
   }
   if (params.left.systemPromptHash !== params.right.systemPromptHash) {
-    return {
-      scenarioId: params.scenarioId,
-      left: params.left,
-      right: params.right,
-      drift: "system-prompt",
-      driftDetails: "system prompt report differs",
-      promptDelta,
-      tokenDeltaPercent,
-      firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
-    };
+    return driftResult("system-prompt", "system prompt report differs");
   }
   if (params.left.toolDescriptionHash !== params.right.toolDescriptionHash) {
-    return {
-      scenarioId: params.scenarioId,
-      left: params.left,
-      right: params.right,
-      drift: "tool-description",
-      driftDetails: "tool description summary shape differs",
-      promptDelta,
-      tokenDeltaPercent,
-      firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
-    };
+    return driftResult("tool-description", "tool description summary shape differs");
   }
   if (params.left.toolSchemaHash !== params.right.toolSchemaHash) {
-    return {
-      scenarioId: params.scenarioId,
-      left: params.left,
-      right: params.right,
-      drift: "tool-schema",
-      driftDetails: "tool schema shape differs",
-      promptDelta,
-      tokenDeltaPercent,
-      firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
-    };
+    return driftResult("tool-schema", "tool schema shape differs");
   }
   const compareToolShapes =
     params.comparisonMode !== "codex-native-workspace" && params.comparisonMode !== "outcome-only";
@@ -335,29 +312,11 @@ export function buildHarnessParityResult(params: {
   if (compareToolShapes) {
     const toolCallDrift = compareToolCallShape(params.left.toolCalls, params.right.toolCalls);
     if (toolCallDrift) {
-      return {
-        scenarioId: params.scenarioId,
-        left: params.left,
-        right: params.right,
-        drift: "tool-call-shape",
-        driftDetails: toolCallDrift,
-        promptDelta,
-        tokenDeltaPercent,
-        firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
-      };
+      return driftResult("tool-call-shape", toolCallDrift);
     }
     const toolResultDrift = compareToolResultShape(params.left.toolCalls, params.right.toolCalls);
     if (toolResultDrift) {
-      return {
-        scenarioId: params.scenarioId,
-        left: params.left,
-        right: params.right,
-        drift: "tool-result-shape",
-        driftDetails: toolResultDrift,
-        promptDelta,
-        tokenDeltaPercent,
-        firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
-      };
+      return driftResult("tool-result-shape", toolResultDrift);
     }
   }
   const leftTranscriptRecords = countComparableTranscriptRecords(params.left.transcriptBytes);
@@ -368,30 +327,15 @@ export function buildHarnessParityResult(params: {
       (!params.left.finalText && Boolean(params.right.finalText)) ||
       (Boolean(params.left.finalText) && !params.right.finalText))
   ) {
-    return {
-      scenarioId: params.scenarioId,
-      left: params.left,
-      right: params.right,
-      drift: "structural",
-      driftDetails: `transcript/final-text structure differs (${leftTranscriptRecords} message records vs ${rightTranscriptRecords} message records)`,
-      promptDelta,
-      tokenDeltaPercent,
-      firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
-    };
+    return driftResult(
+      "structural",
+      `transcript/final-text structure differs (${leftTranscriptRecords} message records vs ${rightTranscriptRecords} message records)`,
+    );
   }
   if (
     normalizeTextForParity(params.left.finalText) !== normalizeTextForParity(params.right.finalText)
   ) {
-    return {
-      scenarioId: params.scenarioId,
-      left: params.left,
-      right: params.right,
-      drift: "text-only",
-      driftDetails: "final text differs after whitespace normalization",
-      promptDelta,
-      tokenDeltaPercent,
-      firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
-    };
+    return driftResult("text-only", "final text differs after whitespace normalization");
   }
   return {
     scenarioId: params.scenarioId,

@@ -1,5 +1,6 @@
 /** Renders and parses systemd unit snippets for managed gateway services. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { escape as escapeGlob } from "minimatch";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
 
@@ -28,8 +29,9 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   if (!env) {
     return [];
   }
+  // An explicit empty NODE_OPTIONS blocks inherited supervisor preload/heap flags.
   const entries = Object.entries(env).filter(
-    ([, value]) => typeof value === "string" && value.trim(),
+    ([key, value]) => typeof value === "string" && (value.trim() || key === "NODE_OPTIONS"),
   );
   if (entries.length === 0) {
     return [];
@@ -38,7 +40,8 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
     const rawValue = value ?? "";
     assertNoSystemdLineBreaks(key, "Systemd environment variable names");
     assertNoSystemdLineBreaks(rawValue, "Systemd environment variable values");
-    return `Environment=${systemdEscapeArg(`${key}=${rawValue.trim()}`)}`;
+    const assignment = `${key}=${rawValue.trim()}`.replaceAll("%", "%%");
+    return `Environment=${systemdEscapeArg(assignment)}`;
   });
 }
 
@@ -48,7 +51,8 @@ function renderEnvironmentFileLines(environmentFiles: string[] | undefined): str
   }
   return normalizeStringEntries(environmentFiles).map((entry) => {
     assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
-    return `EnvironmentFile=-${systemdEscapeArg(entry)}`;
+    // EnvironmentFile is one scalar glob, not a quoted argv word.
+    return `EnvironmentFile=-${escapeGlob(entry).replaceAll("%", "%%")}`;
   });
 }
 
@@ -59,12 +63,29 @@ export function buildSystemdUnit({
   environment,
   environmentFiles,
 }: GatewayServiceRenderArgs): string {
-  const execStart = programArguments.map(systemdEscapeArg).join(" ");
+  const execStart = programArguments
+    .map((argument) => systemdEscapeArg(argument.replaceAll("%", "%%")))
+    .join(" ");
   const descriptionValue = description?.trim() || "OpenClaw Gateway";
   assertNoSystemdLineBreaks(descriptionValue, "Systemd Description");
   const descriptionLine = `Description=${descriptionValue}`;
-  const workingDirLine = workingDirectory
-    ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
+  if (workingDirectory) {
+    assertNoSystemdLineBreaks(workingDirectory, "Systemd WorkingDirectory");
+    const lastComponent = workingDirectory
+      .split("/")
+      .findLast((part) => part !== "" && part !== ".");
+    // systemd 255 strips trailing whitespace when serializing cwd to its executor.
+    // Check the last real component without normalizing symlink-sensitive parent segments.
+    if (lastComponent && /[ \t]$/u.test(lastComponent)) {
+      throw new Error(
+        "Systemd WorkingDirectory cannot end in spaces or tabs; choose a directory without trailing whitespace.",
+      );
+    }
+  }
+  // Scalar paths are unquoted; /. shields a final backslash from line continuation.
+  const workingDirPath = workingDirectory?.replace(/\\$/u, "$&/.");
+  const workingDirLine = workingDirPath
+    ? `WorkingDirectory=${workingDirPath.replaceAll("%", "%%")}`
     : null;
   const envLines = renderEnvLines(environment);
   const environmentFileLines = renderEnvironmentFileLines(environmentFiles);
@@ -73,17 +94,17 @@ export function buildSystemdUnit({
     descriptionLine,
     "After=network-online.target",
     "Wants=network-online.target",
-    "StartLimitBurst=5",
-    "StartLimitIntervalSec=60",
+    // A five-minute lifecycle ownership wait spans this interval. Ten starts
+    // allow surrounding immediate failures while still bounding crash loops.
+    "StartLimitBurst=10",
+    "StartLimitIntervalSec=300",
     "",
     "[Service]",
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
     "RestartPreventExitStatus=78",
-    // Must cover the gateway's SIGTERM drain budget (five minutes) plus its
-    // teardown reserve. Otherwise systemd kills the embedded model/tool
-    // process before the gateway can finish the cooperative drain.
+    // Cover the gateway's five-minute SIGTERM drain plus its teardown reserve.
     "TimeoutStopSec=330",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
@@ -91,9 +112,9 @@ export function buildSystemdUnit({
     // gateway. Keep the service running when that happens; the child surface is
     // already responsible for reporting the failed command/session.
     "OOMPolicy=continue",
-    // Keep service children in the same lifecycle so restarts do not leave
-    // orphan ACP/runtime workers behind.
-    "KillMode=control-group",
+    // Signal only the gateway during drain; systemd still kills remaining
+    // children when the gateway exits or TimeoutStopSec expires.
+    "KillMode=mixed",
     workingDirLine,
     ...environmentFileLines,
     ...envLines,
@@ -110,35 +131,47 @@ export function parseSystemdExecStart(value: string): string[] {
   return splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
 }
 
-function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  // The shared splitter already removes quotes and consumes escapes before an
-  // assignment reaches this helper.
-  const eq = trimmed.indexOf("=");
-  if (eq <= 0) {
-    return null;
-  }
-  const key = trimmed.slice(0, eq).trim();
-  if (!key) {
-    return null;
-  }
-  const value = trimmed.slice(eq + 1);
-  return { key, value };
-}
-
-export function parseSystemdEnvAssignments(raw: string): Array<{ key: string; value: string }> {
-  return splitArgsPreservingQuotes(raw, {
+export function splitSystemdEnvironmentWords(value: string): string[] {
+  return splitArgsPreservingQuotes(value, {
     escapeMode: "backslash",
     quoteChars: ['"', "'"],
     quoteStart: "item-start",
-  }).flatMap((entry) => {
-    const parsed = parseSystemdEnvAssignment(entry);
-    return parsed ? [parsed] : [];
   });
+}
+
+export function parseSystemdEnvAssignments(raw: string): Array<{ key: string; value: string }> {
+  return splitSystemdEnvironmentWords(raw).flatMap((entry) => {
+    // The splitter has already removed quotes and consumed escapes.
+    const assignment = entry.trim();
+    const separator = assignment.indexOf("=");
+    return separator <= 0
+      ? []
+      : [{ key: assignment.slice(0, separator).trim(), value: assignment.slice(separator + 1) }];
+  });
+}
+
+export function splitSystemdLogicalLines(content: string): string[] {
+  const lines: string[] = [];
+  let continued = "";
+  for (const physicalLine of content.split(/\r?\n/)) {
+    // systemd skips physical comments before continuation handling. Keep standalone
+    // comments for unit rewrites, but never let their backslashes consume directives.
+    if (/^\s*[#;]/u.test(physicalLine)) {
+      if (!continued) {
+        lines.push(physicalLine);
+      }
+      continue;
+    }
+    const line = continued + physicalLine;
+    // Only an unmatched final backslash continues; indentation inside quotes is data.
+    if (/(?:^|[^\\])(?:\\\\)*\\$/u.test(line)) {
+      continued = `${line.slice(0, -1)} `;
+    } else {
+      lines.push(line);
+      continued = "";
+    }
+  }
+  return continued ? [...lines, continued] : lines;
 }
 
 export function renderSystemdEnvAssignment(key: string, value: string): string {

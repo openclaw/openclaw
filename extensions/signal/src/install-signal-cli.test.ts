@@ -1,11 +1,10 @@
-// Signal tests cover install signal cli plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ReleaseAsset } from "./install-signal-cli.js";
 
 type CapturedArchiveLimits = {
@@ -70,7 +69,6 @@ const {
   installSignalCli,
   installSignalCliFromRelease,
   looksLikeArchive,
-  MAX_SIGNAL_CLI_EXTRACTED_BYTES,
   pickAsset,
 } = await import("./install-signal-cli.js");
 
@@ -396,9 +394,7 @@ describe("installSignalCliFromRelease", () => {
     const release = vi.fn().mockResolvedValue(undefined);
     fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
 
-    await expect(
-      installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv),
-    ).resolves.toEqual({
+    await expect(installSignalCliFromRelease(createRuntimeSpies())).resolves.toEqual({
       ok: false,
       error: "Failed to fetch release info (503)",
     });
@@ -413,7 +409,7 @@ describe("installSignalCliFromRelease", () => {
     });
     fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
 
-    const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+    const result = await installSignalCliFromRelease(createRuntimeSpies());
 
     expect(result).toEqual({
       ok: false,
@@ -437,7 +433,7 @@ describe("installSignalCliFromRelease", () => {
     });
     fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
 
-    const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+    const result = await installSignalCliFromRelease(createRuntimeSpies());
 
     expect(result).toEqual({
       ok: false,
@@ -471,7 +467,7 @@ describe("installSignalCliFromRelease", () => {
     const releaseMock = vi.fn().mockResolvedValue(undefined);
     fetchWithSsrFGuardMock.mockResolvedValue({ response: oversized, release: releaseMock });
 
-    const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+    const result = await installSignalCliFromRelease(createRuntimeSpies());
 
     expect(result).toEqual({ ok: false, error: "Failed to parse signal-cli release info." });
     expect(canceled).toBe(true);
@@ -485,7 +481,7 @@ describe("installSignalCliFromRelease", () => {
     });
     fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
 
-    const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+    const result = await installSignalCliFromRelease(createRuntimeSpies());
     expect(result.ok).toBe(false);
     expect(result.error).toBe("No compatible release asset found for this platform.");
 
@@ -524,7 +520,7 @@ describe("installSignalCliFromRelease", () => {
     );
     fetchWithSsrFGuardMock.mockResolvedValueOnce(okDownloadResponse("not-a-real-archive"));
 
-    const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+    const result = await installSignalCliFromRelease(createRuntimeSpies());
 
     expect(result.ok).toBe(false);
     await expectTempDownloadDirMissing();
@@ -559,7 +555,7 @@ describe("installSignalCliFromRelease", () => {
       );
       fetchWithSsrFGuardMock.mockResolvedValueOnce(okDownloadResponse(archiveBytes));
 
-      const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+      const result = await installSignalCliFromRelease(createRuntimeSpies());
 
       expect(result.ok).toBe(true);
       expect(result.version).toBe("0.0.0-success-test");
@@ -597,9 +593,9 @@ describe("installSignalCliFromRelease", () => {
     );
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("download failed"));
 
-    await expect(
-      installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv),
-    ).rejects.toThrow("download failed");
+    await expect(installSignalCliFromRelease(createRuntimeSpies())).rejects.toThrow(
+      "download failed",
+    );
 
     expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
       2,
@@ -622,7 +618,7 @@ describe("installSignalCli", () => {
       .mockResolvedValueOnce({ code: 0, stdout: "signal-cli 0.14.5\n", stderr: "" });
 
     try {
-      const result = await installSignalCli({ log: vi.fn() } as unknown as RuntimeEnv);
+      const result = await installSignalCli(createRuntimeSpies());
 
       expect(result).toEqual({
         ok: true,
@@ -698,8 +694,8 @@ describe("extractSignalCliArchive", () => {
         {
           maxArchiveBytes: 256 * 1024 * 1024,
           maxEntries: 32,
-          maxEntryBytes: MAX_SIGNAL_CLI_EXTRACTED_BYTES,
-          maxExtractedBytes: MAX_SIGNAL_CLI_EXTRACTED_BYTES,
+          maxEntryBytes: 384 * 1024 * 1024,
+          maxExtractedBytes: 384 * 1024 * 1024,
         },
       ]);
     });

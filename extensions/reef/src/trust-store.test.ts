@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { reefPeerIdentity } from "./friend-types.js";
@@ -225,15 +226,76 @@ describe("ReefTrustStore", () => {
     store.recordOutboundDelivery("clawd", id, binding);
     store.recordOutboundRejection("clawd", id, binding, "guard_deny");
 
+    const selected = store.pendingOutboundRejections()[0];
+    if (!selected) {
+      throw new Error("Expected a pending rejection before peer keys change");
+    }
     store.set("clawd", peerTrust());
 
     expect(store.pendingOutboundRejections()).toEqual([]);
     expect(() =>
-      store.reserveOutboundRejectionNotice("clawd", id, recipient, {
+      store.reserveOutboundRejectionNotice(selected.peer, selected.id, selected.recipient, {
         lastRejectionAt: 10_000,
       }),
     ).toThrow("changed keys before rejection recovery");
   });
+
+  it.each(["overdue", "rejections"] as const)(
+    "bounds repeated peer reads in %s scans and refreshes between scans",
+    (kind) => {
+      const now = 1_800_000_000_000;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      onTestFinished(() => clock.mockRestore());
+      const store = openReefTrustStore(runtime(), config());
+      const trust = peerTrust();
+      const recipient = reefPeerIdentity(trust);
+      const binding = { bodyHash: "a".repeat(64), recipient };
+      store.set("clawd", trust);
+      store.set("other", trust);
+      const peers = ["clawd", "clawd", "other", "stranger", "clawd", "other", "stranger"];
+      const ids = peers.map((_, index) => String(index + 1).padStart(26, "0"));
+      for (const [index, peer] of peers.entries()) {
+        clock.mockReturnValue(now + index);
+        const id = ids[index];
+        if (!id) {
+          throw new Error("Missing fixture delivery id");
+        }
+        store.recordOutboundDelivery(peer, id, binding);
+        if (kind === "rejections") {
+          store.recordOutboundRejection(peer, id, binding, "guard_deny");
+        }
+      }
+      const scan = () =>
+        kind === "overdue"
+          ? store.overdueOutboundDeliveries(600_000, Date.now() + 601_000)
+          : store.pendingOutboundRejections();
+      const reads = [
+        vi.spyOn(StatementSync.prototype, "get"),
+        vi.spyOn(StatementSync.prototype, "all"),
+        vi.spyOn(StatementSync.prototype, "iterate"),
+      ];
+      try {
+        expect(scan().map((entry) => entry.id)).toEqual([ids[0], ids[1], ids[2], ids[4], ids[5]]);
+        const peerReads = reads.reduce(
+          (count, spy) =>
+            count + spy.mock.calls.filter((params) => params.includes("peer-state")).length,
+          0,
+        );
+        expect(peerReads).toBeGreaterThan(0);
+        expect(peerReads).toBeLessThanOrEqual(3);
+      } finally {
+        for (const spy of reads) {
+          spy.mockRestore();
+        }
+      }
+      store.remove("clawd");
+      expect(scan().map((entry) => entry.id)).toEqual([ids[2], ids[5]]);
+      store.set("stranger", trust);
+      expect(scan().map((entry) => entry.id)).toEqual([ids[2], ids[3], ids[5], ids[6]]);
+      store.set("other", { ...trust, safetyNumberChanged: true });
+      expect(scan().map((entry) => entry.id)).toEqual([ids[3], ids[6]]);
+    },
+  );
 
   it("persists restart-stable rejection notice cooldowns monotonically", () => {
     const store = openReefTrustStore(runtime(), config());

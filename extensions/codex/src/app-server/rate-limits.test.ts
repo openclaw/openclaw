@@ -194,6 +194,33 @@ describe("formatCodexUsageLimitErrorMessage", () => {
 });
 
 describe("buildCodexAppServerUsageSnapshot", () => {
+  it("includes additional quota groups and precise balances for account rows", () => {
+    const payload = {
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          planType: "pro",
+          primary: { usedPercent: 10, windowDurationMins: 300, resetsAt: 1_900_000_000 },
+          credits: { hasCredits: true, balance: "12.75" },
+        },
+        extra: {
+          limitId: "extra",
+          limitName: "Extra quota",
+          primary: { usedPercent: 75, windowDurationMins: 300, resetsAt: 1_900_000_000 },
+        },
+      },
+    };
+    const result = buildCodexAppServerUsageSnapshot(payload, { accountDetails: true });
+    expect(result).toMatchObject({
+      plan: "pro",
+      billing: [{ type: "balance", amount: 12.75, unit: "credits" }],
+      windows: [
+        { label: "5h", usedPercent: 10, resetAt: 1_900_000_000_000 },
+        { label: "5h", groupLabel: "Extra quota", usedPercent: 75 },
+      ],
+    });
+    expect(buildCodexAppServerUsageSnapshot(payload).windows).toHaveLength(1);
+  });
   it("parses Codex app-server rate-limit windows as OpenAI usage", () => {
     const result = buildCodexAppServerUsageSnapshot({
       rateLimitsByLimitId: {

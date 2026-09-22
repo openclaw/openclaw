@@ -6,7 +6,6 @@ import {
   parseObservationSegments,
   pickKeyframeId,
   revisionWindow,
-  sampleFrames,
   selectBatchFrames,
   validateCardCoverage,
 } from "./analyze.js";
@@ -244,21 +243,6 @@ describe("selectBatchFrames", () => {
     const selection = selectBatchFrames({ frames, windowMs, nowMs: nearMidnight + windowMs });
     expect(selection?.frameIds).toEqual([1, 2]);
     expect(selection?.endMs).toBe(midnight.getTime());
-  });
-});
-
-describe("sampleFrames", () => {
-  it("keeps small sets and evenly samples large ones", () => {
-    expect(sampleFrames([1, 2, 3], 16)).toEqual([1, 2, 3]);
-    expect(sampleFrames([1, 2, 3], 1)).toEqual([1]);
-    expect(sampleFrames([1, 2, 3], 0)).toEqual([]);
-    const sampled = sampleFrames(
-      Array.from({ length: 100 }, (_, i) => i),
-      16,
-    );
-    expect(sampled.length).toBeLessThanOrEqual(16);
-    expect(sampled[0]).toBe(0);
-    expect(sampled[sampled.length - 1]).toBe(99);
   });
 });
 

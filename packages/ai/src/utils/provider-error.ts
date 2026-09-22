@@ -1,6 +1,7 @@
 import { asOptionalRecord, stableStringify } from "@openclaw/normalization-core";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { parseRetryAfterErrorSeconds } from "../internal/retry-after.js";
 import { projectDiagnosticValue, redactDiagnosticText } from "./credential-redaction.js";
 
 const MAX_ERROR_BODY_LENGTH = 4000;
@@ -47,7 +48,11 @@ function readCauseCode(error: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-function stringifyField(value: unknown, maxLength: number): string | undefined {
+function truncateField(text: string, maxLength: number): string {
+  return text.length <= maxLength ? text : `${truncateUtf16Safe(text, maxLength)}... [truncated]`;
+}
+
+function stringifyField(value: unknown, maxLength?: number): string | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
@@ -57,7 +62,7 @@ function stringifyField(value: unknown, maxLength: number): string | undefined {
   if (!text) {
     return undefined;
   }
-  return text.length <= maxLength ? text : `${truncateUtf16Safe(text, maxLength)}... [truncated]`;
+  return maxLength === undefined ? text : truncateField(text, maxLength);
 }
 
 function buildProjection(snapshot: unknown, signal?: AbortSignal): ProviderErrorProjection {
@@ -69,7 +74,8 @@ function buildProjection(snapshot: unknown, signal?: AbortSignal): ProviderError
   );
   const bodyValue =
     error?.errorBody ?? error?.body ?? response?.body ?? response?.data ?? nestedError;
-  const body = stringifyField(bodyValue, MAX_ERROR_BODY_LENGTH);
+  // Redact complete structured data before clipping its message/body projections.
+  const body = stringifyField(bodyValue);
   const originalMessage =
     (typeof snapshot === "string" ? snapshot : undefined) ??
     readProviderErrorField(error, "message") ??
@@ -110,7 +116,7 @@ function buildProjection(snapshot: unknown, signal?: AbortSignal): ProviderError
     errorMessage: stringifyField(errorMessage, 4096) ?? "Unknown provider error",
     ...(errorCode ? { errorCode: truncateUtf16Safe(errorCode, 256) } : {}),
     ...(errorType ? { errorType: truncateUtf16Safe(errorType, 256) } : {}),
-    ...(body ? { errorBody: stringifyField(bodyValue, 500) } : {}),
+    ...(body ? { errorBody: truncateField(body, 500) } : {}),
   };
 }
 
@@ -127,7 +133,13 @@ export function projectProviderError(
     } catch {
       // Package projection is independently safe when embedding-host strengthening fails.
     }
-    return buildProjection(snapshot, signal);
+    const projection = buildProjection(snapshot, signal);
+    const retryAfterSeconds = parseRetryAfterErrorSeconds(localSnapshot);
+    if (retryAfterSeconds !== undefined) {
+      const suffix = `; Retry-After: ${retryAfterSeconds} seconds`;
+      projection.errorMessage = `${truncateUtf16Safe(projection.errorMessage, 4096 - suffix.length)}${suffix}`;
+    }
+    return projection;
   } catch {
     return {
       stopReason: signal?.aborted ? "aborted" : "error",

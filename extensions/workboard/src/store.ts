@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   WorkboardAttachment,
+  WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardDiagnostic,
   WorkboardExecution,
@@ -422,16 +423,20 @@ export class WorkboardStore extends WorkboardNotificationStore {
     return await this.enqueueMutation(async () => await this.promoteDependencyReady(id, now));
   }
 
-  private async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
+  private async getAutoOrchestrationBoard(
+    card: WorkboardCard,
+  ): Promise<WorkboardBoardMetadata | undefined> {
     if (
       card.status !== "triage" ||
       card.metadata?.archivedAt ||
       card.metadata?.workerProtocol?.state === "idle"
     ) {
-      return false;
+      return undefined;
     }
     const board = await this.boardStore.lookup(cardBoardId(card));
-    return board?.version === 1 && board.board.orchestration?.autoDecompose === true;
+    return board?.version === 1 && board.board.orchestration?.autoDecompose === true
+      ? board.board
+      : undefined;
   }
 
   async dispatch(
@@ -519,13 +524,10 @@ export class WorkboardStore extends WorkboardNotificationStore {
           });
           blocked.push(latest);
         }
-        if (latest.status === "ready" && !latest.metadata?.archivedAt) {
-          latest = await this.recordDispatch(latest, now);
-        }
-        if (await this.shouldAutoOrchestrate(latest)) {
+        const orchestrationBoard = await this.getAutoOrchestrationBoard(latest);
+        if (orchestrationBoard) {
           const latestBoardId = cardBoardId(latest);
-          const board = await this.boardStore.lookup(latestBoardId);
-          const cap = board?.board.orchestration?.autoDecomposePerDispatch ?? 3;
+          const cap = orchestrationBoard.orchestration?.autoDecomposePerDispatch ?? 3;
           const boardCount = orchestratedByBoard.get(latestBoardId) ?? 0;
           if (boardCount < cap) {
             latest = await this.recordOrchestrationCandidate(latest, now);
@@ -569,12 +571,20 @@ export class WorkboardStore extends WorkboardNotificationStore {
     return { cards };
   }
 
-  async archive(id: string, archived: unknown): Promise<WorkboardCard> {
+  async archive(
+    id: string,
+    archived: unknown,
+    options: { expectedUpdatedAt?: number } = {},
+  ): Promise<WorkboardCard> {
     const shouldArchive = archived !== false;
-    return await this.updateMetadata(id, (existing) => ({
-      ...existing.metadata,
-      archivedAt: shouldArchive ? Date.now() : 0,
-    }));
+    return await this.updateMetadata(
+      id,
+      (existing) => ({
+        ...existing.metadata,
+        archivedAt: shouldArchive ? Date.now() : 0,
+      }),
+      options,
+    );
   }
 
   async exportCards(): Promise<{
@@ -637,13 +647,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
     return buildWorkerContext(card, await this.list());
   }
 
-  static openSqlite() {
-    const stores = createWorkboardSqliteStores();
-    return new WorkboardStore(stores.cards, {
-      boards: stores.boards,
-      subscriptions: stores.subscriptions,
-      attachments: stores.attachments,
-      dataVersion: stores.dataVersion,
-    });
+  static openSqlite(workerModuleUrl: URL) {
+    const stores = createWorkboardSqliteStores({ workerModuleUrl });
+    return new WorkboardStore(stores.cards, stores);
   }
 }

@@ -10,7 +10,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
-import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import { resolveSessionTranscriptFile } from "../config/sessions/transcript-resolve.runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -340,14 +340,15 @@ describe("agent session resolution", () => {
       expect(resolution.sessionEntry?.endedAt).toBe(registryUpdatedAt - 100);
       expect(resolution.sessionEntry?.runtimeMs).toBe(900);
 
-      if (!resolution.sessionKey || !resolution.sessionStore) {
-        throw new Error("expected resolved explicit session store");
+      if (!resolution.sessionKey || !resolution.sessionEntry) {
+        throw new Error("expected resolved explicit session entry");
       }
+      const sessionStore = { [resolution.sessionKey]: resolution.sessionEntry };
       const resolvedTranscript = await resolveSessionTranscriptFile({
         sessionId: resolution.sessionId,
         sessionKey: resolution.sessionKey,
         sessionEntry: resolution.sessionEntry,
-        sessionStore: resolution.sessionStore,
+        sessionStore,
         storePath: resolution.storePath,
         agentId: "main",
       });
@@ -357,7 +358,7 @@ describe("agent session resolution", () => {
           sessionId: resolution.sessionId,
           sessionKey: resolution.sessionKey,
           sessionEntry: undefined,
-          sessionStore: resolution.sessionStore,
+          sessionStore,
           storePath: resolution.storePath,
           agentId: "main",
         }),

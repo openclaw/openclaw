@@ -96,8 +96,20 @@ export function normalizeBoardMetadata(
     1000,
     "board description",
   );
-  const icon = normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
-  const color = normalizeBoundedString(input.color, fallback?.color, 40, "board color");
+  const clearAppearance = input.clearAppearance === undefined ? [] : input.clearAppearance;
+  if (
+    !Array.isArray(clearAppearance) ||
+    clearAppearance.some((field) => field !== "icon" && field !== "color")
+  ) {
+    throw new Error("clearAppearance must be an array containing only icon or color.");
+  }
+  // Legacy empty/null inputs preserve appearance. Explicit clears take precedence.
+  const icon = clearAppearance.includes("icon")
+    ? undefined
+    : normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
+  const color = clearAppearance.includes("color")
+    ? undefined
+    : normalizeBoundedString(input.color, fallback?.color, 40, "board color");
   let automationJobId = fallback?.automationJobId;
   if (Object.hasOwn(input, "automationJobId")) {
     automationJobId = normalizeOptionalString(input.automationJobId);
@@ -990,33 +1002,36 @@ function completionProofConflicts(existing: WorkboardProof, completion: Workboar
 
 export function appendCompletionProof(
   existing: readonly WorkboardProof[] | undefined,
-  proof: WorkboardProof,
+  proof: WorkboardProof | undefined,
   proofId?: string,
 ): WorkboardProof[] {
   const entries = [...(existing ?? [])];
   if (!proofId) {
-    return [...entries, proof].slice(-MAX_CARD_PROOF);
+    return proof ? [...entries, proof].slice(-MAX_CARD_PROOF) : entries;
   }
   const index = entries.findIndex((entry) => entry.id === proofId);
   const pending = index >= 0 ? entries[index] : undefined;
   if (!pending) {
     throw new Error(`proof not found: ${proofId}`);
   }
-  if (proof.status === "unknown") {
-    throw new Error("completion proof status must be passed, failed, or skipped.");
+  const completionProof = proof ?? pending;
+  if (completionProof.status === "unknown") {
+    throw new Error(
+      proof
+        ? "completion proof status must be passed, failed, or skipped."
+        : "proof is required to resolve a pending proof.",
+    );
   }
-  if (completionProofConflicts(pending, proof)) {
+  if (completionProofConflicts(pending, completionProof)) {
     throw new Error(`completion proof does not match pending proof: ${proofId}`);
   }
-  if (pending.status !== "unknown") {
-    if (pending.status !== proof.status) {
-      throw new Error(`completion proof status does not match existing proof: ${proofId}`);
-    }
-    return entries.slice(-MAX_CARD_PROOF);
+  if (pending.status !== "unknown" && pending.status !== completionProof.status) {
+    throw new Error(`completion proof status does not match existing proof: ${proofId}`);
   }
-  // A proof id is the durable correlation boundary between a separately recorded check and its
-  // completion. Preserve the original evidence identity and timestamp while resolving its status.
-  entries[index] = { ...pending, status: proof.status };
+  if (pending.status === "unknown") {
+    // Preserve the stored evidence identity and timestamp when resolving its status.
+    entries[index] = { ...pending, status: completionProof.status };
+  }
   return entries.slice(-MAX_CARD_PROOF);
 }
 

@@ -6,6 +6,7 @@ export function createCronVitestConfig(env?: Record<string, string | undefined>)
     dir: "src",
     env,
     name: "cron",
+    pool: "forks",
     passWithNoTests: true,
   });
   config.test = {

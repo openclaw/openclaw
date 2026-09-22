@@ -12,13 +12,18 @@ import {
   messageHasToolResultShape,
   projectToolResultDetails,
 } from "./chat-display-projection.canvas.js";
+import { projectAssistantCommentaryFallbacks } from "./chat-display-projection.commentary.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
   hasAssistantDisplayableNonTextContent,
+  hasTranscriptMediaFacts,
   isAssistantTextContentType,
-  isProjectedSessionsSendForwardedMessage,
+  isProjectedForwardedMessage,
   shouldPreserveAssistantControlReplyText,
+  stripAssistantMediaDirectivesForDisplay,
+  stripPrivateToolCallContextForDisplay,
+  takeAssistantManagedMediaUrlsForDisplay,
   truncateChatHistoryText,
 } from "./chat-display-projection.helpers.js";
 import {
@@ -129,6 +134,28 @@ function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = fal
   return true;
 }
 
+function projectChatHistoryAttachmentBlock(entry: Record<string, unknown>): boolean {
+  if (entry.type !== "attachment") {
+    return false;
+  }
+  const attachment = readRecord(entry.attachment);
+  if (!attachment) {
+    return false;
+  }
+  const projected = { ...attachment };
+  for (const field of MEDIA_PRIVATE_FIELDS) {
+    delete projected[field];
+  }
+  const url = projectChatHistoryMediaReference(projected.url);
+  if (!url) {
+    delete projected.url;
+  } else {
+    projected.url = url;
+  }
+  entry.attachment = projected;
+  return true;
+}
+
 function projectChatHistoryMediaFacts(value: unknown): unknown[] | undefined {
   return Array.isArray(value)
     ? value.map((fact) => {
@@ -147,7 +174,7 @@ export function sanitizeChatHistoryContentBlock(
     return { block, changed: false, truncated: false };
   }
   const entry = { ...(block as Record<string, unknown>) };
-  let changed = false;
+  let changed = stripPrivateToolCallContextForDisplay(entry);
   // Display-cap truncation is a fact consumers need (to fetch the full row), so
   // it is tracked apart from `changed`, which also covers metadata stripping.
   let truncated = false;
@@ -207,7 +234,8 @@ export function sanitizeChatHistoryContentBlock(
     changed = true;
   }
   const mediaChanged = projectChatHistoryMediaBlock(entry);
-  changed ||= mediaChanged;
+  const attachmentChanged = projectChatHistoryAttachmentBlock(entry);
+  changed ||= mediaChanged || attachmentChanged;
   return { block: changed ? entry : block, changed, truncated };
 }
 
@@ -282,64 +310,6 @@ function projectAssistantMixedToolContent(
   // Mixed messages supply both the visible bubble and its reasoning/tool trace.
   // Keep structured siblings or a history reload loses activity shown while live.
   return hasVisibleText ? { content: projectedContent, changed: true } : null;
-}
-
-function projectAssistantCommentaryFallbacks(message: unknown, maxChars: number): unknown[] {
-  if (!message || typeof message !== "object") {
-    return [];
-  }
-  const entry = readRecord(message);
-  if (
-    !entry ||
-    entry.role !== "assistant" ||
-    !Array.isArray(entry.content) ||
-    entry.stopReason === "error" ||
-    typeof entry.errorMessage === "string"
-  ) {
-    return [];
-  }
-  const transcriptMeta = readRecord(entry["__openclaw"]);
-  return entry.content.flatMap((block) => {
-    const content = readRecord(block);
-    if (!content) {
-      return [];
-    }
-    const signature = parseAssistantTextSignature(content);
-    const text = typeof content.text === "string" ? content.text : "";
-    const itemId = signature?.id?.trim();
-    if (
-      !isAssistantTextContentType(content.type) ||
-      signature?.phase !== "commentary" ||
-      !itemId ||
-      !text.trim()
-    ) {
-      return [];
-    }
-    const projected = truncateChatHistoryText(text, maxChars);
-    const projectedMeta = projected.truncated
-      ? {
-          ...transcriptMeta,
-          truncated: true,
-          reason:
-            typeof transcriptMeta?.reason === "string" ? transcriptMeta.reason : "display-cap",
-        }
-      : transcriptMeta
-        ? { ...transcriptMeta }
-        : undefined;
-    return [
-      {
-        role: "assistant",
-        content: [{ type: "text", text: projected.text }],
-        ...(typeof entry.timestamp === "number" ? { timestamp: entry.timestamp } : {}),
-        openclawStreamFallback: {
-          replacementText: projected.text,
-          source: "segment",
-          itemId,
-        },
-        ...(projectedMeta ? { __openclaw: projectedMeta } : {}),
-      },
-    ];
-  });
 }
 
 function sanitizeCost(raw: unknown): Record<string, number> | undefined {
@@ -467,6 +437,8 @@ export function sanitizeChatHistoryMessage(
     changed = true;
   }
   const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  const managedMedia = takeAssistantManagedMediaUrlsForDisplay(entry, role);
+  changed ||= managedMedia.changed;
   const preserveExactToolPayload =
     role === "toolresult" ||
     role === "tool_result" ||
@@ -528,7 +500,10 @@ export function sanitizeChatHistoryMessage(
 
   if (typeof entry.content === "string") {
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(entry.content)
+      ? stripAssistantMediaDirectivesForDisplay(
+          stripSuppressedControlReplyToken(entry.content),
+          managedMedia.urls,
+        )
       : entry.content;
     changed ||= controlStripped !== entry.content;
     if (preserveExactToolPayload) {
@@ -540,33 +515,54 @@ export function sanitizeChatHistoryMessage(
       truncated ||= res.truncated;
     }
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) => {
-      const sanitized = sanitizeChatHistoryContentBlock(block, {
+    const content = entry.content;
+    const commentary = readRecord(entry.openclawStreamFallback)?.source === "segment";
+    let remainingText = maxChars;
+    let updated: unknown[] | undefined;
+    for (let index = 0; index < content.length; index++) {
+      const rawBlock = commentary ? readRecord(content[index]) : undefined;
+      const rawText =
+        rawBlock && isAssistantTextContentType(rawBlock.type) && typeof rawBlock.text === "string"
+          ? rawBlock.text
+          : undefined;
+      if (rawText !== undefined && remainingText <= 0) {
+        updated ??= content.slice();
+        updated[index] = undefined;
+        truncated ||= rawText.length > 0;
+        continue;
+      }
+      const sanitized = sanitizeChatHistoryContentBlock(content[index], {
         preserveExactToolPayload,
-        maxChars,
+        maxChars: rawText === undefined ? maxChars : remainingText,
       });
+      if (rawText !== undefined) {
+        remainingText -= rawText.length + 1;
+      }
+      const contentBlock = stripAssistantControlTokens ? readRecord(sanitized.block) : undefined;
       if (
-        !stripAssistantControlTokens ||
-        !sanitized.block ||
-        typeof sanitized.block !== "object" ||
-        Array.isArray(sanitized.block)
+        contentBlock &&
+        isAssistantTextContentType(contentBlock.type) &&
+        typeof contentBlock.text === "string"
       ) {
-        return sanitized;
+        const text = stripAssistantMediaDirectivesForDisplay(
+          stripSuppressedControlReplyToken(contentBlock.text),
+          managedMedia.urls,
+        );
+        if (text !== contentBlock.text) {
+          sanitized.block = { ...contentBlock, text };
+          sanitized.changed = true;
+        }
       }
-      const contentBlock = sanitized.block as { type?: unknown; text?: unknown };
-      if (!isAssistantTextContentType(contentBlock.type) || typeof contentBlock.text !== "string") {
-        return sanitized;
+      if (sanitized.changed) {
+        updated ??= content.slice();
+        updated[index] = sanitized.block;
       }
-      const text = stripSuppressedControlReplyToken(contentBlock.text);
-      return text === contentBlock.text
-        ? sanitized
-        : { block: { ...contentBlock, text }, changed: true, truncated: sanitized.truncated };
-    });
-    if (updated.some((item) => item.changed)) {
-      entry.content = updated.map((item) => item.block);
+      truncated ||= sanitized.truncated;
+    }
+    if (updated) {
+      entry.content = commentary ? updated.filter((block) => block !== undefined) : updated;
       changed = true;
     }
-    truncated ||= updated.some((item) => item.truncated);
     if (entry.role === "assistant" && Array.isArray(entry.content)) {
       const mixedToolContent = projectAssistantMixedToolContent(entry.content, maxChars);
       if (mixedToolContent) {
@@ -587,7 +583,10 @@ export function sanitizeChatHistoryMessage(
 
   if (typeof entry.text === "string") {
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(entry.text)
+      ? stripAssistantMediaDirectivesForDisplay(
+          stripSuppressedControlReplyToken(entry.text),
+          managedMedia.urls,
+        )
       : entry.text;
     changed ||= controlStripped !== entry.text;
     if (preserveExactToolPayload) {
@@ -654,7 +653,7 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (entry.role !== "assistant") {
     return false;
   }
-  if (isProjectedSessionsSendForwardedMessage(entry)) {
+  if (isProjectedForwardedMessage(entry)) {
     return false;
   }
   if (resolveAssistantMessagePhase(message) === "commentary") {
@@ -677,12 +676,22 @@ export function sanitizeChatHistoryMessages(
   }
   let changed = false;
   const next: unknown[] = [];
-  for (const message of messages) {
+  for (const original of messages) {
+    let message = original;
     if (opts?.includeCommentaryFallbacks === true) {
-      for (const commentary of projectAssistantCommentaryFallbacks(message, maxChars)) {
-        const projected = sanitizeChatHistoryMessage(commentary, maxChars);
-        next.push(projected.message);
+      const projection = projectAssistantCommentaryFallbacks(message, maxChars);
+      message = projection.message;
+      changed ||= message !== original;
+      for (const commentary of projection.fallbacks) {
         changed = true;
+        const hasMediaFacts = hasTranscriptMediaFacts(readRecord(commentary) ?? {});
+        if (!hasMediaFacts && shouldDropAssistantHistoryMessage(commentary)) {
+          continue;
+        }
+        const projected = sanitizeChatHistoryMessage(commentary, maxChars);
+        if (hasMediaFacts || !shouldDropAssistantHistoryMessage(projected.message)) {
+          next.push(projected.message);
+        }
       }
     }
     if (shouldDropAssistantHistoryMessage(message)) {
@@ -691,7 +700,7 @@ export function sanitizeChatHistoryMessages(
     }
     const res = sanitizeChatHistoryMessage(message, maxChars);
     changed ||= res.changed;
-    if (shouldDropAssistantHistoryMessage(res.message)) {
+    if (res.changed && shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;
       continue;
     }

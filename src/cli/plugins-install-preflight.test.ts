@@ -9,7 +9,6 @@ import {
   installPluginFromNpmPackArchiveMock,
   installPluginFromNpmSpecMock,
   installPluginFromPathMock,
-  parseClawHubPluginSpecMock,
   promptYesNoMock,
   readConfigFileSnapshotForWriteMock,
   resetPluginsCliTestState,
@@ -25,6 +24,7 @@ const { withPluginLifecycleLeaseMock } = vi.hoisted(() => ({
 
 vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
   withPluginLifecycleLease: withPluginLifecycleLeaseMock,
+  hasPluginLifecycleLease: () => false,
 }));
 
 function expectNoPluginInstallSideEffects(): void {
@@ -175,10 +175,6 @@ describe("plugin install mutation-free preflight", () => {
       error: "Plugin path not found:",
     },
   ])("rejects $label before the lifecycle lease", async ({ args, error }) => {
-    if (args[0] === "clawhub:demo") {
-      parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
-    }
-
     await expect(runPluginsCommand(["plugins", "install", ...args, "--force"])).rejects.toThrow(
       "__exit__:1",
     );

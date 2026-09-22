@@ -9,7 +9,6 @@ import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-ru
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
   mapSandboxSkillEntriesForPrompt,
-  mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
 
@@ -98,18 +97,23 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
 
   it("maps materialized read paths while preserving original file identities", () => {
     expect(
-      mapSandboxSkillUsagePaths({
-        paths: [
-          {
-            readPath: "/state/sandbox-skills/skills/demo/SKILL.md",
-            skillFile: "/agent-workspace/skills/demo/SKILL.md",
-            skillName: "demo",
-            skillSource: "workspace",
-          },
-        ],
-        skillsWorkspaceDir: "/state/sandbox-skills",
-        skillsPromptWorkspaceDir: "/workspace/.openclaw/sandbox-skills",
-      }),
+      resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          enabled: true,
+          workspaceAccess: "rw",
+          containerWorkdir: "/workspace",
+          skillsWorkspaceDir: "/state/sandbox-skills",
+          skillUsagePaths: [
+            {
+              readPath: "/state/sandbox-skills/skills/demo/SKILL.md",
+              skillFile: "/agent-workspace/skills/demo/SKILL.md",
+              skillName: "demo",
+              skillSource: "workspace",
+            },
+          ],
+        },
+        skillsAnchorWorkspace: "/workspace",
+      }).skillUsagePaths,
     ).toEqual([
       {
         readPath: "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
@@ -120,7 +124,13 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     ]);
   });
 
-  it("rebuilds sandbox prompts from materialized skill paths", async () => {
+  it.each([
+    { label: "rebuilds sandbox prompts from materialized skill paths", skillsSnapshot: snapshot },
+    {
+      label: "keeps audited skills out of an explicitly empty sandbox snapshot",
+      skillsSnapshot: { prompt: "", skills: [] },
+    },
+  ])("$label", async ({ skillsSnapshot }) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
     try {
       const effectiveWorkspace = path.join(root, "workspace");
@@ -164,9 +174,9 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           workspaceAccess: "rw",
         },
         skillsAnchorWorkspace: effectiveWorkspace,
-        skillsSnapshot: snapshot,
+        skillsSnapshot,
       });
-      const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
+      const { shouldLoadSkillEntries, skillEntries } = await resolveEmbeddedRunSkillEntries({
         workspaceDir: skillsWorkspaceDir,
         eligibility: skillsEligibilityForRun,
         skillsSnapshot: skillsSnapshotForRun,
@@ -177,14 +187,19 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         skillsWorkspaceDir,
         skillsPromptWorkspaceDir,
       });
-      const prompt = resolveSkillsPrompt({
+      const prompt = await resolveSkillsPrompt({
         skillsSnapshot: skillsSnapshotForRun,
         entries: promptSkillEntries,
         workspaceDir: skillsPromptWorkspaceDir,
         eligibility: skillsEligibilityForRun,
       });
 
-      expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
+      if (skillsSnapshot === snapshot) {
+        expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
+      } else {
+        expect(prompt).toBe("");
+        expect(skillEntries).toEqual([]);
+      }
       expect(prompt.replaceAll("\\", "/")).not.toContain(
         materializedWorkspace.replaceAll("\\", "/"),
       );
@@ -223,12 +238,12 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         },
       };
 
-      const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
+      const { shouldLoadSkillEntries, skillEntries } = await resolveEmbeddedRunSkillEntries({
         workspaceDir: root,
         eligibility: skillsEligibility,
         workspaceOnly: true,
       });
-      const prompt = resolveSkillsPrompt({
+      const prompt = await resolveSkillsPrompt({
         entries: shouldLoadSkillEntries ? skillEntries : undefined,
         workspaceDir: root,
         eligibility: skillsEligibility,

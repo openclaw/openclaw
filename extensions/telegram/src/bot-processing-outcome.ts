@@ -1,5 +1,6 @@
 // Telegram plugin module tracks per-update processing outcomes.
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { ChannelIngressMonitorLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 
 export type TelegramMessageProcessingResult =
   | { kind: "completed" }
@@ -10,13 +11,12 @@ type TelegramUpdateProcessingFrame = {
   result?: TelegramMessageProcessingResult;
 };
 
-type TelegramSpooledReplayLifecycle = {
-  abortSignal: AbortSignal;
-  onAdopted: () => void | Promise<void>;
-  onDeferred: () => void;
+type TelegramSpooledReplayLifecycle = Omit<
+  ChannelIngressMonitorLifecycle,
+  "admission" | "onFailed" | "onCancelled" | "onAdoptionFinalizing"
+> & {
   /** Clears pre-adoption stall while durable adoption finalization is held. */
   onAdoptionFinalizing?: () => void;
-  onAbandoned: () => void | Promise<void>;
 };
 
 type TelegramSpooledReplayFrame = {
@@ -108,6 +108,13 @@ export function createTelegramSpooledReplayParticipant(
   const onOwnerAbort = () => {
     if (!settled) {
       ownerAbortedWhilePending = true;
+      // An adoption hold owns its eventual commit or rollback outcome.
+      if (!settlementHeld) {
+        settleNow({
+          kind: "failed-retryable",
+          error: ownerAbortSignal?.reason ?? new Error("telegram spooled replay owner aborted"),
+        });
+      }
     }
   };
   ownerAbortSignal?.addEventListener("abort", onOwnerAbort, { once: true });
@@ -122,6 +129,9 @@ export function createTelegramSpooledReplayParticipant(
     }
     resolveTask(result);
   };
+  if (ownerAbortSignal?.aborted) {
+    onOwnerAbort();
+  }
   return {
     key,
     // Buffered work outlives the ALS frame, so its signal must retain the

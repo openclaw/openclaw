@@ -41,7 +41,7 @@ const collectTelegramSecurityWarnings =
 const collectTelegramOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectTelegramSecurityWarnings,
   checkId: "channels.telegram.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Telegram security warning",
 });
 

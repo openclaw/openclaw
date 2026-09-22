@@ -1,23 +1,45 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import {
+  createLazyRuntimeModule,
+  createLazyRuntimeSurface,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   OpenClawConfig,
   ProviderRuntimeModel,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  createMoonshotThinkingWrapper,
   DEFAULT_CONTEXT_TOKENS,
   normalizeProviderId,
-} from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  createMoonshotThinkingWrapper,
-  createPayloadPatchStreamWrapper,
   resolveMoonshotThinkingType,
-} from "openclaw/plugin-sdk/provider-stream-shared";
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
-import { shouldWrapOllamaCompatMoonshotThinking } from "./model-behavior.js";
 import { supportsOllamaCloudFullThinkingEffort } from "./model-reasoning.js";
+import { isOllamaCloudKimiModelRef } from "./sanitizers/kimi-inline-reasoning.js";
 
 export type OllamaThinkValue = boolean | "low" | "medium" | "high" | "max";
+
+const loadProviderStreamRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/provider-stream-shared"),
+);
+
+function createLazyPayloadPatchStreamWrapper(
+  baseFn: StreamFn | undefined,
+  patchPayload: Parameters<
+    (typeof import("openclaw/plugin-sdk/provider-stream-shared"))["createPayloadPatchStreamWrapper"]
+  >[1],
+): StreamFn {
+  const loadStream = createLazyRuntimeSurface(loadProviderStreamRuntime, (runtime) =>
+    runtime.createPayloadPatchStreamWrapper(baseFn, patchPayload),
+  );
+  return async (model, context, options) => {
+    options?.signal?.throwIfAborted();
+    const stream = await loadStream();
+    options?.signal?.throwIfAborted();
+    return stream(model, context, options);
+  };
+}
 
 export function resolveConfiguredOllamaProviderConfig(params: {
   config?: OpenClawConfig;
@@ -98,7 +120,7 @@ export function shouldInjectOllamaCompatNumCtx(params: {
 }
 
 export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: number): StreamFn {
-  return createPayloadPatchStreamWrapper(baseFn, ({ payload }) => {
+  return createLazyPayloadPatchStreamWrapper(baseFn, ({ payload }) => {
     if (!payload.options || typeof payload.options !== "object") {
       payload.options = {};
     }
@@ -110,7 +132,7 @@ function createOllamaThinkingWrapper(
   baseFn: StreamFn | undefined,
   think: OllamaThinkValue,
 ): StreamFn {
-  return createPayloadPatchStreamWrapper(baseFn, ({ payload }) => {
+  return createLazyPayloadPatchStreamWrapper(baseFn, ({ payload }) => {
     payload.think = think;
   });
 }
@@ -141,13 +163,6 @@ function normalizeOllamaThinkValue(
     return "high";
   }
   return undefined;
-}
-
-function resolveOllamaThinkValue(
-  thinkingLevel: unknown,
-  nativeMax: boolean,
-): OllamaThinkValue | undefined {
-  return normalizeOllamaThinkValue(thinkingLevel, nativeMax);
 }
 
 export function resolveOllamaThinkParamValue(
@@ -229,7 +244,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
     ? resolveOllamaThinkParamValue(model.params, nativeMax)
     : undefined;
   const runtimeThinkValue = isNativeOllamaTransport
-    ? resolveOllamaThinkValue(ctx.thinkingLevel, nativeMax)
+    ? normalizeOllamaThinkValue(ctx.thinkingLevel, nativeMax)
     : undefined;
   // "off" is also the implicit agent default. Preserve explicit native Ollama
   // model config unless the active run requests a non-off thinking level.
@@ -241,10 +256,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
     streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
   }
 
-  if (
-    normalizeProviderId(ctx.provider) === "ollama" &&
-    shouldWrapOllamaCompatMoonshotThinking(ctx.modelId)
-  ) {
+  if (normalizeProviderId(ctx.provider) === "ollama" && isOllamaCloudKimiModelRef(ctx.modelId)) {
     const thinkingType = resolveMoonshotThinkingType({
       configuredThinking: ctx.extraParams?.thinking,
       thinkingLevel: ctx.thinkingLevel,

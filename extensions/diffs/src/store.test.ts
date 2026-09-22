@@ -257,18 +257,94 @@ describe("DiffArtifactStore", () => {
     expect(cleanupSpy).toHaveBeenCalled();
   });
 
-  it("removes only old rowless temp directories without reading legacy metadata", async () => {
-    const oldDir = path.join(rootDir, "a".repeat(20));
-    const recentDir = path.join(rootDir, "b".repeat(20));
-    await fs.mkdir(oldDir, { recursive: true });
-    await fs.mkdir(recentDir, { recursive: true });
+  it("looks up only old orphan candidates while preserving live files and the age boundary", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const now = new Date("2026-09-13T12:00:00Z");
+    vi.setSystemTime(now);
+    const day = 24 * 60 * 60 * 1_000;
+    const directories = [
+      { id: "a".repeat(20), age: day + 1_000, live: false },
+      { id: "b".repeat(20), age: 1_000, live: false },
+      { id: "c".repeat(20), age: day, live: false },
+      { id: "d".repeat(20), age: day + 1_000, live: true },
+      { id: "e".repeat(20), age: 1_000, live: true },
+    ];
+    for (const directory of directories) {
+      const dir = path.join(rootDir, directory.id);
+      await fs.mkdir(dir, { recursive: true });
+      const time = new Date(now.getTime() - directory.age);
+      await fs.utimes(dir, time, time);
+      if (directory.live) {
+        await blobStore.register(directory.id, new Uint8Array(), {
+          version: 1,
+          kind: "rendered_file",
+          format: "png",
+        });
+      }
+    }
+    const lookup = vi.spyOn(blobStore, "lookup");
+    try {
+      await store.cleanupExpired();
+
+      await expect(fs.stat(path.join(rootDir, "a".repeat(20)))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      for (const id of ["b", "c", "d", "e"]) {
+        await expect(fs.stat(path.join(rootDir, id.repeat(20)))).resolves.toMatchObject({});
+      }
+      expect(lookup.mock.calls.length).toBeGreaterThan(0);
+      expect(lookup.mock.calls.length).toBeLessThanOrEqual(2);
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
+  it("retains an old directory registered while its age is being checked", async () => {
+    const id = "f".repeat(20);
+    const dir = path.join(rootDir, id);
+    await fs.mkdir(dir, { recursive: true });
     const oldTime = new Date(Date.now() - 25 * 60 * 60 * 1_000);
-    await fs.utimes(oldDir, oldTime, oldTime);
+    await fs.utimes(dir, oldTime, oldTime);
+    const stat = vi.spyOn(fs, "stat").mockImplementationOnce(async () => {
+      await blobStore.register(id, new Uint8Array(), {
+        version: 1,
+        kind: "rendered_file",
+        format: "png",
+      });
+      return await fs.lstat(dir);
+    });
+    try {
+      await store.cleanupExpired();
+    } finally {
+      stat.mockRestore();
+    }
+
+    await expect(fs.stat(dir)).resolves.toMatchObject({});
+    await expect(blobStore.lookup(id)).resolves.toMatchObject({ key: id });
+  });
+
+  it("preserves a rendering file after its blob expires until rendering completes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const now = new Date("2026-09-13T12:00:00Z");
+    vi.setSystemTime(now);
+    const schedule = vi.spyOn(store, "scheduleCleanup").mockImplementation(() => undefined);
+    let artifact: Awaited<ReturnType<DiffArtifactStore["createStandaloneFileArtifact"]>>;
+    try {
+      artifact = await store.createStandaloneFileArtifact({ format: "png", ttlMs: 1_000 });
+    } finally {
+      schedule.mockRestore();
+    }
+    await fs.writeFile(artifact.filePath, "rendering");
+    const oldTime = new Date(now.getTime() - 25 * 60 * 60 * 1_000);
+    await fs.utimes(path.dirname(artifact.filePath), oldTime, oldTime);
+    vi.setSystemTime(new Date(now.getTime() + 2_000));
 
     await store.cleanupExpired();
 
-    await expect(fs.stat(oldDir)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(recentDir)).resolves.toMatchObject({});
+    await expect(blobStore.lookup(artifact.id)).resolves.toBeUndefined();
+    await expect(fs.readFile(artifact.filePath, "utf8")).resolves.toBe("rendering");
+    await expect(store.completeFileArtifact(artifact.id)).rejects.toThrow();
+    await expect(fs.stat(artifact.filePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("throttles cleanup sweeps across repeated artifact creation", async () => {

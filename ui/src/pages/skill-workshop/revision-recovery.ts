@@ -1,14 +1,43 @@
 import type { ApplicationContext } from "../../app/context.ts";
-import type {
-  SkillWorkshopRevisionAdmissionEntry,
-  SkillWorkshopRevisionAdmissionOutcome,
+import {
+  createSkillWorkshopRevisionAdmissions,
+  type ApplicationSkillWorkshopRevisionAdmissions,
+  type SkillWorkshopRevisionAdmissionEntry,
+  type SkillWorkshopRevisionAdmissionOutcome,
 } from "../../app/skill-workshop-revision-admissions.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SkillWorkshopProposal } from "./page-types.ts";
 import { resolveSkillWorkshopAgentId } from "./proposals.ts";
 import { requestSkillWorkshopRevisionAdmission } from "./revision-admission.ts";
 import type { SkillWorkshopState } from "./state.ts";
+
+registerSkillWorkshopEnglish();
+
+const admissionsByContext = new WeakMap<
+  ApplicationContext,
+  ApplicationSkillWorkshopRevisionAdmissions
+>();
+
+export function skillWorkshopRevisionAdmissionsFor(
+  context: ApplicationContext,
+): ApplicationSkillWorkshopRevisionAdmissions {
+  let admissions = admissionsByContext.get(context);
+  if (!admissions) {
+    admissions = createSkillWorkshopRevisionAdmissions();
+    admissionsByContext.set(context, admissions);
+    context.lifecycleAbortSignal?.addEventListener(
+      "abort",
+      () => {
+        admissions?.dispose();
+        admissionsByContext.delete(context);
+      },
+      { once: true },
+    );
+  }
+  return admissions;
+}
 
 export class SkillWorkshopRevisionRecoveryController {
   private recoveryId: string | null = null;
@@ -25,9 +54,8 @@ export class SkillWorkshopRevisionRecoveryController {
     instructions: string;
     proposal: SkillWorkshopProposal;
     proposalAgentId: string;
-    state: SkillWorkshopState;
   }): Promise<SkillWorkshopRevisionAdmissionOutcome> {
-    const admissions = params.context.skillWorkshopRevisionAdmissions;
+    const admissions = skillWorkshopRevisionAdmissionsFor(params.context);
     const run = this.recoveryId
       ? admissions.retry(this.recoveryId)
       : admissions.start(
@@ -45,7 +73,6 @@ export class SkillWorkshopRevisionRecoveryController {
               ? { proposalOriginSessionKey: params.proposal.origin.sessionKey }
               : {}),
             proposalSlug: params.proposal.slug,
-            useCurrentChatForRevisions: params.state.skillWorkshopUseCurrentChatForRevisions,
           },
           (entry, materialize) =>
             requestSkillWorkshopRevisionAdmission({
@@ -67,7 +94,7 @@ export class SkillWorkshopRevisionRecoveryController {
 
   sync(context: ApplicationContext, state: SkillWorkshopState): void {
     if (this.recoveryId) {
-      const current = context.skillWorkshopRevisionAdmissions.get(this.recoveryId);
+      const current = skillWorkshopRevisionAdmissionsFor(context).get(this.recoveryId);
       if (current?.phase === "retryable-failed") {
         this.restore(state, current);
         return;
@@ -93,7 +120,7 @@ export class SkillWorkshopRevisionRecoveryController {
     if (state.skillWorkshopRevisionKey || state.skillWorkshopRevisionDraft) {
       return;
     }
-    const recovery = context.skillWorkshopRevisionAdmissions.firstFailed(
+    const recovery = skillWorkshopRevisionAdmissionsFor(context).firstFailed(
       resolveSkillWorkshopAgentId(context),
     );
     if (recovery) {

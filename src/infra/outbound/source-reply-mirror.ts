@@ -9,7 +9,8 @@ import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelId } from "../../channels/plugins/types.public.js";
+import { resolveChannelPluginRegistration } from "../../channels/plugins/registry.js";
+import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
@@ -94,24 +95,34 @@ function resolveSourceReplyThreadId(params: SourceReplyTranscriptMirrorParams): 
   return readFirstString(params.actionParams, ["threadId", "messageThreadId"]);
 }
 
+function resolveDeliveryReceipt(
+  params: SourceReplyTranscriptMirrorParams,
+): Record<string, unknown> | undefined {
+  const payload = asRecord(params.deliveredPayload);
+  const result = asRecord(payload?.result);
+  return asRecord(result?.receipt) ?? asRecord(payload?.receipt);
+}
+
 function resolveDeliveredThreadPlacement(
   params: SourceReplyTranscriptMirrorParams,
   currentThreadId: string | undefined,
 ): SourceReplyThreadPlacement | undefined {
-  const payload = asRecord(params.deliveredPayload);
-  const result = asRecord(payload?.result);
-  const receipt = asRecord(result?.receipt) ?? asRecord(payload?.receipt);
+  const receipt = resolveDeliveryReceipt(params);
   if (!receipt) {
     return undefined;
   }
   const deliveredThreadId = normalizeOptionalString(receipt.threadId);
-  return deliveredThreadId
-    ? deliveredThreadId === currentThreadId
+  if (deliveredThreadId) {
+    return deliveredThreadId === currentThreadId ? "match" : "mismatch";
+  }
+  const deliveredReplyToId = normalizeOptionalString(receipt.replyToId);
+  if (deliveredReplyToId) {
+    const currentMessageId = normalizeMessageIdValue(params.toolContext?.currentMessageId);
+    return deliveredReplyToId === currentThreadId || deliveredReplyToId === currentMessageId
       ? "match"
-      : "mismatch"
-    : currentThreadId
-      ? "mismatch"
-      : "match";
+      : "mismatch";
+  }
+  return currentThreadId ? "mismatch" : "match";
 }
 
 function resolveSourceReplyThreadPlacement(
@@ -312,19 +323,7 @@ function resolveTranscriptMirrorIdempotencyKey(params: {
   return `${params.idempotencyKey}:terminal-receipt:${params.sourceTurnId}`;
 }
 
-function isCurrentSourceConversation(
-  params: SourceReplyTranscriptMirrorParams,
-  threadPlacement = resolveSourceReplyThreadPlacement(
-    params,
-    resolveChannelThreadAddressing(params.channel),
-  ),
-): params is MirrorableSourceReplyTranscriptParams {
-  // Polls share the send target contract: `to` addresses a conversation, so the
-  // same current-source matching applies. Transcript mirroring stays send-only
-  // because poll params carry no message text to mirror.
-  if (params.action !== "send" && params.action !== "poll") {
-    return false;
-  }
+function hasCurrentSourceContext(params: SourceReplyTranscriptMirrorParams): boolean {
   if (!params.sessionKey?.trim()) {
     return false;
   }
@@ -344,6 +343,17 @@ function isCurrentSourceConversation(
   }
   const currentChannel = normalizeOptionalLowercaseString(toolContext.currentChannelProvider);
   if (!currentChannel || currentChannel !== normalizeOptionalLowercaseString(params.channel)) {
+    return false;
+  }
+  return true;
+}
+
+function matchesCurrentSourceTarget(
+  params: SourceReplyTranscriptMirrorParams,
+  threadPlacement: SourceReplyThreadPlacement,
+): boolean {
+  const toolContext = params.toolContext;
+  if (!toolContext) {
     return false;
   }
   const currentTargets = [
@@ -382,6 +392,24 @@ function isCurrentSourceConversation(
   );
 }
 
+function isCurrentSourceConversation(
+  params: SourceReplyTranscriptMirrorParams,
+): params is MirrorableSourceReplyTranscriptParams {
+  // Polls share the send target contract. Transcript mirroring stays send-only
+  // because poll params carry no message text to mirror.
+  if (params.action !== "send" && params.action !== "poll") {
+    return false;
+  }
+  if (!hasCurrentSourceContext(params)) {
+    return false;
+  }
+  const threadPlacement = resolveSourceReplyThreadPlacement(
+    params,
+    resolveChannelThreadAddressing(params.channel),
+  );
+  return matchesCurrentSourceTarget(params, threadPlacement);
+}
+
 function isExactCurrentSourceConversation(
   params: SourceReplyTranscriptMirrorParams,
 ): params is MirrorableSourceReplyTranscriptParams {
@@ -389,24 +417,105 @@ function isExactCurrentSourceConversation(
     params,
     resolveChannelThreadAddressing(params.channel),
   );
-  return threadPlacement === "match" && isCurrentSourceConversation(params, threadPlacement);
+  return threadPlacement === "match" && isCurrentSourceConversation(params);
 }
 
-/** Confirms that a successful send reached the exact trusted source conversation. */
+type SourceReplyMatch = boolean | (() => Promise<boolean>);
+
+function resolveOwnerCurrentConversationMatch(
+  params: SourceReplyTranscriptMirrorParams,
+  allowAsync: boolean,
+): SourceReplyMatch | undefined {
+  const toolContext = params.toolContext;
+  if (!toolContext) {
+    return undefined;
+  }
+  // SAFETY: message actions reach this boundary only after channel resolution.
+  const channel = params.channel as ChannelId;
+  const registration = resolveChannelPluginRegistration(channel);
+  if (registration?.origin !== "bundled") {
+    return undefined;
+  }
+  const aliasSpec =
+    registration.plugin.actions?.messageActionTargetAliases?.[
+      // SAFETY: action alias lookup accepts the normalized runtime action name.
+      params.action as ChannelMessageActionName
+    ];
+  if (!aliasSpec) {
+    return undefined;
+  }
+  const matchParams = {
+    args: params.actionParams,
+    accountId: normalizeAccountId(params.accountId ?? params.currentAccountId),
+    toolContext,
+  };
+  const matchAsync = aliasSpec.matchesCurrentConversationAsync;
+  if (allowAsync && matchAsync) {
+    const authority = registration.captureReadAuthority?.();
+    const isRegistrationCurrent = () => {
+      const current =
+        registration.captureReadAuthority && !authority?.()
+          ? undefined
+          : resolveChannelPluginRegistration(channel, { loadedOnly: true });
+      return current?.plugin === registration.plugin && current.origin === "bundled";
+    };
+    if (!isRegistrationCurrent()) {
+      return false;
+    }
+    return async () => (await matchAsync(matchParams)) && isRegistrationCurrent();
+  }
+  return aliasSpec.matchesCurrentConversation?.(matchParams) === true;
+}
+
+function resolveDeliveredThreadPlacementSourceReply(
+  params: SourceReplyTranscriptMirrorParams,
+  allowAsync: boolean,
+): SourceReplyMatch {
+  if (!hasCurrentSourceContext(params)) {
+    return false;
+  }
+  const receipt = resolveDeliveryReceipt(params);
+  if (normalizeOptionalString(receipt?.threadId) || normalizeOptionalString(receipt?.replyToId)) {
+    const threadPlacement = resolveSourceReplyThreadPlacement(
+      params,
+      resolveChannelThreadAddressing(params.channel),
+    );
+    return threadPlacement === "match" && matchesCurrentSourceTarget(params, threadPlacement);
+  }
+  return resolveOwnerCurrentConversationMatch(params, allowAsync) ?? false;
+}
+
+function resolveDeliveredCurrentSourceReply(
+  params: SourceReplyTranscriptMirrorParams,
+  allowAsync: boolean,
+): SourceReplyMatch {
+  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+    return false;
+  }
+  switch (params.action.trim().toLowerCase()) {
+    case "reply":
+      return isDeliveredCurrentSourceReplyAction(params);
+    case "thread-reply":
+      return resolveDeliveredThreadPlacementSourceReply(params, allowAsync);
+    default:
+      return (
+        (params.action === "send" || params.action === "poll") &&
+        isExactCurrentSourceConversation(params)
+      );
+  }
+}
+
+/** Synchronous classification for send-only consumers and legacy owner callbacks. */
 export function isDeliveredCurrentSourceReply(params: SourceReplyTranscriptMirrorParams): boolean {
-  return (
-    !hasExplicitDeliveryFailure(params.deliveredPayload) && isExactCurrentSourceConversation(params)
-  );
+  return resolveDeliveredCurrentSourceReply(params, false) === true;
 }
 
-// `thread-reply` addresses a thread target and only optionally carries a
-// replied-to message id, so the message-id contract below cannot verify it;
-// its current-source marking needs thread-placement validation as follow-up.
-const CURRENT_SOURCE_REPLY_ACTION_NAMES = new Set(["reply"]);
-
-/** Reply-type message actions address a message id rather than a conversation target. */
-export function isCurrentSourceReplyActionName(action: string): boolean {
-  return CURRENT_SOURCE_REPLY_ACTION_NAMES.has(action.trim().toLowerCase());
+/** Confirms delivered source replies, awaiting bundled thread-alias proof when needed. */
+export async function isDeliveredCurrentSourceReplyAsync(
+  params: SourceReplyTranscriptMirrorParams,
+): Promise<boolean> {
+  const match = resolveDeliveredCurrentSourceReply(params, true);
+  return typeof match === "function" ? await match() : match;
 }
 
 function normalizeMessageIdValue(value: unknown): string | undefined {
@@ -422,34 +531,9 @@ function normalizeMessageIdValue(value: unknown): string | undefined {
  * so target matching cannot apply; replying to the run's own inbound message is the
  * one implicit route that provably lands in the current source conversation.
  */
-export function isDeliveredCurrentSourceReplyAction(
-  params: SourceReplyTranscriptMirrorParams,
-): boolean {
-  if (!isCurrentSourceReplyActionName(params.action)) {
-    return false;
-  }
-  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
-    return false;
-  }
-  if (!params.sessionKey?.trim()) {
-    return false;
-  }
+function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirrorParams): boolean {
   const toolContext = params.toolContext;
-  if (!toolContext) {
-    return false;
-  }
-  const accountId = normalizeOptionalString(params.accountId);
-  if (accountId) {
-    const currentAccountId = normalizeOptionalString(params.currentAccountId);
-    if (
-      !currentAccountId ||
-      normalizeAccountId(accountId) !== normalizeAccountId(currentAccountId)
-    ) {
-      return false;
-    }
-  }
-  const currentChannel = normalizeOptionalLowercaseString(toolContext.currentChannelProvider);
-  if (!currentChannel || currentChannel !== normalizeOptionalLowercaseString(params.channel)) {
+  if (!toolContext || !hasCurrentSourceContext(params)) {
     return false;
   }
   // Target params on reply actions are either agent-explicit or runner-resolved
@@ -488,7 +572,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     params,
     resolveChannelThreadAddressing(params.channel),
   );
-  if (!isCurrentSourceConversation(params, threadPlacement)) {
+  if (!isCurrentSourceConversation(params)) {
     return false;
   }
   if (params.sourceReplyFinal === true && threadPlacement !== "match") {
@@ -517,7 +601,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     return false;
   }
   const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
-  const writerFence = getOwnedSessionTranscriptWriterFence();
+  const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: params.sessionKey });
   const result = await appendAssistantMessageToSessionTranscript({
     agentId: params.agentId,
     sessionKey: params.sessionKey,

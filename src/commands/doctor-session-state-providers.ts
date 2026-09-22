@@ -7,7 +7,7 @@ import {
   resolveAgentModelFallbacksOverride,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { resolveAgentHarnessPolicy } from "../agents/harness/selection.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import {
   modelKey,
   normalizeProviderId,
@@ -23,6 +23,7 @@ import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contr
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { countLabel } from "./doctor-state-integrity-format.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {
@@ -32,10 +33,6 @@ type DoctorPrompterLike = {
   }) => Promise<boolean>;
   note?: typeof note;
 };
-
-function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
 
 function normalizeIdSet(values: readonly string[] | undefined): Set<string> {
   return new Set((values ?? []).map((value) => normalizeProviderId(value)));
@@ -135,6 +132,7 @@ function entryMayContainPluginSessionRouteState(sessionKey: string, entry: Sessi
     normalizeString(record.agentRuntimeOverride) !== undefined ||
     record.cliSessionBindings !== undefined ||
     record.cliSessionIds !== undefined ||
+    normalizeString(record.claudeCliSessionId) !== undefined ||
     normalizeString(record.authProfileOverride) !== undefined ||
     normalizeString(record.authProfileOverrideSource) !== undefined
   );
@@ -216,6 +214,8 @@ function hasOwnedCliSession(params: {
   return params.cliSessionKeys.some((key) => {
     const normalized = normalizeProviderId(key);
     return (
+      (normalized === "claude-cli" &&
+        normalizeString(params.entry.claudeCliSessionId) !== undefined) ||
       (bindings !== null &&
         typeof bindings === "object" &&
         normalized in bindings &&
@@ -305,13 +305,11 @@ function scanEntryForOwner(params: {
     }
   }
   if (!routeAllowsOwner && !explicitOwnedOverride) {
-    const runtimeModel = normalizeString(params.entry.model);
-    const runtimeRef = runtimeModel
-      ? parseModelRef(runtimeModel, normalizeString(params.entry.modelProvider) ?? "", {
-          allowManifestNormalization: false,
-          allowPluginNormalization: false,
-        })
-      : null;
+    const runtimeRef = resolvePersistedOverrideModelRef({
+      defaultProvider: "",
+      overrideProvider: params.entry.modelProvider,
+      overrideModel: params.entry.model,
+    });
     if (runtimeRef && providerIds.has(normalizeProviderId(runtimeRef.provider))) {
       addReason(reasons, "runtime model state");
     }
@@ -449,6 +447,8 @@ function applySessionRouteStateRepair(params: {
     clear("providerOverride");
     clear("modelOverride");
     clear("modelOverrideSource");
+    clear("modelOverrideFallbackOriginProvider");
+    clear("modelOverrideFallbackOriginModel");
     clear("modelOverrideRouteResolution");
     clear("liveModelSwitchPending");
   }
@@ -469,6 +469,10 @@ function applySessionRouteStateRepair(params: {
       clearRecordKeys(params.entry, "cliSessionBindings", params.repair.cliSessionKeys) || changed;
     changed =
       clearRecordKeys(params.entry, "cliSessionIds", params.repair.cliSessionKeys) || changed;
+    if (params.repair.cliSessionKeys.includes("claude-cli")) {
+      // Doctor's later binding migration must not restore a conversation this repair cleared.
+      clear("claudeCliSessionId");
+    }
   }
   if (params.repair.reasons.includes("auto auth profile override")) {
     clear("authProfileOverride");

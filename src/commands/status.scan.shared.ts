@@ -3,11 +3,6 @@
 
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -16,6 +11,7 @@ import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { isLoopbackGatewayUrl } from "../gateway/net.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -24,6 +20,8 @@ import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
+import type { MemoryPluginStatus } from "../status/memory-plugin.js";
+import type { StatusSummary } from "../status/summary.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import { isProbeReachable } from "./gateway-status/helpers.js";
 
@@ -34,6 +32,13 @@ const memoryEngineStorageModuleLoader = createLazyImportLoader(
   () => import("../memory-host-sdk/engine-storage.js"),
 );
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
+
+export function resolveStatusGatewayProbeTimeoutMs(opts: {
+  timeoutMs?: number;
+  all?: boolean;
+}): number {
+  return opts.timeoutMs ?? (opts.all ? 5000 : 2500);
+}
 
 function loadGatewayProbeModule() {
   return gatewayProbeModuleLoader.load();
@@ -116,12 +121,6 @@ export type MemoryStatusSnapshot = MemoryProviderStatus & {
   agentId: string;
 };
 
-export type MemoryPluginStatus = {
-  enabled: boolean;
-  slot: string | null;
-  reason?: string;
-};
-
 export type GatewayProbeSnapshot = {
   gatewayConnection: ReturnType<typeof buildGatewayConnectionDetailsWithResolvers>;
   remoteUrlMissing: boolean;
@@ -156,17 +155,6 @@ type StatusMemorySearchManagerResolver = (params: {
 }) => Promise<{
   manager: StatusMemorySearchManager | null;
 }>;
-
-function isLoopbackGatewayUrl(rawUrl: string): boolean {
-  try {
-    const hostname = new URL(rawUrl).hostname.toLowerCase();
-    const unbracketed =
-      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
-  } catch {
-    return false;
-  }
-}
 
 function shouldTryLocalStatusRpcFallback(params: {
   gatewayMode: "local" | "remote";
@@ -218,7 +206,7 @@ async function applyLocalStatusRpcFallback(params: {
   // The fallback uses the gateway status RPC because it can succeed after probe handshake ambiguity.
   const status = await loadGatewayCallModule()
     .then(({ callGateway }) =>
-      callGateway({
+      callGateway<Partial<StatusSummary>>({
         config: params.cfg,
         configPath: params.configPath,
         method: "status",
@@ -264,19 +252,6 @@ function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): bo
   );
 }
 
-/** Resolves whether memory status should be shown and which slot owns it. */
-export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStatus {
-  const pluginsEnabled = cfg.plugins?.enabled !== false;
-  if (!pluginsEnabled) {
-    return { enabled: false, slot: null, reason: "plugins disabled" };
-  }
-  const raw = normalizeOptionalString(cfg.plugins?.slots?.memory) ?? "";
-  if (normalizeOptionalLowercaseString(raw) === "none") {
-    return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
-  }
-  return { enabled: true, slot: raw || defaultSlotIdForKey("memory") };
-}
-
 /** Resolves gateway connection details, probe result, auth warnings, and call overrides. */
 export async function resolveGatewayProbeSnapshot(params: {
   cfg: OpenClawConfig;
@@ -310,9 +285,8 @@ export async function resolveGatewayProbeSnapshot(params: {
       )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
-  const defaultProbeTimeoutMs = params.opts.all ? 5000 : 2500;
   const timeoutMsExplicit = params.opts.timeoutMs !== undefined;
-  const probeTimeoutMs = params.opts.timeoutMs ?? defaultProbeTimeoutMs;
+  const probeTimeoutMs = resolveStatusGatewayProbeTimeoutMs(params.opts);
   const initialGatewayProbe = shouldProbe
     ? await loadProbeGatewayModule()
         .then(({ probeGateway }) =>

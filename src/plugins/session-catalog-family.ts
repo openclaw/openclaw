@@ -5,6 +5,7 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { TerminalUploadPathStyle } from "../../packages/gateway-protocol/src/schema/terminal.js";
 import {
   decodeNodePtyResumeParams,
   resolveNodeHostExecutable,
@@ -52,6 +53,7 @@ type SessionCatalogFamilyMessages = {
 
 type SessionCatalogTerminalOptions = {
   executable: string;
+  uploadPathStyle?: TerminalUploadPathStyle;
   args: (threadId: string) => string[];
   title: (threadId: string) => string;
   requireLocalSession: (threadId: string) => Promise<SessionCatalogSession>;
@@ -143,6 +145,7 @@ function isNodeSession(value: unknown, sessionIdPattern: RegExp): value is Sessi
     typeof value.canContinue === "boolean" &&
     typeof value.canArchive === "boolean" &&
     isOptionalString(value.name) &&
+    isOptionalString(value.color) &&
     isOptionalString(value.cwd) &&
     isOptionalString(value.source) &&
     isOptionalString(value.modelProvider) &&
@@ -274,6 +277,7 @@ async function listNodeHost(
     };
   }
   try {
+    query.signal?.throwIfAborted();
     const cursor = query.cursors?.[hostId];
     if (cursor !== undefined && !isExactCursor(cursor)) {
       throw new Error("cursor is invalid");
@@ -288,7 +292,9 @@ async function listNodeHost(
       },
       timeoutMs: options.node.timeoutMs,
       scopes: ["operator.write"],
+      signal: query.signal,
     });
+    query.signal?.throwIfAborted();
     const page = parseNodeSessionPage(unwrapNodePayload(raw), options, isExactCursor);
     return {
       ...common,
@@ -299,6 +305,7 @@ async function listNodeHost(
       ),
     };
   } catch {
+    query.signal?.throwIfAborted();
     return {
       ...common,
       sessions: [],
@@ -312,37 +319,40 @@ async function listHosts(
   query: SessionCatalogListProviderParams,
   isExactCursor: (value: unknown) => value is string,
 ): Promise<SessionCatalogHost[]> {
+  query.signal?.throwIfAborted();
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const hosts: SessionCatalogHost[] = [];
   if (
     (!requested || requested.has(options.local.hostId)) &&
     (await options.local.available(query))
   ) {
+    let host: SessionCatalogHost;
     try {
+      query.signal?.throwIfAborted();
       const capabilities = await options.capabilities.local();
+      query.signal?.throwIfAborted();
       const adopted = query.sessionEntries
         ? await options.continuation.listAdopted(query.agentId, query.sessionEntries)
         : new Map<string, string>();
+      query.signal?.throwIfAborted();
+      const localPage = await options.local.list(query);
+      query.signal?.throwIfAborted();
       const page = projectAdoptedSessions(
-        projectPageCapabilities(
-          await options.local.list(query),
-          capabilities,
-          options.capabilities.project,
-        ),
+        projectPageCapabilities(localPage, capabilities, options.capabilities.project),
         adopted,
         options.local.hostId,
       );
-      const host: SessionCatalogHost = {
+      query.signal?.throwIfAborted();
+      host = {
         hostId: options.local.hostId,
         label: options.local.label,
         kind: "gateway",
         connected: true,
         ...page,
       };
-      hosts.push(host);
-      query.onHost?.(host);
     } catch {
-      const host: SessionCatalogHost = {
+      query.signal?.throwIfAborted();
+      host = {
         hostId: options.local.hostId,
         label: options.local.label,
         kind: "gateway",
@@ -350,16 +360,23 @@ async function listHosts(
         sessions: [],
         error: { code: "LOCAL_READ_FAILED", message: options.messages.localReadFailed },
       };
-      hosts.push(host);
-      query.onHost?.(host);
     }
+    hosts.push(host);
+    query.onHost?.(host);
+  }
+  query.signal?.throwIfAborted();
+  // Use the captured host selection after local discovery and progress callbacks.
+  if (requested && !Array.from(requested).some((hostId) => hostId.startsWith("node:"))) {
+    return hosts;
   }
   let nodes: CatalogNode[];
   try {
     nodes = (await (query.listNodes?.() ?? options.runtime.nodes.list())).nodes;
   } catch {
+    query.signal?.throwIfAborted();
     return hosts;
   }
+  query.signal?.throwIfAborted();
   const eligible = nodes
     .filter(
       (node) =>
@@ -370,11 +387,20 @@ async function listHosts(
     .slice(0, options.node.maxHosts - hosts.length);
   const pending = eligible.map((node) =>
     listNodeHost(options, query, node, isExactCursor).then((host) => {
+      query.signal?.throwIfAborted();
       query.onHost?.(host);
       return host;
     }),
   );
-  return [...hosts, ...(await Promise.all(pending))];
+  let nodeHosts: SessionCatalogHost[];
+  try {
+    nodeHosts = await Promise.all(pending);
+  } finally {
+    // Retirement or a failed publication must not release still-running node work.
+    await Promise.allSettled(pending);
+  }
+  query.signal?.throwIfAborted();
+  return [...hosts, ...nodeHosts];
 }
 
 async function readTranscript(
@@ -477,6 +503,9 @@ async function openTerminal(
     kind: "node" as const,
     nodeId,
     command: options.node.terminalCommand,
+    ...(options.terminal.uploadPathStyle
+      ? { uploadPathStyle: options.terminal.uploadPathStyle }
+      : {}),
     paramsJSON: JSON.stringify({ threadId: request.threadId }),
     ...(session.cwd ? { cwd: session.cwd } : {}),
     title,
@@ -512,8 +541,10 @@ export function createSessionCatalogFamily(
       }
       const agentId = options.continuation.resolveAgentId(request.agentId);
       const sourceKey = sessionCatalogAdoptedSourceKey(request.hostId, request.threadId);
+      // Scope in-flight results to the agent without changing host/thread adoption lookup keys.
+      const operationKey = `${agentId}\0${sourceKey}`;
       return await continueAdoption({
-        sourceKey,
+        sourceKey: operationKey,
         findExisting: async () => (await options.continuation.listAdopted(agentId)).get(sourceKey),
         create: async () => {
           const session = await options.continuation.loadSession(request.threadId);

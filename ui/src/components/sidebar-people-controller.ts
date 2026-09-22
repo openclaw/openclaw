@@ -61,24 +61,26 @@ export class SidebarPeopleController implements ReactiveController {
   };
 
   private readonly handleEvent = (event: Event): void => {
+    // Links own clicks, including modified browser gestures; only hover/focus opens their card.
+    if (
+      event.type === "click" &&
+      event.target instanceof Element &&
+      event.target.closest("a[href]")
+    ) {
+      return;
+    }
     if (this.runtime) {
       this.runtime.handleEvent(event);
       return;
     }
     const target =
       event.target instanceof Element
-        ? event.target.closest<HTMLElement>(".sidebar-online__row")
+        ? event.target.closest<HTMLElement>("[data-person-card]")
         : null;
     if (!target || !["pointerover", "focusin", "click"].includes(event.type)) {
       return;
     }
     // Input modality belongs to the runtime; row intent only warms its lazy code.
-    if (
-      event.type === "click" &&
-      !(event.target instanceof Element && event.target.closest(".sidebar-online__details"))
-    ) {
-      return;
-    }
     const generation = ++this.generation;
     this.pendingTarget = target;
     document.addEventListener("pointerdown", this.cancelPending, true);

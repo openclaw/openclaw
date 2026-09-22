@@ -6,6 +6,7 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   clearProviderPromptState,
   getProviderPromptState,
@@ -28,14 +29,7 @@ function createResultStream(stopReason: "error" | "stop") {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
     stopReason,
     ...(stopReason === "error" ? { errorMessage: "context length exceeded" } : {}),
     timestamp: 1,
@@ -115,26 +109,7 @@ describe("provider prompt state", () => {
       const rawPayload = { input: "raw", model: model.id };
       const replacement = await options?.onPayload?.(rawPayload, model);
       sentPayloads.push(replacement === undefined ? rawPayload : replacement);
-      const stream = createAssistantMessageEventStream();
-      stream.end({
-        role: "assistant",
-        content: [],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "error",
-        errorMessage: "context length exceeded",
-        timestamp: 1,
-      });
-      return stream;
+      return createResultStream("error");
     });
     const finalPayload = { input: "final", model: model.id };
     const wrapped = wrapStreamFnWithProviderPromptState({
@@ -252,14 +227,7 @@ describe("provider prompt state", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 2,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
       stopReason: "error",
       errorMessage: "connection dropped after dispatch",
       timestamp: 1,
@@ -323,14 +291,7 @@ describe("provider prompt state", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 2,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
       stopReason: "stop",
       timestamp: 1,
     });

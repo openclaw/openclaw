@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/nextcloud-talk",
-  "version": "2026.8.1",
+  "version": "2026.9.4",
   "description": "OpenClaw Nextcloud Talk channel plugin for conversations.",
   "repository": {
     "type": "git",
@@ -12,7 +12,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.9.4"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -31,7 +31,10 @@
       "id": "nextcloud-talk",
       "configuredState": {
         "env": {
-          "anyOf": ["NEXTCLOUD_TALK_BOT_SECRET", "NEXTCLOUD_TALK_API_PASSWORD"]
+          "anyOf": [
+            "NEXTCLOUD_TALK_BOT_SECRET",
+            "NEXTCLOUD_TALK_API_PASSWORD"
+          ]
         },
         "specifier": "./configured-state",
         "exportName": "hasConfiguredNextcloudTalkChannelState"
@@ -117,21 +120,24 @@
               "flags": "--use-env",
               "description": "Use Nextcloud Talk environment credentials"
             },
-            "envVars": ["NEXTCLOUD_TALK_BOT_SECRET"]
+            "envVars": [
+              "NEXTCLOUD_TALK_BOT_SECRET"
+            ]
           }
         ]
       }
     },
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/nextcloud-talk",
       "npmSpec": "@openclaw/nextcloud-talk",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.9.4"
     },
     "build": {
-      "openclawVersion": "2026.8.1"
+      "openclawVersion": "2026.9.4"
     },
     "release": {
       "publishToClawHub": true,
@@ -139,6 +145,6 @@
     }
   },
   "dependencies": {
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   }
 }

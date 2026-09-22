@@ -21,8 +21,9 @@ import {
   resolveReefConfig,
   type ReefCoreConfig,
 } from "./config-schema.js";
-import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
+import { ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
+import { createConfiguredGuard } from "./guard.js";
 import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import {
@@ -259,7 +260,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         handle: ctx.account.config.handle!,
         relayUrl: parseReefRelayUrl(ctx.account.config.relayUrl),
       };
-      assertReefIdentityBinding(runtime, identityBinding);
+      await assertReefIdentityBinding(runtime, identityBinding);
       const authority = createReefRuntimeAuthority(ctx.abortSignal);
       const transport = new ReefTransportClient(
         ctx.account.config.relayUrl,
@@ -470,7 +471,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           }),
         createReefWebSocket,
         {
-          initialCursor: inboxCursor.load(),
+          initialCursor: await inboxCursor.load(),
           persistCursor: (cursor) => inboxCursor.advance(cursor),
           onState: (state) => {
             if (ctx.abortSignal.aborted || state !== "connected") {
@@ -510,6 +511,16 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             }
             signal.throwIfAborted();
             await notifyOverdueReefDeliveries({ trust, ownerNotice });
+            signal.throwIfAborted();
+            // Re-attempts parked inbox entries (pending owner reviews, guard
+            // outages) so an owner decision completes delivery within one
+            // reconcile interval without waiting for a socket reconnect.
+            try {
+              await inbox.poll(signal);
+            } catch (error) {
+              signal.throwIfAborted();
+              ctx.log?.warn?.(`reef inbox poll failed: ${String(error)}`);
+            }
             if (reconcileError) {
               throw reconcileError;
             }

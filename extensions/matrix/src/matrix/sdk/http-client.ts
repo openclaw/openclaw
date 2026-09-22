@@ -9,6 +9,8 @@ type MatrixAuthedHttpClientParams = {
   accessToken: string;
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  captureRequestAuthority?: () => (() => void) | undefined;
+  signal?: AbortSignal;
 };
 
 export class MatrixAuthedHttpClient {
@@ -16,12 +18,16 @@ export class MatrixAuthedHttpClient {
   private readonly accessToken: string;
   private readonly ssrfPolicy?: SsrFPolicy;
   private readonly dispatcherPolicy?: PinnedDispatcherPolicy;
+  private readonly captureRequestAuthority?: () => (() => void) | undefined;
+  private readonly signal?: AbortSignal;
 
   constructor(params: MatrixAuthedHttpClientParams) {
     this.homeserver = params.homeserver;
     this.accessToken = params.accessToken;
     this.ssrfPolicy = params.ssrfPolicy;
     this.dispatcherPolicy = params.dispatcherPolicy;
+    this.captureRequestAuthority = params.captureRequestAuthority;
+    this.signal = params.signal;
   }
 
   async requestJson(params: {
@@ -43,6 +49,8 @@ export class MatrixAuthedHttpClient {
       ssrfPolicy: this.ssrfPolicy,
       dispatcherPolicy: this.dispatcherPolicy,
       allowAbsoluteEndpoint: params.allowAbsoluteEndpoint,
+      assertCurrent: this.captureRequestAuthority?.(),
+      signal: this.signal,
     });
     if (!response.ok) {
       throw buildHttpError(response.status, text);
@@ -86,6 +94,8 @@ export class MatrixAuthedHttpClient {
       ssrfPolicy: this.ssrfPolicy,
       dispatcherPolicy: this.dispatcherPolicy,
       allowAbsoluteEndpoint: params.allowAbsoluteEndpoint,
+      assertCurrent: this.captureRequestAuthority?.(),
+      signal: this.signal,
     });
     if (!response.ok) {
       throw buildHttpError(response.status, buffer.toString("utf8"));

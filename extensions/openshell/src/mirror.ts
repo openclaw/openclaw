@@ -1,7 +1,7 @@
 // Openshell plugin module implements mirror behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { extractErrorCode, movePathWithCopyFallback } from "openclaw/plugin-sdk/security-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 
@@ -30,7 +30,8 @@ async function reconcileMirrorPath(params: {
   replace: boolean;
 }): Promise<boolean> {
   const targetStats = await lstatIfExists(params.targetPath);
-  if (targetStats?.isSymbolicLink()) {
+  // Preserve host entries mirror transport cannot represent and their ancestor directories.
+  if (targetStats && !targetStats.isDirectory() && !targetStats.isFile()) {
     return true;
   }
   const sourceStats = params.sourcePath ? await runLimitedFs(fs.lstat, params.sourcePath) : null;
@@ -44,15 +45,14 @@ async function reconcileMirrorPath(params: {
     if (targetStats && !targetStats.isDirectory()) {
       await runLimitedFs(fs.rm, params.targetPath, { force: true });
     }
-    const preservedLinks = await reconcileMirrorDirectory({
+    const preservedEntries = await reconcileMirrorDirectory({
       sourceDir,
       targetDir: params.targetPath,
       replace: params.replace,
     });
-    // Host links also protect their ancestor directories. A conflicting remote
-    // file cannot replace those directories, just as it cannot replace a link.
-    if (sourceDir || preservedLinks) {
-      return preservedLinks;
+    // A remote file cannot replace a directory containing preserved host entries.
+    if (sourceDir || preservedEntries) {
+      return preservedEntries;
     }
     await runLimitedFs(fs.rmdir, params.targetPath);
   } else if (targetStats) {
@@ -94,14 +94,14 @@ async function reconcileMirrorDirectory(params: {
         }),
       ),
   );
-  let preservedLinks = false;
+  let preservedEntries = false;
   for (const result of results) {
     if (result.status === "rejected") {
       throw result.reason;
     }
-    preservedLinks ||= result.value;
+    preservedEntries ||= result.value;
   }
-  return preservedLinks;
+  return preservedEntries;
 }
 
 export async function replaceDirectoryContents(params: {
@@ -121,5 +121,3 @@ export async function stageDirectoryContents(params: {
 }): Promise<void> {
   await reconcileMirrorDirectory({ ...params, replace: false });
 }
-
-export { movePathWithCopyFallback };

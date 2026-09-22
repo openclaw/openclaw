@@ -700,7 +700,11 @@ describe("ChatGPT Responses cached transport", () => {
         diagnostics: [
           {
             type: "provider_transport_failure",
-            error: { message: "Unexpected server response: 426" },
+            error: {
+              message: expect.stringMatching(
+                /(?:Unexpected server response: 426|Expected 101 status code)/u,
+              ),
+            },
             details: {
               configuredTransport: "auto",
               fallbackTransport: "sse",
@@ -708,11 +712,22 @@ describe("ChatGPT Responses cached transport", () => {
               phase: "before_message_stream_start",
             },
           },
+          {
+            type: "openai_responses_terminal",
+            timestamp: expect.any(Number),
+            details: { eventType: "response.completed", endTurn: "absent" },
+          },
         ],
       });
       const stickyResult = await runSession("sticky-sse-fallback");
       expect(stickyResult.stopReason).toBe("stop");
-      expect(stickyResult.diagnostics).toBeUndefined();
+      expect(stickyResult.diagnostics).toEqual([
+        {
+          type: "openai_responses_terminal",
+          timestamp: expect.any(Number),
+          details: { eventType: "response.completed", endTurn: "absent" },
+        },
+      ]);
       expect((await runSession("unrelated-sse-fallback")).stopReason).toBe("stop");
       expect(websocketUpgrades).toHaveLength(2);
 

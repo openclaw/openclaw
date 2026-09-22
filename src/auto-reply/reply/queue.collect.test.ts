@@ -31,6 +31,7 @@ import {
 } from "./queue.test-helpers.js";
 import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 
 type InternalFollowupRun = FollowupRun & {
   currentTurnImagesPrepared?: true;
@@ -210,6 +211,66 @@ describe("followup queue collect routing", () => {
     expect(cancelA).toEqual(cancelB);
   });
 
+  it.each(["admission", "abandonment", "abort", "callback failure"] as const)(
+    "renews a deeper queued lifecycle until %s",
+    async (transition) => {
+      vi.useFakeTimers();
+      const key = `test-deferred-heartbeat-${transition}`;
+      const abort = new AbortController();
+      let lastHeartbeat = -Infinity;
+      let failHeartbeat = false;
+      const heartbeat = vi.fn(() => {
+        if (failHeartbeat) {
+          throw new Error("heartbeat unavailable");
+        }
+        lastHeartbeat = Date.now();
+      });
+      const pending = createRun({ prompt: "deeper queued turn" });
+      pending.turnAdoptionLifecycle = {
+        admission: "exclusive",
+        abortSignal: abort.signal,
+        onAdopted: async () => {},
+        onDeferredHeartbeat: heartbeat,
+        deferredHeartbeatIntervalMs: 1_000,
+      };
+      try {
+        const settings = createQueueSettings({ mode: "followup" });
+        enqueueFollowupRun(key, createRun({ prompt: "earlier turn" }), settings);
+        enqueueFollowupRun(key, pending, settings);
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(Date.now() - lastHeartbeat).toBeLessThan(1_000);
+
+        if (transition === "admission") {
+          await admitFollowupRunLifecycle(pending);
+        } else if (transition === "abandonment") {
+          clearFollowupQueue(key);
+        } else if (transition === "abort") {
+          abort.abort();
+        } else {
+          failHeartbeat = true;
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        const callsAtTransition = heartbeat.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(heartbeat).toHaveBeenCalledTimes(callsAtTransition);
+
+        if (transition === "admission" || transition === "callback failure") {
+          const delivered: string[] = [];
+          scheduleFollowupDrain(key, async (run) => {
+            await admitFollowupRunLifecycle(run);
+            delivered.push(run.prompt);
+            completeFollowupRunLifecycle(run);
+          });
+          await vi.runAllTimersAsync();
+          expect(delivered).toEqual(["earlier turn", "deeper queued turn"]);
+        }
+      } finally {
+        clearFollowupQueue(key);
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("retries lifecycle admission after a callback rejection", async () => {
     const onAdmitted = vi
       .fn<() => Promise<void>>()
@@ -320,19 +381,26 @@ describe("followup queue collect routing", () => {
       `test-collect-same-to-${Date.now()}`,
     );
 
-    enqueueRoutedRuns(
-      key,
-      settings,
-      { originatingChannel: "slack", originatingTo: "channel:A", originatingChatType: "channel" },
-      "one",
-      "two",
-    );
+    const receipts: ReplyOperationRunState[] = [{}, {}];
+    for (const [index, receipt] of receipts.entries()) {
+      const run = createRun({
+        prompt: String(index + 1),
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingChatType: "channel",
+      });
+      run.replyOperationRunStates = [receipt];
+      enqueueFollowupRun(key, run, settings);
+    }
 
     await drainRecordedQueue(key, runFollowup, done);
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
     expect(calls[0]?.originatingChatType).toBe("channel");
+    expect(calls[0]?.replyOperationRunStates).toEqual(receipts);
+    expect(calls[0]?.replyOperationRunStates?.[0]).toBe(receipts[0]);
+    expect(calls[0]?.replyOperationRunStates?.[1]).toBe(receipts[1]);
   });
 
   it("collects Slack top-level messages when reply anchors are disabled", async () => {
@@ -438,6 +506,24 @@ describe("followup queue collect routing", () => {
       expect(calls.map((call) => call.messageId)).toEqual(["101.001", "101.002"]);
     },
   );
+
+  it("keeps history-policy peers separate when delivery targets coincide", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      "history-route-peers",
+      {},
+      2,
+    );
+    for (const peerId of ["peer", "direct:peer"]) {
+      enqueueSlackRun(key, settings, peerId, { conversationRoutePeerId: peerId });
+    }
+    await drainRecordedQueue(key, runFollowup, done);
+    expect(calls.map((call) => call.run.conversationRoutePeerId)).toEqual(["peer", "direct:peer"]);
+    expect(calls.map((call) => call.prompt)).toEqual(
+      ["peer", "direct:peer"].map(
+        (peerId) => `[Queued messages while agent was busy]\n\n---\nQueued #1\n${peerId}`,
+      ),
+    );
+  });
 
   it("collects distinct messages inside the same routed thread", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
@@ -708,6 +794,7 @@ describe("followup queue collect routing", () => {
           if (owner?.kind === "deliver") {
             await owner.deliver({
               kind: "queued-followup",
+              completion: { kind: "completed" },
               runId: "overflow-summary-run",
               originatingChannel: "webchat",
               payloads: [{ text: "overflow summary reached its owner" }],
@@ -2271,6 +2358,55 @@ describe("followup queue collect routing", () => {
     ]);
   });
 
+  it.each(["enabled", "disabled", "policy-deny", "runtime-cap", "non-owner"])(
+    "collects turns using the effective screen capability: %s",
+    async (screenMode) => {
+      const key = `test-collect-ui-requester-${Date.now()}`;
+      const { calls, runFollowup } = createDrainRecorder();
+      const settings = createQueueSettings();
+      const targets = [
+        { connId: "browser-a", profileId: "profile-a" },
+        { connId: "browser-b", profileId: "profile-a" },
+        { connId: "browser-b", profileId: "profile-a" },
+      ];
+      for (const [index, gatewayUiCommandTarget] of targets.entries()) {
+        const run = createRun({ prompt: `selection ${index + 1}`, originatingChannel: "webchat" });
+        run.run.gatewayUiCommandTarget = gatewayUiCommandTarget;
+        run.run.clientCaps = ["ui-commands"];
+        run.run.senderIsOwner = screenMode !== "non-owner";
+        run.run.approvalReviewerDeviceId = "shared-device";
+        run.disableTools = screenMode === "disabled";
+        if (screenMode === "policy-deny") {
+          run.run.config = { tools: { deny: ["screen"] } };
+        }
+        if (screenMode === "runtime-cap") {
+          run.toolsAllow = ["read"];
+        }
+        enqueueFollowupRun(key, run, settings);
+      }
+
+      scheduleFollowupDrain(key, runFollowup);
+      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+
+      if (screenMode === "enabled") {
+        expect(calls).toHaveLength(2);
+        expect(calls[0]?.prompt).toContain("selection 1");
+        expect(calls[0]?.prompt).not.toContain("selection 2");
+        expect(calls[1]?.prompt).toContain("selection 2");
+        expect(calls[1]?.prompt).toContain("selection 3");
+        expect(calls.map((call) => call.run.gatewayUiCommandTarget)).toEqual([
+          targets[0],
+          targets[1],
+        ]);
+      } else {
+        expect(calls).toHaveLength(1);
+        for (const selection of ["selection 1", "selection 2", "selection 3"]) {
+          expect(calls[0]?.prompt).toContain(selection);
+        }
+      }
+    },
+  );
+
   it("keys collect batches by turn allowlists, intersections, disablement, and roles", () => {
     const createAuthorityRun = () =>
       createRun({
@@ -3251,12 +3387,18 @@ describe("followup queue collect routing", () => {
     const secondCorrelation = { begin: vi.fn() };
     const createRecorder = (text: string, mediaPath: string) =>
       createUserTurnTranscriptRecorder({
-        input: { text, media: [{ path: mediaPath, contentType: "image/png" }] },
+        input: {
+          text,
+          media: [{ path: mediaPath, contentType: "image/png" }],
+          mentions: [
+            { profileId: "ada", start: text.indexOf("@Ada"), end: text.indexOf("@Ada") + 4 },
+          ],
+        },
         target: createTestUserTurnTranscriptTarget(),
         updateMode: "none",
       });
-    const firstRecorder = createRecorder("first transcript", "/tmp/first.png");
-    const secondRecorder = createRecorder("second transcript", "/tmp/second.png");
+    const firstRecorder = createRecorder("first transcript @Ada", "/tmp/first.png");
+    const secondRecorder = createRecorder("second transcript 🦞 @Ada", "/tmp/second.png");
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
     for (const [prompt, recorder, onComplete, deliveryCorrelation] of [
@@ -3298,6 +3440,16 @@ describe("followup queue collect routing", () => {
     const message = await calls[0]?.userTurnTranscriptRecorder?.resolveMessage();
     expect(message?.content).toContain("first transcript");
     expect(message?.content).toContain("second transcript");
+    const mentions = message?.["__openclaw"]?.humanMentions;
+    expect(mentions).toHaveLength(2);
+    expect(
+      mentions?.map((mention) =>
+        typeof message?.content === "string"
+          ? message.content.slice(mention.start, mention.end)
+          : undefined,
+      ),
+    ).toEqual(["@Ada", "@Ada"]);
+    expect(mentions?.[1]?.start).toBeGreaterThan(mentions?.[0]?.end ?? 0);
     expect(
       (message as unknown as { __openclaw?: { media?: Array<{ path?: string }> } } | undefined)?.[
         "__openclaw"

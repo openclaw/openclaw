@@ -5,10 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
-  createGlobalCommandRunner,
   ensureGitCheckout,
   parseTimeoutMsOrExit,
+  resolveGlobalManager,
   resolveUpdateRoot,
+  runUpdateStep,
 } from "./shared.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
@@ -40,35 +41,6 @@ describe("update CLI shared helpers", () => {
     runCommandWithTimeout.mockResolvedValue(successfulCommandResult);
   });
 
-  it("forwards argv/options and maps exec result shape", async () => {
-    runCommandWithTimeout.mockResolvedValueOnce({
-      stdout: "out",
-      stderr: "err",
-      code: 17,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-    const runCommand = createGlobalCommandRunner();
-
-    const result = await runCommand(["npm", "root", "-g"], {
-      timeoutMs: 1200,
-      cwd: "/tmp/openclaw",
-      env: { OPENCLAW_TEST: "1" },
-    });
-
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(["npm", "root", "-g"], {
-      timeoutMs: 1200,
-      cwd: "/tmp/openclaw",
-      env: { OPENCLAW_TEST: "1" },
-    });
-    expect(result).toEqual({
-      stdout: "out",
-      stderr: "err",
-      code: 17,
-    });
-  });
-
   it("requires timeout values to be complete positive integer seconds", () => {
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
@@ -91,6 +63,32 @@ describe("update CLI shared helpers", () => {
       error.mockRestore();
       exit.mockRestore();
     }
+  });
+
+  it("keeps failed command diagnostics in both progress and the final result", async () => {
+    runCommandWithTimeout.mockResolvedValueOnce({
+      ...successfulCommandResult,
+      code: 1,
+      stdout: `${"x".repeat(10_000)}\nBuild type error`,
+      stderr: "Command failed",
+    });
+    const onStepComplete = vi.fn();
+    const result = await runUpdateStep({
+      name: "build",
+      argv: ["pnpm", "build"],
+      timeoutMs: 1200,
+      progress: { onStepComplete },
+    });
+
+    expect(result.stdoutTail).toContain("Build type error");
+    expect(result.stdoutTail?.length).toBeLessThanOrEqual(8001); // includes the truncation marker
+    expect(onStepComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stdoutTail: result.stdoutTail,
+        stderrTail: "Command failed",
+        exitCode: 1,
+      }),
+    );
   });
 
   it("parses complete positive integer timeout values as milliseconds", () => {
@@ -135,6 +133,27 @@ describe("update CLI shared helpers", () => {
       });
     },
   );
+
+  it("refuses a package root without a proven manager owner", async () => {
+    runCommandWithTimeout.mockResolvedValue({
+      ...successfulCommandResult,
+      code: 1,
+      stderr: "not owned",
+    });
+
+    await expect(
+      resolveGlobalManager({
+        root: "/shared/lib/node_modules/openclaw",
+        installKind: "package",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toMatchObject({
+      name: "UpdatePreMutationError",
+      message: expect.stringMatching(
+        /No package changes or Gateway restart were attempted\.[\s\S]*Inspected:[\s\S]*\/shared\/lib\/node_modules\/openclaw[\s\S]*npm root -g[\s\S]*pnpm root -g[\s\S]*prefix -g/,
+      ),
+    });
+  });
 
   it("publishes a successful fresh clone only after the clone completes", async () => {
     await withTestDir({ prefix: "openclaw-update-clone-success-" }, async (base) => {

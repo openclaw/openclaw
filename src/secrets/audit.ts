@@ -15,6 +15,7 @@ import {
 } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
@@ -196,15 +197,17 @@ function collectConfigSecrets(params: {
     if (!target.entry.includeInAudit) {
       continue;
     }
-    const { ref } = resolveSecretInputRef({
+    const inlineRef = resolveConfigSecretRef({
+      config: params.config,
+      path: target.path,
       value: target.value,
-      refValue: target.refValue,
       defaults,
+      includeResolved: true,
     });
-    const hasPlaintext = hasConfiguredPlaintextSecretValue(
-      target.value,
-      target.entry.expectedResolvedValue,
-    );
+    const ref = coerceSecretRef(target.refValue, defaults) ?? inlineRef;
+    const hasPlaintext =
+      inlineRef === null &&
+      hasConfiguredPlaintextSecretValue(target.value, target.entry.expectedResolvedValue);
     const isNonSecretHeader =
       target.entry.id === "models.providers.*.headers.*" &&
       !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "");

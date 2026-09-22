@@ -74,6 +74,11 @@ export const terminalPanelStyles = css`
     background: var(--bg-elevated);
     box-shadow: var(--overlay-shadow);
   }
+  .tp-session-menu--hosted {
+    --tp-session-menu-max-height: calc(100% - 8px);
+
+    top: 4px;
+  }
   .tp-session-menu__header {
     display: flex;
     align-items: center;
@@ -160,27 +165,6 @@ export const terminalPanelStyles = css`
     padding: 6px 8px;
     caret-color: transparent;
   }
-  .tp-connecting {
-    position: absolute;
-    inset: 0;
-    z-index: 2;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    color: var(--muted, #8a919e);
-    background: color-mix(in srgb, var(--bg, #0e1015) 88%, transparent);
-    font-size: 12px;
-    pointer-events: none;
-  }
-  .tp-connecting__spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid color-mix(in srgb, var(--accent, #ff5c5c) 24%, transparent);
-    border-top-color: var(--accent, #ff5c5c);
-    border-radius: 50%;
-    animation: tp-spin 0.8s linear infinite;
-  }
   .tp-error {
     display: flex;
     align-items: center;
@@ -198,15 +182,5 @@ export const terminalPanelStyles = css`
     color: var(--text);
     padding: 6px 10px;
     font: inherit;
-  }
-  @keyframes tp-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .tp-connecting__spinner {
-      animation: none;
-    }
   }
 `;

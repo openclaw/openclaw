@@ -11,7 +11,8 @@ import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
-vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/qa-runner-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/qa-runner-runtime")>()),
   listQaRunnerCliContributions: () => [],
 }));
 

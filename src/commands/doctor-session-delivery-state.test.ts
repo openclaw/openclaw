@@ -265,7 +265,7 @@ describe("doctor canonical session delivery state", () => {
     expect(repaired).not.toHaveProperty("lastAccountId");
   });
 
-  it("publishes cross-agent incognito parent rewrites to each existing SQLite connection", () => {
+  it("publishes cross-agent incognito parent rewrites to each existing SQLite connection", async () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-incognito-warm-cache-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const oldParentKey = "agent:main:dashboard:incognito-warm-cache";
@@ -291,7 +291,7 @@ describe("doctor canonical session delivery state", () => {
       updatedAt: 20,
       parentSessionKey: oldParentKey,
     });
-    expect(repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
+    expect(await repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
       found: 1,
       repaired: 1,
     });

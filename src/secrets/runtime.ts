@@ -6,12 +6,12 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles.js";
+import { clearAuthProfileMigrationDiagnostics } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import {
-  AuthProfileMigrationRequiredError,
-  clearAuthProfileMigrationDiagnostics,
-  markAuthProfileMigrationRequired,
-} from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
+  prepareRuntimeAuthProfileStoreSnapshots,
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   cloneConfigWithResolutionFacts,
@@ -32,6 +32,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { secretRefKey } from "./ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
+import { loadAdmittedAuthStores } from "./runtime-auth-store-admission.js";
 import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
 import {
   canUseSecretsRuntimeFastPath,
@@ -131,39 +132,6 @@ function shouldLoadPluginMetadataForSecrets(config: OpenClawConfig): boolean {
   );
 }
 
-function loadAuthStoresWithMigrationIsolation(params: {
-  agentDirs: readonly string[];
-  loadAuthStore: (agentDir?: string) => AuthProfileStore;
-  allowUnavailable: boolean;
-}): {
-  authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
-  degradedOwners: DegradedSecretOwner[];
-} {
-  const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
-  const degradedOwners: DegradedSecretOwner[] = [];
-  for (const agentDir of params.agentDirs) {
-    try {
-      authStores.push({ agentDir, store: structuredClone(params.loadAuthStore(agentDir)) });
-    } catch (error) {
-      if (!(error instanceof AuthProfileMigrationRequiredError) || !params.allowUnavailable) {
-        throw error;
-      }
-      markAuthProfileMigrationRequired(agentDir, error);
-      authStores.push({ agentDir, store: { version: 1, profiles: {} } });
-      degradedOwners.push({
-        ownerKind: "route",
-        ownerId: error.ownerId,
-        state: "unavailable",
-        degradationState: "cold",
-        paths: error.sourceKinds.map((kind) => `auth-profile-legacy:${kind}`),
-        refKeys: [],
-        reason: "auth profile migration required",
-      });
-    }
-  }
-  return { authStores, degradedOwners };
-}
-
 /** Prepares a secrets runtime snapshot and records refresh context for later activation. */
 export async function prepareSecretsRuntimeSnapshot(params: {
   config: OpenClawConfig;
@@ -186,6 +154,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
+  // Capture before store reads. A live mutation during preparation must advance past
+  // this watermark, or activation could overwrite it with the prepared candidate.
+  const authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
   const sourceConfig = cloneConfigWithResolutionFacts(params.config);
   const assignmentSourceConfig = cloneConfigWithResolutionFacts(
     params.assignmentConfig ?? params.config,
@@ -200,8 +171,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
   let migrationDegradedOwners: DegradedSecretOwner[] = [];
   if (includeAuthStoreRefs) {
-    const loaded = loadAuthStoresWithMigrationIsolation({
+    const loaded = loadAdmittedAuthStores({
       agentDirs: candidateDirs,
+      env: runtimeEnv,
       loadAuthStore: fastPathLoadAuthStore,
       allowUnavailable: params.allowUnavailableSecretOwners === true,
     });
@@ -219,8 +191,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     const snapshot = {
       sourceConfig,
       config: resolvedConfig,
-      authStores,
+      authStores: prepareRuntimeAuthProfileStoreSnapshots(authStores, runtimeEnv),
       authStoreCredentialsRevision,
+      authStoreSnapshotsRevision,
       warnings: [],
       degradedOwners: migrationDegradedOwners,
       secretOwners: [],
@@ -276,8 +249,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   if (includeAuthStoreRefs) {
     const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
     if (!params.loadAuthStore) {
-      const loaded = loadAuthStoresWithMigrationIsolation({
+      const loaded = loadAdmittedAuthStores({
         agentDirs: candidateDirs,
+        env: runtimeEnv,
         loadAuthStore,
         allowUnavailable: params.allowUnavailableSecretOwners === true,
       });
@@ -336,8 +310,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const snapshot = {
     sourceConfig,
     config: resolvedConfig,
-    authStores,
+    authStores: prepareRuntimeAuthProfileStoreSnapshots(authStores, runtimeEnv),
     authStoreCredentialsRevision,
+    authStoreSnapshotsRevision,
     warnings: context.warnings,
     degradedOwners: [
       ...migrationDegradedOwners,
@@ -469,6 +444,7 @@ export async function refreshActiveSecretsRuntimeSnapshotForConfig(
 ): Promise<boolean> {
   let candidate = coercePreflightRefresh(params.preflightResult, params.sourceConfig);
   for (;;) {
+    params.assertCurrent?.();
     candidate ??= await prepareActiveSecretsRuntimeRefresh(
       params.sourceConfig,
       params.includeAuthStoreRefs,
@@ -486,8 +462,11 @@ export async function refreshActiveSecretsRuntimeSnapshotForConfig(
       candidate.snapshot.authStores = getLiveSecretsRuntimeAuthStores();
       candidate.snapshot.authStoreCredentialsRevision =
         getRuntimeAuthProfileStoreCredentialsRevision();
+      candidate.snapshot.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
       setPreparedSecretsRuntimeSnapshotRefreshContext(candidate.snapshot, activeRefreshContext);
     }
+    // Preparation may yield; keep the admitting write owner at the activation boundary.
+    params.assertCurrent?.();
     if (activateSecretsRuntimeSnapshotIfCurrent(candidate.snapshot, candidate.expectedRevision)) {
       return true;
     }
@@ -670,6 +649,7 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
       config,
       authStores: candidate.snapshot.authStores,
       authStoreCredentialsRevision: candidate.snapshot.authStoreCredentialsRevision,
+      authStoreSnapshotsRevision: candidate.snapshot.authStoreSnapshotsRevision,
       warnings: mergeProviderAuthRuntimeWarnings(
         activeSnapshot.warnings,
         candidate.snapshot.warnings,

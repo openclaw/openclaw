@@ -8,7 +8,11 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--name <name>", "Job name")
     .option("--display-name <name>", "Human-readable job label")
     .option("--description <text>", "Job description")
-    .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
+    .option(
+      "--delete-after-run",
+      "Delete one-shot after successful completion (confirmed/no delivery, intentional silence, or best effort); failed/unknown required delivery retains it disabled",
+      false,
+    )
     .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
     .option("--agent <id>", "Agent id for this job")
     .option("--session <target>", "Session target (main|isolated|current|session:<id>)")
@@ -53,7 +57,10 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--thinking <level>", `Thinking level for agent jobs (${THINKING_LEVELS_HELP})`)
     .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
     .option("--fallbacks <list>", "Fallback model list for agent jobs")
-    .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
+    .option(
+      "--timeout-seconds <n>",
+      "Timeout seconds for agent or command jobs (non-negative integer; 0 disables scheduler timeout)",
+    )
     .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
     .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
     .option(
@@ -61,7 +68,10 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
       "Use lightweight bootstrap context for agent jobs",
       create ? false : undefined,
     )
-    .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
+    .option(
+      "--tools <list>",
+      'Tool allow-list (e.g. exec,read or exec read; "" disables all tools)',
+    )
     .option("--announce", "Fallback-deliver final text to a chat", create ? false : undefined)
     .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
     .option("--no-deliver", "Disable runner fallback delivery")

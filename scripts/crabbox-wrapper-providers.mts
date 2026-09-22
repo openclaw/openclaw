@@ -21,9 +21,6 @@ const providerAliases = new Map([
   ["tl", "tensorlake"],
 ]);
 
-// Crabbox providerHelpAll can omit Tensorlake even when the binary accepts it.
-const providerHelpOmissions = new Set(["tensorlake"]);
-
 export function canonicalProviderName(provider: string) {
   return providerAliases.get(provider) ?? provider;
 }
@@ -86,9 +83,5 @@ export function parseProvidersFromHelp(text: string) {
 
 export function isProviderAdvertised(provider: string, advertisedProviders: readonly string[]) {
   const canonicalProvider = canonicalProviderName(provider);
-  return (
-    advertisedProviders.includes(provider) ||
-    advertisedProviders.includes(canonicalProvider) ||
-    providerHelpOmissions.has(canonicalProvider)
-  );
+  return advertisedProviders.includes(provider) || advertisedProviders.includes(canonicalProvider);
 }

@@ -18,15 +18,25 @@ public enum OpenClawQuestionCardStatus: Sendable, Equatable {
 @Observable
 public final class OpenClawQuestionCardModel: Identifiable {
     public let id: String
-    public private(set) var record: QuestionRecord
+    public private(set) var record: QuestionRecord {
+        didSet { self.discardTerminalDrafts() }
+    }
+
     public private(set) var isSubmitting = false
     public private(set) var isSkipping = false
     public private(set) var wasAnsweredLocally = false
     public private(set) var errorText: String?
     public private(set) var selectedOptions: [String: Set<String>] = [:]
     public private(set) var otherText: [String: String] = [:]
-    public private(set) var isLocallyExpired = false
-    public private(set) var isRecoveryUnavailable = false
+    public private(set) var isLocallyExpired = false {
+        didSet { self.discardTerminalDrafts() }
+    }
+
+    public private(set) var isRecoveryUnavailable = false {
+        didSet { self.discardTerminalDrafts() }
+    }
+
+    private var allowedHostsDraft: String?
 
     public init(record: QuestionRecord) {
         self.id = record.id
@@ -125,10 +135,37 @@ public final class OpenClawQuestionCardModel: Identifiable {
               self.status() == .pending
         else { return }
         self.otherText[questionID] = value
-        if question.multiselect != true, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let hasText = question.issecret == true ? !value.isEmpty : !value
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if question.multiselect != true, hasText {
             self.selectedOptions[questionID] = []
         }
         self.errorText = nil
+    }
+
+    public var secretStoreAllowedHostsText: String {
+        get {
+            self.allowedHostsDraft ?? self.record.questions.first?.secretstore?.allowedhosts?
+                .joined(separator: ", ") ?? ""
+        }
+        set {
+            guard self.status() == .pending else { return }
+            self.allowedHostsDraft = newValue
+            self.errorText = nil
+        }
+    }
+
+    public var secretStoreAllowedHosts: [String]? {
+        guard self.record.questions.first?.secretstore?.kind.value as? String == "secret" else { return nil }
+        return self.secretStoreAllowedHostsText.split { $0 == "," || $0.isWhitespace }.map(String.init)
+    }
+
+    private func discardTerminalDrafts() {
+        guard self.record.status != .pending || self.isLocallyExpired || self.isRecoveryUnavailable else { return }
+        // Every terminal producer, including remote recovery and the expiry timer, retires raw input here.
+        self.otherText.removeAll()
+        self.selectedOptions.removeAll()
+        self.allowedHostsDraft = nil
     }
 
     public var canSubmit: Bool {
@@ -151,58 +188,18 @@ public final class OpenClawQuestionCardModel: Identifiable {
         return true
     }
 
-    public func markAnsweredLocally(answers: [String: [String]]) {
+    public func markAnsweredLocally(answers: QuestionAnswers) {
         self.wasAnsweredLocally = true
-        self.isSubmitting = false
-        self.isSkipping = false
-        self.isLocallyExpired = false
-        self.isRecoveryUnavailable = false
-        self.record = QuestionRecord(
-            id: self.record.id,
-            questions: self.record.questions,
-            agentid: self.record.agentid,
-            sessionkey: self.record.sessionkey,
-            runid: self.record.runid,
-            createdatms: self.record.createdatms,
-            expiresatms: self.record.expiresatms,
-            status: .answered,
-            answers: QuestionAnswers(answers: answers.mapValues(AnyCodable.init)),
-            resolvedby: self.record.resolvedby)
+        self.apply(resolved: .init(id: self.id, status: .answered, answers: answers))
     }
 
     public func markSkippedLocally() {
-        self.isSubmitting = false
-        self.isSkipping = false
-        self.isLocallyExpired = false
-        self.isRecoveryUnavailable = false
-        self.record = QuestionRecord(
-            id: self.record.id,
-            questions: self.record.questions,
-            agentid: self.record.agentid,
-            sessionkey: self.record.sessionkey,
-            runid: self.record.runid,
-            createdatms: self.record.createdatms,
-            expiresatms: self.record.expiresatms,
-            status: .cancelled,
-            resolvedby: self.record.resolvedby)
+        self.apply(resolved: .init(id: self.id, status: .cancelled))
     }
 
     // periphery:ignore - Public completion API for package consumers reconciling external answers.
     public func markAnsweredElsewhere() {
-        self.isSubmitting = false
-        self.isSkipping = false
-        self.isLocallyExpired = false
-        self.isRecoveryUnavailable = false
-        self.record = QuestionRecord(
-            id: self.record.id,
-            questions: self.record.questions,
-            agentid: self.record.agentid,
-            sessionkey: self.record.sessionkey,
-            runid: self.record.runid,
-            createdatms: self.record.createdatms,
-            expiresatms: self.record.expiresatms,
-            status: .answered,
-            resolvedby: self.record.resolvedby)
+        self.apply(resolved: .init(id: self.id, status: .answered))
     }
 
     @discardableResult
@@ -234,7 +231,12 @@ public final class OpenClawQuestionCardModel: Identifiable {
             resolvedby: self.record.resolvedby)
     }
 
-    public func failSubmission(_ message: String) {
+    public func failSubmission(_ message: String, preserveSecretDraft: Bool = false) {
+        if !preserveSecretDraft {
+            for question in self.record.questions where question.issecret == true {
+                self.otherText.removeValue(forKey: question.questionid)
+            }
+        }
         self.isSubmitting = false
         self.isSkipping = false
         self.errorText = message
@@ -284,9 +286,9 @@ public final class OpenClawQuestionCardModel: Identifiable {
         for question in self.record.questions {
             let selected = self.selectedOptions[question.questionid] ?? []
             var values = question.options.compactMap { selected.contains($0.label) ? $0.label : nil }
-            if let other = self.otherText[question.questionid]?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !other.isEmpty
-            {
+            let draft = self.otherText[question.questionid]
+            let other = question.issecret == true ? draft : draft?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let other, !other.isEmpty {
                 values.append(other)
             }
             guard !values.isEmpty else { return nil }
@@ -379,6 +381,9 @@ struct OpenClawQuestionCard: View {
                 .foregroundStyle(OpenClawChatTheme.accent)
             Text(question.question)
                 .font(OpenClawChatTypography.body)
+            if let store = question.secretstore {
+                self.secretStoreConsent(question: question, store: store, now: now)
+            }
             ForEach(question.options, id: \.label) { option in
                 self.optionRow(question: question, option: option, now: now)
             }
@@ -387,14 +392,20 @@ struct OpenClawQuestionCard: View {
                     // Secret answers must never render on screen: masked entry, no
                     // autocorrect/prediction capture, same submit path as free text.
                     SecureField(
-                        "Secret value",
                         text: Binding(
                             get: { self.model.otherText[question.questionid] ?? "" },
                             set: { self.model.setOtherText(questionID: question.questionid, value: $0) }))
-                        .font(OpenClawChatTypography.body)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(self.model.status(at: now) != .pending)
-                        .accessibilityLabel("Secret value")
+                    {
+                        Text("Secret value").font(OpenClawChatTypography.body)
+                    }
+                    .font(OpenClawChatTypography.body)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .disabled(self.model.status(at: now) != .pending)
+                    .accessibilityLabel("Secret value")
                 } else {
                     TextField(
                         "Other answer",
@@ -411,20 +422,70 @@ struct OpenClawQuestionCard: View {
         }
         #if os(macOS)
         .focusable()
-        .focused(self.$focusedQuestionID, equals: question.questionid)
-        .onKeyPress(characters: .decimalDigits) { keyPress in
-            guard self.focusedQuestionID == question.questionid else { return .ignored }
-            return self.handleNumberKey(keyPress, question: question, now: now)
-        }
-        .onKeyPress(.return) {
-            guard self.focusedQuestionID == question.questionid,
-                  self.model.status(at: now) == .pending,
-                  self.model.canSubmit
-            else { return .ignored }
-            Task { await self.onSubmit(self.model) }
-            return .handled
-        }
+            .focused(self.$focusedQuestionID, equals: question.questionid)
+            .onKeyPress(characters: .decimalDigits) { keyPress in
+                guard self.focusedQuestionID == question.questionid else { return .ignored }
+                return self.handleNumberKey(keyPress, question: question, now: now)
+            }
+            .onKeyPress(.return) {
+                guard self.focusedQuestionID == question.questionid,
+                      self.model.status(at: now) == .pending,
+                      self.model.canSubmit
+                else { return .ignored }
+                Task { await self.onSubmit(self.model) }
+                return .handled
+            }
         #endif
+    }
+
+    private func secretStoreConsent(
+        question: Question,
+        store: QuestionSecretStoreBinding,
+        now: Date) -> some View
+    {
+        let protectedSecret = store.kind.value as? String == "secret"
+        let agent = self.model.record.agentid ?? String(localized: "Unknown")
+        let session = self.model.record.sessionkey ?? String(localized: "Unknown")
+        let kind = protectedSecret ? String(localized: "Protected secret") :
+            String(localized: "Agent-readable environment")
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(String(format: String(localized: "Requested by %@ • %@"), agent, session))
+                .font(OpenClawChatTypography.caption)
+                .foregroundStyle(.secondary)
+            Text(String(format: String(localized: "Stores %@ as %@"), store.name, kind))
+                .font(OpenClawChatTypography.body)
+            if let reason = store.reason, !reason.isEmpty {
+                Text(reason).font(OpenClawChatTypography.body)
+            }
+            if let existing = question.secretstoreexisting {
+                let updated = Date(timeIntervalSince1970: Double(existing.updatedatms) / 1000)
+                    .formatted(date: .abbreviated, time: .shortened)
+                Text(String(format: String(localized: "Replaces %@ — last updated %@"), store.name, updated))
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .foregroundStyle(OpenClawChatTheme.danger)
+                if let updatedBy = existing.updatedby {
+                    Text(String(format: String(localized: "Updated by %@"), updatedBy))
+                        .font(OpenClawChatTypography.caption)
+                }
+            }
+            if protectedSecret {
+                Text("Allowed HTTPS hosts").font(OpenClawChatTypography.captionSemiBold)
+                TextField(text: self.$model.secretStoreAllowedHostsText, axis: .vertical) {
+                    Text("api.example.com, uploads.example.com").font(OpenClawChatTypography.body)
+                }
+                .font(OpenClawChatTypography.body)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+                .disabled(self.model.status(at: now) != .pending)
+                .accessibilityLabel("Allowed HTTPS hosts")
+                Text("Exact HTTPS hosts, separated by commas or spaces. Empty allows config SecretRefs only.")
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func optionRow(question: Question, option: QuestionOption, now: Date) -> some View {
@@ -552,6 +613,26 @@ private struct QuestionRefreshApplyResult {
 }
 
 extension OpenClawChatViewModel {
+    /// Retained attachment controls may outlive a Gateway account, but its questions cannot.
+    public func retireQuestionAuthority() {
+        guard !self.isQuestionAuthorityRetired else { return }
+        self.isQuestionAuthorityRetired = true
+        self.questionRefreshGeneration &+= 1
+        self.questionStateRevision &+= 1
+        self.questionRefreshRetryTask?.cancel()
+        self.questionRefreshRetryTask = nil
+        for task in self.questionExpiryTasks.values {
+            task.cancel()
+        }
+        self.questionExpiryTasks.removeAll()
+        self.questionExpiryDeadlines.removeAll()
+        for card in self.questionCards {
+            card.markRecoveryUnavailable()
+        }
+        self.questionCards.removeAll()
+        self.markTimelineChanged()
+    }
+
     public var visibleQuestionCards: [OpenClawQuestionCardModel] {
         self.questionCards.filter { card in
             guard let key = card.record.sessionkey else { return true }
@@ -563,6 +644,7 @@ extension OpenClawChatViewModel {
     }
 
     func refreshQuestions() async {
+        guard !self.isQuestionAuthorityRetired else { return }
         self.questionRefreshGeneration &+= 1
         let refreshGeneration = self.questionRefreshGeneration
         self.questionRefreshRetryTask?.cancel()
@@ -686,7 +768,9 @@ extension OpenClawChatViewModel {
         let previousCount = self.questionCards.count
         self.questionCards.removeAll {
             let status = $0.status()
-            return status == .pending || status == .submitting
+            guard status == .pending || status == .submitting else { return false }
+            $0.markRecoveryUnavailable()
+            return true
         }
         self.syncQuestionExpirations()
         if self.questionCards.count != previousCount {
@@ -696,6 +780,7 @@ extension OpenClawChatViewModel {
     }
 
     private func questionRefreshSnapshotIsCurrent(generation: UInt64, stateRevision: UInt64) -> Bool {
+        guard !self.isQuestionAuthorityRetired else { return false }
         guard generation == self.questionRefreshGeneration else { return false }
         guard stateRevision == self.questionStateRevision else {
             self.restartQuestionRefreshAfterStateChange(generation: generation)
@@ -720,7 +805,7 @@ extension OpenClawChatViewModel {
     }
 
     private func scheduleQuestionRefreshRetry(generation: UInt64, retryIndex: Int) {
-        guard generation == self.questionRefreshGeneration else { return }
+        guard !self.isQuestionAuthorityRetired, generation == self.questionRefreshGeneration else { return }
         guard self.questionRefreshRetryDelaysMs.indices.contains(retryIndex) else {
             self.questionRefreshRetryTask = nil
             return
@@ -740,6 +825,7 @@ extension OpenClawChatViewModel {
     }
 
     func upsertQuestion(_ record: QuestionRecord) {
+        guard !self.isQuestionAuthorityRetired else { return }
         if let model = self.questionCards.first(where: { $0.id == record.id }) {
             guard model.apply(record: record) else { return }
         } else {
@@ -751,6 +837,7 @@ extension OpenClawChatViewModel {
     }
 
     func resolveQuestionEvent(_ event: OpenClawQuestionResolvedEvent) {
+        guard !self.isQuestionAuthorityRetired else { return }
         self.questionCards.first(where: { $0.id == event.id })?.apply(resolved: event)
         self.questionStateRevision &+= 1
         self.syncQuestionExpirations()
@@ -758,6 +845,7 @@ extension OpenClawChatViewModel {
     }
 
     func reconcileQuestionsAfterEvent() {
+        guard !self.isQuestionAuthorityRetired else { return }
         // Invalidate a list snapshot captured before this event, then fetch the
         // authoritative set so other pending cards from that snapshot are not lost.
         self.questionRefreshGeneration &+= 1
@@ -767,30 +855,48 @@ extension OpenClawChatViewModel {
     }
 
     func submitQuestion(_ model: OpenClawQuestionCardModel) async {
-        guard let answers = model.beginSubmission() else { return }
+        guard !self.isQuestionAuthorityRetired,
+              self.questionCards.contains(where: { $0 === model }),
+              let answers = model.beginSubmission()
+        else { return }
         self.questionStateRevision &+= 1
         do {
-            try await self.transport.resolveQuestion(id: model.id, answers: answers)
-            model.markAnsweredLocally(answers: answers)
+            let resolvedAnswers = try await self.transport.resolveQuestion(
+                id: model.id,
+                answers: answers,
+                secretStoreAllowedHosts: model.secretStoreAllowedHosts)
+            guard !self.isQuestionAuthorityRetired else { return }
+            // Only Gateway-normalized answers may outlive the request, including stored-secret markers.
+            model.markAnsweredLocally(answers: resolvedAnswers)
             self.questionStateRevision &+= 1
             self.syncQuestionExpirations()
             self.markTimelineChanged()
         } catch {
-            model.failSubmission(error.localizedDescription)
+            guard !self.isQuestionAuthorityRetired else { return }
+            let responseError = error as? GatewayResponseError
+            model.failSubmission(
+                error.localizedDescription,
+                preserveSecretDraft: responseError?.code == "INVALID_REQUEST" &&
+                    responseError?.detailsReason == nil && responseError?.isAuthorizationFailure == false)
             self.questionStateRevision &+= 1
         }
     }
 
     func skipQuestion(_ model: OpenClawQuestionCardModel) async {
-        guard model.beginSkip() else { return }
+        guard !self.isQuestionAuthorityRetired,
+              self.questionCards.contains(where: { $0 === model }),
+              model.beginSkip()
+        else { return }
         self.questionStateRevision &+= 1
         do {
             try await self.transport.cancelQuestion(id: model.id)
+            guard !self.isQuestionAuthorityRetired else { return }
             model.markSkippedLocally()
             self.questionStateRevision &+= 1
             self.syncQuestionExpirations()
             self.markTimelineChanged()
         } catch {
+            guard !self.isQuestionAuthorityRetired else { return }
             model.failSubmission(error.localizedDescription)
             self.questionStateRevision &+= 1
         }
@@ -800,7 +906,9 @@ extension OpenClawChatViewModel {
         _ model: OpenClawQuestionCardModel,
         at date: Date = Date())
     {
-        guard self.questionCards.first(where: { $0.id == model.id }) === model else { return }
+        guard !self.isQuestionAuthorityRetired,
+              self.questionCards.first(where: { $0.id == model.id }) === model
+        else { return }
         if model.observeLocalExpiry(at: date) {
             self.questionStateRevision &+= 1
             self.syncQuestionExpirations(at: date)

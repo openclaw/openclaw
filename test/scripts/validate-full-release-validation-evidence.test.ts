@@ -1,13 +1,29 @@
 // Full release validation evidence tests cover producer and candidate binding.
 import { describe, expect, it, vi } from "vitest";
 import {
+  createPublicationSourceFact,
+  publicationDispatchEnvelope,
+  publicationIntentInputs,
+  publicationSourceRequest,
+  type PublicationSelection,
+} from "../../scripts/full-release-publication-contract.mjs";
+import {
   isShaPinnedReleaseValidationBranch,
   normalizeFullReleaseValidationRun,
-  validateFullReleaseValidationEvidence,
+  validateFullReleaseValidationEvidence as validateEvidence,
 } from "../../scripts/validate-full-release-validation-evidence.mjs";
+
+function validateFullReleaseValidationEvidence(options: Parameters<typeof validateEvidence>[0]) {
+  return validateEvidence({
+    getWorkflowSource: () =>
+      'name: Full Release Validation\nenv:\n  RELEASE_ISOLATION_TOOLING_CONTRACT: "2"\n',
+    ...options,
+  });
+}
 
 const targetSha = "b".repeat(40);
 const workflowSha = "a".repeat(40);
+const publisherWorkflowSha = "c".repeat(40);
 const pinnedBranch = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
 
 function releaseRun(overrides: Record<string, unknown> = {}) {
@@ -53,9 +69,9 @@ function exactTargetEvidenceReuse() {
   };
 }
 
-function strictEvidenceReuse() {
+function strictEvidenceReuse(version = 3) {
   return {
-    schema: "openclaw.release-validation-evidence/v3",
+    schema: `openclaw.release-validation-evidence/v${version}`,
     valid: true,
     current: { runId: "123", targetSha },
     root: { runId: "122", targetSha },
@@ -84,12 +100,239 @@ function validate(
     expectedTargetSha: targetSha,
     expectedWorkflowBranch: "release/2026.7.1",
     isTrustedMainAncestor,
-    validateEvidenceReuseStrictly: () => strictEvidenceReuse(),
+    validateEvidenceReuseStrictly: () =>
+      strictEvidenceReuse(Number(manifestOverrides.version ?? 3)),
   });
   return { isTrustedMainAncestor, result };
 }
 
 describe("full release validation evidence", () => {
+  it("keeps historical recovery outside new selection validation", () => {
+    const expectedPublicationSelection = vi.fn(() => {
+      throw new Error("new selection was evaluated");
+    });
+    validateFullReleaseValidationEvidence({
+      run: releaseRun(),
+      manifest: releaseManifest(),
+      expectedRepository: "openclaw/openclaw",
+      expectedRunId: "123",
+      expectedTargetSha: targetSha,
+      expectedPublicationSelection,
+      isTrustedMainAncestor: () => true,
+    });
+    expect(expectedPublicationSelection).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "publish",
+    "diagnostic",
+    "missing",
+    "selection",
+    "context",
+    "tooling",
+    "missing-publication",
+  ])("authenticates new source-admission evidence: %s", (scenario) => {
+    const selection: PublicationSelection = {
+      route: "normal",
+      npmDistTag: "latest",
+      publishOpenclawNpm: true,
+      pluginPublishScope: "all-publishable",
+      plugins: [],
+    };
+    const request = publicationSourceRequest({
+      PUBLICATION_INPUTS_JSON: JSON.stringify({
+        ref: targetSha,
+        trusted_workflow_json: publicationDispatchEnvelope(null, {
+          validationPurpose: scenario === "diagnostic" ? "diagnostic" : "publish",
+          publicationSelection: scenario === "diagnostic" ? null : selection,
+        }),
+        release_profile: "full",
+        rerun_group: "all",
+      }),
+      PUBLICATION_TARGET_CONTEXT: "release/2026.9.9",
+      PUBLICATION_TOOLING_JSON: JSON.stringify({ fullRef: "refs/heads/main", sha: workflowSha }),
+      PUBLICATION_TARGET_SHA: targetSha,
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_REF: `refs/heads/${pinnedBranch}`,
+      GITHUB_SHA: workflowSha,
+      GITHUB_RUN_ID: "123",
+      GITHUB_RUN_ATTEMPT: "2",
+    });
+    const source = createPublicationSourceFact(
+      request,
+      scenario === "diagnostic" ? null : { packages: [], platforms: [] },
+      scenario === "diagnostic"
+        ? null
+        : {
+            version: "2026.9.9",
+            packages: [{ name: "openclaw", version: "2026.9.9", targets: ["npm"] }],
+            platforms: [],
+          },
+    );
+    const manifest = releaseManifest({
+      sourceAdmissionContract: "1",
+      sourceAdmission: source,
+      releaseProfile: "full",
+      rerunGroup: "all",
+      runReleaseSoak: "true",
+      trustedWorkflow: {
+        fullRef: scenario === "tooling" ? "refs/heads/other" : "refs/heads/main",
+        sha: workflowSha,
+      },
+      validationInputs: {
+        ...publicationIntentInputs(source),
+        targetContextRef: scenario === "context" ? "release/2026.9.8" : "release/2026.9.9",
+        allowUnreleasedChangelog: "false",
+      },
+    });
+    if (scenario === "missing") {
+      delete (manifest as Record<string, unknown>).sourceAdmission;
+      delete (manifest as Record<string, unknown>).sourceAdmissionContract;
+    }
+    const run = () =>
+      validateFullReleaseValidationEvidence({
+        run: releaseRun(),
+        manifest,
+        getWorkflowSource: () =>
+          'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n' +
+          (scenario === "missing-publication"
+            ? '  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n'
+            : ""),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        isTrustedMainAncestor: () => true,
+        expectedPublicationSelection: (): PublicationSelection => ({
+          ...selection,
+          route: scenario === "selection" ? "prepared" : "normal",
+        }),
+      });
+    if (scenario === "publish") {
+      expect(run).not.toThrow();
+    } else {
+      expect(run).toThrow(
+        /source.admission|source admission|publication|cannot prepare publication/iu,
+      );
+    }
+  });
+
+  it.each(["main", pinnedBranch])(
+    "binds npm beta coverage to its exact publication tag on %s",
+    (branch) => {
+      const validateEvidenceReuseStrictly = vi.fn();
+      const result = validateFullReleaseValidationEvidence({
+        run: releaseRun({ head_branch: branch }),
+        manifest: releaseManifest({
+          version: 4,
+          workflowRef: branch,
+          workflowFullRef: `refs/heads/${branch}`,
+          releaseProfile: "beta",
+          rerunGroup: "all",
+          runReleaseSoak: "false",
+          validationInputs: { coveragePolicy: "npm-beta-v1", targetVersion: "2026.8.28-beta.1" },
+        }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedReleaseTag: "v2026.8.28-beta.1",
+        isTrustedMainAncestor: () => true,
+        validateEvidenceReuseStrictly,
+      });
+      expect(result.coveragePolicy).toBe("npm-beta-v1");
+      expect(validateEvidenceReuseStrictly).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { label: "unknown policy", coveragePolicy: "unknown" },
+    { label: "old schema", version: 3 },
+    { label: "stable profile", releaseProfile: "stable" },
+    { label: "soak", runReleaseSoak: "true" },
+    { label: "focused group", rerunGroup: "performance" },
+    { label: "stable target", targetVersion: "2026.8.28" },
+    { label: "stable publication on beta dist-tag", expectedReleaseTag: "v2026.8.28" },
+    { label: "different beta", expectedReleaseTag: "v2026.8.28-beta.2" },
+    { label: "missing publication tag", expectedReleaseTag: undefined },
+  ])("rejects npm beta direct evidence for $label", (drift) => {
+    const {
+      label: _label,
+      coveragePolicy,
+      targetVersion,
+      expectedReleaseTag,
+      ...manifestDrift
+    } = drift;
+    expect(() =>
+      validateFullReleaseValidationEvidence({
+        run: releaseRun({ head_branch: "main" }),
+        manifest: releaseManifest({
+          version: 4,
+          workflowRef: "main",
+          workflowFullRef: "refs/heads/main",
+          releaseProfile: "beta",
+          rerunGroup: "all",
+          runReleaseSoak: "false",
+          ...manifestDrift,
+          validationInputs: {
+            coveragePolicy: coveragePolicy ?? "npm-beta-v1",
+            targetVersion: targetVersion ?? "2026.8.28-beta.1",
+          },
+        }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedReleaseTag: Object.hasOwn(drift, "expectedReleaseTag")
+          ? expectedReleaseTag
+          : "v2026.8.28-beta.1",
+        isTrustedMainAncestor: () => true,
+      }),
+    ).toThrow(/coverage policy/iu);
+  });
+
+  it.each([
+    ["2026.8.28", "release/2026.8.28", "v2026.8.28", true],
+    ["2026.8.28", "v2026.8.28", "v2026.8.28", true],
+    ["2026.8.28", "release/2026.8.28-1", "v2026.8.28-1", true],
+    ["2026.8.28-1", "release/2026.8.28-1", "v2026.8.28-1", true],
+    ["2026.8.28", "release/2026.8.28-1", "v2026.8.28", false],
+    ["2026.8.28", "release/2026.8.28-1", "v2026.8.28-2", false],
+    ["2026.8.28", "release/2026.8.27", "v2026.8.28", false],
+    ["2026.8.28", "main", "v2026.8.28", false],
+    ["2026.8.28", "", "v2026.8.28", false],
+    ["2026.8.33", "extended-stable/2026.8.33", "v2026.8.33", false],
+  ] as const)(
+    "binds npm stable evidence %s/%s to final publication %s",
+    (targetVersion, context, expectedReleaseTag, accepted) => {
+      const validateStableEvidence = () =>
+        validateFullReleaseValidationEvidence({
+          run: releaseRun({ head_branch: "main" }),
+          manifest: releaseManifest({
+            version: 4,
+            workflowRef: "main",
+            workflowFullRef: "refs/heads/main",
+            releaseProfile: "stable",
+            rerunGroup: "all",
+            runReleaseSoak: "true",
+            targetRef: context.startsWith("v") ? context : targetSha,
+            validationInputs: {
+              coveragePolicy: "npm-stable-v1",
+              targetContextRef: context.startsWith("v") ? "" : context,
+              targetVersion,
+            },
+          }),
+          expectedRepository: "openclaw/openclaw",
+          expectedRunId: "123",
+          expectedTargetSha: targetSha,
+          expectedReleaseTag,
+          isTrustedMainAncestor: () => true,
+        });
+      if (accepted) {
+        expect(validateStableEvidence().coveragePolicy).toBe("npm-stable-v1");
+      } else {
+        expect(validateStableEvidence).toThrow();
+      }
+    },
+  );
+
   it("normalizes REST and gh run metadata", () => {
     const normalized = normalizeFullReleaseValidationRun(releaseRun());
 
@@ -117,8 +360,8 @@ describe("full release validation evidence", () => {
     });
   });
 
-  it("accepts canonical SHA-pinned evidence bound to current main", () => {
-    const { isTrustedMainAncestor, result } = validate();
+  it.each([3, 4])("accepts v%s SHA-pinned evidence bound to current main", (version) => {
+    const { isTrustedMainAncestor, result } = validate({}, { version });
 
     expect(result.source).toBe("sha-pinned-main");
     expect(isTrustedMainAncestor).toHaveBeenCalledWith(workflowSha);
@@ -143,7 +386,35 @@ describe("full release validation evidence", () => {
     expect(isTrustedMainAncestor).not.toHaveBeenCalled();
   });
 
-  it("rejects protected-tag evidence from a same-name branch or older ancestor", () => {
+  it.each([3, 4])(
+    "accepts historical v%s evidence from trusted main under a protected publisher",
+    (version) => {
+      const isTrustedMainAncestor = vi.fn(() => true);
+      const validateEvidenceReuseStrictly = vi.fn(() => strictEvidenceReuse(version));
+      const trustedWorkflowRef = `release-publish/${publisherWorkflowSha.slice(0, 12)}-123`;
+      const result = validateFullReleaseValidationEvidence({
+        run: releaseRun(),
+        manifest: releaseManifest({ version, evidenceReuse: exactTargetEvidenceReuse() }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedTrustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
+        expectedTrustedWorkflowSha: publisherWorkflowSha,
+        isTrustedMainAncestor,
+        validateEvidenceReuseStrictly,
+      });
+
+      expect(result.source).toBe("sha-pinned-protected-tag-main-ancestor");
+      expect(isTrustedMainAncestor).toHaveBeenCalledWith(workflowSha);
+      expect(validateEvidenceReuseStrictly).toHaveBeenCalledWith({
+        repository: "openclaw/openclaw",
+        runId: "123",
+        targetSha,
+      });
+    },
+  );
+
+  it("rejects protected-tag evidence from a same-name branch or untrusted ancestor", () => {
     const trustedWorkflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
     expect(() =>
       validateFullReleaseValidationEvidence({
@@ -176,9 +447,9 @@ describe("full release validation evidence", () => {
         expectedTargetSha: targetSha,
         expectedTrustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
         expectedTrustedWorkflowSha: workflowSha,
-        isTrustedMainAncestor: () => true,
+        isTrustedMainAncestor: () => false,
       }),
-    ).toThrow("does not match trusted tooling");
+    ).toThrow("not reachable from current main");
 
     expect(() =>
       validateFullReleaseValidationEvidence({
@@ -258,6 +529,8 @@ describe("full release validation evidence", () => {
     ["target SHA", {}, { targetSha: "c".repeat(40) }, "targetSha"],
     ["target ref", {}, { targetRef: "v2026.7.1-beta.3" }, "target ref"],
     ["manifest version", {}, { version: 2 }, "version 3"],
+    ["future manifest version", {}, { version: 5 }, "version 3"],
+    ["string manifest version", {}, { version: "4" }, "version 3"],
   ])("rejects mismatched %s", (_name, runOverrides, manifestOverrides, message) => {
     expect(() => validate(runOverrides, manifestOverrides)).toThrow(message);
   });
@@ -276,45 +549,60 @@ describe("full release validation evidence", () => {
     expect(() => validate({}, {}, false)).toThrow("not reachable from current main");
   });
 
-  it("accepts exact-target evidence reuse on the SHA-pinned path", () => {
-    expect(validate({}, { evidenceReuse: exactTargetEvidenceReuse() }).result.source).toBe(
+  it.each([3, 4])("accepts v%s exact-target evidence reuse on the SHA-pinned path", (version) => {
+    expect(validate({}, { version, evidenceReuse: exactTargetEvidenceReuse() }).result.source).toBe(
       "sha-pinned-main",
     );
   });
 
-  it("accepts changelog-only release evidence reuse on the SHA-pinned path", () => {
-    const codeSha = "c".repeat(40);
-    const reuse = {
-      changedPaths: ["CHANGELOG.md"],
-      evidenceSha: codeSha,
-      policy: "changelog-only-release-v1",
-      runId: "122",
-      selectedRunId: "122",
-    };
-    const result = validateFullReleaseValidationEvidence({
-      run: releaseRun(),
-      manifest: releaseManifest({ evidenceReuse: reuse }),
-      expectedRepository: "openclaw/openclaw",
-      expectedRunId: "123",
-      expectedTargetSha: targetSha,
-      expectedWorkflowBranch: "release/2026.7.1",
-      isTrustedMainAncestor: () => true,
-      validateEvidenceReuseStrictly: () => ({
-        ...strictEvidenceReuse(),
-        current: { runId: "123", targetSha },
-        root: { runId: "122", targetSha: codeSha },
-        evidenceReuse: {
-          changedPaths: ["CHANGELOG.md"],
-          evidenceSha: codeSha,
-          policy: "changelog-only-release-v1",
-          rootRunId: "122",
-          selectedRunId: "122",
-        },
-      }),
-    });
+  it.each([
+    { version: 3, policy: "changelog-only-release-v1", changedPaths: ["CHANGELOG.md"] },
+    { version: 4, policy: "changelog-only-release-v1", changedPaths: ["CHANGELOG.md"] },
+    {
+      version: 4,
+      policy: "split-changelog-release-v1",
+      changedPaths: ["CHANGELOG/2026.7.1.md", "CHANGELOG/records/2026.7.1.md"],
+    },
+  ])(
+    "accepts v$version $policy evidence reuse on the SHA-pinned path",
+    ({ version, policy, changedPaths }) => {
+      const codeSha = "c".repeat(40);
+      const reuse = {
+        changedPaths,
+        evidenceSha: codeSha,
+        policy,
+        runId: "122",
+        selectedRunId: "122",
+      };
+      const result = validateFullReleaseValidationEvidence({
+        run: releaseRun(),
+        manifest: releaseManifest({
+          version,
+          evidenceReuse: reuse,
+          validationInputs: { targetVersion: "2026.7.1" },
+        }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedWorkflowBranch: "release/2026.7.1",
+        isTrustedMainAncestor: () => true,
+        validateEvidenceReuseStrictly: () => ({
+          ...strictEvidenceReuse(version),
+          current: { runId: "123", targetSha },
+          root: { runId: "122", targetSha: codeSha },
+          evidenceReuse: {
+            changedPaths,
+            evidenceSha: codeSha,
+            policy,
+            rootRunId: "122",
+            selectedRunId: "122",
+          },
+        }),
+      });
 
-    expect(result.source).toBe("sha-pinned-main");
-  });
+      expect(result.source).toBe("sha-pinned-main");
+    },
+  );
 
   it("requires strict root and child validation for reused evidence", () => {
     expect(() =>
@@ -345,6 +633,23 @@ describe("full release validation evidence", () => {
       }),
     ).toThrow("failed strict chain validation");
   });
+
+  it.each([3, 4])(
+    "rejects strict evidence with a different schema from the v%s manifest",
+    (version) => {
+      expect(() =>
+        validateFullReleaseValidationEvidence({
+          run: releaseRun(),
+          manifest: releaseManifest({ version, evidenceReuse: exactTargetEvidenceReuse() }),
+          expectedRepository: "openclaw/openclaw",
+          expectedRunId: "123",
+          expectedTargetSha: targetSha,
+          isTrustedMainAncestor: () => true,
+          validateEvidenceReuseStrictly: () => strictEvidenceReuse(version === 3 ? 4 : 3),
+        }),
+      ).toThrow("failed strict chain validation");
+    },
+  );
 
   it("rejects malformed evidence reuse on the SHA-pinned path", () => {
     expect(() =>

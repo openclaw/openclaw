@@ -168,21 +168,113 @@ struct WebChatSwiftUISmokeTests {
     }
 
     @Test func `one Gateway profile can own multiple independent windows`() async throws {
-        let manager = WebChatManager()
-        let profile = try MacGatewayProfile(
-            id: "same-gateway",
-            name: "Same Gateway",
-            url: #require(URL(string: "wss://same.example")))
+        try await withIsolatedWebChatProfile { manager, profile in
+            await manager.openGatewayWindow(for: .profile(profile.id), newWindow: true).value
+            await manager.openGatewayWindow(for: .profile(profile.id), newWindow: true).value
+            let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
 
-        try await manager.show(profile: profile)
-        try await manager.show(profile: profile)
-        let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 2)
+            #expect(manager._testSessionObserverVisible(connection: connection))
+            manager.resetPrimaryConnections()
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 2)
+            #expect(manager._testSessionObserverVisible(connection: connection))
+            manager.closeGatewayWindows(profileID: profile.id)
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 0)
+            #expect(!manager._testSessionObserverVisible(connection: connection))
+        }
+    }
 
-        #expect(manager._testProfileWindowCount(profileID: profile.id) == 2)
-        #expect(manager._testSessionObserverVisible(connection: connection))
-        await manager.closeGatewayWindows(profileID: profile.id)
-        #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
-        #expect(!manager._testSessionObserverVisible(connection: connection))
+    @Test(arguments: [false, true])
+    func `hiding retains the window and its draft while removing it from the Dock and Window menu`(
+        minimized: Bool) async throws
+    {
+        let controller = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            initialDraft: "Keep this draft",
+            transport: TestTransport())
+        defer { controller.close() }
+        let window = try #require(controller._testWindow)
+        controller.show()
+        if minimized {
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didMiniaturizeNotification)
+            {
+                window.miniaturize(nil)
+            }
+        }
+        #expect(controller.isWindowOpen)
+
+        if minimized {
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didDeminiaturizeNotification)
+            {
+                controller.hide()
+            }
+        } else {
+            controller.hide()
+        }
+        #expect(controller._testWindow === window)
+        #expect(!controller.isWindowOpen)
+        #expect(!window.isVisible)
+        #expect(!window.isMiniaturized)
+        #expect(window.isExcludedFromWindowsMenu)
+        #expect(controller._testDraft == "Keep this draft")
+
+        controller.show()
+        if minimized {
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didMiniaturizeNotification)
+            {
+                window.miniaturize(nil)
+            }
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didDeminiaturizeNotification)
+            {
+                controller.hide()
+                controller.show()
+            }
+        }
+        #expect(controller._testWindow === window)
+        #expect(controller.isWindowOpen)
+        #expect(!window.isExcludedFromWindowsMenu)
+        #expect(controller._testDraft == "Keep this draft")
+    }
+
+    @Test(arguments: ["close", "hide", "reuse"])
+    func `pending profile opens honor window lifetime and ordinary opens reuse the admitted window`(
+        action: String) async throws
+    {
+        try await withIsolatedWebChatProfile { manager, profile in
+            let fleet = MacGatewayConnectionFleet.shared
+            let release = DispatchSemaphore(value: 0)
+            let gateEntered = AsyncStream.makeStream(of: Void.self)
+            let blockedFleet = Task.detached {
+                await fleet.holdForPendingWindowRegression(
+                    entered: gateEntered.continuation,
+                    release: release)
+            }
+            defer { release.signal() }
+            var gateIterator = gateEntered.stream.makeAsyncIterator()
+            await gateIterator.next()
+
+            let first = manager.openGatewayWindow(for: .profile(profile.id))
+            let second = manager.openGatewayWindow(for: .profile(profile.id))
+            // Let both production entrypoints reach the held connection owner.
+            await Task.yield()
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 0)
+            switch action {
+            case "close": manager.close()
+            case "hide": manager.hideWindows()
+            default: break
+            }
+            release.signal()
+            #expect(await blockedFleet.value)
+            await first.value
+            await second.value
+
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == (action == "reuse" ? 1 : 0))
+            #expect(manager.hasVisibleWindows == (action == "reuse"))
+        }
     }
 
     @Test func `initial draft populates an empty composer without replacing user text`() {
@@ -197,26 +289,13 @@ struct WebChatSwiftUISmokeTests {
         controller.close()
     }
 
-    @Test func `controller explicit agent wins and nil falls back to cached default`() throws {
-        let cachedIdentity = try #require(OpenClawChatSessionRoutingIdentity(
-            scope: "global",
-            mainSessionKey: "main",
-            defaultAgentID: "main"))
-        let explicit = WebChatSwiftUIWindowController(
-            sessionKey: "global",
-            agentID: " Work ",
-            cachedRoutingIdentity: cachedIdentity,
-            store: nil)
-        let fallback = WebChatSwiftUIWindowController(
-            sessionKey: "global",
-            agentID: nil,
-            cachedRoutingIdentity: cachedIdentity,
-            store: nil)
-
-        #expect(explicit._testActiveAgentID == "work")
-        #expect(fallback._testActiveAgentID == "main")
-        explicit.close()
-        fallback.close()
+    @Test func `controller explicit agent wins and nil falls back to cached default`() {
+        #expect(WebChatSwiftUIWindowController.effectiveAgentID(
+            explicitAgentID: " Work ", cachedDefaultAgentID: "main") == "work")
+        #expect(WebChatSwiftUIWindowController.effectiveAgentID(
+            explicitAgentID: nil, cachedDefaultAgentID: "main") == "main")
+        #expect(WebChatSwiftUIWindowController.effectiveAgentID(
+            explicitAgentID: "  ", cachedDefaultAgentID: " MAIN ") == "main")
     }
 
     @Test func `max and Ultra thinking preferences survive reopen`() throws {
@@ -251,5 +330,18 @@ struct WebChatSwiftUISmokeTests {
 
         #expect(WebChatSwiftUIWindowController.persistedVerboseLevel(defaults: defaults) == nil)
         #expect(defaults.object(forKey: "openclaw.webchat.verboseLevel") == nil)
+    }
+}
+
+extension MacGatewayConnectionFleet {
+    fileprivate func holdForPendingWindowRegression(
+        entered: AsyncStream<Void>.Continuation,
+        release: DispatchSemaphore) -> Bool
+    {
+        // Hold the actual fleet admission boundary so close runs after show
+        // starts but before it can acquire its connection.
+        entered.yield()
+        entered.finish()
+        return release.wait(timeout: .now() + 5) == .success
     }
 }

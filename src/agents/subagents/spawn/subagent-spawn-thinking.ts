@@ -7,7 +7,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
-/** Resolves subagent thinking override and initial session patch from caller/agent config. */
 export function resolveSubagentThinkingOverride(params: {
   cfg: OpenClawConfig;
   requesterAgentConfig?: unknown;
@@ -46,28 +45,12 @@ export function resolveSubagentThinkingOverride(params: {
     };
   }
 
-  if (!params.callerThinkingRaw) {
-    return {
-      status: "ok" as const,
-      thinkingOverride: undefined,
-      initialSessionPatch: {},
-    };
-  }
-
-  const normalizedThinking = normalizeThinkLevel(params.callerThinkingRaw);
-  if (!normalizedThinking) {
-    return {
-      status: "ok" as const,
-      thinkingOverride: undefined,
-      initialSessionPatch: {},
-    };
-  }
-
+  const normalizedThinking = params.callerThinkingRaw
+    ? normalizeThinkLevel(params.callerThinkingRaw)
+    : undefined;
   return {
     status: "ok" as const,
     thinkingOverride: undefined,
-    initialSessionPatch: {
-      thinkingLevel: normalizedThinking,
-    },
+    initialSessionPatch: normalizedThinking ? { thinkingLevel: normalizedThinking } : {},
   };
 }

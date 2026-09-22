@@ -6,6 +6,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { mergeProcessEnv } from "./process-env.js";
 
 const SESSION_COUNT = 2_640;
 const SESSION_WINDOW_COUNT = 300_000;
@@ -14,6 +16,21 @@ const ACTIVE_SESSIONS = 40;
 const EVENTS_PER_SESSION = 128;
 const PAYLOAD = "x".repeat(48 * 1024);
 const tempDir = useAutoCleanupTempDirTracker(afterEach);
+
+function migrationChildEnv(stateDir: string): NodeJS.ProcessEnv {
+  // Measure migration memory, not tsx's index of unrelated projects' cached modules.
+  const loaderTempDir = tempDir.make("loader-", stateDir);
+  return mergeProcessEnv([
+    process.env,
+    {
+      OPENCLAW_STATE_DIR: stateDir,
+      TMPDIR: loaderTempDir,
+      TMP: loaderTempDir,
+      TEMP: loaderTempDir,
+    },
+  ]);
+}
+
 const CHILD_SCRIPT = String.raw`
   import { createHash } from "node:crypto";
   import { DatabaseSync } from "node:sqlite";
@@ -30,7 +47,7 @@ const CHILD_SCRIPT = String.raw`
   const hash = (value) => createHash("sha256").update(value).digest("hex");
   const before = [hash(read("large-corpus-20", 64)), hash(read("large-corpus-39", 127))];
   db.close();
-  const migration = migrateLegacyMediaPersistence({
+  const migration = await migrateLegacyMediaPersistence({
     configuredAgentDatabaseTargets: [{ agentId: "main", path }], env: process.env,
   });
   db = new DatabaseSync(path, { readOnly: true });
@@ -64,7 +81,7 @@ const SESSION_WINDOW_CHILD_SCRIPT = String.raw`
   import { resolveOpenClawAgentSqlitePath } from "./src/state/openclaw-agent-db.ts";
   import { migrateLegacyMediaPersistence } from "./src/infra/state-migrations.media-persistence.ts";
   const path = resolveOpenClawAgentSqlitePath({ agentId: "main", env: process.env });
-  const migration = migrateLegacyMediaPersistence({
+  const migration = await migrateLegacyMediaPersistence({
     configuredAgentDatabaseTargets: [{ agentId: "main", path }], env: process.env,
   });
   process.stdout.write(JSON.stringify(migration) + "\n");
@@ -92,7 +109,7 @@ const SPARSE_EVENT_CHILD_SCRIPT = String.raw`
     "./src/infra/state-migrations.media-persistence.ts"
   );
   const path = resolveOpenClawAgentSqlitePath({ agentId: "main", env: process.env });
-  const migration = migrateLegacyMediaPersistence({
+  const migration = await migrateLegacyMediaPersistence({
     configuredAgentDatabaseTargets: [{ agentId: "main", path }], env: process.env,
   });
   const migrationSelects = mediaSelects;
@@ -244,7 +261,8 @@ describe("legacy media persistence large corpus", () => {
     try {
       createSessionWindowCorpus(stateDir);
       const result = spawnSync(
-        process.execPath,
+        // Old-space limits are a V8/Node contract; keep this resource proof on that owner.
+        resolveTestNodeExecPath(),
         [
           "--max-old-space-size=128",
           "--import",
@@ -256,7 +274,7 @@ describe("legacy media persistence large corpus", () => {
         {
           cwd: process.cwd(),
           encoding: "utf8",
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          env: migrationChildEnv(stateDir),
           timeout: 120_000,
         },
       );
@@ -273,12 +291,12 @@ describe("legacy media persistence large corpus", () => {
     try {
       createCorpus(stateDir);
       const result = spawnSync(
-        process.execPath,
+        resolveTestNodeExecPath(),
         ["--max-old-space-size=256", "--import", "tsx", "--input-type=module", "-e", CHILD_SCRIPT],
         {
           cwd: process.cwd(),
           encoding: "utf8",
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          env: migrationChildEnv(stateDir),
           timeout: 120_000,
         },
       );
@@ -316,7 +334,7 @@ describe("legacy media persistence large corpus", () => {
         {
           cwd: process.cwd(),
           encoding: "utf8",
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          env: migrationChildEnv(stateDir),
           timeout: 120_000,
         },
       );

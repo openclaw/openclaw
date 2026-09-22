@@ -1,6 +1,18 @@
 // Repairs canonical binding references after agent config migration.
+import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { AgentSelectionRequiredError, listAgentIds } from "../../../agents/agent-scope-config.js";
+import { resolveReadOnlyChannelPluginsForConfig } from "../../../channels/plugins/read-only.js";
+import { projectLegacyAgentRosterEntries } from "../../../config/legacy.roster.js";
+import type { AgentRouteBinding } from "../../../config/types.agents.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../../routing/session-key.js";
+import { resolveChannelAccountEntry } from "../../../routing/account-lookup.js";
+import { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import {
+  DEFAULT_AGENT_ID,
+  normalizeAccountId,
+  normalizeAgentId,
+} from "../../../routing/session-key.js";
+import type { DoctorConfigMutationResult } from "./config-mutation-state.js";
 
 export function pruneBindingsForMissingAgents(
   cfg: OpenClawConfig,
@@ -39,5 +51,112 @@ export function pruneBindingsForMissingAgents(
   return {
     ...cfg,
     ...(nextBindings.length > 0 ? { bindings: nextBindings } : { bindings: undefined }),
+  };
+}
+
+/** Preserve proven route owners before explicit ownership retires implicit account routing. */
+export function repairUnownedChannelAccountBindings({
+  config: cfg,
+  sourceConfigBeforeMigrations,
+}: {
+  config: OpenClawConfig;
+  sourceConfigBeforeMigrations: unknown;
+}): DoctorConfigMutationResult & { warnings?: string[] } {
+  const agentIds = new Set(listAgentIds(cfg));
+  const additions: AgentRouteBinding[] = [];
+  const warnings: string[] = [];
+  const bindings = cfg.bindings === undefined ? [] : cfg.bindings;
+  // Malformed or ownerless bindings cannot establish an explicit repair owner.
+  if (
+    agentIds.size < 2 ||
+    cfg.plugins?.enabled === false ||
+    !Array.isArray(bindings) ||
+    !bindings.every(
+      (binding) =>
+        isRecord(binding) &&
+        isRecord(binding.match) &&
+        typeof binding.agentId === "string" &&
+        binding.agentId.trim().length > 0 &&
+        typeof binding.match.channel === "string" &&
+        (binding.match.accountId === undefined || typeof binding.match.accountId === "string"),
+    )
+  ) {
+    return { config: cfg, changes: [] };
+  }
+  const sourceAgents = asNullableRecord(asNullableRecord(sourceConfigBeforeMigrations)?.agents);
+  const sourceList = sourceAgents?.list;
+  // The shipped list fallback used source array order, which keyed rosters cannot recover.
+  const legacyDefaultAgentId =
+    sourceAgents?.ownership === undefined &&
+    sourceAgents?.entries === undefined &&
+    Array.isArray(sourceList) &&
+    sourceList.length > 1 &&
+    sourceList.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.id === "string" &&
+        entry.id.trim().length > 0 &&
+        (entry.default === undefined || entry.default === false),
+    )
+      ? projectLegacyAgentRosterEntries(sourceList).entries[0]?.id
+      : undefined;
+  const inventory = resolveReadOnlyChannelPluginsForConfig(cfg, {
+    includePersistedAuthState: false,
+    includeSetupFallbackPlugins: true,
+  });
+  const plugins = new Map(inventory.plugins.map((plugin) => [plugin.id, plugin]));
+  for (const channelId of [...inventory.configuredChannelIds].toSorted()) {
+    const plugin = plugins.get(channelId);
+    const channel = asNullableRecord(cfg.channels?.[channelId]);
+    if (!plugin || channel?.enabled === false) {
+      continue;
+    }
+    const accounts = asNullableRecord(channel?.accounts) ?? undefined;
+    const accountIds = [
+      ...new Set(plugin.config.listAccountIds(cfg).map(normalizeAccountId)),
+    ].toSorted();
+    for (const accountId of accountIds) {
+      const account = resolveChannelAccountEntry(
+        accounts,
+        accountId,
+        channelId,
+        normalizeAccountId,
+      );
+      if (asNullableRecord(account)?.enabled === false) {
+        continue;
+      }
+      const routeInput = { cfg, channel: channelId, accountId };
+      let missingOwner: AgentSelectionRequiredError | undefined;
+      try {
+        const route = resolveAgentRoute(routeInput);
+        if (!legacyDefaultAgentId || route.matchedBy !== "default") {
+          continue;
+        }
+      } catch (error) {
+        if (!(error instanceof AgentSelectionRequiredError)) {
+          throw error;
+        }
+        missingOwner = error;
+      }
+      const agentId = legacyDefaultAgentId;
+      if (agentId && agentIds.has(agentId)) {
+        // An exact account fallback preserves narrower precedence and never assigns sibling accounts.
+        additions.push({ agentId, match: { channel: channelId, accountId } });
+      } else if (missingOwner) {
+        warnings.push(
+          !Array.isArray(sourceList) && !isRecord(sourceAgents?.entries)
+            ? `${channelId}:${accountId} unresolved: original roster unavailable. ${missingOwner.message}`
+            : missingOwner.message,
+        );
+      }
+    }
+  }
+  return {
+    config: additions.length ? { ...cfg, bindings: [...bindings, ...additions] } : cfg,
+    changes: additions.map(
+      ({ agentId, match }) =>
+        `Preserved ${match.channel}:${match.accountId} ownership with binding ${JSON.stringify({ agentId, match })}.`,
+    ),
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }

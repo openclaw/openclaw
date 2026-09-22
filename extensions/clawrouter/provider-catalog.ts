@@ -58,6 +58,7 @@ type CatalogPricing = {
 
 type CatalogModel = {
   id: string;
+  displayName?: string;
   upstream: string;
   capabilities: string[];
   supportedReasoningEfforts?: CatalogReasoningEffort[];
@@ -155,6 +156,7 @@ function parseCatalogModel(value: unknown): CatalogModel | undefined {
   }
   return {
     id,
+    displayName: normalizeOptionalString(row?.displayName),
     upstream,
     capabilities: readStringArray(row?.capabilities),
     supportedReasoningEfforts: normalizeClawRouterReasoningEfforts(row?.supportedReasoningEfforts),
@@ -298,9 +300,14 @@ function buildRoutedModel(
     upstreamModel = model.upstream;
   }
 
+  const providerPrefix = `${provider.id}/`;
+  const modelLabel = model.id.startsWith(providerPrefix)
+    ? model.id.slice(providerPrefix.length)
+    : model.id;
+
   return {
     id: model.id,
-    name: `${provider.displayName} · ${model.id}`,
+    name: model.displayName ?? `${provider.displayName} · ${modelLabel}`,
     api,
     baseUrl,
     reasoning:

@@ -1,5 +1,6 @@
 // Exercises heartbeat wake coalescing, retries, and skip handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -9,6 +10,7 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
+  requestHeartbeatAndWait,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 
@@ -147,10 +149,7 @@ describe("heartbeat-wake", () => {
 
   it("counts an in-flight wake until the whole handler settles", async () => {
     vi.useFakeTimers();
-    let finishWake: (() => void) | undefined;
-    const wakeFinished = new Promise<void>((resolve) => {
-      finishWake = resolve;
-    });
+    const { promise: wakeFinished, resolve: finishWake } = createDeferred();
     const handler = vi.fn(async () => {
       await wakeFinished;
       return { status: "ran" as const, durationMs: 1 };
@@ -837,17 +836,14 @@ describe("heartbeat-wake", () => {
 
     // Simulate a handler that's mid-execution when SIGUSR1 fires.
     // We do this by having the handler hang forever (never resolve).
-    let resolveHang: () => void;
-    const hangPromise = new Promise<void>((r) => {
-      resolveHang = r;
-    });
+    const { promise: hangPromise, resolve: resolveHang } = createDeferred();
     const handlerA = vi
       .fn()
       .mockReturnValue(hangPromise.then(() => ({ status: "ran" as const, durationMs: 1 })));
     setHeartbeatWakeHandler(handlerA);
 
     // Trigger the handler — it starts running but never finishes
-    requestHeartbeat(wake("interval", { coalesceMs: 0 }));
+    const recovered = requestHeartbeatAndWait(wake("interval", { coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerA).toHaveBeenCalledTimes(1);
 
@@ -861,6 +857,7 @@ describe("heartbeat-wake", () => {
     requestHeartbeat(wake("interval", { agentId: "ready", coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerB.mock.calls.map(([request]) => request.agentId)).toEqual([undefined, "ready"]);
+    await expect(recovered).resolves.toEqual({ status: "ran", durationMs: 1 });
 
     // Clean up the hanging promise
     resolveHang!();
@@ -923,10 +920,7 @@ describe("heartbeat-wake", () => {
     "hands off only unfinished wakes when a replaced handler is $outcome",
     async ({ outcome, expectedReasons }) => {
       vi.useFakeTimers();
-      let finishOldWake!: () => void;
-      const oldWakeFinished = new Promise<void>((resolve) => {
-        finishOldWake = resolve;
-      });
+      const { promise: oldWakeFinished, resolve: finishOldWake } = createDeferred();
       const oldHandler = vi.fn(async () => {
         await oldWakeFinished;
         if (outcome === "thrown") {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { enrichChatHistoryCompactionMarkers } from "./chat-history-pages.js";
+import { enrichChatHistoryCompactionMarkers } from "./chat-history-page-kernel.js";
 
 describe("enrichChatHistoryCompactionMarkers", () => {
   it("joins checkpoint token metrics to the matching transcript marker", () => {

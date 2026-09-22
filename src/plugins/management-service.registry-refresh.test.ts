@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { computeDeclaredSurfaceHash } from "./capability-consent.js";
-import { buildPluginCapabilitySummary } from "./capability-summary.js";
+import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   clawhubInstall: vi.fn(),
+  gatewayMetadata: vi.fn(),
   metadata: vi.fn(),
   officialCatalog: vi.fn(),
   persistInstall: vi.fn(),
@@ -16,15 +17,23 @@ const mocks = vi.hoisted(() => ({
   replaceConfig: vi.fn(),
 }));
 
+vi.mock("./current-plugin-metadata-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./current-plugin-metadata-state.js")>()),
+  getProcessGatewayPluginMetadataSnapshot: () => mocks.gatewayMetadata(),
+}));
+
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: () => undefined,
   readConfigFileSnapshotForWrite: () => mocks.readConfig(),
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
 
-vi.mock("./install-persistence.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./install-persistence.js")>()),
+vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: (params: unknown) => mocks.persistInstall(params),
+}));
+
+vi.mock("./install-config-mutation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install-config-mutation.js")>()),
   resolveInstallConfigMutationPreflights: () => ({
     hookMutation: { mode: "allowed" },
     pluginMutation: { mode: "allowed" },
@@ -41,7 +50,8 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
   loadInstalledPluginIndexInstallRecords: async () => ({}),
 }));
 
-vi.mock("./plugin-metadata-snapshot.js", () => ({
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
   resolvePluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
 }));
@@ -60,12 +70,10 @@ vi.mock("./slot-selection.js", () => ({
   applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
 }));
 
-const {
-  clearManagedPluginOfficialCatalogCache,
-  installManagedPlugin,
-  installManagedPluginSource,
-  setManagedPluginEnabled,
-} = await import("./management-service.js");
+const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
+const { installManagedPlugin, setManagedPluginEnabled } = await import("./management-mutations.js");
+const { installManagedPluginSource } = await import("./management-install.js");
+const { inspectManagedPlugin, listManagedPlugins } = await import("./management-service.js");
 
 const installSnapshot = {
   config: {},
@@ -167,12 +175,65 @@ function metadataSnapshot(enabled: boolean, installed = false) {
 }
 
 describe("plugin management registry refresh", () => {
-  afterEach(() => cleanupTrackedTempDirs(trackedArtifactDirs));
+  afterEach(() => {
+    clearPluginMetadataLifecycleCaches();
+    cleanupTrackedTempDirs(trackedArtifactDirs);
+  });
 
   beforeEach(() => {
-    clearManagedPluginOfficialCatalogCache();
+    clearManagedPluginCatalogCache();
     vi.resetAllMocks();
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
+  });
+
+  it("returns the installed candidate without replacing the running Gateway inventory", async () => {
+    mockClawHubWorkboardInstall();
+    mocks.readConfig.mockResolvedValue({
+      snapshot: {
+        valid: true,
+        parsed: {},
+        path: "/tmp/openclaw.json",
+        sourceConfig: {},
+        hash: "base-hash",
+      },
+      writeOptions: installSnapshot.writeOptions,
+    });
+    mocks.persistInstall.mockResolvedValue({
+      plugins: { entries: { workboard: { enabled: false } } },
+    });
+    const boot = {
+      ...metadataSnapshot(false),
+      index: { plugins: [], installRecords: {} },
+      plugins: [],
+      byPluginId: new Map(),
+    };
+    mocks.gatewayMetadata.mockReturnValue(boot);
+    mocks.metadata.mockImplementation((params: { allowCurrent?: boolean }) =>
+      params.allowCurrent === false ? metadataSnapshot(false, true) : boot,
+    );
+
+    const result = await installManagedPlugin({
+      request: {
+        source: "clawhub",
+        packageName: "community/workboard",
+        acknowledgeCapabilities: emptyArtifactAcknowledgment,
+      },
+      env: {},
+    });
+
+    expect(result.plugin).toMatchObject({ id: "workboard", installed: true, enabled: false });
+    mocks.metadata.mockClear();
+    expect((await listManagedPlugins({ config: {}, env: {} })).plugins).toEqual([
+      expect.objectContaining({ id: "workboard", installed: true, enabled: false }),
+    ]);
+    expect(
+      (await inspectManagedPlugin({ config: {}, pluginId: "workboard", env: {} })).plugin,
+    ).toMatchObject({ id: "workboard", installed: true });
+    expect(mocks.metadata).not.toHaveBeenCalled();
+    expect(mocks.gatewayMetadata()).toBe(boot);
+
+    mocks.gatewayMetadata.mockReturnValue({ ...boot });
+    expect((await listManagedPlugins({ config: {}, env: {} })).plugins).toEqual([]);
   });
 
   it.each([true, false])(

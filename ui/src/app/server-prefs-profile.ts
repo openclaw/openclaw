@@ -2,13 +2,10 @@ import {
   normalizeUiAppearancePreference,
   UI_APPEARANCE_PREFERENCE_KEYS,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
-import type {
-  UsersPrefsGetResult,
-  UsersPrefsSetResult,
-} from "../../../packages/gateway-protocol/src/schema/users.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { isAppearancePref, type ServerUiPrefs } from "./server-prefs-state.ts";
+import { saveUserPreferences } from "./user-prefs-cache.ts";
 
 type ProfileAppearancePrefs = { profileId: string; scope: string; prefs: ServerUiPrefs };
 
@@ -45,7 +42,11 @@ export async function loadProfileAppearancePrefs(
   scope: string,
 ): Promise<boolean> {
   const requestId = ++profilePreferencesRequestId;
-  const result = await client.request<UsersPrefsGetResult>("users.prefs.get", {
+  const { loadUserPreferences } = await import("./user-prefs-request.ts");
+  if (requestId !== profilePreferencesRequestId) {
+    return false;
+  }
+  const result = await loadUserPreferences(client, profileId, {
     keys: Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
   });
   if (requestId !== profilePreferencesRequestId || result.status !== "ok") {
@@ -79,7 +80,7 @@ export async function writeProfileAppearancePrefs(
     ),
   );
   try {
-    const result = await client.request<UsersPrefsSetResult>("users.prefs.set", { entries });
+    const result = await saveUserPreferences(client, { entries });
     return result.status === "ok"
       ? { ok: true, value: result, refresh: { ok: true } }
       : { ok: false, reason: "rejected", error: "Profile preferences are unavailable." };

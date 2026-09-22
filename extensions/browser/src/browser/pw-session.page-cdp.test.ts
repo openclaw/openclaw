@@ -13,12 +13,15 @@ describe("pw-session page-scoped CDP client", () => {
   });
 
   it("uses Playwright page sessions", async () => {
-    const sessionSend = vi.fn(async () => ({ ok: true }));
     const sessionDetach = vi.fn(async () => {});
-    const newCDPSession = vi.fn(async () => ({
-      send: sessionSend,
+    const session = {
+      send: vi.fn(async function (this: unknown) {
+        expect(this).toBe(session);
+        return { ok: true };
+      }),
       detach: sessionDetach,
-    }));
+    };
+    const newCDPSession = vi.fn(async () => session);
     const page = {
       context: () => ({
         newCDPSession,
@@ -26,16 +29,14 @@ describe("pw-session page-scoped CDP client", () => {
     };
 
     await withPageScopedCdpClient({
-      cdpUrl: "http://127.0.0.1:9222",
       page: page as never,
-      targetId: "tab-1",
       fn: async (pageSend) => {
         await pageSend("Emulation.setLocaleOverride", { locale: "en-US" });
       },
     });
 
     expect(newCDPSession).toHaveBeenCalledWith(page);
-    expect(sessionSend).toHaveBeenCalledWith("Emulation.setLocaleOverride", { locale: "en-US" });
+    expect(session.send).toHaveBeenCalledWith("Emulation.setLocaleOverride", { locale: "en-US" });
     expect(sessionDetach).toHaveBeenCalledTimes(1);
   });
 
@@ -112,6 +113,34 @@ describe("pw-session page-scoped CDP client", () => {
       value: "ax2",
     });
     expect(sessionDetach).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks both generated role refs and raw accessibility refs", async () => {
+    const sessionSend = vi.fn(async (method: string) => {
+      if (method === "DOM.pushNodesByBackendIdsToFrontend") {
+        return { nodeIds: [101, 202] };
+      }
+      return {};
+    });
+    const page = {
+      context: () => ({
+        newCDPSession: vi.fn(async () => ({
+          send: sessionSend,
+          detach: vi.fn(async () => {}),
+        })),
+      }),
+      locator: vi.fn(() => ({ evaluateAll: vi.fn(async () => {}) })),
+    };
+
+    const marked = await markBackendDomRefsOnPage({
+      page: page as never,
+      refs: [
+        { ref: "e1", backendDOMNodeId: 42 },
+        { ref: "ax2", backendDOMNodeId: 84 },
+      ],
+    });
+
+    expect(marked).toEqual(new Set(["e1", "ax2"]));
   });
 
   it("clears stale markers even when no backend refs are valid", async () => {

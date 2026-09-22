@@ -5,7 +5,7 @@
 
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
-import { createPatch, FILE_HEADERS_ONLY, structuredPatch } from "diff";
+import { createPatch, FILE_HEADERS_ONLY, structuredPatch, type StructuredPatchHunk } from "diff";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { normalizeToLF } from "../../line-endings.js";
 import {
@@ -13,18 +13,18 @@ import {
   applyReplacementsPreservingLineEndings,
   type TextReplacement,
 } from "./edit-replacements.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 
 interface FuzzyBoundary {
   /** Original offset when the normalized boundary begins a replacement. */
-  start?: number;
+  readonly start?: number;
   /** Original offset when the normalized boundary ends a replacement. */
-  end?: number;
+  readonly end?: number;
 }
 
 interface FuzzyNormalizedFile {
   text: string;
-  boundaries: Array<FuzzyBoundary | undefined>;
+  boundaries: Array<FuzzyBoundary | undefined> | undefined;
 }
 
 const fuzzyGraphemeSegmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
@@ -95,7 +95,10 @@ function buildNfkcBoundaries(
   return boundaries;
 }
 
-function buildFuzzyNormalizedFile(text: string): FuzzyNormalizedFile | undefined {
+function buildFuzzyBoundaries(
+  text: string,
+  normalizedText: string,
+): FuzzyNormalizedFile["boundaries"] {
   const authoritativeNfkc = text.normalize("NFKC");
   const nfkcBoundaries = buildNfkcBoundaries(text, authoritativeNfkc);
   if (!nfkcBoundaries) {
@@ -115,7 +118,7 @@ function buildFuzzyNormalizedFile(text: string): FuzzyNormalizedFile | undefined
     for (let offset = sourceLineStart; offset <= keptLineEnd; offset++) {
       const boundary = nfkcBoundaries[offset];
       if (boundary) {
-        boundaries[normalizedLineStart + offset - sourceLineStart] = { ...boundary };
+        boundaries[normalizedLineStart + offset - sourceLineStart] = boundary;
       }
     }
 
@@ -134,16 +137,15 @@ function buildFuzzyNormalizedFile(text: string): FuzzyNormalizedFile | undefined
     }
 
     const afterNewline = nfkcBoundaries[sourceLineEnd + 1];
-    boundaries[normalizedLineEnd + 1] = afterNewline ? { ...afterNewline } : undefined;
+    boundaries[normalizedLineEnd + 1] = afterNewline;
     normalizedLineStart = normalizedLineEnd + 1;
     sourceLineStart = sourceLineEnd + 1;
   }
 
-  const normalizedText = normalizeForFuzzyMatch(text);
   if (boundaries.length > normalizedText.length + 1) {
     return undefined;
   }
-  return { text: normalizedText, boundaries };
+  return boundaries;
 }
 
 function translateFuzzySpan(
@@ -152,8 +154,8 @@ function translateFuzzySpan(
   fuzzyLength: number,
 ): { originalStart: number; originalLength: number } | undefined {
   const fuzzyEnd = fuzzyStart + fuzzyLength;
-  const originalStart = normalized.boundaries[fuzzyStart]?.start;
-  const originalEnd = normalized.boundaries[fuzzyEnd]?.end;
+  const originalStart = normalized.boundaries?.[fuzzyStart]?.start;
+  const originalEnd = normalized.boundaries?.[fuzzyEnd]?.end;
   if (originalStart === undefined || originalEnd === undefined) {
     return undefined;
   }
@@ -244,6 +246,10 @@ function fuzzyFindText(
     };
   }
 
+  // Source boundaries matter only after normalized text actually matches.
+  if (normalizedFile && !normalizedFile.boundaries) {
+    normalizedFile.boundaries = buildFuzzyBoundaries(content, normalizedFile.text);
+  }
   const translated = normalizedFile
     ? translateFuzzySpan(normalizedFile, fuzzyIndex, fuzzyOldText.length)
     : undefined;
@@ -272,8 +278,7 @@ export function stripBom(content: string): { bom: string; text: string } {
     : { bom: "", text: content };
 }
 
-function countOccurrences(content: string, oldText: string): number {
-  const fuzzyContent = normalizeForFuzzyMatch(content);
+function countOccurrences(fuzzyContent: string, oldText: string): number {
   const fuzzyOldText = normalizeForFuzzyMatch(oldText);
   if (!fuzzyOldText) {
     return 0;
@@ -484,7 +489,7 @@ function getUnsafeFuzzyBoundaryError(path: string, editIndex: number, totalEdits
  * Apply one or more exact-text replacements to LF-normalized content.
  *
  * All edits are matched against the same original content. Replacements are
- * then applied in reverse order so offsets remain stable. Fuzzy matching is
+ * assembled from original spans so offsets remain stable. Fuzzy matching is
  * lookup-only: replacements always splice into the original content.
  */
 function applyEdits(normalizedContent: string, edits: Edit[], path: string): AppliedEdits {
@@ -502,15 +507,18 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string): App
   const needsFuzzyMapping = normalizedEdits.some(
     (edit) => !normalizedContent.includes(edit.oldText),
   );
-  const fuzzyFile = needsFuzzyMapping ? buildFuzzyNormalizedFile(normalizedContent) : undefined;
+  const fuzzyFile: FuzzyNormalizedFile | undefined = needsFuzzyMapping
+    ? { text: normalizeForFuzzyMatch(normalizedContent), boundaries: undefined }
+    : undefined;
   const replacementBaseContent = normalizedContent;
 
   const matchedEdits: MatchedEdit[] = [];
   for (const [i, edit] of normalizedEdits.entries()) {
     const matchResult = fuzzyFindText(normalizedContent, edit.oldText, fuzzyFile);
-    const occurrences = matchResult.usedFuzzyMatch
-      ? countOccurrences(normalizedContent, edit.oldText)
-      : countExactOccurrences(replacementBaseContent, edit.oldText);
+    const occurrences =
+      fuzzyFile && matchResult.usedFuzzyMatch
+        ? countOccurrences(fuzzyFile.text, edit.oldText)
+        : countExactOccurrences(replacementBaseContent, edit.oldText);
     if (occurrences > 1) {
       throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
     }
@@ -604,15 +612,19 @@ export function generateUnifiedPatch(
 /**
  * Generate a display-oriented diff string with line numbers and context.
  * Returns both the diff string and the first changed line number (in the new file).
+ * Prepared hunks must describe these exact contents with the requested context.
  */
 export function generateDiffString(
   oldContent: string,
   newContent: string,
   contextLines = 4,
+  preparedHunks?: StructuredPatchHunk[],
 ): { diff: string; firstChangedLine: number | undefined } {
-  const hunks = structuredPatch("", "", oldContent, newContent, undefined, undefined, {
-    context: contextLines,
-  }).hunks;
+  const hunks =
+    preparedHunks ??
+    structuredPatch("", "", oldContent, newContent, undefined, undefined, {
+      context: contextLines,
+    }).hunks;
   const oldLineCount = oldContent.split("\n").length;
   const newLineCount = newContent.split("\n").length;
   const lastNewLine = newContent === "" ? 0 : newLineCount - Number(newContent.endsWith("\n"));
@@ -696,8 +708,7 @@ export function splitNoOpEdits(
   const noOpEdits: Edit[] = [];
   const realEdits: Edit[] = [];
   for (const edit of edits) {
-    const fuzzyNoOp = normalizeForFuzzyMatch(edit.oldText) === normalizeForFuzzyMatch(edit.newText);
-    if (edit.oldText === edit.newText || fuzzyNoOp) {
+    if (edit.oldText === edit.newText) {
       applyEditsToNormalizedContent(
         normalizedContent,
         [{ oldText: edit.oldText, newText: "" }],
@@ -723,8 +734,9 @@ export async function computeEditsDiff(
     readFile: (absolutePath: string) => Promise<Buffer | string>;
     access: (absolutePath: string) => Promise<void>;
   },
+  resolvePath = operations ? resolveToCwd : resolveLocalPathToCwd,
 ): Promise<EditDiffResult | EditDiffError> {
-  const absolutePath = resolveToCwd(path, cwd);
+  const absolutePath = resolvePath(path, cwd);
 
   try {
     // Check if file exists and is readable

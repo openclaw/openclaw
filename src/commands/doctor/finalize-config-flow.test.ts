@@ -8,6 +8,7 @@ describe("doctor finalize config flow", () => {
     const result = await finalizeDoctorConfigFlow({
       cfg: { channels: {} },
       candidate: { channels: { signal: { enabled: true } } },
+      snapshot: { path: "/config.json", hash: "source-hash", raw: null },
       pendingChanges: true,
       shouldRepair: false,
       fixHints: ['Run "openclaw doctor --fix" to apply these changes.'],
@@ -18,6 +19,7 @@ describe("doctor finalize config flow", () => {
     expect(result).toEqual({
       cfg: { channels: { signal: { enabled: true } } },
       shouldWriteConfig: true,
+      confirmedConfigSource: { path: "/config.json", hash: "source-hash" },
     });
     expect(note).not.toHaveBeenCalled();
   });
@@ -27,6 +29,7 @@ describe("doctor finalize config flow", () => {
     const result = await finalizeDoctorConfigFlow({
       cfg: { channels: {} },
       candidate: { channels: { signal: { enabled: true } } },
+      snapshot: { path: "/config.json", hash: "source-hash", raw: null },
       pendingChanges: true,
       shouldRepair: false,
       fixHints: ['Run "openclaw doctor --fix" to apply these changes.'],
@@ -48,6 +51,7 @@ describe("doctor finalize config flow", () => {
     const result = await finalizeDoctorConfigFlow({
       cfg: { channels: { signal: { enabled: true } } },
       candidate: { channels: { signal: { enabled: false } } },
+      snapshot: { path: "/config.json", hash: "source-hash", raw: null },
       pendingChanges: true,
       shouldRepair: true,
       fixHints: [],

@@ -19,6 +19,7 @@ import { resolveConversation } from "./conversation-registry.js";
 import {
   applySessionEntryLifecycleMutation,
   deleteSessionEntryLifecycle,
+  loadSessionEntry,
   upsertSessionEntryCore as upsertCanonicalSessionEntry,
 } from "./session-accessor.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
@@ -73,6 +74,37 @@ async function withConversationStore(
 }
 
 describe("conversation delivery store", () => {
+  it("validates retry input without recreating a missing operation", async () => {
+    await withConversationStore(({ scope, conversationRef }) => {
+      const input = {
+        operationKind: "send" as const,
+        conversationRef,
+        sourceSessionKey: "agent:main:telegram:direct:operator",
+        message: "hello",
+      };
+      expect(getConversationDeliveryOperation(scope, "missing", input)).toBeUndefined();
+      expect(getConversationDeliveryOperation(scope, "missing")).toBeUndefined();
+      const begun = beginConversationDeliveryOperation(scope, { operationId: "retry", ...input });
+      expect(
+        getConversationDeliveryOperation(scope, " retry ", {
+          ...input,
+          sourceSessionKey: ` ${input.sourceSessionKey} `,
+        }),
+      ).toEqual(begun.record);
+      for (const changed of [
+        { operationKind: "turn" as const },
+        { conversationRef: "conv_ffffffffffffffffffffffffffffffff" },
+        { sourceSessionKey: "agent:main:other" },
+        { message: "changed" },
+      ]) {
+        expect(() =>
+          getConversationDeliveryOperation(scope, "retry", { ...input, ...changed }),
+        ).toThrow("Conversation delivery operation was reused with different input: retry");
+      }
+      expect(getConversationDeliveryOperation(scope, "retry")).toEqual(begun.record);
+    });
+  });
+
   it("creates idempotent operations and rejects operation-id input reuse", async () => {
     await withConversationStore(({ scope, conversationRef }) => {
       const first = beginConversationDeliveryOperation(scope, {
@@ -212,16 +244,17 @@ describe("conversation delivery store", () => {
     });
   });
 
-  it("retains terminal delivery evidence after its local session binding is pruned", async () => {
+  it("preserves routed session bindings and terminal delivery evidence during maintenance", async () => {
     await withConversationStore(async ({ scope, conversationRef }) => {
+      const sessionKey = "agent:main:reef:direct:peer-agent";
       beginConversationDeliveryOperation(scope, {
-        operationId: "operation-pruned-session",
+        operationId: "operation-preserved-session",
         operationKind: "send",
         conversationRef,
-        sourceSessionKey: "agent:main:reef:direct:peer-agent",
+        sourceSessionKey: sessionKey,
         message: "hello",
       });
-      markConversationDeliverySent(scope, "operation-pruned-session", "platform-pruned");
+      markConversationDeliverySent(scope, "operation-preserved-session", "platform-preserved");
 
       await applySessionEntryLifecycleMutation({
         agentId: scope.agentId,
@@ -232,12 +265,13 @@ describe("conversation delivery store", () => {
       expect(resolveConversation(scope, conversationRef)).toMatchObject({
         conversationRef,
         channel: "reef",
+        sessionId: "reef-session",
       });
-      expect(resolveConversation(scope, conversationRef)?.sessionId).toBeUndefined();
-      expect(getConversationDeliveryOperation(scope, "operation-pruned-session")).toMatchObject({
+      expect(loadSessionEntry({ ...scope, sessionKey })?.archivedAt).toBeUndefined();
+      expect(getConversationDeliveryOperation(scope, "operation-preserved-session")).toMatchObject({
         channel: "reef",
         conversationRef,
-        platformMessageId: "platform-pruned",
+        platformMessageId: "platform-preserved",
         status: "sent",
       });
     });
@@ -287,7 +321,15 @@ describe("conversation delivery store", () => {
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       });
 
+      expect(resolveConversation(scope, conversationRef)).toMatchObject({
+        conversationRef,
+        channel: "reef",
+      });
+      expect(resolveConversation(scope, conversationRef)?.sessionId).toBeUndefined();
+      expect(loadSessionEntry({ ...scope, sessionKey })).toBeUndefined();
       expect(getConversationDeliveryOperation(scope, "operation-migrated-session")).toMatchObject({
+        conversationRef,
+        platformMessageId: "platform-migrated",
         sourceSessionKey: sessionKey,
         status: "sent",
       });

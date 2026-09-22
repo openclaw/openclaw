@@ -1,11 +1,86 @@
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
-import type { SessionLifecycleArchivedTranscript } from "./session-accessor.lifecycle-types.js";
-import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive.js";
-import type { SessionEntryLifecycleRemoval } from "./session-accessor.sqlite-contract.js";
-import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
-import type { SessionEntry } from "./types.js";
+import type {
+  SessionLifecycleArchivedTranscript,
+  SessionResetBoundaryWrite,
+} from "./session-accessor.lifecycle-types.js";
+import type {
+  MaterializedSessionStateDeletePlan,
+  SessionStateDeletePlan,
+} from "./session-accessor.sqlite-archive-types.js";
+import type {
+  DeleteSessionEntryLifecycleParams,
+  DeleteSessionEntryLifecycleResult,
+  SessionEntryLifecycleRemoval,
+} from "./session-accessor.sqlite-contract.js";
+import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Shared plan shapes only. Runtime ownership stays in maintenance and lifecycle-state.
+
+export type ReclamationDatabaseOptions = OpenClawAgentDatabaseOptions & {
+  env: NodeJS.ProcessEnv;
+  path: string;
+};
+
+export type ReclamationDeleteParams = Omit<DeleteSessionEntryLifecycleParams, "commitGuard">;
+
+/** Internal scope: a historical request cannot authorize whole-entry reclamation. */
+export type SqliteSessionDeletionScope =
+  | { kind: "entry"; phase: "plan" | "commit" }
+  | { kind: "historical-generation"; phase: "plan" | "commit"; sessionId: string };
+
+type SessionReclamationPlanBase = {
+  databaseOptions: ReclamationDatabaseOptions;
+  materializedPlans: MaterializedSessionStateDeletePlan[];
+};
+
+export type SqliteSessionReclamationPlan =
+  | (SessionReclamationPlanBase & {
+      deleteParams: ReclamationDeleteParams;
+      kind: "entry";
+      preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
+    })
+  | (SessionReclamationPlanBase & {
+      agentId: string;
+      entries: SessionEntryRemovalPlan[];
+      kind: "lifecycle-artifacts";
+    })
+  | (SessionReclamationPlanBase & {
+      diskBudget: { preserveRecentMs?: number | null };
+      kind: "history-eviction";
+      protectedSessionIds: string[];
+      sessionId: string;
+    })
+  | (SessionReclamationPlanBase & {
+      deleteParams: ReclamationDeleteParams;
+      kind: "historical-generation";
+      preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
+      protectedSessionIds: string[];
+      sessionId: string;
+    });
+
+export type SqliteSessionReclamationResult =
+  | { kind: "entry"; value: DeleteSessionEntryLifecycleResult }
+  | {
+      kind: "lifecycle-artifacts";
+      value: {
+        archivedTranscripts: SessionLifecycleArchivedTranscript[];
+        removedEntries: number;
+      };
+    }
+  | {
+      kind: "history-eviction";
+      value: { archivedTranscripts: SessionLifecycleArchivedTranscript[]; deleted: boolean };
+    }
+  | {
+      kind: "historical-generation";
+      value: {
+        archivedTranscripts: SessionLifecycleArchivedTranscript[];
+        deleted: boolean;
+        expectedEntryMismatch?: true;
+      };
+    };
 
 export type SessionEntryRemovalPlan = {
   expectedEntry: SessionEntry | undefined;
@@ -14,11 +89,13 @@ export type SessionEntryRemovalPlan = {
 };
 type SessionEntryMaintenanceCounts = {
   archived: number;
+  capArchived: number;
   modelRunPruned: number;
   pruned: number;
   capped: number;
 };
 export type SessionEntryMaintenancePlan = SessionEntryMaintenanceCounts & {
+  archivedWorktrees?: Array<{ entry: SessionEntry; sessionKey: string; storePath: string }>;
   entryRemovals: SessionEntryRemovalPlan[];
   stateDeletePlans: SessionStateDeletePlan[];
 };
@@ -32,6 +109,7 @@ export type LifecycleArtifactCleanupPlan = {
 export type ProjectedLifecycleMutation = {
   deletePlans: SessionStateDeletePlan[];
   removals: Array<{
+    archiveTranscript: boolean;
     expectedEntry: SessionEntry;
     removal: SessionEntryLifecycleRemoval;
     sessionKey: string;
@@ -40,7 +118,7 @@ export type ProjectedLifecycleMutation = {
     entry: SessionEntry;
     expectedEntry: SessionEntry | undefined;
     routeContext?: ConversationRouteContext | null;
-    resetBoundary?: SessionResetBoundaryRequest;
+    resetBoundary?: SessionResetBoundaryWrite;
     sessionKey: string;
   }>;
 };

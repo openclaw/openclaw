@@ -34,7 +34,7 @@ import {
   type ProviderCredentialPrecedence,
 } from "./model-auth-provider.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
-import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
+import { prepareSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
@@ -165,7 +165,11 @@ export async function hasAvailableAuthForProvider(params: {
   ) {
     return true;
   }
-  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  const syntheticLocalAuth = await prepareSyntheticLocalProviderAuth({
+    cfg,
+    provider,
+    workspaceDir: params.workspaceDir,
+  });
   if (
     syntheticLocalAuth &&
     (!authConfig.isConfigBackedInlineProviderApiKey({
@@ -184,6 +188,7 @@ export async function hasAvailableAuthForProvider(params: {
     provider,
     preferredProfile,
     forModel: params.modelId,
+    includePendingOAuthRefresh: true,
   });
   for (const candidate of order) {
     try {
@@ -260,6 +265,7 @@ export async function getApiKeyForModelCore(params: {
     skipSetupProviderFallback: params.skipSetupProviderFallback,
     modelId: params.model.id,
     modelApi: params.model.api,
+    modelBaseUrl: params.model.baseUrl,
     secretSentinels: params.secretSentinels,
   });
 }

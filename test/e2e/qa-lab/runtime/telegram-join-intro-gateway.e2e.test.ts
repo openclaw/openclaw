@@ -4,10 +4,13 @@ import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import {
   type MockOpenAiRequestSnapshot,
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
   writeJson,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 type JsonObject = Record<string, unknown>;
 type TelegramCall = { method: string; body: JsonObject };
@@ -227,12 +230,14 @@ test("introduces itself once when Telegram reports joining an allowed supergroup
     },
     async (apiRoot) =>
       await withTempDir("openclaw-telegram-join-intro-", async (workspace) => {
-        let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+        const gatewayOwner = createQaGatewayChild();
+        let gateway: QaGatewayChild | undefined;
         try {
+          const repoRoot = path.resolve(import.meta.dirname, "../../../..");
           mock = await startQaMockOpenAiServer();
-          gateway = await startQaGatewayChild({
-            repoRoot: path.resolve(import.meta.dirname, "../../../.."),
-            useRepoCli: true,
+          gateway = await gatewayOwner.start({
+            repoRoot,
+            command: createQaPreparedRepoCliCommand(repoRoot),
             providerBaseUrl: `${apiRoot}/v1`,
             transportBaseUrl: apiRoot,
             transport: {
@@ -334,7 +339,7 @@ test("introduces itself once when Telegram reports joining an allowed supergroup
           );
         } finally {
           await settleCleanup(
-            async () => await gateway?.stop(),
+            async () => await stopQaGatewayFixture(gatewayOwner),
             async () => await mock?.stop(),
           );
         }

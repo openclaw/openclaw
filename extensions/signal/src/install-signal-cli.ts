@@ -34,8 +34,7 @@ type SignalCliRelease = {
 };
 
 const MAX_SIGNAL_CLI_ARCHIVE_BYTES = 256 * 1024 * 1024;
-/** @internal Exported for testing. */
-export const MAX_SIGNAL_CLI_EXTRACTED_BYTES = 384 * 1024 * 1024;
+const MAX_SIGNAL_CLI_EXTRACTED_BYTES = 384 * 1024 * 1024;
 const SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 const SIGNAL_CLI_RELEASE_INFO_TIMEOUT_MS = 30_000;
 const CONTENT_LENGTH_RE = /^\d+$/;

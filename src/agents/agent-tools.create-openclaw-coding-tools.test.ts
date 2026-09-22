@@ -27,7 +27,7 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
+import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -55,7 +55,11 @@ import {
   createSandboxFsBridgeFromResolver,
 } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
-import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolPolicyName } from "./tool-policy.js";
+import {
+  attachToolAllowlistIntersection,
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  normalizeToolPolicyName,
+} from "./tool-policy.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -606,7 +610,7 @@ describe("createOpenClawCodingTools", () => {
     expect(
       buildEmptyExplicitToolAllowlistError({
         sources: [{ label: "runtime toolsAllow", entries: ["automations"] }],
-        callableToolNames: allowed.map((tool) => tool.name),
+        hasCallableTools: allowed.length > 0,
         toolsEnabled: true,
       }),
     ).toBeNull();
@@ -699,19 +703,30 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow?.includes("exec")).toBe(false);
   });
 
-  it("lets direct restricted callers inherit runtime toolsAllow into subagent spawns", () => {
+  it.each([
+    {
+      label: "explicit tools",
+      toolsAllow: ["sessions_spawn", "read"],
+      expected: ["sessions_spawn", "read"],
+    },
+    {
+      label: "overlapping globs",
+      toolsAllow: attachToolAllowlistIntersection([], [["sessions_*"], ["*_spawn"]]),
+      expected: ["sessions_spawn"],
+    },
+  ])("lets direct callers inherit $label into subagent spawns", ({ toolsAllow, expected }) => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
 
     createOpenClawCodingTools({
       config: testConfig,
-      runtimeToolAllowlist: ["sessions_spawn", "read"],
+      runtimeToolAllowlist: toolsAllow,
       inheritRuntimeToolAllowlist: true,
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
-    expectListIncludes(inheritedAllow, ["sessions_spawn", "read"]);
+    expectListIncludes(inheritedAllow, expected);
     expect(inheritedAllow?.includes("exec")).toBe(false);
   });
 
@@ -1084,6 +1099,41 @@ describe("createOpenClawCodingTools", () => {
     });
 
     expect(latestCreateOpenClawToolsOptions().fsPolicy).toEqual({ workspaceOnly: true });
+  });
+
+  it.each([
+    {
+      name: "allowed read policy",
+      config: { tools: { allow: ["message", "read"] } },
+      sandboxTools: { allow: ["message", "read"], deny: [] },
+      expected: true,
+    },
+    {
+      name: "global read denial",
+      config: { tools: { allow: ["message"], deny: ["read"] } },
+      sandboxTools: { allow: ["message", "read"], deny: [] },
+      expected: false,
+    },
+    {
+      name: "sandbox read denial",
+      config: { tools: { allow: ["message", "read"] } },
+      sandboxTools: { allow: ["message"], deny: ["read"] },
+      expected: false,
+    },
+  ])("prepares sandbox workspace media authorization for $name", (testCase) => {
+    vi.mocked(createOpenClawTools).mockClear();
+    createOpenClawCodingTools({
+      config: testCase.config,
+      sandbox: createAgentToolsSandboxContext({
+        workspaceDir: "/tmp/sandbox",
+        fsBridge: createHostSandboxFsBridge("/tmp/sandbox"),
+        tools: testCase.sandboxTools,
+      }),
+    });
+
+    expect(latestCreateOpenClawToolsOptions().sandboxWorkspaceMediaReadAllowed).toBe(
+      testCase.expected,
+    );
   });
 
   it("allows workspace-only reads from declared sandbox bind mounts", async () => {
@@ -1478,7 +1528,7 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("forwards the native channel id through standard tool construction", () => {
+  it("forwards prepared runtime context through standard tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
 
@@ -1487,6 +1537,9 @@ describe("createOpenClawCodingTools", () => {
       chatType: "group",
       nativeChannelId: "oc_native_chat",
       messageActionTurnCapability: "turn-capability-1",
+      modelProvider: "custom",
+      modelId: "alias",
+      requesterModel: { provider: "custom", model: "custom/resolved" },
     });
 
     expect(latestCreateOpenClawToolsOptions().nativeChannelId).toBe("oc_native_chat");
@@ -1494,6 +1547,10 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().messageActionTurnCapability).toBe(
       "turn-capability-1",
     );
+    expect(latestCreateOpenClawToolsOptions().requesterModel).toEqual({
+      provider: "custom",
+      model: "custom/resolved",
+    });
   });
 
   it("separates scheduled Gateway authority from the live delivery account", () => {
@@ -1501,7 +1558,16 @@ describe("createOpenClawCodingTools", () => {
     createOpenClawToolsMock.mockClear();
 
     createOpenClawCodingTools({
-      config: testConfig,
+      config: {
+        ...testConfig,
+        channels: {
+          discord: {
+            accounts: {
+              creator: {},
+            },
+          },
+        },
+      },
       agentAccountId: "delivery",
       scheduledToolPolicy: {
         version: 1,
@@ -1525,9 +1591,19 @@ describe("createOpenClawCodingTools", () => {
     createOpenClawToolsMock.mockClear();
 
     createOpenClawCodingTools({
-      config: testConfig,
+      config: {
+        ...testConfig,
+        channels: {
+          discord: {
+            accounts: {
+              creator: {},
+            },
+          },
+        },
+      },
       agentAccountId: "delivery",
       messageChannel: "discord",
+      messageProvider: "discord",
       scheduledToolPolicy: {
         version: 1,
         mode: "account",
@@ -1636,8 +1712,7 @@ describe("createOpenClawCodingTools", () => {
       "workboard_heartbeat",
     );
     expect(
-      isPluginToolAllowed(
-        new Set(latestCreateOpenClawToolsOptions().pluginToolAllowlist),
+      createPluginToolAllowlist(latestCreateOpenClawToolsOptions().pluginToolAllowlist).allowsTool(
         "workboard",
         "workboard_heartbeat",
       ),
@@ -2018,16 +2093,16 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().agentChannel).toBe("discord");
   });
 
-  it("filters session tools for sub-agent sessions by default", () => {
+  it("gives sub-agent sessions orchestration tools by default", () => {
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",
     });
     const names = new Set(tools.map((tool) => tool.name));
-    expect(names.has("sessions_list")).toBe(false);
-    expect(names.has("sessions_history")).toBe(false);
+    expect(names.has("sessions_list")).toBe(true);
+    expect(names.has("sessions_history")).toBe(true);
     expect(names.has("sessions_send")).toBe(false);
-    expect(names.has("sessions_spawn")).toBe(false);
-    expect(names.has("subagents")).toBe(false);
+    expect(names.has("sessions_spawn")).toBe(true);
+    expect(names.has("subagents")).toBe(true);
 
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(true);
@@ -2637,35 +2712,68 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("records sandbox-backed memory writes before mutation", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-sandbox-taint-"));
-    try {
-      const sandbox = createAgentToolsSandboxContext({
-        workspaceDir,
-        fsBridge: createHostSandboxFsBridge(workspaceDir),
-        workspaceAccess: "rw",
-      });
-      const tools = createOpenClawCodingTools({
-        workspaceDir,
-        sandbox,
-        senderIsOwner: true,
-        isTurnTainted: () => true,
-      });
-      await requireToolExecute(requireTool(tools, "write"))("sandbox-memory", {
-        path: "memory/2026-07-29.md",
-        content: "sandbox network note\n",
-      });
-
-      await expect(
-        readMemoryArtifactProvenance({
+  it.each(["relative", "container"])(
+    "records sandbox-backed %s memory writes before mutation",
+    async (pathKind) => {
+      const workspaceDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-memory-sandbox-taint-"),
+      );
+      const sandboxRoot = path.join(workspaceDir, "private");
+      await fs.mkdir(sandboxRoot);
+      try {
+        const sandbox = createAgentToolsSandboxContext({
+          workspaceDir: sandboxRoot,
+          agentWorkspaceDir: workspaceDir,
+          fsBridge: createContainerWorkspaceSandboxFsBridge(sandboxRoot),
+          workspaceAccess: "none",
+        });
+        const tools = createOpenClawCodingTools({
           workspaceDir,
-          relativePath: "memory/2026-07-29.md",
-        }),
-      ).resolves.toMatchObject({ originClass: "untrusted" });
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
+          sandbox,
+          senderIsOwner: true,
+          isTurnTainted: () => true,
+        });
+        const filePath = (relative: string) =>
+          pathKind === "container" ? `/workspace/${relative}` : relative;
+        await requireToolExecute(requireTool(tools, "write"))("sandbox-project", {
+          path: filePath("project.txt"),
+          content: "before\n",
+        });
+        await requireToolExecute(requireTool(tools, "edit"))("sandbox-edit", {
+          path: filePath("project.txt"),
+          edits: [{ oldText: "before", newText: "after" }],
+        });
+        await expect(fs.readFile(path.join(sandboxRoot, "project.txt"), "utf8")).resolves.toBe(
+          "after\n",
+        );
+        await requireToolExecute(requireTool(tools, "write"))("sandbox-memory", {
+          path: filePath("memory/2026-07-29.md"),
+          content: "sandbox network note\n",
+        });
+        await requireToolExecute(requireTool(tools, "apply_patch"))("sandbox-patch", {
+          input: `*** Begin Patch\n*** Add File: ${filePath("memory/nested/project.md")}\n+project note\n*** End Patch`,
+        });
+        await expect(
+          readMemoryArtifactProvenance({
+            workspaceDir: sandboxRoot,
+            relativePath: "memory/nested/project.md",
+          }),
+        ).resolves.toMatchObject({ originClass: "untrusted" });
+
+        await expect(
+          readMemoryArtifactProvenance({
+            workspaceDir: sandboxRoot,
+            relativePath: "memory/2026-07-29.md",
+          }),
+        ).resolves.toMatchObject({ originClass: "untrusted" });
+        await expect(
+          readMemoryArtifactProvenance({ workspaceDir, relativePath: "memory/2026-07-29.md" }),
+        ).resolves.toBeUndefined();
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("rejects legacy alias parameters", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-alias-"));
@@ -3303,6 +3411,8 @@ describe("createOpenClawCodingTools read behavior", () => {
 
     expect(extractToolText(yamlResult)).toBe(`api_key: ${credential}`);
     expect(extractToolText(envResult)).not.toContain(credential);
+    expect(JSON.stringify(envResult.details)).not.toContain(credential);
+    expect(envResult.details).toEqual({ kind: "text", content: extractToolText(envResult) });
     expect(extractToolText(sourceResult)).toBe(source);
     expect(extractToolText(envrcResult)).toBe(source);
   });

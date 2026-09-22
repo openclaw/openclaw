@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   listAgentIds,
   resolveAgentDir,
-  resolveSessionAgentIds,
+  resolveSessionAgentIdsStrict,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   canonicalPathFromExistingAncestor,
@@ -19,6 +19,7 @@ import {
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -97,9 +98,6 @@ type MigratedBindingRow =
     };
 
 async function collectSessionSurfaces(params: MigrationEnvironment): Promise<SessionSurface[]> {
-  // Doctor enumeration cold-loads this closure; session-store-runtime pulls the
-  // session-accessor/kysely graph, so it stays behind lazy imports in async bodies.
-  const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
   const surfaces = new Map<string, SessionSurface>();
   const stateRoot = await canonicalPathFromExistingAncestor(params.stateDir);
   const add = async (
@@ -131,7 +129,7 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
     if (!entry.isDirectory() || entry.isSymbolicLink()) {
       continue;
     }
-    const agentId = resolveSessionAgentIds({
+    const agentId = resolveSessionAgentIdsStrict({
       agentId: entry.name,
       config: params.config,
     }).sessionAgentId;
@@ -318,7 +316,6 @@ async function collectBindingOwners(
   surfaces: SessionSurface[],
   params: MigrationEnvironment,
 ): Promise<BindingOwnerCollection> {
-  const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
   const sourcePaths = new Set(
     await Promise.all(
       sources.map((source) => canonicalPathFromExistingAncestor(source.transcriptPath)),
@@ -430,7 +427,7 @@ function tryResolveLegacyBindingOwnerAgentId(params: {
   storeAgentIds?: Set<string>;
 }): string | undefined {
   if (params.sessionKey.trim().toLowerCase().startsWith("agent:")) {
-    return resolveSessionAgentIds({
+    return resolveSessionAgentIdsStrict({
       sessionKey: params.sessionKey,
       config: params.config,
     }).sessionAgentId;
@@ -445,7 +442,7 @@ function tryResolveLegacyBindingOwnerAgentId(params: {
       : [undefined];
   for (const fallbackAgentId of fallbackAgentIds) {
     try {
-      return resolveSessionAgentIds({
+      return resolveSessionAgentIdsStrict({
         sessionKey: params.sessionKey,
         config: params.config,
         ...(storeAgentId ? { agentId: storeAgentId } : fallbackAgentId ? { fallbackAgentId } : {}),
@@ -530,6 +527,12 @@ async function migrateSource(
         // blocking every later Gateway startup.
         return retainNotice(`its session is owned by agent harness ${owner.agentHarnessId}`);
       }
+      const readEvidence = params.context.readSessionIdentityEvidenceBatch;
+      const canonicalOwner =
+        owner && readEvidence
+          ? (await readEvidence([{ agentId: owner.agentId, sessionId: owner.sessionId }]))[0]
+          : undefined;
+      const canCreateOwner = !readEvidence || canonicalOwner?.state === "unknown";
       const sourceSessionFile =
         typeof raw.sessionFile === "string" && raw.sessionFile.trim()
           ? raw.sessionFile
@@ -645,7 +648,16 @@ async function migrateSource(
         }
       }
       if (owner) {
-        const ownershipWarning = await recordSessionOwner(owner, params.env);
+        const ownershipResult = await recordSessionOwner(owner, params.env, {
+          canCreateOwner,
+          readEvidence,
+        });
+        const ownershipWarning =
+          typeof ownershipResult === "string"
+            ? ownershipResult
+            : ownershipResult
+              ? "its canonical session was deleted"
+              : undefined;
         if (ownershipWarning) {
           if (sessionEntry?.value.state === "active") {
             const update = store.update;
@@ -675,11 +687,14 @@ async function migrateSource(
           // Imported active session state is retired before reaching here.
           // The remaining sidecar may belong to the new owner, so preserve it
           // as a note; failed retirement and revalidation stay warnings above.
-          return retainNotice(ownershipWarning);
-        }
-        for (const entry of entries) {
-          if (!hasExpected(await store.lookup(entry.key), entry.value)) {
-            return retain(`canonical plugin state changed at ${entry.key}`);
+          if (typeof ownershipResult === "string") {
+            return retainNotice(ownershipWarning);
+          }
+        } else {
+          for (const entry of entries) {
+            if (!hasExpected(await store.lookup(entry.key), entry.value)) {
+              return retain(`canonical plugin state changed at ${entry.key}`);
+            }
           }
         }
       }
@@ -712,7 +727,11 @@ async function migrateSource(
 async function recordSessionOwner(
   owner: LegacyBindingOwner,
   env: NodeJS.ProcessEnv,
-): Promise<string | undefined> {
+  options: {
+    canCreateOwner: boolean;
+    readEvidence: MigrationParams["context"]["readSessionIdentityEvidenceBatch"];
+  },
+): Promise<string | { deleted: true } | undefined> {
   const { patchSessionEntry } = await import("openclaw/plugin-sdk/session-store-runtime");
   const currentIndex = await readLegacySessionIndex(owner.storePath);
   if ("failure" in currentIndex) {
@@ -750,20 +769,26 @@ async function recordSessionOwner(
   }
 
   let observedForeignHarness: string | undefined;
+  let observedCanonicalEntry = false;
   const updated = await patchSessionEntry({
     agentId: owner.agentId,
     env,
-    fallbackEntry: {
-      sessionId: owner.sessionId,
-      updatedAt: currentOwner.entry.updatedAt ?? owner.updatedAt ?? 0,
-      ...(owner.lifecycleRevision ? { lifecycleRevision: owner.lifecycleRevision } : {}),
-    },
+    ...(options.canCreateOwner
+      ? {
+          fallbackEntry: {
+            sessionId: owner.sessionId,
+            updatedAt: currentOwner.entry.updatedAt ?? owner.updatedAt ?? 0,
+            ...(owner.lifecycleRevision ? { lifecycleRevision: owner.lifecycleRevision } : {}),
+          },
+        }
+      : {}),
     preserveActivity: true,
     requireWriteSuccess: true,
     skipMaintenance: true,
     storePath: owner.storePath,
     sessionKey: owner.sessionKey,
-    update: (entry) => {
+    update: (entry, { existingEntry }) => {
+      observedCanonicalEntry = existingEntry !== undefined;
       if (
         entry.sessionId.trim() !== owner.sessionId ||
         entry.lifecycleRevision !== owner.lifecycleRevision
@@ -783,6 +808,14 @@ async function recordSessionOwner(
     },
   });
   if (!updated) {
+    if (!options.canCreateOwner && !observedCanonicalEntry && options.readEvidence) {
+      const current = (
+        await options.readEvidence([{ agentId: owner.agentId, sessionId: owner.sessionId }])
+      )[0];
+      if (current?.state === "absent") {
+        return { deleted: true };
+      }
+    }
     return observedForeignHarness
       ? `its session is owned by agent harness ${observedForeignHarness}`
       : "its session owner changed before Codex ownership could be recorded";
@@ -824,76 +857,70 @@ function isSafeLegacySessionId(value: unknown): value is string {
   );
 }
 
-export const stateMigrations: PluginDoctorStateMigration[] = [
-  {
-    id: "codex-app-server-sidecars-to-plugin-state",
-    label: "Codex app-server thread bindings",
-    async detectLegacyState(params) {
-      const { sources } = await collectLegacyBindingSources(params, { firstOnly: true });
-      return sources.length > 0
-        ? {
-            preview: [
-              `- Codex app-server bindings: legacy sidecar -> plugin state (${CODEX_APP_SERVER_BINDING_NAMESPACE})`,
-            ],
-          }
-        : null;
-    },
-    async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const notices: string[] = [];
-      const { sources, surfaces } = await collectLegacyBindingSources(params);
-      if (sources.length === 0) {
-        return { changes, warnings };
+export async function detectLegacySessionBindingSidecars(params: MigrationParams) {
+  const { sources } = await collectLegacyBindingSources(params, { firstOnly: true });
+  return sources.length > 0
+    ? {
+        preview: [
+          `- Codex app-server bindings: legacy sidecar -> plugin state (${CODEX_APP_SERVER_BINDING_NAMESPACE})`,
+        ],
       }
-      const ownerCollection = await collectBindingOwners(sources, surfaces, params);
-      if (ownerCollection.failures.length > 0) {
-        warnings.push(
-          `Left ${sources.length} Codex binding sidecar(s) in place because session ownership is indeterminate: ${ownerCollection.failures.join("; ")}`,
-        );
-        return { changes, warnings };
-      }
-      const store = params.context.openPluginStateKeyedStore<MigratedBindingRow>({
-        namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
-        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      });
-      let migrated = 0;
-      let partialImports = 0;
-      for (const source of sources) {
-        const candidates =
-          ownerCollection.owners.get(
-            await canonicalPathFromExistingAncestor(source.transcriptPath),
-          ) ?? [];
-        const result = await migrateSource(source, candidates, params, store);
-        if (result.warning) {
-          warnings.push(result.warning);
-        }
-        if (result.notice) {
-          notices.push(result.notice);
-        }
-        if (result.archived) {
-          migrated++;
-        } else {
-          partialImports += result.importedKeys;
-        }
-      }
-      if (migrated > 0) {
-        changes.push(
-          `Migrated ${migrated} Codex app-server binding sidecar(s) to plugin state and archived the legacy sources`,
-        );
-      }
-      if (partialImports > 0) {
-        changes.push(
-          `Migrated ${partialImports} safe Codex app-server binding row(s) to plugin state; retained legacy sidecars needing review`,
-        );
-      }
-      return {
-        changes,
-        warnings,
-        ...(notices.length > 0 ? { notices } : {}),
-      };
-    },
-  },
-];
+    : null;
+}
+
+export async function migrateLegacySessionBindingSidecars(params: MigrationParams) {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const notices: string[] = [];
+  const { sources, surfaces } = await collectLegacyBindingSources(params);
+  if (sources.length === 0) {
+    return { changes, warnings };
+  }
+  const ownerCollection = await collectBindingOwners(sources, surfaces, params);
+  if (ownerCollection.failures.length > 0) {
+    warnings.push(
+      `Left ${sources.length} Codex binding sidecar(s) in place because session ownership is indeterminate: ${ownerCollection.failures.join("; ")}`,
+    );
+    return { changes, warnings };
+  }
+  const store = params.context.openPluginStateKeyedStore<MigratedBindingRow>({
+    namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+    maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
+  });
+  let migrated = 0;
+  let partialImports = 0;
+  for (const source of sources) {
+    const candidates =
+      ownerCollection.owners.get(await canonicalPathFromExistingAncestor(source.transcriptPath)) ??
+      [];
+    const result = await migrateSource(source, candidates, params, store);
+    if (result.warning) {
+      warnings.push(result.warning);
+    }
+    if (result.notice) {
+      notices.push(result.notice);
+    }
+    if (result.archived) {
+      migrated++;
+    } else {
+      partialImports += result.importedKeys;
+    }
+  }
+  if (migrated > 0) {
+    changes.push(
+      `Migrated ${migrated} Codex app-server binding sidecar(s) to plugin state and archived the legacy sources`,
+    );
+  }
+  if (partialImports > 0) {
+    changes.push(
+      `Migrated ${partialImports} safe Codex app-server binding row(s) to plugin state; retained legacy sidecars needing review`,
+    );
+  }
+  return {
+    changes,
+    warnings,
+    ...(notices.length > 0 ? { notices } : {}),
+  };
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

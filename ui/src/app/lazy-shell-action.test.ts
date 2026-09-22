@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../components/command-palette-contract.ts";
 import {
+  DEBUG_OVERLAY_REQUEST_EVENT,
   KEYBOARD_SHORTCUTS_REQUEST_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
@@ -19,8 +21,13 @@ import {
   DEBUG_OVERLAY_ELEMENT,
   KEYBOARD_SHORTCUTS_ELEMENT,
   type LazyCustomElementRequestController,
+  type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
-import { readLazyShellAction, SHELL_APPROVALS_OPEN_EVENT } from "./lazy-shell-action.ts";
+import {
+  persistLazyShellAction,
+  readLazyShellAction,
+  SHELL_APPROVALS_OPEN_EVENT,
+} from "./lazy-shell-action.ts";
 
 const recovery = vi.hoisted(() => ({ reload: vi.fn(), pending: new Array<Promise<boolean>>() }));
 vi.mock("./stale-chunk-reload.ts", async (importOriginal) => {
@@ -56,7 +63,8 @@ async function withConnectedShell(shell: ShellLifecycle, run: () => void | Promi
   }
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await vi.dynamicImportSettled();
   resetAppHostTestGlobals();
   vi.restoreAllMocks();
   recovery.reload.mockClear();
@@ -244,10 +252,13 @@ describe("shell lazy events", () => {
 
     try {
       await withConnectedShell(shell, async () => {
+        input.focus();
+        expect(document.activeElement).toBe(input);
         input.dispatchEvent(shortcut);
 
         expect(shortcut.defaultPrevented).toBe(true);
         expect(requested).toHaveBeenCalledOnce();
+        await vi.dynamicImportSettled();
         await vi.waitFor(() => expect(toggled).toHaveBeenCalledOnce());
 
         input.dispatchEvent(
@@ -272,10 +283,12 @@ describe("shell lazy events", () => {
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState &
       ShellLifecycle &
       HTMLElement;
-    const overlay = document.createElement(DEBUG_OVERLAY_ELEMENT.tagName) as HTMLElement & {
+    const overlay = document.createElement("openclaw-debug-overlay") as HTMLElement & {
       toggle: () => void;
+      open: () => void;
     };
     overlay.toggle = toggled;
+    overlay.open = toggled;
     shell.append(overlay);
     Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
     const shortcut = new KeyboardEvent("keydown", {
@@ -289,6 +302,7 @@ describe("shell lazy events", () => {
     await withConnectedShell(shell, async () => {
       shell.handleDocumentKeydown(shortcut);
       expect(shortcut.defaultPrevented).toBe(true);
+      await vi.dynamicImportSettled();
       await vi.waitFor(() => expect(toggled).toHaveBeenCalledOnce());
 
       const input = document.body.appendChild(document.createElement("input"));
@@ -306,6 +320,84 @@ describe("shell lazy events", () => {
       expect(toggled).toHaveBeenCalledOnce();
     });
   });
+
+  it.each(["minimized", "close", "context", "replacement", "unmounted"] as const)(
+    "keeps the pending debug frame intent owned through %s",
+    async (outcome) => {
+      vi.stubGlobal("sessionStorage", createStorageMock());
+      const element: OptionalCustomElement = DEBUG_OVERLAY_ELEMENT;
+      const originalTag = element.tagName;
+      const tagName = createLazyElementSpec("debug frame").tagName;
+      element.tagName = tagName;
+      const opened = vi.fn((_mode: string) => {
+        // The loaded overlay records a separate inner-content reload action.
+        persistLazyShellAction({ eventType: DEBUG_OVERLAY_REQUEST_EVENT });
+      });
+      const ready = createDeferred();
+      const shell = document.createElement("openclaw-app-shell") as PaletteShell & {
+        readonly pendingDebugOverlayMode: "expanded" | "minimized";
+        togglePendingDebugOverlayMode(): void;
+      };
+      Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
+      Object.defineProperty(shell, "queryRenderedElement", {
+        value: (tag: string) => shell.querySelector(tag),
+      });
+      vi.spyOn(element, "loadModule").mockImplementation(async () => {
+        await ready.promise;
+        customElements.define(
+          tagName,
+          class extends HTMLElement {
+            open = opened;
+            toggle = () => opened("expanded");
+          },
+        );
+        if (outcome !== "unmounted") {
+          shell.append(document.createElement(tagName));
+        }
+      });
+      try {
+        await withConnectedShell(shell, async () => {
+          window.dispatchEvent(new CustomEvent(DEBUG_OVERLAY_REQUEST_EVENT));
+          expect(shell.lazyCustomElements.visibleState?.status).toBe("loading");
+          shell.togglePendingDebugOverlayMode();
+          expect(shell.pendingDebugOverlayMode).toBe("minimized");
+          expect(readLazyShellAction()).toEqual({
+            eventType: DEBUG_OVERLAY_REQUEST_EVENT,
+            detail: { mode: "minimized" },
+          });
+          if (outcome === "close") {
+            shell.lazyCustomElements.close();
+          } else if (outcome === "context") {
+            shell.resetForContextEpoch();
+          } else if (outcome === "replacement") {
+            shell.commandPaletteElement = createLazyElementSpec("replacement palette");
+            shell.openPalette();
+          }
+          ready.resolve();
+          await vi.dynamicImportSettled();
+          await vi.waitFor(() => expect(shell.lazyCustomElements.visibleState).toBeUndefined());
+          if (outcome === "unmounted") {
+            expect(opened).not.toHaveBeenCalled();
+            shell.append(document.createElement(tagName));
+            shell.restorePendingLazyAction();
+          }
+          if (outcome === "minimized" || outcome === "unmounted") {
+            expect(opened).toHaveBeenCalledExactlyOnceWith("minimized");
+            expect(readLazyShellAction()).toEqual({ eventType: DEBUG_OVERLAY_REQUEST_EVENT });
+            shell.restorePendingLazyAction();
+            expect(opened).toHaveBeenCalledOnce();
+          } else {
+            expect(opened).not.toHaveBeenCalled();
+            expect(readLazyShellAction()?.eventType).not.toBe(DEBUG_OVERLAY_REQUEST_EVENT);
+          }
+        });
+      } finally {
+        ready.resolve();
+        await vi.dynamicImportSettled();
+        element.tagName = originalTag;
+      }
+    },
+  );
 
   it("opens approvals after the modal module loads", async () => {
     const element = createLazyElementSpec("exec approval modal");

@@ -2,6 +2,7 @@ import { once } from "node:events";
 import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket, { type RawData, WebSocketServer } from "ws";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -59,15 +60,18 @@ async function withRealtimeProvider(
           onAudio: vi.fn(),
           onClearAudio: vi.fn(),
         })
-      : new OpenAIQuicksilverVoiceBridge({
-          providerConfig: {},
-          model: "gpt-live-1-codex",
-          audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
-          resolveAuth: async () => ({ type: "api-key", token: "fixture-local" }),
-          webSocketFactory: (_url, options) => new WebSocket(endpoint, options),
-          onAudio: vi.fn(),
-          onClearAudio: vi.fn(),
-        });
+      : new OpenAIQuicksilverVoiceBridge(
+          {
+            providerConfig: {},
+            model: "gpt-live-test-canary",
+            audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+            resolveAuth: async () => ({ type: "api-key", token: "fixture-local" }),
+            webSocketFactory: (_url, options) => new WebSocket(endpoint, options),
+            onAudio: vi.fn(),
+            onClearAudio: vi.fn(),
+          },
+          openAIRealtimeHost,
+        );
 
   try {
     prepareAudio(bridge);
@@ -77,7 +81,7 @@ async function withRealtimeProvider(
     });
     return received;
   } finally {
-    bridge.close();
+    await bridge.close();
     for (const client of server.clients) {
       client.terminate();
     }

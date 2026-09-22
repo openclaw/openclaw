@@ -1,4 +1,5 @@
 import {
+  placementTurnOwner,
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
   type WorkerSessionPlacementRecord,
@@ -17,6 +18,8 @@ type WorkerPlacementBinding = Readonly<{
 }>;
 
 export type WorkerSessionPlacementGate = {
+  /** Refresh runtime bytes without changing the retained workspace's owner epoch. */
+  assertWorkerRuntimeRefresh(binding: WorkerPlacementBinding): number;
   /** Credential verification only; this does not grant operational worker authority. */
   readWorkerTurnClaim(binding: WorkerPlacementBinding): WorkerSessionTurnClaim | undefined;
   getExecutionIdentityCapability?(
@@ -30,6 +33,7 @@ export type WorkerSessionPlacementGate = {
     transcriptSeq?: number;
     liveSeq?: number;
   }): void;
+  prepareWorkspaceResultOwnerRevocation(binding: WorkerPlacementBinding, error: Error): void;
   registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void;
 };
 
@@ -43,6 +47,27 @@ function claimForBinding(
     claim.owner.ownerEpoch === binding.ownerEpoch
     ? claim
     : undefined;
+}
+
+function claimForOwnerRevocation(
+  record: WorkerSessionPlacementRecord | undefined,
+  binding: WorkerPlacementBinding,
+): WorkerSessionTurnClaim | undefined {
+  if (
+    (record?.state !== "active" && record?.state !== "draining") ||
+    record.environmentId !== binding.environmentId ||
+    record.activeOwnerEpoch !== binding.ownerEpoch ||
+    !record.turnClaim
+  ) {
+    return undefined;
+  }
+  return {
+    sessionId: record.sessionId,
+    claimId: record.turnClaim.claimId,
+    runId: record.turnClaim.runId,
+    placementGeneration: record.turnClaim.generation,
+    owner: placementTurnOwner(record),
+  };
 }
 
 export function createWorkerSessionPlacementGate(
@@ -69,6 +94,25 @@ export function createWorkerSessionPlacementGate(
   const validateWorkerTurn = (claim: WorkerSessionTurnClaim) => isOperational(claim);
 
   return {
+    assertWorkerRuntimeRefresh(binding): number {
+      const placement = store.get(binding.sessionId);
+      if (
+        placement?.state !== "active" ||
+        placement.environmentId !== binding.environmentId ||
+        placement.activeOwnerEpoch !== binding.ownerEpoch ||
+        store.getPlacementMove(binding.sessionId)
+      ) {
+        throw new Error("Worker runtime refresh lost its active placement owner");
+      }
+      const claim = projectWorkerSessionTurnClaim(placement);
+      if (
+        placement.turnClaim &&
+        (!claim || !recoveryOnlyClaims.has(serializeWorkerSessionTurnClaim(claim)))
+      ) {
+        throw new Error("Worker runtime refresh is waiting for the current turn to finish");
+      }
+      return placement.generation;
+    },
     readWorkerTurnClaim,
     getExecutionIdentityCapability: (claim) =>
       getWorkerTurnExecutionIdentityCapability(store, claim),
@@ -98,6 +142,36 @@ export function createWorkerSessionPlacementGate(
         ...(input.transcriptSeq === undefined ? {} : { transcript: input.transcriptSeq }),
         ...(input.liveSeq === undefined ? {} : { liveEvent: input.liveSeq }),
       });
+    },
+
+    prepareWorkspaceResultOwnerRevocation(binding, error): void {
+      const claim = claimForOwnerRevocation(store.get(binding.sessionId), binding);
+      if (!claim) {
+        return;
+      }
+      const pending = store
+        .listPendingWorkspaceResults(claim.sessionId)
+        .find(
+          (candidate) =>
+            candidate.sessionId === claim.sessionId &&
+            candidate.claimId === claim.claimId &&
+            candidate.runId === claim.runId,
+        );
+      if (!pending) {
+        return;
+      }
+      if (pending.gatewayInstanceId !== store.workspaceResultInstanceId()) {
+        return;
+      }
+      if (
+        claim.owner.kind === "local" &&
+        pending.stagedResultRef === null &&
+        pending.workspaceAcceptedAtMs === null
+      ) {
+        store.failWorkspaceResultAndReleaseTurn(pending, error);
+        return;
+      }
+      store.handoffWorkspaceResultRecovery(claim);
     },
 
     registerTurnClaimClosedHandler: (handler) => store.registerTurnClaimClosedHandler(handler),

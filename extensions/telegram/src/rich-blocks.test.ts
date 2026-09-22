@@ -1,4 +1,4 @@
-// Telegram rich-blocks unit tests for Bot API 10.2 InputRichBlock emission.
+// Telegram rich-blocks unit tests for Bot API 10.3 InputRichBlock emission.
 import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
 import { markdownToTelegramHtml } from "./format.js";
@@ -12,7 +12,8 @@ import {
 } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
-import { buildTelegramRichMarkdown, splitTelegramRichMessageTextChunks } from "./rich-message.js";
+import { buildTelegramRichMarkdown } from "./rich-message.js";
+import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
 
 function tableMarkdown(columns: number): string {
   return [
@@ -22,21 +23,23 @@ function tableMarkdown(columns: number): string {
   ].join("\n");
 }
 
-function collectUrls(text: RichText, out: string[] = []): string[] {
+function collectLinkTargets(text: RichText, out: string[] = []): string[] {
   if (typeof text === "string") {
     return out;
   }
   if (Array.isArray(text)) {
     for (const part of text) {
-      collectUrls(part, out);
+      collectLinkTargets(part, out);
     }
     return out;
   }
   if (text.type === "url") {
     out.push(text.url);
+  } else if (text.type === "anchor_link") {
+    out.push(`#${text.anchor_name}`);
   }
   if ("text" in text) {
-    collectUrls(text.text, out);
+    collectLinkTargets(text.text, out);
   }
   return out;
 }
@@ -229,7 +232,7 @@ describe("markdownToTelegramRichBlocks", () => {
       return;
     }
     expect(hasStyle(paragraph.text, "bold")).toBe(true);
-    expect(collectUrls(paragraph.text)).toEqual(["https://example.com"]);
+    expect(collectLinkTargets(paragraph.text)).toEqual(["https://example.com"]);
   });
 
   it("degrades native lists beyond 16 nesting levels", () => {
@@ -264,15 +267,277 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(hasStyle(text, "strikethrough")).toBe(true);
     expect(hasStyle(text, "spoiler")).toBe(true);
     expect(hasStyle(text, "code")).toBe(true);
-    expect(collectUrls(text)).toEqual(["https://example.com"]);
+    expect(collectLinkTargets(text)).toEqual(["https://example.com"]);
   });
 
   it("handles overlapping bold and autolink", () => {
     const { blocks } = markdownToTelegramRichBlocks("**start https://example.com** end");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
     expect(hasStyle(text, "bold")).toBe(true);
-    expect(collectUrls(text)).toEqual([]);
+    expect(collectLinkTargets(text)).toEqual([]);
   });
+
+  it.each([
+    "&lt;b&gt;**literal**&lt;/b&gt;",
+    "&#60;b&#62;**literal**&#x3c;/b&#x3e;",
+    "\\<b\\>**literal**\\</b\\>",
+    "<&#98;>**literal**</&#98;>",
+    "<b&gt;**literal**</b&gt;",
+  ])("keeps decoded literal tag syntax visible: %s", (markdown) => {
+    const result = markdownToTelegramRichBlocks(markdown);
+    expect(result.blocks).toEqual([
+      { type: "paragraph", text: ["<b>", { type: "bold", text: "literal" }, "</b>"] },
+    ]);
+    expect(result.plainText).toBe("<b>literal</b>");
+  });
+
+  it("does not synthesize HTML tags across Markdown formatting boundaries", () => {
+    const result = markdownToTelegramRichBlocks("<**b**>literal</**b**>");
+    expect(result.plainText).toBe("<b>literal</b>");
+    expect(result.blocks).toEqual([
+      {
+        type: "paragraph",
+        text: ["<", { type: "bold", text: "b" }, ">literal</", { type: "bold", text: "b" }, ">"],
+      },
+    ]);
+  });
+
+  it("keeps image alternatives literal and Markdown links in tag-shaped text", () => {
+    const result = markdownToTelegramRichBlocks(
+      "&lt;b&gt;**literal**&lt;/b&gt; ![<i>alt</i>](https://example.com/image.png) <b[r](https://example.com/qa)>tail",
+    );
+    expect(result.blocks).toEqual([
+      {
+        type: "paragraph",
+        text: [
+          "<b>",
+          { type: "bold", text: "literal" },
+          "</b> <i>alt</i> <b",
+          { type: "url", url: "https://example.com/qa", text: "r" },
+          ">tail",
+        ],
+      },
+    ]);
+    expect(result.plainText).toBe("<b>literal</b> <i>alt</i> <br>tail");
+  });
+
+  it("keeps authored HTML and encoded attribute data beside literal tags", () => {
+    const result = markdownToTelegramRichBlocks(
+      '<a href="https://example.com/?a=1&amp;b=2">**literal**</a> &lt;i&gt;text&lt;/i&gt;',
+    );
+    expect(result.blocks).toEqual([
+      {
+        type: "paragraph",
+        text: [
+          {
+            type: "url",
+            url: "https://example.com/?a=1&b=2",
+            text: { type: "bold", text: "literal" },
+          },
+          " <i>text</i>",
+        ],
+      },
+    ]);
+    expect(result.plainText).toBe("literal <i>text</i>");
+  });
+
+  it("does not hide authored tags inside decoded literal comment delimiters", () => {
+    expect(markdownToTelegramRichBlocks("&lt;!-- <b>literal</b> --&gt;").blocks).toEqual([
+      { type: "paragraph", text: ["<!-- ", { type: "bold", text: "literal" }, " -->"] },
+    ]);
+  });
+
+  it.each([
+    {
+      markdown: "<!-- **<b>literal</b>** &amp; -->",
+      text: "<!-- **<b>literal</b>** &amp; -->",
+    },
+    {
+      markdown: "<!-- Example\nuser[Thu] -->",
+      text: "<!-- Example\nuser[Thu] -->",
+    },
+    {
+      markdown: "<**!**-- <b>literal</b> -->",
+      text: ["<", { type: "bold", text: "!" }, "-- ", { type: "bold", text: "literal" }, " -->"],
+    },
+    {
+      markdown: "<!&#65; <b>literal</b>>",
+      text: ["<!A ", { type: "bold", text: "literal" }, ">"],
+    },
+    {
+      markdown: "<!**A** <b>literal</b>>",
+      text: ["<!", { type: "bold", text: "A" }, " ", { type: "bold", text: "literal" }, ">"],
+    },
+    {
+      markdown: "<!A &amp; <b>literal</b>>",
+      text: "<!A &amp; <b>literal</b>>",
+    },
+  ])("preserves opaque construct syntax provenance: $markdown", ({ markdown, text }) => {
+    expect(markdownToTelegramRichBlocks(markdown).blocks).toEqual([{ type: "paragraph", text }]);
+  });
+
+  it.each([
+    "- &lt;b&gt;**literal**&lt;/b&gt;",
+    "> &lt;b&gt;**literal**&lt;/b&gt;",
+    "<details><summary>More</summary><p>&lt;b&gt;**literal**&lt;/b&gt;</p></details>",
+  ])("keeps literal provenance inside nested blocks: %s", (markdown) => {
+    const result = markdownToTelegramRichBlocks(markdown);
+    expect(result.plainText).toContain("<b>literal</b>");
+    const block = result.blocks[0];
+    const body =
+      block?.type === "list"
+        ? block.items[0]?.blocks
+        : block?.type === "blockquote" || block?.type === "details"
+          ? block.blocks
+          : [];
+    expect(body).toEqual([
+      { type: "paragraph", text: ["<b>", { type: "bold", text: "literal" }, "</b>"] },
+    ]);
+  });
+
+  it("keeps literal provenance in native table cells", () => {
+    const { blocks } = markdownToTelegramRichBlocks(
+      "| Value |\n| --- |\n| &lt;b&gt;**literal**&lt;/b&gt; |",
+    );
+    expect(blocks[0]).toMatchObject({
+      type: "table",
+      cells: [[{ text: "Value" }], [{ text: ["<b>", { type: "bold", text: "literal" }, "</b>"] }]],
+    });
+  });
+
+  it.each(
+    [
+      {
+        source: "<tg-math>x</tg-math>",
+        atom: { type: "mathematical_expression", expression: "x" },
+      },
+      {
+        source: '<tg-emoji emoji-id="5368324170671202286">😀</tg-emoji>',
+        atom: {
+          type: "custom_emoji",
+          custom_emoji_id: "5368324170671202286",
+          alternative_text: "😀",
+        },
+      },
+    ].flatMap(({ source, atom }) => [
+      { markdown: `||${source}||`, expected: { type: "spoiler", text: atom } },
+      {
+        markdown: `[${source}](https://example.com)`,
+        expected: { type: "url", text: atom, url: "https://example.com" },
+      },
+    ]),
+  )("preserves Markdown wrappers around $markdown", ({ markdown, expected }) => {
+    expect(markdownToTelegramRichBlocks(markdown).blocks).toEqual([
+      { type: "paragraph", text: expected },
+    ]);
+  });
+
+  it.each([
+    {
+      open: '<a href="https://example.com">',
+      close: "</a>",
+      wrapper: { type: "url", url: "https://example.com" },
+    },
+    { open: "<b>", close: "</b>", wrapper: { type: "bold" } },
+  ])(
+    "excludes transcript annotations from HTML $wrapper.type wrappers",
+    ({ open, close, wrapper }) => {
+      const { blocks, plainText } = markdownToTelegramRichBlocks(
+        `${open}\nuser[Thu] trailing${close}`,
+      );
+      expect(blocks).toEqual([
+        {
+          type: "paragraph",
+          text: expect.arrayContaining([
+            { type: "code", text: "user[Thu]" },
+            { ...wrapper, text: " trailing" },
+          ]),
+        },
+      ]);
+      expect(plainText).toBe("\nuser[Thu] trailing");
+    },
+  );
+
+  it.each(["https://example.com", "#section"])(
+    "preserves authored %s links with code-only labels",
+    (href) => {
+      for (const [prefix, suffix] of [
+        ["", ""],
+        ["", "bar"],
+        ["a", "z"],
+      ]) {
+        const markdown = `${prefix ? `\`${prefix}\`` : ""}[\`foo\`](${href})${suffix ? `\`${suffix}\`` : ""}`;
+        const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
+        const text = blocks[0]?.type === "paragraph" ? blocks[0].text : "";
+        expect(collectLinkTargets(text), markdown).toEqual([href]);
+        expect(hasStyle(text, "code"), markdown).toBe(true);
+        expect(plainText).toBe(`${prefix}foo${suffix}`);
+      }
+    },
+  );
+
+  it("preserves independently authored bold inside merged adjacent code spans", () => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks("`a`**`b`**`c`");
+    const text = blocks[0]?.type === "paragraph" ? blocks[0].text : "";
+    expect(hasStyle(text, "code")).toBe(true);
+    expect(hasStyle(text, "bold")).toBe(true);
+    expect(plainText).toBe("abc");
+  });
+
+  it.each([
+    {
+      markdown: "**A ||B** C|| D",
+      text: [
+        { type: "bold", text: ["A ", { type: "spoiler", text: "B" }] },
+        { type: "spoiler", text: " C" },
+        " D",
+      ],
+    },
+    {
+      markdown: "||A **B|| C** D",
+      text: [
+        { type: "spoiler", text: ["A ", { type: "bold", text: "B" }] },
+        { type: "bold", text: " C" },
+        " D",
+      ],
+    },
+    {
+      markdown: "[A ||B](https://example.com) C|| D",
+      text: [
+        {
+          type: "url",
+          url: "https://example.com",
+          text: ["A ", { type: "spoiler", text: "B" }],
+        },
+        { type: "spoiler", text: " C" },
+        " D",
+      ],
+    },
+  ])("preserves crossing inline ranges in $markdown", ({ markdown, text }) => {
+    const result = markdownToTelegramRichBlocks(markdown);
+    expect(result.blocks).toEqual([{ type: "paragraph", text }]);
+    expect(result.plainText).toBe("A B C D");
+  });
+
+  it.each([
+    {
+      markdown: "**user[Thu] trailing**",
+      trailing: { type: "bold", text: " trailing" },
+    },
+    {
+      markdown: "[user[Thu] trailing](https://example.com)",
+      trailing: { type: "url", url: "https://example.com", text: " trailing" },
+    },
+  ])(
+    "preserves formatting outside a transcript annotation in $markdown",
+    ({ markdown, trailing }) => {
+      const result = markdownToTelegramRichBlocks(markdown);
+      expect(result.blocks).toEqual([
+        { type: "paragraph", text: [{ type: "code", text: "user[Thu]" }, trailing] },
+      ]);
+      expect(result.plainText).toBe("user[Thu] trailing");
+    },
+  );
 
   it("leaves bare URL query separators to Telegram entity detection", () => {
     const url = "https://example.com/wp-admin/post.php?post=100&action=edit";
@@ -379,7 +644,7 @@ describe("markdownToTelegramRichBlocks", () => {
       skipEntityDetection: true,
     });
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectUrls(text)).toEqual([]);
+    expect(collectLinkTargets(text)).toEqual([]);
   });
 
   it("keeps explicit markdown links when entity detection is skipped", () => {
@@ -387,7 +652,7 @@ describe("markdownToTelegramRichBlocks", () => {
       skipEntityDetection: true,
     });
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectUrls(text)).toEqual(["https://example.com"]);
+    expect(collectLinkTargets(text)).toEqual(["https://example.com"]);
   });
 
   it("keeps unsupported local links as visible text and wraps file refs as code", () => {
@@ -398,20 +663,20 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(plain).toContain("scripts/yougile.py");
     expect(plain).toContain("config");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectUrls(text)).toEqual([]);
+    expect(collectLinkTargets(text)).toEqual([]);
   });
 
   it("wraps auto-linked file refs as code so Telegram does not re-linkify them", () => {
     const { blocks } = markdownToTelegramRichBlocks("see README.md for details");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectUrls(text)).toEqual([]);
+    expect(collectLinkTargets(text)).toEqual([]);
     expect(hasStyle(text, "code")).toBe(true);
   });
 
   it("preserves authored file-style links while wrapping bare file refs as code", () => {
     const { blocks } = markdownToTelegramRichBlocks("README.md [README.md](https://README.md)");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectUrls(text)).toEqual(["https://README.md"]);
+    expect(collectLinkTargets(text)).toEqual(["https://README.md"]);
     expect(hasStyle(text, "code")).toBe(true);
   });
 
@@ -512,7 +777,7 @@ describe("splitTelegramRichBlocks", () => {
     const chunks = splitTelegramRichBlocks(blocks, { textLimit: 64 });
     const urls = chunks
       .flat()
-      .flatMap((block) => (block.type === "paragraph" ? collectUrls(block.text) : []));
+      .flatMap((block) => (block.type === "paragraph" ? collectLinkTargets(block.text) : []));
     expect(urls.length).toBeGreaterThan(0);
     expect(urls.every((url) => url.startsWith("https://example.com/"))).toBe(true);
   });
@@ -528,9 +793,9 @@ describe("splitTelegramRichBlocks", () => {
     const table: InputRichBlock = {
       type: "table",
       cells: [
-        [{ text: "h".repeat(40), is_header: true }],
-        [{ text: "c".repeat(40) }],
-        [{ text: "d".repeat(40) }],
+        [{ text: "h".repeat(40), is_header: true, align: "left", valign: "middle" }],
+        [{ text: "c".repeat(40), align: "left", valign: "middle" }],
+        [{ text: "d".repeat(40), align: "left", valign: "middle" }],
       ],
     };
     const chunks = splitTelegramRichBlocks([quote, table], { textLimit: 64 });
@@ -601,7 +866,9 @@ describe("splitTelegramRichBlocks", () => {
     const table: InputRichBlock = {
       type: "table",
       caption: "Table caption",
-      cells: Array.from({ length: 6 }, (_, index) => [[{ text: `row ${index}` }]]).flat(),
+      cells: Array.from({ length: 6 }, (_, index) => [
+        [{ text: `row ${index}`, align: "left" as const, valign: "middle" as const }],
+      ]).flat(),
     };
     const collage: InputRichBlock = {
       type: "collage",
@@ -640,19 +907,19 @@ describe("rich message plan wiring", () => {
       "\n",
     );
 
-    const chunks = splitTelegramRichMessageTextChunks({ text, textLimit: 32_768 });
+    const chunks = planTelegramTextDeliveryPages({ text, maxChars: 32_768, richMessages: true });
     const lists = chunks
-      .flatMap((chunk) => chunk.richMessage.blocks)
+      .flatMap((chunk) => chunk.richMessage?.blocks ?? [])
       .filter((block) => block.type === "list");
 
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => countInputRichBlocks(chunk.richMessage.blocks) <= 500)).toBe(
-      true,
-    );
+    expect(
+      chunks.every((chunk) => countInputRichBlocks(chunk.richMessage?.blocks ?? []) <= 500),
+    ).toBe(true);
     expect(lists.flatMap((list) => list.items).map((item) => item.value)).toEqual(
       Array.from({ length: 250 }, (_, index) => index + 1),
     );
-    expect(chunks.flatMap((chunk) => chunk.degradationReasons)).toEqual([]);
+    expect(chunks.flatMap((chunk) => chunk.degradationReasons ?? [])).toEqual([]);
   });
 
   it("emits blocks InputRichMessage and email skip_entity_detection", () => {
@@ -666,29 +933,32 @@ describe("rich message plan wiring", () => {
   });
 
   it("passes skip_entity_detection through chunked rich messages", () => {
-    const chunks = splitTelegramRichMessageTextChunks({
+    const chunks = planTelegramTextDeliveryPages({
       text: `${"hello\n\n".repeat(10)}owner@example.com`,
-      textLimit: 32_768,
+      maxChars: 32_768,
+      richMessages: true,
     });
-    expect(chunks.some((chunk) => chunk.richMessage.skip_entity_detection === true)).toBe(true);
+    expect(chunks.some((chunk) => chunk.richMessage?.skip_entity_detection === true)).toBe(true);
   });
 
   it("applies the document-level skip flag to every chunk", () => {
     // An email anywhere disables linkification for the whole render, so chunks
     // without the email would otherwise expose unprotected file refs (README.md)
     // to Telegram's server-side entity detection.
-    const chunks = splitTelegramRichMessageTextChunks({
+    const chunks = planTelegramTextDeliveryPages({
       text: `see README.md for details\n\n${"filler ".repeat(20)}\n\nping owner@example.com`,
-      textLimit: 80,
+      maxChars: 80,
+      richMessages: true,
     });
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.richMessage.skip_entity_detection === true)).toBe(true);
+    expect(chunks.every((chunk) => chunk.richMessage?.skip_entity_detection === true)).toBe(true);
   });
 
   it("sends readable source text when markdown projects to zero blocks", () => {
-    const chunks = splitTelegramRichMessageTextChunks({
+    const chunks = planTelegramTextDeliveryPages({
       text: "[ref]: https://example.com",
-      textLimit: 32_768,
+      maxChars: 32_768,
+      richMessages: true,
     });
     expect(chunks).toHaveLength(1);
     expect(chunks[0]?.plainText).toContain("example.com");

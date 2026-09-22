@@ -1,6 +1,6 @@
 // Media and voice compatibility migrations retired from canonical runtime config.
 import { getRecord } from "../../../config/legacy.shared.js";
-import { deleteRetiredPath } from "./legacy-config-record-shared.js";
+import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";
 
 export function moveVoice(owner: Record<string, unknown>, path: string, changes: string[]): void {
   if (!Object.hasOwn(owner, "voice")) {
@@ -190,7 +190,6 @@ const RETIRED_TUNING_PATHS = [
   ["acp", "stream", "hiddenBoundarySeparator"],
   ["acp", "maxConcurrentSessions"],
   ["acp", "runtime", "ttlMinutes"],
-  ["mcp", "sessionIdleTtlMs"],
   ["worktrees"],
   ["transcripts", "maxUtterances"],
   ["hooks", "maxBodyBytes"],
@@ -245,34 +244,22 @@ const RETIRED_AGENT_TUNING_PATHS = [
   ["tools", "loopDetection", "postCompactionGuard"],
 ] as const;
 
-export function stripRetiredTuningKnobs(raw: Record<string, unknown>): boolean {
-  let changed = false;
+export function stripRetiredTuningKnobs(raw: Record<string, unknown>, changes?: string[]): boolean {
+  const removed: string[] = [];
   for (const path of RETIRED_TUNING_PATHS) {
-    changed = deleteRetiredPath(raw, path) || changed;
+    deleteRetiredPath(raw, path, removed);
   }
-  const agents = getRecord(raw.agents);
-  const defaults = getRecord(agents?.defaults);
-  if (defaults) {
+  visitAgentConfigScopes(raw, (agent, prefix) => {
     for (const path of RETIRED_AGENT_TUNING_PATHS) {
-      changed = deleteRetiredPath(defaults, path) || changed;
+      deleteRetiredPath(agent, path, removed, `${prefix}.`);
     }
+  });
+  if (removed.length > 0) {
+    changes?.push(
+      `Removed retired runtime tuning knobs: ${JSON.stringify(removed.join(", ")).slice(1, -1)}; built-in defaults now apply.`,
+    );
   }
-  if (Array.isArray(agents?.list)) {
-    for (const agent of agents.list) {
-      for (const path of RETIRED_AGENT_TUNING_PATHS) {
-        changed = deleteRetiredPath(agent, path) || changed;
-      }
-    }
-  }
-  const entries = getRecord(agents?.entries);
-  if (entries) {
-    for (const agent of Object.values(entries)) {
-      for (const path of RETIRED_AGENT_TUNING_PATHS) {
-        changed = deleteRetiredPath(agent, path) || changed;
-      }
-    }
-  }
-  return changed;
+  return removed.length > 0;
 }
 
 const MEDIA_CAPABILITIES = ["image", "audio", "video"] as const;

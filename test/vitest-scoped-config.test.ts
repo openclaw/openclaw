@@ -2,14 +2,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { minimatch } from "minimatch";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { resolveConfig } from "vitest/node";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import { createAcpVitestConfig } from "./vitest/vitest.acp.config.ts";
 import { createAgentsCoreIsolatedVitestConfig } from "./vitest/vitest.agents-core-isolated.config.ts";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
 import { agentVitestProjectOwners } from "./vitest/vitest.agents-paths.mjs";
+import { createAgentsSpawnProductionBoundaryVitestConfig } from "./vitest/vitest.agents-spawn-production-boundary.config.ts";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
 import { createAutoReplyCoreVitestConfig } from "./vitest/vitest.auto-reply-core.config.ts";
 import { createAutoReplyReplyVitestConfig } from "./vitest/vitest.auto-reply-reply.config.ts";
@@ -24,8 +27,12 @@ import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.
 import { createCommandsVitestConfig } from "./vitest/vitest.commands.config.ts";
 import { createCronVitestConfig } from "./vitest/vitest.cron.config.ts";
 import { createDaemonVitestConfig } from "./vitest/vitest.daemon.config.ts";
+import { databaseWorkerCoreTestFiles } from "./vitest/vitest.database-worker-core-paths.mjs";
+import { createDatabaseWorkerWatchVitestConfig } from "./vitest/vitest.database-worker-watch.config.ts";
 import { createExtensionAcpxVitestConfig } from "./vitest/vitest.extension-acpx.config.ts";
 import { createExtensionBrowserVitestConfig } from "./vitest/vitest.extension-browser.config.ts";
+import { databaseWorkerExtensionTestFiles } from "./vitest/vitest.extension-database-workers-paths.mjs";
+import { createExtensionDatabaseWorkersVitestConfig } from "./vitest/vitest.extension-database-workers.config.ts";
 import { createExtensionDiffsVitestConfig } from "./vitest/vitest.extension-diffs.config.ts";
 import { createExtensionDiscordVitestConfig } from "./vitest/vitest.extension-discord.config.ts";
 import { createExtensionFeishuVitestConfig } from "./vitest/vitest.extension-feishu.config.ts";
@@ -64,7 +71,7 @@ import { createPluginSdkVitestConfig } from "./vitest/vitest.plugin-sdk.config.t
 import { createPluginsVitestConfig } from "./vitest/vitest.plugins.config.ts";
 import { createProcessVitestConfig } from "./vitest/vitest.process.config.ts";
 import { createRuntimeConfigVitestConfig } from "./vitest/vitest.runtime-config.config.ts";
-import { createScopedVitestConfig, resolveVitestIsolation } from "./vitest/vitest.scoped-config.ts";
+import { createScopedVitestConfig } from "./vitest/vitest.scoped-config.ts";
 import { createSecretsVitestConfig } from "./vitest/vitest.secrets.config.ts";
 import { createSharedCoreVitestConfig } from "./vitest/vitest.shared-core.config.ts";
 import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
@@ -159,7 +166,7 @@ function expectForkedIsolatedRunner(config: {
   expect(testConfig.runner).toBeUndefined();
 }
 
-describe("resolveVitestIsolation", () => {
+describe("scoped Vitest configuration", () => {
   it("aliases private QA plugin SDK subpaths for source tests only", () => {
     for (const subpath of PRIVATE_PLUGIN_SDK_SUBPATHS) {
       expect(findAlias(sharedVitestConfig.resolve.alias, `openclaw/plugin-sdk/${subpath}`)).toEqual(
@@ -204,9 +211,13 @@ describe("resolveVitestIsolation", () => {
   });
 
   it("ignores the legacy isolation escape hatches", () => {
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_ISOLATE: "1" })).toBe(false);
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "0" })).toBe(false);
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "false" })).toBe(false);
+    for (const env of [
+      { OPENCLAW_TEST_ISOLATE: "1" },
+      { OPENCLAW_TEST_NO_ISOLATE: "0" },
+      { OPENCLAW_TEST_NO_ISOLATE: "false" },
+    ]) {
+      expect(requireTestConfig(createScopedVitestConfig([], { env })).isolate).toBe(false);
+    }
   });
 
   it("resolves scoped discovery dirs from the repo root after config relocation", () => {
@@ -249,7 +260,7 @@ describe("createScopedVitestConfig", () => {
       passWithNoTests: true,
     });
 
-    expect(requireTestConfig(config).include).toEqual(["slack/**/*.test.*"]);
+    expect(requireTestConfig(config).include).toEqual(["slack/**/*.test.ts"]);
   });
 
   it("keeps broad package scoped cli directory filters aligned with repo-root include patterns", () => {
@@ -260,7 +271,7 @@ describe("createScopedVitestConfig", () => {
       passWithNoTests: true,
     });
 
-    expect(requireTestConfig(config).include).toEqual(["normalization-core/**/*.test.*"]);
+    expect(requireTestConfig(config).include).toEqual(["**/*.test.ts"]);
   });
 
   it("relativizes scoped include and exclude patterns to the configured dir", () => {
@@ -282,6 +293,12 @@ describe("createScopedVitestConfig", () => {
       includePattern: "extensions/**/*.test.ts",
       target: "extensions/browser/index.test.ts",
       expectedInclude: "browser/index.test.ts",
+    },
+    {
+      title: "keeps explicitly selected files owned by negative extglobs",
+      includePattern: "extensions/*/browser/**/!(*.browser).test.ts",
+      target: "extensions/example/browser/view.test.ts",
+      expectedInclude: "example/browser/view.test.ts",
     },
     {
       title: "narrows scoped includes to matching dot-prefixed CLI file filters",
@@ -569,6 +586,8 @@ describe("scoped vitest configs", () => {
   const defaultAgentsConfig = createAgentsVitestConfig({});
   const defaultAgentsCoreConfig = createAgentsCoreVitestConfig({});
   const defaultAgentsCoreIsolatedConfig = createAgentsCoreIsolatedVitestConfig({});
+  const defaultAgentsSpawnProductionBoundaryConfig =
+    createAgentsSpawnProductionBoundaryVitestConfig({});
   const defaultPluginsConfig = createPluginsVitestConfig({});
   const defaultProcessConfig = createProcessVitestConfig({});
   const defaultToolingDockerConfig = createToolingDockerVitestConfig({});
@@ -587,7 +606,6 @@ describe("scoped vitest configs", () => {
       defaultExtensionLineConfig,
       defaultExtensionProviderOpenAiConfig,
       defaultExtensionSignalConfig,
-      defaultExtensionSlackConfig,
       defaultAutoReplyConfig,
       defaultAutoReplyCoreConfig,
       defaultAutoReplyTopLevelConfig,
@@ -611,11 +629,13 @@ describe("scoped vitest configs", () => {
     expectForkedIsolatedRunner(defaultCliProcessConfig);
   });
 
-  it("keeps process-launching CLI files out of the shared CLI graph", () => {
+  it("keeps source-child process tests in the isolated process project", () => {
+    const cliProcessFiles = cliProcessTestFiles.filter((file) => file.startsWith("src/cli/"));
     expect(requireTestConfig(defaultCliConfig).exclude).toEqual(
-      expect.arrayContaining(cliProcessTestFiles.map((file) => file.replace("src/cli/", ""))),
+      expect.arrayContaining(cliProcessFiles.map((file) => file.replace("src/cli/", ""))),
     );
     const processTestConfig = requireTestConfig(defaultCliProcessConfig);
+    expect(processTestConfig.include).toContain("src/cli/update-dry-run-state.process.test.ts");
     expect(processTestConfig.include).toEqual(cliProcessTestFiles);
     for (const file of cliProcessTestFiles) {
       expect(matchingExcludePatterns(processTestConfig.exclude ?? [], file), file).toEqual([]);
@@ -663,6 +683,7 @@ describe("scoped vitest configs", () => {
   it("isolates agent suites with conflicting shared-module mocks", () => {
     const sharedConfig = requireTestConfig(defaultAgentsCoreConfig);
     const isolatedConfig = requireTestConfig(defaultAgentsCoreIsolatedConfig);
+    const productionBoundaryConfig = requireTestConfig(defaultAgentsSpawnProductionBoundaryConfig);
 
     const scopedIsolatedFiles = agentVitestProjectOwners.coreIsolated.include.map((file) =>
       file.replace("src/agents/", ""),
@@ -671,6 +692,15 @@ describe("scoped vitest configs", () => {
     expect(isolatedConfig.include).toEqual(scopedIsolatedFiles);
     expect(isolatedConfig.isolate).toBe(true);
     expect(isolatedConfig.runner).toBeUndefined();
+    expect(productionBoundaryConfig.include).toEqual(
+      agentVitestProjectOwners.spawnProductionBoundary.include.map((file) =>
+        file.replace("src/agents/", ""),
+      ),
+    );
+    expect(productionBoundaryConfig.fileParallelism).toBe(false);
+    expect(productionBoundaryConfig.isolate).toBe(true);
+    expect(productionBoundaryConfig.pool).toBe("forks");
+    expect(productionBoundaryConfig.runner).toBeUndefined();
   });
 
   it("keeps selected plugin-sdk and commands light lanes off the openclaw runtime setup", () => {
@@ -727,16 +757,13 @@ describe("scoped vitest configs", () => {
     }
   });
 
-  it("defaults extension tests to threads with the non-isolated runner", () => {
-    expectThreadedNonIsolatedRunner(defaultExtensionsConfig);
-  });
-
   it("serializes and isolates Telegram extension files with conflicting mocks", () => {
     expectThreadedIsolatedRunner(defaultExtensionTelegramConfig);
     expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(false);
   });
 
   it("serializes Slack extension files that share process globals", () => {
+    expectForkedNonIsolatedRunner(defaultExtensionSlackConfig);
     expect(requireTestConfig(defaultExtensionSlackConfig).fileParallelism).toBe(false);
   });
 
@@ -788,6 +815,7 @@ describe("scoped vitest configs", () => {
       "amazon-bedrock-mantle/**/*.test.ts",
       "anthropic/**/*.test.ts",
       "anthropic-vertex/**/*.test.ts",
+      "apple-fm/**/*.test.ts",
       "byteplus/**/*.test.ts",
       "chutes/**/*.test.ts",
       "comfy/**/*.test.ts",
@@ -847,11 +875,7 @@ describe("scoped vitest configs", () => {
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
-    expect(testConfig.include).toEqual([
-      "memory-core/**/*.test.ts",
-      "memory-lancedb/**/*.test.ts",
-      "memory-wiki/**/*.test.ts",
-    ]);
+    expect(testConfig.include).toEqual(["memory-lancedb/**/*.test.ts", "memory-wiki/**/*.test.ts"]);
   });
 
   it("keeps telegram plugin tests out of the shared extensions lane", () => {
@@ -987,20 +1011,131 @@ describe("scoped vitest configs", () => {
     }
   });
 
-  it("normalizes gateway include patterns relative to the scoped dir", () => {
+  it("createGatewayVitestConfig includes core and plugin Gateway tests from the repository root", () => {
     const testConfig = requireTestConfig(defaultGatewayConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "gateway"));
-    expect(testConfig.include).toEqual(["**/*.test.ts"]);
-    expect(testConfig.exclude).toContain("gateway.test.ts");
-    expect(testConfig.exclude).toContain("server.startup-matrix-migration.integration.test.ts");
-    expect(testConfig.exclude).toContain("sessions-history-http.test.ts");
+    expect(testConfig.dir).toBe(process.cwd());
+    expect(testConfig.include).toEqual([
+      "src/gateway/**/*.test.ts",
+      "test/plugins/codex-model-catalog.gateway.test.ts",
+    ]);
+    expect(testConfig.exclude).toContain("src/gateway/gateway.test.ts");
+    expect(testConfig.exclude).toContain(
+      "src/gateway/server.startup-matrix-migration.integration.test.ts",
+    );
+    expect(testConfig.exclude).not.toContain("src/gateway/sessions-history-http.test.ts");
   });
 
-  it("normalizes infra include patterns relative to the scoped dir", () => {
+  it("keeps infra and database worker consumers rooted at the repository", () => {
     const testConfig = requireTestConfig(defaultInfraConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
-    expect(testConfig.include).toEqual(["infra/**/*.test.ts"]);
+    expect(testConfig.dir).toBe(process.cwd());
+    expect(testConfig.include).toEqual(["src/infra/**/*.test.ts", ...databaseWorkerCoreTestFiles]);
+    const recoveryFile = "src/wizard/setup.inference-recovery.integration.test.ts";
+    expect(testConfig.include?.filter((file) => file === recoveryFile)).toEqual([recoveryFile]);
+    expect(requireTestConfig(defaultWizardConfig).exclude).toContain(
+      "wizard/setup.inference-recovery.integration.test.ts",
+    );
+    for (const file of databaseWorkerCoreTestFiles) {
+      expect(matchingExcludePatterns(testConfig.exclude ?? [], file), file).toEqual([]);
+    }
   });
+
+  it.each([
+    {
+      root: "src/agents",
+      createOwner: createAgentsVitestConfig,
+      workerFiles: databaseWorkerCoreTestFiles,
+      names: ["agents", "infra"],
+      existing: "src/agents/memory-write-provenance.test.ts",
+      createWorker: createInfraVitestConfig,
+    },
+    {
+      root: "extensions/matrix",
+      createOwner: createExtensionMatrixVitestConfig,
+      workerFiles: databaseWorkerExtensionTestFiles,
+      names: ["extension-matrix", "extension-database-workers"],
+      existing: "extensions/matrix/src/matrix/client/storage.test.ts",
+      createWorker: createExtensionDatabaseWorkersVitestConfig,
+    },
+  ])(
+    "discovers current and new $root watch files once across database owners",
+    async ({ root, createOwner, workerFiles, names, existing, createWorker }) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-worker-watch-"));
+      try {
+        const includeFile = path.join(tempDir, "include.json");
+        fs.writeFileSync(includeFile, JSON.stringify([`${root}/**/*.test.ts`]));
+        const env = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+        const owner = createOwner(env);
+        const aggregate = createDatabaseWorkerWatchVitestConfig(
+          owner,
+          workerFiles.filter((file) => file.startsWith(`${root}/`)),
+          env,
+        );
+        const resolved = await resolveConfig({ config: false }, aggregate);
+        const projects = resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig);
+        const resolvedOwner = await resolveConfig({ config: false }, owner);
+        expect(resolved.test.reporters).toEqual(resolvedOwner.test.reporters);
+        const { exclude: exclusions, ...coverage } = resolved.test.coverage;
+        const { exclude: ownerExclusions, ...ownerCoverage } = resolvedOwner.test.coverage;
+        expect(coverage).toEqual(ownerCoverage);
+        expect(exclusions).toEqual(expect.arrayContaining(ownerExclusions));
+        expect(
+          exclusions
+            .filter((pattern) => !ownerExclusions.includes(pattern))
+            .every((pattern) => /\.test\.[cm]?[jt]sx?$/u.test(pattern)),
+        ).toBe(true);
+        expect(projects.map((project) => project.name)).toEqual(names);
+        expect(projects.map((project) => project.pool)).toEqual(["threads", "forks"]);
+        expect(projects[0]?.setupFiles).toEqual(owner.test?.setupFiles);
+        expect(projects[0]?.maxWorkers).toBe(owner.test?.maxWorkers);
+        const workerConfig = await resolveConfig(
+          { config: false },
+          createWorker({ ...env, OPENCLAW_VITEST_INCLUDE_FILE: undefined }),
+        );
+        expect(projects[1]?.maxWorkers).toBe(workerConfig.test.maxWorkers);
+
+        const discover = (fixtureRoot: string) =>
+          projects.flatMap((project) => {
+            const scopedDir = path.relative(process.cwd(), project.dir);
+            const exclude = project.exclude.map((pattern) =>
+              path.isAbsolute(pattern) ? path.relative(project.dir, pattern) : pattern,
+            );
+            return fs
+              .globSync(project.include, {
+                cwd: path.join(fixtureRoot, scopedDir),
+                exclude,
+              })
+              .map((file) => path.join(scopedDir, file).replaceAll("\\", "/"));
+          });
+        const current = discover(process.cwd());
+        expect(new Set(current).size).toBe(current.length);
+        for (const file of workerFiles.filter((candidate) => candidate.startsWith(`${root}/`))) {
+          expect(current).toContain(file);
+        }
+
+        const fixtureRoot = path.join(tempDir, "repo");
+        fs.mkdirSync(path.dirname(path.join(fixtureRoot, existing)), { recursive: true });
+        fs.writeFileSync(path.join(fixtureRoot, existing), "// discovery only\n");
+        expect(discover(fixtureRoot)).toEqual([existing]);
+        const added = `${root}/new-watch-consumer.test.ts`;
+        fs.writeFileSync(path.join(fixtureRoot, added), "// discovery only\n");
+        expect(discover(fixtureRoot).toSorted()).toEqual([existing, added].toSorted());
+
+        fs.writeFileSync(includeFile, JSON.stringify([existing]));
+        const narrowed = createDatabaseWorkerWatchVitestConfig(
+          createOwner(env),
+          workerFiles.filter((file) => file.startsWith(`${root}/`)),
+          env,
+        );
+        const narrowedConfig = await resolveConfig({ config: false }, narrowed);
+        const workerProject = narrowedConfig.test.resolvedProjects[1]?.projectConfig;
+        expect(workerProject?.include).toEqual([
+          path.relative(workerProject!.dir, path.resolve(existing)),
+        ]);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("normalizes runtime config include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultRuntimeConfig);
@@ -1012,6 +1147,10 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultCronConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
     expect(testConfig.include).toEqual(["cron/**/*.test.ts"]);
+    expectForkedNonIsolatedRunner(defaultCronConfig);
+    expect(testConfig.maxWorkers).toBe(1);
+    expect(testConfig.fileParallelism).toBe(false);
+    expect(testConfig.sequence).toMatchObject({ groupOrder: 1 });
   });
 
   it("normalizes daemon include patterns relative to the scoped dir", () => {
@@ -1030,6 +1169,10 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultLoggingConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
     expect(testConfig.include).toEqual(["logging/**/*.test.ts"]);
+    expect(testConfig.exclude).toContain("logging/diagnostic-session-context.test.ts");
+    expect(testConfig.exclude).toContain(
+      "logging/diagnostic-stuck-session-recovery.runtime.test.ts",
+    );
   });
 
   it("normalizes plugin-sdk include patterns relative to the scoped dir", () => {
@@ -1137,8 +1280,20 @@ describe("scoped vitest configs", () => {
   it("normalizes ui include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultUiConfig);
     expect(testConfig.dir).toBe(process.cwd());
-    expect(testConfig.include).toEqual(["ui/src/**/*.test.ts"]);
+    for (const [file, included] of [
+      ["ui/src/pages/chat/chat-view.test.ts", true],
+      ["ui/src/components/form-controls.browser.test.ts", true],
+      ["ui/src/components/markdown-mermaid.runtime.browser.test.ts", false],
+      ["extensions/workboard/browser/catalog.test.ts", true],
+      ["extensions/workboard/browser/native.browser.test.ts", false],
+    ] as const) {
+      expect(
+        testConfig.include?.some((pattern) => minimatch(file, pattern)),
+        file,
+      ).toBe(included);
+    }
     expect(testConfig.exclude).toContain("ui/src/**/*.e2e.test.ts");
+    expect(testConfig.exclude).toContain("extensions/*/browser/**/*.e2e.test.ts");
   });
 
   it("normalizes utils include patterns relative to the scoped dir", () => {

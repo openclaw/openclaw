@@ -1,3 +1,4 @@
+import type { z } from "zod";
 // Defines shared agent configuration types across runtime schemas.
 import type {
   SandboxBrowserSettings,
@@ -5,28 +6,13 @@ import type {
   SandboxPruneSettings,
   SandboxSshSettings,
 } from "./types.sandbox.js";
+import type { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 
 /** Agent model selector: a single provider/model ref or primary+fallback chain. */
-export type AgentModelConfig =
-  | string
-  | {
-      /** Primary model (provider/model). */
-      primary?: string;
-      /** Per-agent model fallbacks (provider/model). */
-      fallbacks?: string[];
-    };
+export type AgentModelConfig = z.input<typeof AgentModelSchema>;
 
 /** Tool-specific model selector with an optional capability timeout override. */
-export type AgentToolModelConfig =
-  | string
-  | {
-      /** Primary model (provider/model). */
-      primary?: string;
-      /** Per-tool model fallbacks (provider/model). */
-      fallbacks?: string[];
-      /** Optional provider request timeout in milliseconds for capabilities that support it. */
-      timeoutMs?: number;
-    };
+export type AgentToolModelConfig = z.input<typeof AgentToolModelSchema>;
 
 /** Runtime selection policy attached to providers, models, and agent defaults. */
 export type AgentRuntimePolicyConfig = {

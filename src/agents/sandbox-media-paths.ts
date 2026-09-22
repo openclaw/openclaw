@@ -5,6 +5,7 @@
  */
 import path from "node:path";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { createBoundedOutboundMediaReadFile } from "../media/bounded-read-file.js";
 import type { OutboundMediaReadFile } from "../media/load-options.js";
 import { resolveMediaReferenceSandboxPath } from "../media/media-reference.js";
@@ -16,6 +17,8 @@ export type SandboxedBridgeMediaPathConfig = {
   root: string;
   bridge: SandboxFsBridge;
   workspaceOnly?: boolean;
+  stagedMediaPaths?: ReadonlyMap<string, string>;
+  readOnlyResourceMounts?: readonly { hostPath: string; containerPath: string }[];
 };
 
 export function createSandboxBridgeReadFile(params: {
@@ -39,10 +42,24 @@ export async function resolveSandboxedBridgeMediaPath(params: {
   const mediaPathInfo = params.inboundFallbackDir
     ? resolveMediaReferenceSandboxPath(params.mediaPath, params.inboundFallbackDir)
     : { resolved: params.mediaPath };
-  const filePath = /^file:/iu.test(mediaPathInfo.resolved)
+  let filePath = /^file:/iu.test(mediaPathInfo.resolved)
     ? safeFileURLToPath(mediaPathInfo.resolved, "linux")
     : mediaPathInfo.resolved;
-  const rewrittenFrom = mediaPathInfo.rewrittenFrom;
+  let rewrittenFrom = mediaPathInfo.rewrittenFrom;
+  const stagedMediaPath = rewrittenFrom
+    ? undefined
+    : params.sandbox.stagedMediaPaths?.get(filePath);
+  if (stagedMediaPath) {
+    // A real workspace entry remains authoritative over the producer's staged alias.
+    const directStat = await params.sandbox.bridge.stat({
+      filePath,
+      cwd: params.sandbox.root,
+    });
+    if (!directStat) {
+      rewrittenFrom = filePath;
+      filePath = stagedMediaPath;
+    }
+  }
   if (rewrittenFrom) {
     const stat = await params.sandbox.bridge.stat({
       filePath,
@@ -54,6 +71,17 @@ export async function resolveSandboxedBridgeMediaPath(params: {
   }
   const enforceWorkspaceBoundary = async (resolved: SandboxResolvedPath) => {
     if (!params.sandbox.workspaceOnly) {
+      return;
+    }
+    const inReadOnlyResource = params.sandbox.readOnlyResourceMounts?.some((mount) =>
+      resolved.hostPath
+        ? isPathInside(mount.hostPath, resolved.hostPath)
+        : isPathInsideContainerRoot(
+            normalizeContainerPathCore(mount.containerPath),
+            normalizeContainerPathCore(resolved.containerPath),
+          ),
+    );
+    if (inReadOnlyResource) {
       return;
     }
     if (resolved.hostPath) {

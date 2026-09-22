@@ -1,10 +1,10 @@
 // Gateway RPC call helper.
 // Builds a GatewayClient, resolves auth/scopes, and performs one request.
 import { randomUUID } from "node:crypto";
-import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -45,7 +45,6 @@ import {
 } from "../infra/device-identity.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
-import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
@@ -57,7 +56,6 @@ import {
   resolveGatewayClientBootstrap,
   resolveGatewayUrlOverride,
 } from "./client-bootstrap.js";
-import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import {
   GatewayClient,
   isGatewayConnectAssemblyError,
@@ -96,7 +94,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
+import { isLoopbackGatewayUrl } from "./net.js";
 import {
   GatewayTransportError,
   type GatewayTransportErrorKind,
@@ -117,6 +115,8 @@ export type GatewayRequestFunction = <T = Record<string, unknown>>(
 
 type CallGatewayBaseOptions = {
   url?: string;
+  /** Require this resolved endpoint without overriding target selection or authentication. */
+  expectUrl?: string;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -127,6 +127,7 @@ type CallGatewayBaseOptions = {
   expectFinal?: boolean;
   timeoutMs?: number | null;
   signal?: AbortSignal;
+  assertDispatchCurrent?: () => void;
   onAccepted?: GatewayClientRequestOptions["onAccepted"];
   onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
   clientName?: GatewayClientName;
@@ -140,6 +141,8 @@ type CallGatewayBaseOptions = {
   requiredStoredDeviceAuthScopes?: OperatorScope[];
   requireLocalBackendSharedAuth?: boolean;
   sharedStateMode?: "read-only";
+  /** Keep caller-resolved token/password authoritative, including an empty result. */
+  skipImplicitAuth?: boolean;
   onHelloOk?: GatewayClientOptions["onHelloOk"];
   deviceIdentity?: DeviceIdentity | null;
   instanceId?: string;
@@ -159,6 +162,12 @@ type CallGatewayBaseOptions = {
   localPortOverride?: number;
   /** Keep a caller-supplied config target authoritative over OPENCLAW_GATEWAY_URL. */
   ignoreEnvUrlOverride?: boolean;
+  /**
+   * Service-derived probe target (e.g. custom bind host or Tailnet address).
+   * Used as the connection URL without classifying it as a caller URL override,
+   * so the explicit-credential guard does not fire.
+   */
+  serviceTargetUrl?: string;
 };
 
 export type CallGatewayCliOptions = CallGatewayBaseOptions & {
@@ -450,6 +459,7 @@ export function buildGatewayConnectionDetails(
     urlSource?: "cli" | "env";
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
+    serviceTargetUrl?: string;
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
@@ -457,17 +467,6 @@ export function buildGatewayConnectionDetails(
     resolveConfigPath: (env) => resolveGatewayConfigPath(env),
     resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
   });
-}
-
-function isLoopbackGatewayUrl(rawUrl: string): boolean {
-  try {
-    const hostname = new URL(rawUrl).hostname.toLowerCase();
-    const unbracketed =
-      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
-  } catch {
-    return false;
-  }
 }
 
 function shouldOmitDeviceIdentityForGatewayCall(params: {
@@ -499,7 +498,9 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
   return isLocalBackendSharedAuth || isLocalCliSharedAuth;
 }
 
-function resolveDeviceIdentityForGatewayCall(sharedStateMode?: "read-only"): DeviceIdentity | null {
+export function resolveDeviceIdentityForGatewayCall(
+  sharedStateMode?: "read-only",
+): DeviceIdentity | null {
   try {
     return sharedStateMode === "read-only"
       ? loadDeviceIdentityIfPresent()
@@ -983,6 +984,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
         try {
           opts.onHelloOk?.(hello);
         } catch {}
+        // An observer may cancel after inspecting hello, before any RPC is sent.
+        if (settled) {
+          return;
+        }
         void (async () => {
           try {
             ensureGatewaySupportsRequiredMethods({
@@ -999,6 +1004,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
             if (!activeClient) {
               throw new Error("gateway client not initialized");
             }
+            // This check must stay synchronous with request -> ws.send. Moving
+            // an await into that chain requires moving enforcement to the send owner.
+            opts.assertDispatchCurrent?.();
             primaryRequestStarted = true;
             const result = await activeClient.request<T>(opts.method, opts.params, {
               expectFinal: opts.expectFinal,
@@ -1133,10 +1141,12 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     env: process.env,
     configPath: context.configPath,
     ignoreEnvUrlOverride:
-      opts.localPortOverride !== undefined || opts.ignoreEnvUrlOverride === true,
+      opts.localPortOverride !== undefined ||
+      opts.ignoreEnvUrlOverride === true ||
+      opts.serviceTargetUrl !== undefined,
     localPortOverride: opts.localPortOverride,
     explicitTlsFingerprint: opts.tlsFingerprint,
-    skipImplicitAuth: useStoredDeviceAuth,
+    skipImplicitAuth: useStoredDeviceAuth || opts.skipImplicitAuth === true,
     ...(useStoredDeviceAuth
       ? {}
       : {
@@ -1144,11 +1154,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
             "Fix: pass --token or --password with --url (or gatewayToken in tools).",
         }),
     buildConnectionDetails: buildGatewayConnectionDetails,
-    resolveTlsFingerprint: async (params) =>
-      await resolveGatewayConnectionTlsFingerprint({
-        ...params,
-        loadGatewayTlsRuntime,
-      }),
+    ...(opts.serviceTargetUrl ? { serviceTargetUrl: opts.serviceTargetUrl } : {}),
   });
   ensureRemoteModeUrlConfigured({
     context,
@@ -1156,6 +1162,9 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   const connectionDetails = bootstrap.connectionDetails;
   const url = bootstrap.url;
+  if (opts.expectUrl !== undefined && url !== opts.expectUrl) {
+    throw new Error("Gateway destination changed. Refresh the selected Gateway before retrying.");
+  }
   const deviceAuthScope = bootstrap.deviceAuthScope;
   const token = useStoredDeviceAuth ? undefined : bootstrap.auth.token;
   const password = useStoredDeviceAuth ? undefined : bootstrap.auth.password;
@@ -1271,6 +1280,7 @@ export async function buildGatewayProbeConnectionDetails(
     | "ignoreEnvUrlOverride"
     | "localPortOverride"
     | "password"
+    | "serviceTargetUrl"
     | "tlsFingerprint"
     | "token"
     | "url"
@@ -1288,16 +1298,14 @@ export async function buildGatewayProbeConnectionDetails(
     env: process.env,
     configPath: context.configPath,
     ignoreEnvUrlOverride:
-      opts.localPortOverride !== undefined || opts.ignoreEnvUrlOverride === true,
+      opts.localPortOverride !== undefined ||
+      opts.ignoreEnvUrlOverride === true ||
+      opts.serviceTargetUrl !== undefined,
     localPortOverride: opts.localPortOverride,
     explicitTlsFingerprint: opts.tlsFingerprint,
     skipImplicitAuth: true,
     buildConnectionDetails: buildGatewayConnectionDetails,
-    resolveTlsFingerprint: async (params) =>
-      await resolveGatewayConnectionTlsFingerprint({
-        ...params,
-        loadGatewayTlsRuntime,
-      }),
+    ...(opts.serviceTargetUrl ? { serviceTargetUrl: opts.serviceTargetUrl } : {}),
   });
   ensureRemoteModeUrlConfigured({
     context,

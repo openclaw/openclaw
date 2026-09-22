@@ -563,8 +563,7 @@ describe("createTelegramDraftStream", () => {
           },
         });
         // Reposition: rewind for a new message; the old one's delete is deferred.
-        const superseded = stream.rotateToNewMessageDeferringDelete();
-        expect(superseded).toBe(17);
+        stream.rotateToNewMessageDeferringDelete();
 
         // The replacement lands before detached cleanup, so the old message
         // still owns the single-use reply and the replacement must omit it.
@@ -601,9 +600,41 @@ describe("createTelegramDraftStream", () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
 
-    expect(stream.rotateToNewMessageDeferringDelete()).toBeUndefined();
+    stream.rotateToNewMessageDeferringDelete();
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
+
+  it.each(["send", "edit"] as const)(
+    "does not recover a retired preview after a delayed %s receipt",
+    async (operation) => {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api);
+      let resolveReceipt!: (message: MockSentMessage) => void;
+      const receipt = new Promise<MockSentMessage>((resolve) => {
+        resolveReceipt = resolve;
+      });
+      if (operation === "edit") {
+        stream.update("Initial preview");
+        await stream.flush();
+        api.editMessageText.mockReturnValueOnce(receipt);
+      } else {
+        api.sendMessage.mockReturnValueOnce(receipt);
+      }
+
+      stream.update("Retired pre-tool preview");
+      const pending = stream.flush();
+      await vi.waitFor(() =>
+        expect(operation === "edit" ? api.editMessageText : api.sendMessage).toHaveBeenCalled(),
+      );
+      stream.rotateToNewMessageDeferringDelete();
+      resolveReceipt({ message_id: 17 });
+      await pending;
+
+      // Final-error recovery reads this value; a retired generation cannot supply it.
+      expect(stream.lastDeliveredText()).toBe("");
+      await stream.stop();
+    },
+  );
 
   it.each(["first", "batched"] as const)(
     "keeps a settled %s reply target owned when reposition cleanup fails",
@@ -2001,6 +2032,41 @@ describe("draft stream initial message debounce", () => {
   });
 
   describe("minInitialChars threshold", () => {
+    it.each([false, true])(
+      "sends short complete progress and resumes after clear (richMessages=%s)",
+      async (richMessages) => {
+        const api = createMockApi();
+        const stream = createDraftStream(api, { richMessages, minInitialChars: 30 });
+        const send = richMessages ? api.raw.sendRichMessage : api.sendMessage;
+        const progress = (text: string) => ({
+          text,
+          complete: true as const,
+          ...(richMessages ? { richMessage: buildTelegramRichMarkdown(text) } : {}),
+        });
+
+        stream.updatePreview(progress("0/1 complete"));
+        await stream.flush();
+        expect(send).toHaveBeenCalledOnce();
+
+        await stream.clear();
+        stream.forceNewMessage();
+        stream.update("Hi");
+        await stream.flush();
+        expect(send).toHaveBeenCalledOnce();
+
+        stream.updatePreview(progress("1/1 complete"));
+        await stream.flush();
+        expect(send).toHaveBeenCalledTimes(2);
+
+        stream.update("Done");
+        await stream.stop();
+        const edits = richMessages ? api.raw.editMessageText : api.editMessageText;
+        expect(edits).toHaveBeenCalled();
+        await vi.runOnlyPendingTimersAsync();
+        expect(api.deleteMessage).toHaveBeenCalledOnce();
+      },
+    );
+
     it("does not send first message below threshold", async () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);

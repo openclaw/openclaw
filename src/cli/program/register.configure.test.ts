@@ -1,6 +1,7 @@
 // Register configure tests cover configure command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerConfigCli } from "../config-cli.js";
 import { registerConfigureCommand } from "./register.configure.js";
 
 const mocks = vi.hoisted(() => ({
@@ -22,7 +23,8 @@ vi.mock("../../commands/configure.commands.js", () => ({
   configureCommandFromSectionsArg: mocks.configureCommandFromSectionsArgMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -30,6 +32,7 @@ describe("registerConfigureCommand", () => {
   async function runCli(args: string[]) {
     const program = new Command();
     registerConfigureCommand(program);
+    registerConfigCli(program);
     await program.parseAsync(args, { from: "user" });
   }
 
@@ -59,22 +62,16 @@ describe("registerConfigureCommand", () => {
     expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith([...sections], runtime, {});
   });
 
-  it("forwards --agent as the explicit setup owner", async () => {
-    // Without an owner, an explicit multi-agent roster aborts the wizard with
-    // AgentSelectionRequiredError, whose text tells callers to pass --agent <id>.
-    await runCli(["configure", "--section", "auth", "--agent", "ops"]);
-
-    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith(["auth"], runtime, {
-      agentId: "ops",
-    });
-  });
-
-  it("forwards an empty --agent instead of dropping it", async () => {
-    // Truthiness filtering dropped `--agent ""`, so an invalid selector silently resolved to the
-    // default owner instead of failing. Presence must survive to the wizard's validation.
-    await runCli(["configure", "--agent", ""]);
-
-    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith([], runtime, { agentId: "" });
+  it.each(["configure", "config"])("forwards selectors through the %s alias", async (command) => {
+    for (const agent of ["ops", "", "ops!"]) {
+      configureCommandFromSectionsArgMock.mockClear();
+      await runCli([command, "--agent", agent, "--section", "channels"]);
+      expect(configureCommandFromSectionsArgMock).toHaveBeenCalledExactlyOnceWith(
+        ["channels"],
+        runtime,
+        { agentId: agent },
+      );
+    }
   });
 
   it("reports errors through runtime when configure command fails", async () => {

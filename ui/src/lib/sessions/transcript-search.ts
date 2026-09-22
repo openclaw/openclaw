@@ -119,6 +119,10 @@ export async function searchVisibleSessionTranscripts(params: {
     sessions: visibleSessions,
     results,
     indexing: pages.some((page) => page.indexing === true),
+    archivedTranscriptsExcluded: pages.reduce(
+      (total, page) => total + (page.archivedTranscriptsExcluded ?? 0),
+      0,
+    ),
     truncated:
       rosterTruncated ||
       requestsTruncated ||

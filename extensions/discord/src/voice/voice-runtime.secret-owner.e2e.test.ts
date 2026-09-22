@@ -55,7 +55,8 @@ defineDiscordVoiceTests(
         expect(params?.isProviderAvailable?.({ id: "openai" })).toBe(false);
         expect(params?.isProviderAvailable?.({ id: "xai" })).toBe(true);
         return {
-          provider: { id: "xai", capabilities: { supportsActivationNameGating: true } },
+          provider: { id: "xai" },
+          capabilities: { supportsActivationNameGating: true },
           providerConfig: { model: "grok-voice", voice: "ara" },
         };
       });

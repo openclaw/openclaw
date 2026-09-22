@@ -9,7 +9,7 @@ import {
   setTaskRegistryDeliveryRuntimeForTests,
 } from "./task-registry-query.js";
 
-export { isParentFlowLinkError } from "./task-registry-common.js";
+export { isParentFlowLinkError } from "./task-registry-flow-link.js";
 export { assertTaskCancellationReadyById, cancelTaskById } from "./task-registry-cancel.js";
 export { maybeDeliverTaskTerminalUpdate } from "./task-registry-delivery.js";
 export {
@@ -37,10 +37,9 @@ export {
   listTasksForFlowId,
   listTasksForOwnerKey,
   listTasksForRelatedSessionKey,
-  listTasksForSessionKey,
   resolveTaskForLookupToken,
 } from "./task-registry-query.js";
-export { publishTaskRecordAfterAtomicStore } from "./task-registry-mutation.js";
+export { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 export { ensureTaskRegistryReady, reloadTaskRegistryFromStore } from "./task-registry-state.js";
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

@@ -4,12 +4,21 @@ import {
   CONTROL_UI_USER_AVATAR_PATH_SUFFIX,
 } from "./control-ui-user-avatar-route.js";
 
+const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
+
+export function resolveAssistantMediaRoutePath(basePath?: string): string {
+  const normalizedBasePath =
+    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
+  return `${normalizedBasePath}${CONTROL_UI_ASSISTANT_MEDIA_PREFIX}`;
+}
+
 const CONTROL_UI_RESOURCE_ROUTES = {
   agentAvatar: { prefix: "/avatar", suffix: "" },
   catalogIcon: { prefix: "/__openclaw__/catalog-icon", suffix: "" },
   channelAvatar: { prefix: "/__openclaw__/channel-avatar", suffix: "" },
   linkFavicon: { prefix: "/__openclaw__/link-favicon", suffix: "" },
   pluginIcon: { prefix: "/__openclaw__/plugin-icon", suffix: "" },
+  pluginActivityIcon: { prefix: "/__openclaw__/plugin-activity-icon", suffix: "" },
   userAvatar: {
     prefix: CONTROL_UI_USER_AVATAR_PATH_PREFIX.slice(0, -1),
     suffix: CONTROL_UI_USER_AVATAR_PATH_SUFFIX,

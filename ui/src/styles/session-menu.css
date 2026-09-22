@@ -1,0 +1,135 @@
+wa-dropdown.session-menu::part(menu) {
+  padding: var(--menu-padding);
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
+}
+
+.session-menu__item,
+.sidebar-session-sort-menu__item {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--menu-item-height);
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  text-align: left;
+}
+
+.row.session-menu__label {
+  gap: 8px;
+}
+
+/* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
+   slotted icon, which the light DOM cannot outrank. Dropping the gap leaves
+   that margin as the icon column instead of stacking into a ~17px gutter. */
+wa-dropdown-item.session-menu__item {
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
+  gap: 0;
+}
+
+/* The icon slot wrapper is a block-level flex item, so its inline child sits on
+   the row's text baseline ~2px above the label's optical centre. */
+wa-dropdown-item.session-menu__item::part(icon) {
+  display: flex;
+  align-items: center;
+}
+
+/* Web Awesome insets the submenu chevron 1em at its own font size, landing it
+   inside the shortcut column and heavier than the hints. Share their rail. */
+wa-dropdown-item.session-menu__item::part(submenu-icon) {
+  inset-inline-end: 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.session-menu__item:hover:not(:disabled):not([aria-disabled="true"]),
+.session-menu__item[aria-expanded="true"],
+.session-menu__item:focus-visible,
+.sidebar-session-sort-menu__item:hover,
+.sidebar-session-sort-menu__item:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__item:disabled,
+.session-menu__item[aria-disabled="true"] {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.session-menu__item--destructive,
+.session-menu__item--destructive .session-menu__icon {
+  color: var(--danger);
+}
+
+/* Web Awesome renders checkbox marks before the label. Selection state in this
+   menu uses the trailing details rail, so keep the native semantics but hide its visual. */
+.sidebar-session-sort-menu__item::part(checkmark) {
+  display: none;
+}
+
+.session-menu__icon,
+.session-menu__avatar,
+.session-menu__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.session-menu__check {
+  color: var(--accent);
+}
+
+.session-menu__icon {
+  color: var(--muted);
+}
+
+/* Identity choices need room for recognizable faces, not action-sized glyphs. */
+.session-menu__avatar,
+.session-menu__avatar .viewer-avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 10px;
+}
+
+.session-menu__icon svg,
+.session-menu__check svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+wa-dropdown-item.session-menu__item:not([disabled]):not([aria-disabled="true"]) {
+  cursor: var(--cursor-action);
+}
+
+wa-dropdown-item.session-menu__item[data-new-tab-action]:not([disabled], [aria-disabled="true"]) {
+  cursor: pointer;
+}
+
+@supports (corner-shape: superellipse(1.5)) {
+  wa-dropdown.session-menu {
+    --menu-radius: calc(10px * var(--openclaw-corner-radius-scale));
+    --menu-item-radius: calc(var(--menu-radius) - var(--menu-padding));
+  }
+
+  wa-dropdown.session-menu::part(menu) {
+    corner-shape: superellipse(1.5);
+  }
+}

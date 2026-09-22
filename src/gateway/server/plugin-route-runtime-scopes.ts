@@ -1,6 +1,8 @@
 // Plugin route runtime scopes map authenticated HTTP callers to operator scopes exposed inside plugin handlers.
 import type { IncomingMessage } from "node:http";
+import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
+  applyHttpOperatorRoleScopeCeiling,
   getHeader,
   resolveTrustedHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
@@ -18,19 +20,32 @@ export function resolvePluginRouteRuntimeOperatorScopes(
   requestAuth: AuthorizedGatewayHttpRequest,
   surface: PluginRouteRuntimeScopeSurface = "write-default",
 ): string[] {
-  if (surface === "trusted-operator") {
-    if (!requestAuth.trustDeclaredOperatorScopes) {
-      return [...CLI_DEFAULT_OPERATOR_SCOPES];
-    }
+  if (requestAuth.authMethod === "device-token") {
+    const deviceScopes = applyHttpOperatorRoleScopeCeiling(
+      requestAuth.deviceOperatorScopes ?? [],
+      requestAuth,
+    );
+    return surface === "trusted-operator"
+      ? deviceScopes
+      : [WRITE_SCOPE].filter((scope) =>
+          roleScopesAllow({
+            role: "operator",
+            requestedScopes: [scope],
+            allowedScopes: deviceScopes,
+          }),
+        );
+  }
+  const useTrustedScopes =
+    surface === "trusted-operator"
+      ? requestAuth.trustDeclaredOperatorScopes
+      : requestAuth.authMethod === "trusted-proxy" &&
+        getHeader(req, "x-openclaw-scopes") !== undefined;
+  if (useTrustedScopes) {
     return resolveTrustedHttpOperatorScopes(req, requestAuth);
   }
-  if (requestAuth.authMethod !== "trusted-proxy") {
-    return [WRITE_SCOPE];
-  }
-  if (getHeader(req, "x-openclaw-scopes") === undefined) {
-    // Trusted-proxy callers without an explicit scope header keep the legacy
-    // write-default surface instead of inheriting every CLI operator scope.
-    return [WRITE_SCOPE];
-  }
-  return resolveTrustedHttpOperatorScopes(req, requestAuth);
+  // Ordinary plugin routes grant only write by default; a named role can narrow
+  // that grant, never replace it with the role's scopes or the CLI defaults.
+  const defaultScopes =
+    surface === "trusted-operator" ? [...CLI_DEFAULT_OPERATOR_SCOPES] : [WRITE_SCOPE];
+  return applyHttpOperatorRoleScopeCeiling(defaultScopes, requestAuth);
 }

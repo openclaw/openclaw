@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
@@ -30,6 +31,104 @@ async function runCode(code: string, targets: AnyAgentTool[]) {
 
 describe("Code Mode preflight repair", () => {
   afterEach(() => resetCodeModeTestState());
+
+  it.each([
+    { kind: "input", code: "input_contract", calls: 0 },
+    { kind: "output", code: "output_contract", calls: 1 },
+    { kind: "schema", code: "invalid_contract", calls: 0 },
+    { kind: "throw", code: "invalid_input", calls: 1 },
+    { kind: "spoof", code: "tool_error", calls: 1 },
+  ])("classifies $kind failures without inferring safe retry", async ({ kind, code, calls }) => {
+    const target = pluginToolWithExecute("contract_target", "Contract boundary", async () => {
+      if (kind === "throw") {
+        throw new ToolInputError("already started");
+      }
+      if (kind === "spoof") {
+        throw Object.assign(new Error("already started"), {
+          code: "input_contract",
+          effectStatus: "none",
+        });
+      }
+      return jsonResult({ count: "wrong" });
+    });
+    target.parameters = Type.Object({ count: Type.Number() }, { additionalProperties: false });
+    target.outputSchema =
+      kind === "schema"
+        ? ({ type: "not-a-type" } as never)
+        : Type.Object({ count: Type.Number() }, { additionalProperties: false });
+    const result = await runCode(
+      "try { await contract_target({ count: " +
+        (kind === "input" ? '"wrong"' : "1") +
+        " }); } catch (e) { return { code: e.code, effectStatus: e.effectStatus, location: e.location, message: e.message }; }",
+      [target],
+    );
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        code,
+        effectStatus: "unknown",
+        location: expect.stringContaining("openclaw-code-mode:user.js:1:"),
+      },
+    });
+    expect(target.execute).toHaveBeenCalledTimes(calls);
+    if (kind === "output") {
+      expect(result.value).toMatchObject({
+        message: expect.stringContaining("count: must be number"),
+      });
+      expect(result.value).toMatchObject({
+        message: expect.stringContaining("Check current state before retrying"),
+      });
+    }
+  });
+
+  it("reports bounded output validation details after a mutation without exposing returned values", async () => {
+    let applied = 0;
+    const privateValue = "SYNTHETIC_PRIVATE_OUTPUT";
+    const fields = [
+      "field0",
+      "long_" + "🦞".repeat(600),
+      ...Array.from({ length: 6 }, (_, index) => `field${index + 2}`),
+    ];
+    const target = pluginToolWithExecute(
+      "update_receipt",
+      "Update a synthetic receipt",
+      async () => {
+        applied += 1;
+        return jsonResult({
+          receipt: Object.fromEntries(fields.map((field) => [field, privateValue])),
+        });
+      },
+    );
+    target.outputSchema = Type.Object(
+      {
+        receipt: Type.Object(Object.fromEntries(fields.map((field) => [field, Type.Number()]))),
+      },
+      { additionalProperties: false },
+    );
+
+    const details = await runCode(
+      "try { await update_receipt({}); } catch (e) { return { code:e.code, effectStatus:e.effectStatus, message:e.message }; }",
+      [target],
+    );
+
+    expect(applied).toBe(1);
+    expect(target.execute).toHaveBeenCalledOnce();
+    expect(details).toMatchObject({
+      status: "completed",
+      value: {
+        code: "output_contract",
+        effectStatus: "unknown",
+        message: expect.stringContaining("receipt.field0: must be number"),
+      },
+    });
+    const message = JSON.stringify(details.value);
+    expect(message).toContain("tool returned");
+    expect(message).toContain("Check current state before retrying");
+    expect(message).toContain("additional validation issues omitted");
+    expect(message).toContain("[truncated]");
+    expect(message).not.toContain(privateValue);
+    expect(Buffer.byteLength(message, "utf8")).toBeLessThan(2048);
+  });
 
   it("rejects stale exec timeout input before starting the command", async () => {
     const exec = createExecTool({ host: "gateway", security: "full", ask: "off" });

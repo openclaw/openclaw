@@ -3,8 +3,8 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import "../test-support/browser-security.mock.js";
 import { closeTrackedCdpTarget, resolveCdpTabOwnership } from "./cdp.helpers.js";
@@ -911,6 +911,10 @@ describe("cdp", () => {
     const wsPort = await startWsServerWithMessages((msg, socket) => {
       if (msg.method === "Accessibility.getFullAXTree") {
         socket.send(JSON.stringify({ id: msg.id, result: { nodes } }));
+      } else if (msg.method === "Runtime.evaluate") {
+        socket.send(
+          JSON.stringify({ id: msg.id, error: { code: -32000, message: "unavailable" } }),
+        );
       }
     });
 

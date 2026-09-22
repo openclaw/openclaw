@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { wrapToolWithBeforeToolCallHook } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createTerminalPresentationContractTool,
@@ -62,6 +63,7 @@ describe("buildEmbeddedExtensionFactories", () => {
         result: {
           content: [{ type: "text" as const, text: "middleware-observed" }],
           details: { observedTool: event.toolName },
+          terminate: true,
         },
       }),
     );
@@ -86,10 +88,7 @@ describe("buildEmbeddedExtensionFactories", () => {
       ...identity,
     });
     const factory = factories[0];
-    expect(factory).toBeDefined();
-    if (!factory) {
-      throw new Error("Expected embedded tool-result extension factory");
-    }
+    assert(factory, "Expected embedded tool-result extension factory");
 
     const runtime = createExtensionRuntime();
     const extension = await loadExtensionFromFactory(
@@ -127,6 +126,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(result).toMatchObject({
       content: [{ type: "text", text: "middleware-observed" }],
       details: { observedTool: "read" },
+      terminate: true,
     });
   });
 
@@ -641,10 +641,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
 
     const factory = factories[0];
-    expect(factory).toBeDefined();
-    if (!factory) {
-      throw new Error("Expected embedded tool-result extension factory");
-    }
+    assert(factory, "Expected embedded tool-result extension factory");
     const runtime = createExtensionRuntime();
     const extension = await loadExtensionFromFactory(
       factory,

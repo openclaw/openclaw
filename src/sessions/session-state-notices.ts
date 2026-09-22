@@ -1,7 +1,7 @@
 /** Stale-state notice text, coalescing keys, and watcher eligibility. */
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
 const SESSION_STATE_WAKE_COALESCE_MS = 20_000;
@@ -39,16 +39,6 @@ function sessionStateNoticeText(targetSessionKey: string, lastSeenSequence: numb
 
 function shouldWakeWatcher(watcherSessionKey: string): boolean {
   return !isSubagentSessionKey(watcherSessionKey);
-}
-
-// Bare keys (session.scope="global") are store-local per agent, but cursors, the
-// system-event queue, and heartbeat wakes are keyed by session key alone. A notice
-// for one agent's child could be drained and acknowledged by another agent's global
-// turn — a cross-A2A metadata leak plus a lost notification. Until watcher identity
-// is agent-scoped end-to-end, such watchers get durable events and changesSince but
-// no notices.
-export function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
-  return parseAgentSessionKey(watcherSessionKey) != null;
 }
 
 export function enqueueSessionStateNotice(params: {

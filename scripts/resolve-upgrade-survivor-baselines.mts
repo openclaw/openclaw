@@ -3,7 +3,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { normalizeUpgradeSurvivorBaselineSpec } from "./lib/docker-e2e-plan.mts";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";
+import { OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE } from "./lib/upgrade-survivor-policy.mjs";
 
 type ReleaseRecord = Partial<Record<"isPrerelease" | "publishedAt" | "tagName", unknown>>;
 
@@ -41,6 +43,21 @@ function dedupeSpecs(specs: string[]) {
     .map(normalizeUpgradeSurvivorBaselineSpec)
     .filter((spec) => spec !== undefined);
   return [...new Set(normalized)];
+}
+
+function omitUnpublishedCandidateBaseline(args: Map<string, string>, specs: string[]) {
+  if (args.get("candidate-published") !== "false") {
+    return specs;
+  }
+  const candidateVersion = args.get("candidate-version");
+  if (!candidateVersion) {
+    return specs;
+  }
+  const candidateSpec = normalizeUpgradeSurvivorBaselineSpec(candidateVersion);
+  if (!candidateSpec) {
+    throw new Error(`invalid candidate version: ${candidateVersion}`);
+  }
+  return specs.filter((spec) => normalizeUpgradeSurvivorBaselineSpec(spec) !== candidateSpec);
 }
 
 function parsePositiveInteger(value: unknown, label: string) {
@@ -133,7 +150,10 @@ function resolveReleaseHistory(args: Map<string, string>) {
   const preDate = args.get("pre-date") ?? "2026-03-15T00:00:00Z";
   const publishedVersions = readPublishedVersions(args.get("npm-versions-json"));
   const releases = readStableReleases(releasesJson, publishedVersions);
-  const versions = releases.slice(0, historyCount).map((release) => release.version);
+  const versions = omitUnpublishedCandidateBaseline(
+    args,
+    releases.map((release) => release.version),
+  ).slice(0, historyCount);
   const exact = releases.find((release) => release.version === includeVersion);
   if (exact) {
     versions.push(exact.version);
@@ -160,7 +180,12 @@ function resolveLastStable(args: Map<string, string>, count: number) {
   }
   const publishedVersions = readPublishedVersions(args.get("npm-versions-json"));
   const releases = readStableReleases(releasesJson, publishedVersions);
-  return dedupeSpecs(releases.slice(0, count).map((release) => release.version));
+  return dedupeSpecs(
+    omitUnpublishedCandidateBaseline(
+      args,
+      releases.map((release) => release.version),
+    ).slice(0, count),
+  );
 }
 
 /**
@@ -173,10 +198,57 @@ function resolveAllSince(args: Map<string, string>, minimumVersion: string) {
   }
   const publishedVersions = readPublishedVersions(args.get("npm-versions-json"));
   const releases = readStableReleases(releasesJson, publishedVersions);
-  return dedupeSpecs(
-    releases
-      .map((release) => release.version)
-      .filter((version) => compareStableVersions(version, minimumVersion) >= 0),
+  return omitUnpublishedCandidateBaseline(
+    args,
+    dedupeSpecs(
+      releases
+        .map((release) => release.version)
+        .filter((version) => compareStableVersions(version, minimumVersion) >= 0),
+    ),
+  );
+}
+
+function resolveSupportedLines(args: Map<string, string>) {
+  const tagsFile = args.get("npm-dist-tags-json");
+  const versions = readPublishedVersions(args.get("npm-versions-json"));
+  if (!tagsFile || !versions) {
+    throw new Error("supported-lines requires --npm-dist-tags-json and --npm-versions-json");
+  }
+  const tagResults = resolveNpmJsonEntries(JSON.parse(readFileSync(tagsFile, "utf8")));
+  const tags = tagResults.length === 1 ? tagResults[0] : undefined;
+  if (typeof tags !== "object" || tags === null || Array.isArray(tags)) {
+    throw new Error("npm dist-tags must be a JSON object");
+  }
+  const latest = "latest" in tags ? tags.latest : undefined;
+  if (typeof latest !== "string" || !parseStableVersion(latest) || !versions.has(latest)) {
+    throw new Error("npm latest must name a published stable version");
+  }
+  const previous = [...versions]
+    .filter((version) => parseStableVersion(version) && compareStableVersions(version, latest) < 0)
+    .toSorted((left, right) => compareStableVersions(right, left))[0];
+  if (!previous) {
+    throw new Error(`no previous stable npm version before ${latest}`);
+  }
+  if (!versions.has(OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE)) {
+    throw new Error(
+      `oldest supported baseline is not published: ${OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE}`,
+    );
+  }
+  const extended = "extended-stable" in tags ? tags["extended-stable"] : undefined;
+  if (
+    extended !== undefined &&
+    (typeof extended !== "string" || !parseStableVersion(extended) || !versions.has(extended))
+  ) {
+    throw new Error("npm extended-stable must name a published stable version when present");
+  }
+  return omitUnpublishedCandidateBaseline(
+    args,
+    dedupeSpecs([
+      latest,
+      previous,
+      ...(typeof extended === "string" ? [extended] : []),
+      OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE,
+    ]),
   );
 }
 
@@ -192,7 +264,9 @@ export function resolveBaselines(args: Map<string, string>) {
   }
   const resolved: string[] = [];
   for (const token of requestedTokens) {
-    if (token === "release-history") {
+    if (token === "supported-lines") {
+      resolved.push(...resolveSupportedLines(args));
+    } else if (token === "release-history") {
       resolved.push(...resolveReleaseHistory(args));
     } else if (token.startsWith("last-stable-")) {
       const count = parsePositiveInteger(
@@ -222,6 +296,13 @@ if (isMain) {
 
   const githubOutput = args.get("github-output");
   if (githubOutput) {
-    writeFileSync(githubOutput, `baselines=${baselines}\n`, { flag: "a" });
+    const requestedTokens = splitSpecs(args.get("requested"));
+    const baselineScope =
+      requestedTokens.length > 0 && requestedTokens.every((token) => token === "supported-lines")
+        ? "legacy-operator-state"
+        : "all-scenarios";
+    writeFileSync(githubOutput, `baselines=${baselines}\nbaseline_scope=${baselineScope}\n`, {
+      flag: "a",
+    });
   }
 }

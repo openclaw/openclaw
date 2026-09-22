@@ -1,0 +1,251 @@
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import type { SessionsListResult } from "../../api/types.ts";
+import { formatUiError } from "../format-error.ts";
+import { isAwaitingGatewayFailure } from "../gateway-availability.ts";
+import { appendSessionResults, reconcileRosterPresentationMetadata } from "./reconcile.ts";
+import type {
+  SessionConnectionOwner,
+  SessionGateway,
+  SessionListScope,
+  SessionListSnapshot,
+  SessionState,
+} from "./session-capability.ts";
+import {
+  sessionListQueryAgentId,
+  type ManagedSessionList,
+  type ManagedSessionListRefresh,
+  type ObservedSessionList,
+} from "./session-list-query.ts";
+import { requestSessionListParams } from "./session-requests.ts";
+import type { createSessionRosterObservations } from "./session-roster-observations.ts";
+
+export function publishManagedList(
+  entry: ObservedSessionList,
+  snapshot: SessionListSnapshot,
+  isCurrent: () => boolean = () => true,
+): void {
+  entry.snapshot = snapshot;
+  for (const listener of entry.listeners) {
+    if (!isCurrent() || entry.snapshot !== snapshot) {
+      return;
+    }
+    listener(snapshot);
+  }
+}
+
+export type SessionListRefreshHost = {
+  background: (key: string | object, task: () => Promise<unknown>) => Promise<void>;
+  connection: SessionConnectionOwner;
+  snapshot: () => SessionGateway["snapshot"];
+  readState: () => SessionState;
+  decorate: (
+    result: SessionsListResult | null,
+    owner: { scope: SessionListScope },
+  ) => SessionsListResult | null;
+  reconcileList: (
+    result: SessionsListResult | null,
+    issuedRevision: number,
+    agentId?: string,
+  ) => SessionsListResult | null;
+};
+
+/** Owns each managed window's pending request and queued replacement drain. */
+export function createSessionManagedListRefresh(
+  host: SessionListRefreshHost,
+  {
+    managedLists,
+    observations,
+    nextRevision,
+    isPageActive,
+    publishPrimary,
+  }: {
+    managedLists: ReadonlyMap<string, ManagedSessionList>;
+    observations: Pick<
+      ReturnType<typeof createSessionRosterObservations>,
+      "inherit" | "accept" | "stageObservedRows" | "mergeRows"
+    >;
+    nextRevision: () => number;
+    isPageActive: () => boolean;
+    publishPrimary: (result: SessionsListResult | null) => void;
+  },
+) {
+  const refreshManagedList = (
+    entry: ManagedSessionList,
+    refresh: ManagedSessionListRefresh,
+  ): Promise<void> => {
+    const scope = host.connection.capture();
+    if (!scope) {
+      return Promise.resolve();
+    }
+    if (entry.pending) {
+      if (
+        refresh.invalidated &&
+        (!refresh.background || !entry.queued || entry.queued.background)
+      ) {
+        entry.queued = refresh;
+      }
+      return entry.pending;
+    }
+    // Another bootstrap path can hydrate this query while its initial fill waits for admission.
+    if (
+      refresh.background &&
+      !refresh.invalidated &&
+      !refresh.append &&
+      entry.connectionEpoch === scope.epoch
+    ) {
+      return Promise.resolve();
+    }
+    if (refresh.append && !entry.snapshot.result) {
+      return Promise.resolve();
+    }
+    if (!refresh.append) {
+      entry.queued = null;
+    }
+    const isCurrent = () =>
+      managedLists.get(entry.key) === entry && host.connection.isCurrent(scope);
+    const drain = async () => {
+      let next: ManagedSessionListRefresh | null = refresh;
+      while (next && isCurrent()) {
+        if (!next.append) {
+          entry.coordinator.absorb();
+        }
+        const requestParams = {
+          ...entry.query,
+          limit: next.append ? entry.query.limit : entry.retainedLimit,
+          ...(next.append && next.offset !== undefined ? { offset: next.offset } : {}),
+        };
+        publishManagedList(entry, { ...entry.snapshot, loading: true, error: null }, isCurrent);
+        try {
+          const issuedRevision = nextRevision();
+          const response = await requestSessionListParams(scope.client, requestParams);
+          if (!isCurrent()) {
+            return;
+          }
+          if (!response) {
+            throw new Error("The session query did not return a result. Try again.");
+          }
+          const result = host.reconcileList(
+            response,
+            issuedRevision,
+            sessionListQueryAgentId(entry.query),
+          );
+          const previous = entry.snapshot.result;
+          // Only this response's rows were observed now; pagination retains older
+          // members and discards duplicate page rows without refreshing their facts.
+          const presented = reconcileRosterPresentationMetadata(result, previous);
+          const agentId = sessionListQueryAgentId(entry.query);
+          observations.inherit(presented, result, previous, agentId);
+          const observed = observations.accept(
+            presented,
+            previous,
+            host.readState().result,
+            agentId,
+            entry.snapshot.agentId,
+          );
+          const nextResult =
+            observed && next.append && requestParams.offset && previous
+              ? appendSessionResults(previous, observed)
+              : observed;
+          const decorated = host.decorate(nextResult, entry);
+          if (decorated) {
+            entry.retainedLimit = Math.max(entry.retainedLimit, decorated.sessions.length);
+          }
+          const notifyObserved = observations.stageObservedRows(
+            observed?.sessions ?? [],
+            scope,
+            agentId,
+            undefined,
+            false,
+          );
+          entry.connectionEpoch = scope.epoch;
+          const snapshot: SessionListSnapshot = {
+            result: decorated,
+            agentId: agentId ?? null,
+            loading: false,
+            error: null,
+          };
+          // Stage this window before notifying primary observers. Each query keeps
+          // its membership; only overlapping, admitted row facts reach the primary.
+          entry.snapshot = snapshot;
+          const primary = host.readState();
+          const merged = observations.mergeRows(
+            primary.result,
+            decorated?.sessions ?? [],
+            primary.agentId,
+            agentId,
+          );
+          if (merged !== primary.result) {
+            publishPrimary(merged);
+          }
+          // Primary listeners can retire the connection or replace this snapshot.
+          if (isCurrent() && entry.snapshot === snapshot) {
+            publishManagedList(entry, snapshot, isCurrent);
+          }
+          notifyObserved();
+        } catch (error) {
+          if (!isCurrent()) {
+            return;
+          }
+          const awaitingGateway = isAwaitingGatewayFailure(error, host.snapshot());
+          publishManagedList(
+            entry,
+            {
+              ...entry.snapshot,
+              loading: false,
+              error: awaitingGateway ? null : formatUiError(error),
+            },
+            isCurrent,
+          );
+        }
+        if (!isCurrent()) {
+          return;
+        }
+        const queued = entry.queued;
+        if (queued?.background) {
+          return;
+        }
+        entry.queued = null;
+        next = isPageActive() ? queued : null;
+      }
+    };
+    // Loading listeners can request a refresh before the first RPC starts.
+    // Claim the pending owner first so those requests enter its trailing queue.
+    const completion = createDeferredCore();
+    const pending = completion.promise.finally(() => {
+      if (entry.pending === pending) {
+        entry.pending = null;
+        if (entry.queued?.background && isCurrent() && isPageActive()) {
+          // Release this request's admission before scheduling its automatic successor.
+          entry.coordinator.schedule();
+        }
+      }
+    });
+    entry.pending = pending;
+    completion.resolve(drain());
+    return pending;
+  };
+  return (
+    entry: ManagedSessionList,
+    refresh: ManagedSessionListRefresh,
+    isCurrent: () => boolean = () => true,
+  ): Promise<void> => {
+    if (!refresh.background || entry.pending) {
+      return refreshManagedList(entry, refresh);
+    }
+    if (!entry.queued || (refresh.invalidated && entry.queued.background)) {
+      entry.queued = refresh;
+    }
+    return host.background(entry, async () => {
+      if (isCurrent() && managedLists.get(entry.key) === entry && entry.listeners.size > 0) {
+        if (!isPageActive()) {
+          entry.coordinator.setActive(false, true);
+          return;
+        }
+        // Scheduler deduplication must retain invalidation that arrives after the initial fill.
+        const queued = entry.queued ?? refresh;
+        entry.queued = null;
+        await refreshManagedList(entry, queued);
+      }
+    });
+  };
+}

@@ -4,6 +4,7 @@
  */
 
 import { t } from "../../i18n/index.ts";
+import type { ToolCard } from "./chat-types.ts";
 import {
   resolveToolCallFileOperations,
   resolveToolCallKind,
@@ -12,9 +13,76 @@ import {
 } from "./tool-call-view.ts";
 import { resolveToolDisplay } from "./tool-display.ts";
 
+export type ToolCardGroup<Card = ToolCard> = {
+  card: Card;
+  children: ToolCardGroup<Card>[];
+};
+
+/** Preserve recorded nesting without guessing relationships from names or arrival order. */
+export function groupToolCards<
+  Card extends Pick<ToolCard, "callId" | "runId" | "parentToolCallId">,
+>(cards: readonly Card[]): ToolCardGroup<Card>[] {
+  const groups = cards.map((card): ToolCardGroup<Card> => ({ card, children: [] }));
+  const identities = new Map<string, ToolCardGroup<Card> | null>();
+  for (const group of groups) {
+    const { runId, callId } = group.card;
+    if (runId && callId) {
+      const key = JSON.stringify([runId, callId]);
+      identities.set(key, identities.has(key) ? null : group);
+    }
+  }
+
+  const parents = new Map<ToolCardGroup<Card>, ToolCardGroup<Card>>();
+  for (const group of groups) {
+    const { runId, callId, parentToolCallId } = group.card;
+    if (
+      !runId ||
+      !parentToolCallId ||
+      parentToolCallId === callId ||
+      (callId && identities.get(JSON.stringify([runId, callId])) !== group)
+    ) {
+      continue;
+    }
+    const parent = identities.get(JSON.stringify([runId, parentToolCallId]));
+    if (parent) {
+      parents.set(group, parent);
+    }
+  }
+
+  // Break every cycle member out as a root before linking children. Iterative
+  // traversal also keeps malformed or deeply nested transcripts stack-safe.
+  const visited = new Set<ToolCardGroup<Card>>();
+  for (const group of groups) {
+    const path: ToolCardGroup<Card>[] = [];
+    let current: ToolCardGroup<Card> | undefined = group;
+    while (current && !visited.has(current)) {
+      visited.add(current);
+      path.push(current);
+      current = parents.get(current);
+    }
+    const cycleStart = current ? path.indexOf(current) : -1;
+    if (cycleStart >= 0) {
+      for (const member of path.slice(cycleStart)) {
+        parents.delete(member);
+      }
+    }
+  }
+
+  const roots: ToolCardGroup<Card>[] = [];
+  for (const group of groups) {
+    const parent = parents.get(group);
+    (parent ? parent.children : roots).push(group);
+  }
+  return roots;
+}
+
 type ToolGroupSummaryInput = {
   name: string;
   args?: unknown;
+  callId?: string;
+  runId?: string;
+  parentToolCallId?: string;
+  isError?: boolean;
 };
 
 type FileActivity = "read" | "edit" | "write" | "delete";
@@ -107,8 +175,19 @@ export function summarizeToolGroup(cards: readonly ToolGroupSummaryInput[]): str
     otherNames: new Set(),
     others: 0,
   };
+  const wrappers = new Set<ToolGroupSummaryInput>();
+  const pending = groupToolCards(cards);
+  for (const { card, children } of pending) {
+    if (children.length) {
+      wrappers.add(card);
+      pending.push(...children);
+    }
+  }
+  // Match the visible hierarchy; failed wrappers retain their own outcome.
   for (const card of cards) {
-    countCard(counts, card);
+    if (card.isError || !wrappers.has(card)) {
+      countCard(counts, card);
+    }
   }
 
   const segments: string[] = [];

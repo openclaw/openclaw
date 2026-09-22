@@ -45,7 +45,7 @@
           "type": "function"
         },
         {
-          "description": "End turn after subagent spawn; results arrive next message. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
+          "description": "End this turn for pending child completion events; this is not a final-result submission. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:\"message\". Collector runs require agents_wait instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.",
           "inputSchema": {
             "properties": {
               "acknowledgment": {
@@ -54,6 +54,11 @@
               },
               "message": {
                 "description": "Private context for the resumed turn; not sent to the user.",
+                "type": "string"
+              },
+              "waitFor": {
+                "const": "message",
+                "description": "Explicitly pause an unfinished subagent until an incoming continuation message. Does not schedule a message or submit the final result.",
                 "type": "string"
               }
             },

@@ -1,10 +1,9 @@
 // Matrix plugin module implements credentials read behavior. Pure record
 // shapes/normalizers live in credentials-state.ts; this module owns the
-// heavy sync plugin-state store access.
+// plugin-state store access.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
-import { getOptionalMatrixRuntime } from "../runtime.js";
+import { getMatrixRuntime, getOptionalMatrixRuntime } from "../runtime.js";
 import {
   MATRIX_CREDENTIALS_MAX_ENTRIES,
   MATRIX_CREDENTIALS_NAMESPACE,
@@ -16,28 +15,56 @@ import {
 
 export { resolveMatrixCredentialsDir, resolveMatrixCredentialsPath } from "../storage-paths.js";
 
-export function openMatrixCredentialsStore(
-  env: NodeJS.ProcessEnv = process.env,
-): PluginStateSyncKeyedStore<MatrixCredentialStateRecord> {
+function matrixCredentialsStoreOptions(env: NodeJS.ProcessEnv) {
   const runtime = getOptionalMatrixRuntime();
   const resolvedEnv =
     env.OPENCLAW_STATE_DIR?.trim() || !runtime
       ? env
       : { ...env, OPENCLAW_STATE_DIR: runtime.state.resolveStateDir(env) };
-  return createPluginStateSyncKeyedStore<MatrixCredentialStateRecord>("matrix", {
+  return {
     namespace: MATRIX_CREDENTIALS_NAMESPACE,
     maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
+    overflowPolicy: "reject-new" as const,
     env: resolvedEnv,
-  });
+  };
+}
+
+export function openMatrixCredentialsStore(env: NodeJS.ProcessEnv = process.env) {
+  return createPluginStateSyncKeyedStore<MatrixCredentialStateRecord>(
+    "matrix",
+    matrixCredentialsStoreOptions(env),
+  );
+}
+
+export function openMatrixCredentialsAsyncStore(env: NodeJS.ProcessEnv = process.env) {
+  return getMatrixRuntime().state.openKeyedStore<MatrixCredentialStateRecord>(
+    matrixCredentialsStoreOptions(env),
+  );
+}
+
+export async function loadMatrixCredentialsAsync(
+  env: NodeJS.ProcessEnv = process.env,
+  accountId?: string | null,
+): Promise<MatrixStoredCredentials | null> {
+  const stored = await openMatrixCredentialsAsyncStore(env).lookup(
+    matrixCredentialsStoreKey(accountId),
+  );
+  return decodeMatrixCredentials(stored, accountId);
 }
 
 export function loadMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
 ): MatrixStoredCredentials | null {
-  const normalizedAccountId = normalizeAccountId(accountId);
   const stored = openMatrixCredentialsStore(env).lookup(matrixCredentialsStoreKey(accountId));
+  return decodeMatrixCredentials(stored, accountId);
+}
+
+function decodeMatrixCredentials(
+  stored: MatrixCredentialStateRecord | undefined,
+  accountId?: string | null,
+): MatrixStoredCredentials | null {
+  const normalizedAccountId = normalizeAccountId(accountId);
   const parsed = normalizeMatrixStoredCredentials(stored, normalizedAccountId);
   if (!parsed || parsed.accountId !== normalizedAccountId) {
     return null;

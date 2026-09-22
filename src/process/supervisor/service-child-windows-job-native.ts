@@ -9,6 +9,59 @@ const FILE_SHARE_READ = 0x0000_0001;
 const FILE_SHARE_WRITE = 0x0000_0002;
 const OPEN_EXISTING = 3;
 const FILE_ATTRIBUTE_NORMAL = 0x0000_0080;
+let retainedProcessJob: NativeHandle | undefined;
+
+/** The executable caller keeps this non-inheritable Job handle until OS exit. */
+export function retainWindowsProcessJobUntilExit(koffi: typeof import("koffi").default): void {
+  if (retainedProcessJob !== undefined) {
+    return;
+  }
+  const bindings = createWindowsJobBindings(koffi);
+  bindings.assertLayouts();
+  const job = bindings.requireHandle(bindings.CreateJobObjectW(null, null), "CreateJobObjectW");
+  try {
+    if (!bindings.SetExtendedLimits(job, 9, bindings.extendedLimits, bindings.extendedLimitsSize)) {
+      throw bindings.lastError("SetInformationJobObject(KILL_ON_JOB_CLOSE)");
+    }
+    if (!bindings.AssignProcessToJobObject(job, bindings.GetCurrentProcess())) {
+      throw bindings.lastError("AssignProcessToJobObject(finalizer)");
+    }
+  } catch (error) {
+    bindings.CloseHandle(job);
+    throw error;
+  }
+  // Closing this handle would terminate the caller before it can flush terminal
+  // JSON. OS exit closes it and kills descendants even after their launcher exits.
+  retainedProcessJob = job;
+}
+
+/** The caller supplies a pinned live launcher process, which becomes the last Job handle owner. */
+export function bindWindowsProcessJobToOwner(
+  bindings: ReturnType<typeof createWindowsJobBindings>,
+  owner: NativeHandle,
+): void {
+  const job = bindings.requireHandle(bindings.CreateJobObjectW(null, null), "CreateJobObjectW");
+  try {
+    if (!bindings.SetExtendedLimits(job, 9, bindings.extendedLimits, bindings.extendedLimitsSize)) {
+      throw bindings.lastError("SetInformationJobObject(KILL_ON_JOB_CLOSE)");
+    }
+    const transferred: Array<NativeHandle | null> = [null];
+    if (!bindings.DuplicateHandle(bindings.GetCurrentProcess(), job, owner, transferred, 0, 0, 2)) {
+      throw bindings.lastError("DuplicateHandle(Job to task launcher)");
+    }
+    bindings.requireHandle(transferred[0], "DuplicateHandle(task launcher Job)");
+    if (!bindings.AssignProcessToJobObject(job, bindings.GetCurrentProcess())) {
+      throw bindings.lastError("AssignProcessToJobObject(task supervisor)");
+    }
+  } catch (error) {
+    bindings.CloseHandle(job);
+    throw error;
+  }
+  // No supervisor/child copy may keep this Job alive after Task Scheduler ends its launcher.
+  if (!bindings.CloseHandle(job)) {
+    throw bindings.lastError("CloseHandle(local task Job)");
+  }
+}
 
 export function createWindowsJobBindings(koffi: typeof import("koffi").default) {
   if (process.arch !== "x64" && process.arch !== "arm64") {
@@ -95,6 +148,22 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
     VOID_POINTER,
     "str16",
   ]);
+  const GetCurrentProcess = kernel32.func("__stdcall", "GetCurrentProcess", HANDLE, []);
+  const DuplicateHandle = kernel32.func("__stdcall", "DuplicateHandle", "int32_t", [
+    HANDLE,
+    HANDLE,
+    HANDLE,
+    koffi.out(koffi.pointer(HANDLE)),
+    "uint32_t",
+    "int32_t",
+    "uint32_t",
+  ]);
+  const AssignProcessToJobObject = kernel32.func(
+    "__stdcall",
+    "AssignProcessToJobObject",
+    "int32_t",
+    [HANDLE, HANDLE],
+  );
   const SetExtendedLimits = kernel32.func("__stdcall", "SetInformationJobObject", "int32_t", [
     HANDLE,
     "int32_t",
@@ -337,6 +406,9 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
   };
   return {
     CreateJobObjectW,
+    GetCurrentProcess,
+    DuplicateHandle,
+    AssignProcessToJobObject,
     SetExtendedLimits,
     CreateProcessW,
     WaitForSingleObject,

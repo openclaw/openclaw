@@ -8,6 +8,12 @@ beforeEach(() => {
   vi.useRealTimers();
 });
 
-afterAll(() => {
-  testEnv.cleanup();
+afterAll(async () => {
+  const { drainAgentDatabaseResources } = await vi.importActual<
+    typeof import("../src/state/openclaw-agent-db-resources.js")
+  >("../src/state/openclaw-agent-db-resources.js");
+  // File-owned homes must survive until retained Worker leases have been released.
+  await drainAgentDatabaseResources({}, async () => {
+    testEnv.cleanup();
+  });
 });

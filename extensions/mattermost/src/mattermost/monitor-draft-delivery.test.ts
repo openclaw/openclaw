@@ -1,9 +1,11 @@
 // Mattermost tests cover draft-preview delivery settlement.
+import { setImmediate } from "node:timers/promises";
 import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as clientModule from "./client.js";
 import type { MattermostClient } from "./client.js";
@@ -122,15 +124,32 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   it("records thread participation when a same-thread final finalizes the preview in place", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = createDeliverFinalMock();
-    const recordThreadParticipation = vi.fn();
+    const recording = createDeferred<void>();
+    const registered = createDeferred<void>();
+    const recordThreadParticipation = vi.fn(() => {
+      recording.resolve();
+      return registered.promise;
+    });
+    let settled = false;
 
-    const result = await deliverDraftPreview({
+    const delivery = deliverDraftPreview({
       payload: { text: "All good" } as never,
       draftStream,
       effectiveReplyToId: "thread-root-1",
       recordThreadParticipation,
       deliverPayload: deliverFinal,
+    }).finally(() => {
+      settled = true;
     });
+    try {
+      await recording.promise;
+      await setImmediate();
+      expect(settled).toBe(false);
+    } finally {
+      registered.resolve();
+      await delivery;
+    }
+    const result = await delivery;
 
     // Default streaming finalizes by editing the preview post, bypassing deliverPayload —
     // participation must still be recorded (regression: PR #95552 review P1).

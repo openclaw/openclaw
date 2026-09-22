@@ -183,6 +183,7 @@ export function createAgentRunEventHandler(params: {
         phase: readStringValue(evt.data.phase),
         title: readStringValue(evt.data.title),
         explanation: readStringValue(evt.data.explanation),
+        ...(evt.data.explanationFormat === "plain" ? { explanationFormat: "plain" as const } : {}),
         steps: normalizeAgentPlanSteps(evt.data.steps),
         source: readStringValue(evt.data.source),
       });
@@ -264,6 +265,7 @@ export function createAgentRunEventHandler(params: {
       return;
     }
     if (evt.data.completed !== true) {
+      await params.turn.opts?.onCompactionEnd?.({ completed: false });
       await sendCompactionUserNotices("incomplete");
       return;
     }
@@ -288,7 +290,7 @@ export function createAgentRunEventHandler(params: {
         consoleMessage,
       });
     }
-    await params.turn.opts?.onCompactionEnd?.();
+    await params.turn.opts?.onCompactionEnd?.({ completed: true });
     await sendCompactionUserNotices("end");
   };
 }

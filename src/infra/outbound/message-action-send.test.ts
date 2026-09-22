@@ -1,7 +1,7 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
+import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -10,65 +10,62 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   createAlwaysConfiguredPluginConfig,
-  createActionHubPluginFixture,
   createGatewayActionPlugin,
   messageActionRunnerMocks as mocks,
   resetMessageActionRunnerMocks,
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
+  useActionHubPluginFixture,
+  readFirstPluginCall,
+  readMockCallArg,
+  readRecordField,
+  expectRecordFields,
+  createEnabledMessageActionConfig,
 } from "./message-action-runner.test-helpers.js";
-
-const requireRecord = createRequireRecord("record", "expected-non-array-record");
-const requireLabeledRecord = createRequireRecord("record", "expected-label");
-
-function readFirstPluginCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  const [mockCall] = mock.mock.calls;
-  const call = mockCall?.[0];
-  return requireRecord(call);
-}
-
-function readMockCallArg(
-  mock: { mock: { calls: unknown[][] } },
-  label: string,
-  callIndex = 0,
-  argIndex = 0,
-): Record<string, unknown> {
-  const mockCall = mock.mock.calls[callIndex];
-  const value = mockCall?.[argIndex];
-  return requireLabeledRecord(value, label);
-}
-
-function readRecordField(record: Record<string, unknown>, key: string, label: string) {
-  const value = record[key];
-  return requireLabeledRecord(value, label);
-}
-
-function expectRecordFields(
-  record: Record<string, unknown>,
-  expected: Record<string, unknown>,
-  label: string,
-) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key], `${label}.${key}`).toEqual(value);
-  }
-}
+import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 
 describe("runMessageAction plugin dispatch", () => {
   beforeEach(() => {
     resetMessageActionRunnerMocks();
   });
   describe("alias-based plugin action dispatch", () => {
-    const { handleAction, plugin: actionHubPlugin } = createActionHubPluginFixture();
-
-    beforeEach(() => {
-      setTestPlugin(actionHubPlugin, "actionhub");
-      handleAction.mockClear();
-    });
-
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
-      vi.unstubAllEnvs();
+    useActionHubPluginFixture();
+    it("does not persist a route for Gateway-relayed suppression", async () => {
+      vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
+        sessionKey: "agent:main:gatewaychat:direct:user-123",
+        baseSessionKey: "agent:main:gatewaychat:direct:user-123",
+        peer: { kind: "direct", id: "user-123" },
+        chatType: "direct",
+        from: "gatewaychat:user-123",
+        to: "user-123",
+      });
+      setTestPlugin(
+        createGatewayActionPlugin({
+          pluginId: "gatewaychat",
+          label: "Gateway Chat",
+          blurb: "Gateway Chat send test plugin.",
+          actions: ["send"],
+          messaging: { targetResolver: { looksLikeId: () => true } },
+          handleAction: vi.fn(),
+        }),
+        "gatewaychat",
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+      });
+      const result = await runMessageAction({
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
+        action: "send",
+        params: { channel: "gatewaychat", target: "user-123", message: "omitted" },
+        agentId: "main",
+        gateway: { clientName: "cli", mode: "cli" },
+      });
+      expect(result.payload).toEqual({
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+      });
+      expect(ensureOutboundSessionEntry).not.toHaveBeenCalled();
     });
     it.each([
       { name: "raw base64", buffer: "SGVsbG8=" },
@@ -93,13 +90,7 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "send",
         params: {
           channel: "gatewaychat",
@@ -133,6 +124,92 @@ describe("runMessageAction plugin dispatch", () => {
         "gateway message params",
       );
       expect(mocks.executeSendAction).not.toHaveBeenCalled();
+    });
+
+    it("stages workspace-reader media before gateway dispatch", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat sandbox media test plugin.",
+        actions: ["send"],
+        messaging: { targetResolver: { looksLikeId: () => true } },
+        handleAction: vi.fn(async () => jsonResult({ ok: true })),
+      });
+      setTestPlugin(gatewayPlugin, "gatewaychat");
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        messageId: "gw-sandbox-media",
+      });
+      const workspaceReadFile = vi.fn(async () => Buffer.from("remote chart"));
+      mocks.loadWebMedia.mockImplementation(async (mediaUrl, maxBytesOrOptions) => {
+        const options =
+          typeof maxBytesOrOptions === "object" && maxBytesOrOptions !== null
+            ? maxBytesOrOptions
+            : undefined;
+        const readFile = options?.readFile;
+        if (!readFile) {
+          throw new Error("expected gateway staging media reader");
+        }
+        return {
+          buffer: await readFile(mediaUrl),
+          contentType: "text/plain",
+          fileName: "chart.txt",
+          kind: "document",
+        };
+      });
+
+      await runMessageAction({
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
+        action: "send",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          path: "/sandbox/chart.txt",
+          filePath: "/sandbox/chart.txt",
+          fileUrl: "/sandbox/chart.txt",
+          attachments: [
+            {
+              type: "file",
+              path: "/sandbox/chart.txt",
+              fileUrl: "/sandbox/chart.txt",
+              name: "chart.txt",
+              mimeType: "text/plain",
+            },
+          ],
+        },
+        sandboxRoot: "/host-mirror",
+        sandboxContainerWorkdir: "/sandbox",
+        workspaceMediaAccess: {
+          localRoots: ["/host-mirror", "/sandbox"],
+          readFile: workspaceReadFile,
+          workspaceDir: "/host-mirror",
+        },
+        gateway: { clientName: "cli", mode: "cli" },
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      const messageParams = readRecordField(gatewayParams, "params", "gateway message params");
+      const stagedPath = String(messageParams.media);
+      expect(stagedPath).not.toBe("/sandbox/chart.txt");
+      expect(messageParams.mediaUrl).toBe(stagedPath);
+      expect(messageParams.mediaUrls).toEqual([stagedPath]);
+      expect(messageParams.attachments).toEqual([
+        {
+          type: "file",
+          path: stagedPath,
+          name: "chart.txt",
+          mimeType: "text/plain",
+        },
+      ]);
+      expect(messageParams).not.toHaveProperty("path");
+      expect(messageParams).not.toHaveProperty("filePath");
+      expect(messageParams).not.toHaveProperty("fileUrl");
+      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("remote chart");
+      expect(workspaceReadFile).toHaveBeenCalled();
     });
 
     it.each([
@@ -170,13 +247,7 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaydeliver: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaydeliver"),
         action: "send",
         params: {
           channel: "gatewaydeliver",
@@ -387,13 +458,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("keeps presentation-only sends on action-only gateway plugins", async () => {
-      const cfg = {
-        channels: {
-          cardchat: {
-            enabled: true,
-          },
-        },
-      } as OpenClawConfig;
+      const cfg = createEnabledMessageActionConfig("cardchat");
 
       const presentation = {
         blocks: [{ type: "text", text: "Presentation-only payload" }],
@@ -502,13 +567,7 @@ describe("runMessageAction plugin dispatch", () => {
       );
 
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            cardchat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("cardchat"),
         action: "send",
         params: {
           channel: "cardchat",
@@ -543,6 +602,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes local chart presentations through core delivery", async () => {
+      const sourceSessionKey = "agent:main:cardchat:direct:restricted-creator";
       const presentation = {
         blocks: [
           {
@@ -585,13 +645,7 @@ describe("runMessageAction plugin dispatch", () => {
       );
 
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            cardchat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("cardchat"),
         action: "send",
         params: {
           channel: "cardchat",
@@ -604,6 +658,7 @@ describe("runMessageAction plugin dispatch", () => {
           mode: "cli",
         },
         agentId: "main",
+        sessionKey: sourceSessionKey,
         suppressTranscriptMirror: true,
         dryRun: false,
       });
@@ -621,6 +676,9 @@ describe("runMessageAction plugin dispatch", () => {
         readRecordField(executeCall, "payload", "execute send payload"),
         { text: "Deployment trend", presentation },
         "execute send payload",
+      );
+      expect(ensureOutboundSessionEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceSessionKey }),
       );
     });
 
@@ -653,7 +711,7 @@ describe("runMessageAction plugin dispatch", () => {
       );
 
       await runMessageAction({
-        cfg: { channels: { cardchat: { enabled: true } } } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("cardchat"),
         action: "send",
         ...(actionOrigin ? { actionOrigin } : {}),
         params: {

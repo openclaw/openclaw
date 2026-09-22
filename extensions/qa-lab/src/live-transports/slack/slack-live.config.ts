@@ -1,6 +1,7 @@
 // QA Lab Slack credentials, instrumentation, and channel config.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asNonArrayRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildLiveQaApprovalForwardingConfig } from "../shared/live-approval-config.js";
 import {
   type SlackQaRuntimeEnv,
   type SlackQaConfigOverrides,
@@ -136,32 +137,7 @@ export function buildSlackQaConfig(
   const codexEntry = baseCfg.plugins?.entries?.codex;
   const codexEntryConfig = asPlainRecord(codexEntry?.config);
   const codexAppServerConfig = asPlainRecord(codexEntryConfig.appServer);
-  const approvalForwardingConfig =
-    approvalOverrides?.exec || approvalOverrides?.plugin
-      ? {
-          approvals: {
-            ...baseCfg.approvals,
-            ...(approvalOverrides.exec
-              ? {
-                  exec: {
-                    ...baseCfg.approvals?.exec,
-                    enabled: true,
-                    mode: "session" as const,
-                  },
-                }
-              : {}),
-            ...(approvalOverrides.plugin
-              ? {
-                  plugin: {
-                    ...baseCfg.approvals?.plugin,
-                    enabled: true,
-                    mode: "session" as const,
-                  },
-                }
-              : {}),
-          },
-        }
-      : {};
+  const approvalForwardingConfig = buildLiveQaApprovalForwardingConfig(baseCfg, approvalOverrides);
   const codexAgentDefaults =
     codexApprovalConfig && primaryModel
       ? {
@@ -302,6 +278,7 @@ export function buildSlackQaConfig(
                         commandText: "raw" as const,
                         label: false,
                         maxLines: 4,
+                        ...(progressOverrides.style ? { style: progressOverrides.style } : {}),
                         toolProgress: progressOverrides.toolProgress,
                         ...(progressOverrides.commentary === undefined
                           ? {}

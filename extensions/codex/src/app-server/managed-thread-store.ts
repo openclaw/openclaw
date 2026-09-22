@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { z } from "zod";
 
 export const CODEX_MANAGED_THREAD_NAMESPACE = "app-server-managed-threads";
@@ -17,6 +17,7 @@ const managedThreadSchema = z.object({
 export type StoredCodexManagedThread = z.infer<typeof managedThreadSchema>;
 
 export type CodexManagedThreadStore = {
+  has(sourceHomeId: string, threadId: string): Promise<boolean>;
   mark(params: { sourceHomeId: string; threadId: string; rolloutPath?: string }): Promise<boolean>;
   snapshot(): Promise<ReadonlyMap<string, ReadonlySet<string>>>;
 };
@@ -52,9 +53,22 @@ function managedThreadStoreKey(sourceHomeId: string, threadId: string): string {
 
 /** Durable ownership index for Codex threads created by OpenClaw. */
 export function createCodexManagedThreadStore(
-  state: Pick<PluginStateSyncKeyedStore<StoredCodexManagedThread>, "entries" | "registerIfAbsent">,
+  state: Pick<
+    PluginStateKeyedStore<StoredCodexManagedThread>,
+    "entries" | "lookup" | "registerIfAbsent"
+  >,
 ): CodexManagedThreadStore {
   return {
+    async has(sourceHomeId, threadId) {
+      const parsed = managedThreadSchema.safeParse(
+        await state.lookup(managedThreadStoreKey(sourceHomeId, threadId)),
+      );
+      return (
+        parsed.success &&
+        parsed.data.sourceHomeId === sourceHomeId &&
+        parsed.data.threadId === threadId
+      );
+    },
     async mark(params) {
       try {
         const value = managedThreadSchema.parse({
@@ -64,7 +78,10 @@ export function createCodexManagedThreadStore(
           threadId: params.threadId.trim(),
           ...(params.rolloutPath?.trim() ? { rolloutPath: params.rolloutPath.trim() } : {}),
         });
-        state.registerIfAbsent(managedThreadStoreKey(value.sourceHomeId, value.threadId), value);
+        await state.registerIfAbsent(
+          managedThreadStoreKey(value.sourceHomeId, value.threadId),
+          value,
+        );
         return true;
       } catch (error) {
         // Catalog ownership is advisory bookkeeping. Losing an old catalog exclusion is safer
@@ -75,7 +92,7 @@ export function createCodexManagedThreadStore(
     },
     async snapshot() {
       const byHome = new Map<string, Set<string>>();
-      for (const entry of state.entries()) {
+      for (const entry of await state.entries()) {
         const parsed = managedThreadSchema.safeParse(entry.value);
         if (!parsed.success) {
           continue;

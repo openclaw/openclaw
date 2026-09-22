@@ -265,9 +265,10 @@ export function listMcpOAuthStoreKeysByPrefix(prefix: string): string[] {
         getNodeSqliteKysely<McpOAuthDatabase>(db)
           .selectFrom("mcp_oauth_stores")
           .select("store_key")
+          .where((eb) => eb(eb.fn<number>("instr", ["store_key", eb.val(prefix)]), "=", 1))
           .orderBy("store_key", "asc"),
       ).rows;
-      return rows.map((row) => row.store_key).filter((storeKey) => storeKey.startsWith(prefix));
+      return rows.map((row) => row.store_key);
     }) ?? []
   );
 }

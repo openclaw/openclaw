@@ -1,52 +1,93 @@
-// Covers one-shot session hint persistence against missing persisted rows.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  claimMainSessionRecoveryOwner,
+  releaseMainSessionRecoveryOwner,
+} from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { getAbortMemory, setAbortMemory } from "./abort-primitives.js";
 import { applySessionHints } from "./body.js";
+import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 
-async function withTempStore<T>(run: (storePath: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-hints-"));
-  try {
-    return await run(path.join(dir, "sessions.json"));
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("applySessionHints", () => {
-  it("recreates a complete persisted row when clearing a consumed abort hint", async () => {
-    await withTempStore(async (storePath) => {
-      const sessionKey = "agent:main:explicit:hint-missing-row";
-      const entry: SessionEntry = {
-        sessionId: "hint-session",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-5.5",
-        abortedLastRun: true,
-      };
-      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-
-      const body = await applySessionHints({
-        baseBody: "continue",
-        abortedLastRun: true,
-        sessionEntry: entry,
-        sessionStore,
-        sessionKey,
-        storePath,
-      });
-
-      const persisted = loadSessionEntry({ storePath, sessionKey });
-      expect(body).toContain("previous agent run was aborted");
-      expect(sessionStore[sessionKey]?.sessionId).toBe("hint-session");
-      expect(sessionStore[sessionKey]?.modelProvider).toBe("openai");
-      expect(sessionStore[sessionKey]?.abortedLastRun).toBe(false);
-      expect(persisted?.sessionId).toBe("hint-session");
-      expect(persisted?.modelProvider).toBe("openai");
-      expect(persisted?.model).toBe("gpt-5.5");
-      expect(persisted?.abortedLastRun).toBe(false);
+  it("preserves interrupted work for recovery when a prepared foreground turn cannot start", async () => {
+    const storePath = path.join(tempDirs.make("openclaw-session-hints-"), "sessions.json");
+    const sessionKey = "agent:main:main";
+    const sessionId = "interrupted-session";
+    const scope = { storePath, sessionKey };
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    let entry: SessionEntry = {
+      sessionId,
+      updatedAt: 1,
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryDeliveryRunId: "interrupted-claim",
+      restartRecoveryDeliverySourceRunId: "channel-user:original-input",
+      restartRecoveryDeliveryContext: { channel: "discord", to: "synthetic-channel" },
+      restartRecoverySourceIngress: "channel",
+    };
+    await replaceSessionEntry(scope, entry);
+    const owner = await claimMainSessionRecoveryOwner({
+      lifecycleGeneration,
+      sessionId,
+      target: scope,
     });
+    expect(owner.kind).toBe("claimed");
+    if (owner.kind !== "claimed") {
+      throw new Error("foreground recovery owner was not acquired");
+    }
+    entry = owner.entry;
+    const prepared = {
+      baseBody: "organize my sessions",
+      abortedLastRun: true,
+      sessionEntry: entry,
+      sessionStore: { [sessionKey]: entry },
+      ...scope,
+    };
+    const body = await Promise.resolve(applySessionHints(prepared));
+    expect(body).toContain("organize my sessions");
+
+    const controller = createReplyRestartRecoveryClaimController({
+      admissionRunId: "new-input",
+      lifecycleGeneration,
+      getEntry: () => entry,
+      getSessionId: () => sessionId,
+      isRestartAbort: () => false,
+      resolveDeliveryContext: () => undefined,
+      setEntry: (next) => {
+        entry = next;
+      },
+      ...scope,
+    });
+    await expect(controller.admitUserTurn()).rejects.toThrow(
+      "restart recovery claim changed before agent adoption",
+    );
+    await controller.clear();
+
+    await expect(releaseMainSessionRecoveryOwner(owner.lease)).resolves.toMatchObject({
+      sessionId,
+      ...scope,
+    });
+    expect(loadSessionEntry(scope)).toMatchObject({
+      abortedLastRun: true,
+      status: "running",
+      restartRecoveryDeliveryRunId: "interrupted-claim",
+      restartRecoveryDeliverySourceRunId: "channel-user:original-input",
+    });
+    expect(body).not.toContain("aborted by the user");
+  });
+
+  it("consumes the process-local abort hint without a session write", () => {
+    const abortKey = "session-hint-without-store";
+    setAbortMemory(abortKey, true);
+    expect(applySessionHints({ baseBody: "continue", abortedLastRun: true, abortKey })).toContain(
+      "previous agent run was interrupted",
+    );
+    expect(getAbortMemory(abortKey)).toBeUndefined();
   });
 });

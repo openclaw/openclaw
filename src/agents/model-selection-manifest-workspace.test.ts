@@ -1,6 +1,13 @@
 // Verifies configured model selection uses manifest policy only in scoped contexts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import {
+  buildAllowedModelSet,
+  buildConfiguredModelCatalog,
+  buildModelAliasIndex,
+  resolveConfiguredModelRef,
+} from "./model-selection-shared.js";
 
 const loadManifestMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
@@ -24,33 +31,45 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: normalizeProviderModelIdWithRuntimeMock,
 }));
 
+const defaultNormalizationSnapshot = createPluginMetadataSnapshotFixture({
+  plugins: [
+    {
+      id: "default-normalizer",
+      modelIdNormalization: {
+        providers: { openai: { aliases: { entry: "middle", middle: "final" } } },
+      },
+    },
+  ],
+});
+
 describe("configured model manifest workspace scope", () => {
   beforeEach(() => {
-    vi.resetModules();
     loadManifestMetadataSnapshotMock.mockReset();
     getCurrentPluginMetadataSnapshotMock.mockReset();
     getActivePluginRegistryWorkspaceDirFromStateMock.mockReset();
     normalizeProviderModelIdWithRuntimeMock.mockReset();
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
-    loadManifestMetadataSnapshotMock.mockReturnValue({
-      plugins: [
-        {
-          modelIdNormalization: {
-            providers: {
-              custom: {
-                prefixWhenBare: "workspace-custom",
+    loadManifestMetadataSnapshotMock.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "workspace-model-normalizer",
+            modelIdNormalization: {
+              providers: {
+                custom: {
+                  prefixWhenBare: "workspace-custom",
+                },
               },
             },
           },
-        },
-      ],
-    });
+        ],
+      }),
+    );
   });
 
-  it("does not reuse workspace manifest policies without a workspace context", async () => {
+  it("does not reuse workspace manifest policies without a workspace context", () => {
     // Workspace plugin normalization must not leak into unscoped callers; they
     // can only use the current global metadata snapshot.
-    const { buildConfiguredModelCatalog } = await import("./model-selection-shared.js");
     const cfg = {
       models: {
         providers: {
@@ -71,11 +90,10 @@ describe("configured model manifest workspace scope", () => {
       config: cfg,
       env: process.env,
     });
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
   });
 
-  it("uses manifest policies when the workspace context is explicit", async () => {
-    const { buildConfiguredModelCatalog } = await import("./model-selection-shared.js");
+  it("uses manifest policies when the workspace context is explicit", () => {
     const cfg = {
       models: {
         providers: {
@@ -97,24 +115,26 @@ describe("configured model manifest workspace scope", () => {
       workspaceDir: "/workspace/a",
       env: process.env,
     });
-    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
   });
 
-  it("uses an unscoped current snapshot without falling back to a metadata scan", async () => {
-    getCurrentPluginMetadataSnapshotMock.mockReturnValue({
-      plugins: [
-        {
-          modelIdNormalization: {
-            providers: {
-              custom: {
-                prefixWhenBare: "global-custom",
+  it("uses an unscoped current snapshot without falling back to a metadata scan", () => {
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "workspace-model-normalizer",
+            modelIdNormalization: {
+              providers: {
+                custom: {
+                  prefixWhenBare: "global-custom",
+                },
               },
             },
           },
-        },
-      ],
-    });
-    const { buildConfiguredModelCatalog } = await import("./model-selection-shared.js");
+        ],
+      }),
+    );
     const cfg = {
       models: {
         providers: {
@@ -131,12 +151,11 @@ describe("configured model manifest workspace scope", () => {
         id: "global-custom/fast-model",
       },
     ]);
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
   });
 
-  it("builds configured catalog facts once when resolving allowed models", async () => {
-    getCurrentPluginMetadataSnapshotMock.mockReturnValue({ plugins: [] });
-    const { buildAllowedModelSet } = await import("./model-selection-shared.js");
+  it("builds configured catalog facts once when resolving allowed models", () => {
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(createPluginMetadataSnapshotFixture());
     const cfg = {
       models: {
         providers: {
@@ -153,25 +172,23 @@ describe("configured model manifest workspace scope", () => {
       }).allowedCatalog,
     ).toMatchObject([{ provider: "custom", id: "fast-model" }]);
     expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
   });
 
-  it("does not load manifest metadata for empty configured model aliases", async () => {
+  it("does not load manifest metadata for empty configured model aliases", () => {
     // Alias indexing is a hot config path. Empty inputs should avoid manifest
     // scans entirely.
-    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
     const cfg = {} as unknown as OpenClawConfig;
 
     const aliases = buildModelAliasIndex({ cfg, defaultProvider: "anthropic" });
 
     expect(aliases.byAlias.size).toBe(0);
     expect(aliases.byKey.size).toBe(0);
-    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
+    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
   });
 
-  it("does not load manifest metadata for wildcard-only configured model aliases", async () => {
-    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+  it("does not load manifest metadata for wildcard-only configured model aliases", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -186,12 +203,11 @@ describe("configured model manifest workspace scope", () => {
 
     expect(aliases.byAlias.size).toBe(0);
     expect(aliases.byKey.size).toBe(0);
-    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
+    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
   });
 
-  it("does not load manifest metadata for configured model entries without aliases", async () => {
-    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+  it("does not load manifest metadata for configured model entries without aliases", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -206,12 +222,11 @@ describe("configured model manifest workspace scope", () => {
 
     expect(aliases.byAlias.size).toBe(0);
     expect(aliases.byKey.size).toBe(0);
-    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
+    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
   });
 
-  it("indexes selected-agent default-provider aliases without cold manifest discovery", async () => {
-    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+  it("indexes selected-agent default-provider aliases without cold manifest discovery", () => {
     const cfg = {
       agents: {
         ownership: "explicit",
@@ -237,8 +252,7 @@ describe("configured model manifest workspace scope", () => {
     expect(normalizeProviderModelIdWithRuntimeMock.mock.calls.length).toBe(0);
   });
 
-  it("resolves selected-agent default-provider aliases without cold manifest discovery", async () => {
-    const { resolveConfiguredModelRef } = await import("./model-selection-shared.js");
+  it("resolves selected-agent default-provider aliases without cold manifest discovery", () => {
     const cfg = {
       agents: {
         ownership: "explicit",
@@ -266,7 +280,7 @@ describe("configured model manifest workspace scope", () => {
 
   it.each(["current", "supplied"] as const)(
     "preserves %s prepared manifest policy for default-provider aliases",
-    async (source) => {
+    (source) => {
       const manifestPlugins = [
         {
           modelIdNormalization: {
@@ -277,9 +291,12 @@ describe("configured model manifest workspace scope", () => {
         },
       ];
       if (source === "current") {
-        getCurrentPluginMetadataSnapshotMock.mockReturnValue({ plugins: manifestPlugins });
+        getCurrentPluginMetadataSnapshotMock.mockReturnValue(
+          createPluginMetadataSnapshotFixture({
+            plugins: [{ id: "prepared-model-normalizer", ...manifestPlugins[0] }],
+          }),
+        );
       }
-      const { buildModelAliasIndex } = await import("./model-selection-shared.js");
       const cfg = {
         agents: { defaults: { models: { "openai/legacy": { alias: "Legacy" } } } },
       } as unknown as OpenClawConfig;
@@ -299,14 +316,18 @@ describe("configured model manifest workspace scope", () => {
     },
   );
 
-  it("preserves workspace manifest policy for default-provider aliases", async () => {
+  it("preserves workspace manifest policy for default-provider aliases", () => {
     getActivePluginRegistryWorkspaceDirFromStateMock.mockReturnValue("/workspace/a");
-    loadManifestMetadataSnapshotMock.mockReturnValue({
-      plugins: [
-        { modelIdNormalization: { providers: { openai: { aliases: { ops: "workspace-ops" } } } } },
-      ],
-    });
-    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+    loadManifestMetadataSnapshotMock.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "workspace-model-normalizer",
+            modelIdNormalization: { providers: { openai: { aliases: { ops: "workspace-ops" } } } },
+          },
+        ],
+      }),
+    );
     const cfg = {
       agents: { defaults: { models: { "openai/ops": { alias: "Operations" } } } },
     } as unknown as OpenClawConfig;
@@ -318,8 +339,7 @@ describe("configured model manifest workspace scope", () => {
     expect(loadManifestMetadataSnapshotMock.mock.calls[0]?.[0]?.workspaceDir).toBe("/workspace/a");
   });
 
-  it("preserves provider-owned manifest discovery for non-default aliases", async () => {
-    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+  it("preserves provider-owned manifest discovery for non-default aliases", () => {
     const cfg = {
       agents: { defaults: { models: { "custom/ops": { alias: "Operations" } } } },
     } as unknown as OpenClawConfig;
@@ -346,20 +366,22 @@ describe("configured model manifest workspace scope", () => {
         ["openai/legacy", { alias: "Legacy" }],
       ],
     },
-  ])("normalizes mixed aliases consistently with $name", async ({ models }) => {
-    loadManifestMetadataSnapshotMock.mockReturnValue({
-      plugins: [
-        {
-          modelIdNormalization: {
-            providers: {
-              custom: { prefixWhenBare: "workspace-custom" },
-              openai: { aliases: { legacy: "normalized" } },
+  ])("normalizes mixed aliases consistently with $name", ({ models }) => {
+    loadManifestMetadataSnapshotMock.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "workspace-model-normalizer",
+            modelIdNormalization: {
+              providers: {
+                custom: { prefixWhenBare: "workspace-custom" },
+                openai: { aliases: { legacy: "normalized" } },
+              },
             },
           },
-        },
-      ],
-    });
-    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+        ],
+      }),
+    );
     const cfg = {
       agents: { defaults: { models: Object.fromEntries(models) } },
     } as unknown as OpenClawConfig;
@@ -377,8 +399,7 @@ describe("configured model manifest workspace scope", () => {
     expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves manifest discovery for default-provider configured API-owner mappings", async () => {
-    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+  it("preserves manifest discovery for default-provider configured API-owner mappings", () => {
     const cfg = {
       agents: { defaults: { models: { "openai/ops": { alias: "Operations" } } } },
       models: { providers: { openai: { api: "custom-owner", models: [] } } },
@@ -390,14 +411,156 @@ describe("configured model manifest workspace scope", () => {
     expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(1);
   });
 
-  it("does not load manifest metadata for statically resolved primary models", async () => {
-    const { resolveConfiguredModelRef } = await import("./model-selection-shared.js");
+  it.each(["snapshot", "plugins"] as const)(
+    "normalizes unresolved bare defaults once with captured %s metadata",
+    (source) => {
+      const snapshot = defaultNormalizationSnapshot;
+      const manifestPlugins = source === "snapshot" ? snapshot : snapshot.plugins;
+      for (const primary of ["entry", "entry@work"]) {
+        expect(
+          resolveConfiguredModelRef({
+            cfg: { agents: { defaults: { model: { primary } } } },
+            defaultProvider: "openai",
+            defaultModel: "unused",
+            manifestPlugins,
+            allowPluginNormalization: false,
+          }),
+        ).toEqual({ provider: "openai", model: "middle" });
+      }
+      expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
+      expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
+      expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: "explicit", primary: "openai/entry", models: undefined },
+    { name: "inferred", primary: "entry", models: { "openai/entry": {} } },
+    {
+      name: "configured alias",
+      primary: "friendly",
+      models: { "openai/entry": { alias: "friendly" } },
+    },
+  ])("does not renormalize the $name selection", ({ primary, models }) => {
+    const manifestPlugins = defaultNormalizationSnapshot;
+    expect(
+      resolveConfiguredModelRef({
+        cfg: { agents: { defaults: { model: { primary }, models } } },
+        defaultProvider: "openai",
+        defaultModel: "unused",
+        manifestPlugins,
+        allowPluginNormalization: false,
+      }),
+    ).toEqual({ provider: "openai", model: "middle" });
+  });
+
+  it.each([false, true])(
+    "normalizes bare defaults without discovering absent metadata (captured=%s)",
+    (captured) => {
+      normalizeProviderModelIdWithRuntimeMock.mockReturnValue("runtime-entry");
+      expect(
+        resolveConfiguredModelRef({
+          cfg: { agents: { defaults: { model: "entry" } } },
+          defaultProvider: "openai",
+          defaultModel: "unused",
+          ...(captured ? { manifestPlugins: [] } : {}),
+        }),
+      ).toEqual({ provider: "openai", model: "runtime-entry" });
+      expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalledTimes(1);
+      expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
+      expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
+    },
+  );
+
+  it.each([
+    { manifest: true, runtime: true, expected: "runtime-middle" },
+    { manifest: true, runtime: false, expected: "middle" },
+    { manifest: false, runtime: true, expected: "runtime-entry" },
+    { manifest: false, runtime: false, expected: "entry" },
+  ])(
+    "honors captured normalization flags (manifest=$manifest, runtime=$runtime)",
+    ({ manifest, runtime, expected }) => {
+      normalizeProviderModelIdWithRuntimeMock.mockImplementation(
+        ({ context }: { context: { modelId: string } }) => `runtime-${context.modelId}`,
+      );
+      expect(
+        resolveConfiguredModelRef({
+          cfg: { agents: { defaults: { model: "entry" } } },
+          defaultProvider: "openai",
+          defaultModel: "unused",
+          manifestPlugins: defaultNormalizationSnapshot,
+          allowManifestNormalization: manifest,
+          allowPluginNormalization: runtime,
+        }),
+      ).toEqual({ provider: "openai", model: expected });
+      expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalledTimes(runtime ? 1 : 0);
+      expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
+      expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
+    },
+  );
+
+  it("reuses metadata captured during unsuccessful provider inference", () => {
+    loadManifestMetadataSnapshotMock.mockReturnValue(defaultNormalizationSnapshot);
+    expect(
+      resolveConfiguredModelRef({
+        cfg: { agents: { defaults: { model: "entry", models: { "custom/unrelated": {} } } } },
+        defaultProvider: "openai",
+        defaultModel: "unused",
+        allowPluginNormalization: false,
+      }),
+    ).toEqual({ provider: "openai", model: "middle" });
+    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the configured native API owner for a captured bare default", () => {
+    normalizeProviderModelIdWithRuntimeMock.mockReturnValue("wrong-runtime-model");
+    expect(
+      resolveConfiguredModelRef({
+        cfg: {
+          agents: { defaults: { model: "entry@work" } },
+          models: {
+            providers: {
+              openai: { api: "ollama", baseUrl: "https://fixture.invalid", models: [] },
+            },
+          },
+        },
+        defaultProvider: "openai",
+        defaultModel: "unused",
+        manifestPlugins: defaultNormalizationSnapshot,
+      }),
+    ).toEqual({ provider: "openai", model: "middle" });
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { primary: "@work", expected: "@work" },
+    { primary: "entry@", expected: "entry@" },
+    { primary: "   ", expected: "unused" },
+    { primary: "/", expected: "unused" },
+  ])(
+    "keeps existing parser behavior for captured malformed input '$primary'",
+    ({ primary, expected }) => {
+      expect(
+        resolveConfiguredModelRef({
+          cfg: { agents: { defaults: { model: { primary } } } },
+          defaultProvider: "openai",
+          defaultModel: "unused",
+          manifestPlugins: [],
+          allowPluginNormalization: false,
+        }),
+      ).toEqual({ provider: "openai", model: expected });
+      expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
+      expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
+    },
+  );
+
+  it("does not load manifest metadata for statically resolved primary models", () => {
     const cases: Array<{ cfg: OpenClawConfig; expected: { provider: string; model: string } }> = [
       {
         cfg: {
           agents: { defaults: { model: { primary: "sonnet-4.6" } } },
         } as unknown as OpenClawConfig,
-        expected: { provider: "anthropic", model: "sonnet-4.6" },
+        expected: { provider: "anthropic", model: "claude-sonnet-4-6" },
       },
       {
         cfg: {
@@ -418,13 +581,12 @@ describe("configured model manifest workspace scope", () => {
           defaultModel: "claude-sonnet-4-6",
         }),
       ).toEqual(expected);
-      expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-      expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+      expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
+      expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
     }
   });
 
-  it("does not load manifest metadata for non-alias primary models with configured aliases", async () => {
-    const { resolveConfiguredModelRef } = await import("./model-selection-shared.js");
+  it("does not load manifest metadata for non-alias primary models with configured aliases", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -443,27 +605,29 @@ describe("configured model manifest workspace scope", () => {
         defaultModel: "claude-sonnet-4-6",
       }),
     ).toEqual({ provider: "anthropic", model: "haiku-4.6" });
-    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(getCurrentPluginMetadataSnapshotMock.mock.calls.length).toBe(0);
+    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
   });
 
-  it("uses manifest-normalized configured refs to infer providers for bare defaults", async () => {
-    loadManifestMetadataSnapshotMock.mockReturnValue({
-      plugins: [
-        {
-          modelIdNormalization: {
-            providers: {
-              anthropic: {
-                aliases: {
-                  "sonnet-4.6": "claude-sonnet-4-6",
+  it("uses manifest-normalized configured refs to infer providers for bare defaults", () => {
+    loadManifestMetadataSnapshotMock.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "workspace-model-normalizer",
+            modelIdNormalization: {
+              providers: {
+                anthropic: {
+                  aliases: {
+                    "sonnet-4.6": "claude-sonnet-4-6",
+                  },
                 },
               },
             },
           },
-        },
-      ],
-    });
-    const { resolveConfiguredModelRef } = await import("./model-selection-shared.js");
+        ],
+      }),
+    );
     const cfg = {
       agents: {
         defaults: {
@@ -485,26 +649,28 @@ describe("configured model manifest workspace scope", () => {
     expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses resolved manifest plugins while resolving configured model aliases", async () => {
-    loadManifestMetadataSnapshotMock.mockReturnValue({
-      plugins: [
-        {
-          modelIdNormalization: {
-            providers: {
-              anthropic: {
-                aliases: {
-                  "sonnet-4.6": "claude-sonnet-4-6",
+  it("reuses resolved manifest plugins while resolving configured model aliases", () => {
+    loadManifestMetadataSnapshotMock.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "workspace-model-normalizer",
+            modelIdNormalization: {
+              providers: {
+                anthropic: {
+                  aliases: {
+                    "sonnet-4.6": "claude-sonnet-4-6",
+                  },
                 },
-              },
-              openrouter: {
-                prefixWhenBare: "openrouter",
+                openrouter: {
+                  prefixWhenBare: "openrouter",
+                },
               },
             },
           },
-        },
-      ],
-    });
-    const { resolveConfiguredModelRef } = await import("./model-selection-shared.js");
+        ],
+      }),
+    );
     const cfg = {
       agents: {
         defaults: {
@@ -527,26 +693,28 @@ describe("configured model manifest workspace scope", () => {
     expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses resolved manifest plugins while resolving direct primary models", async () => {
-    loadManifestMetadataSnapshotMock.mockReturnValue({
-      plugins: [
-        {
-          modelIdNormalization: {
-            providers: {
-              anthropic: {
-                aliases: {
-                  "sonnet-4.6": "claude-sonnet-4-6",
+  it("reuses resolved manifest plugins while resolving direct primary models", () => {
+    loadManifestMetadataSnapshotMock.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "workspace-model-normalizer",
+            modelIdNormalization: {
+              providers: {
+                anthropic: {
+                  aliases: {
+                    "sonnet-4.6": "claude-sonnet-4-6",
+                  },
                 },
-              },
-              openrouter: {
-                prefixWhenBare: "openrouter",
+                openrouter: {
+                  prefixWhenBare: "openrouter",
+                },
               },
             },
           },
-        },
-      ],
-    });
-    const { resolveConfiguredModelRef } = await import("./model-selection-shared.js");
+        ],
+      }),
+    );
     const cfg = {
       agents: {
         defaults: {

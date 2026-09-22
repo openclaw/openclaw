@@ -4,13 +4,13 @@
 // (the Create PR gate). Pure local-git reasoning; GitHub facts come in as
 // MergedPullHead records.
 import { runGit } from "../agents/worktrees/git.js";
-
-/** Lowercased merged-PR head, the base it merged into, and its merge commit. */
-export type MergedPullHead = { sha: string; baseRef?: string; mergeCommitSha?: string };
+import { requireGitCommandOutput } from "../infra/git-exec.js";
+import type { GitMergedPullHead as MergedPullHead } from "../infra/git-read-operations.js";
 
 type BranchLanding = {
   /** origin/<branch> tip when the remote-tracking ref resolves. */
   pushedSha: string | null;
+  defaultSha: string | null;
   /** Newest known-published commit to diff the working tree against. */
   statsBase: string | null;
   /** At least one merged PR provably landed on the default branch. */
@@ -25,6 +25,38 @@ export async function gitOutput(cwd: string, args: string[]): Promise<string | n
     return result.code === 0 ? result.stdout.trim() || null : null;
   } catch {
     return null;
+  }
+}
+
+async function readRemoteRevisions(root: string, refs: string[]): Promise<Map<string, string>> {
+  try {
+    // These fields read stored IDs without loading or lazily fetching partial-clone objects.
+    const result = await runGit(
+      root,
+      ["for-each-ref", "--format=%(refname)%00%(objectname)", "--", ...refs],
+      { maxOutputBytes: 16 * 1024, terminateOnOutputLimit: true },
+    );
+    const output = requireGitCommandOutput("git for-each-ref", result);
+    const revisions = new Map<string, string>();
+    for (const line of output.trim().split("\n")) {
+      const separator = line.indexOf("\0");
+      const ref = line.slice(0, separator);
+      // Ref patterns also match descendants; only exact requested refs identify these tips.
+      if (separator > 0 && refs.includes(ref)) {
+        revisions.set(ref, line.slice(separator + 1));
+      }
+    }
+    return revisions;
+  } catch {
+    // A failed or oversized ref inventory must not hide independently readable tips.
+    const revisions = new Map<string, string>();
+    for (const ref of refs) {
+      const revision = await gitOutput(root, ["rev-parse", "--verify", "--quiet", ref]);
+      if (revision) {
+        revisions.set(ref, revision);
+      }
+    }
+    return revisions;
   }
 }
 
@@ -70,15 +102,15 @@ async function maximalCommit(root: string, candidates: readonly string[]): Promi
       .map((line) => line.trim())
       .filter(Boolean),
   );
-  if (independent.has(first)) {
-    return first;
-  }
-  for (const candidate of unique.slice(1)) {
-    if (independent.has(candidate) && (await isAncestor(root, first, candidate))) {
+  const maxima = unique.filter((candidate) => independent.has(candidate));
+  // A sole survivor is also the fallback, so probing its ancestry cannot
+  // change the choice. Keep competing survivors in their original order.
+  for (const candidate of maxima) {
+    if (candidate === first || maxima.length === 1 || (await isAncestor(root, first, candidate))) {
       return candidate;
     }
   }
-  return unique.find((candidate) => independent.has(candidate)) ?? first;
+  return maxima[0] ?? first;
 }
 
 export async function resolveBranchLanding(
@@ -89,34 +121,41 @@ export async function resolveBranchLanding(
     mergedHeads: readonly MergedPullHead[];
   },
 ): Promise<BranchLanding> {
-  const pushedSha = await gitOutput(root, [
-    "rev-parse",
-    "--verify",
-    "--quiet",
-    `refs/remotes/origin/${params.branch}`,
+  const pushedRef = `refs/remotes/origin/${params.branch}`;
+  const defaultRef = params.defaultBranch ? `refs/remotes/origin/${params.defaultBranch}` : null;
+  const revisions = await readRemoteRevisions(root, [
+    pushedRef,
+    ...(defaultRef ? [defaultRef] : []),
   ]);
-  const headSha = await gitOutput(root, ["rev-parse", "HEAD"]);
+  const pushedSha = revisions.get(pushedRef) ?? null;
+  const headSha = await gitOutput(root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  const defaultSha = defaultRef ? (revisions.get(defaultRef) ?? null) : null;
+  const possibleLandings = params.mergedHeads.filter(
+    (head) =>
+      head.baseRef === params.defaultBranch || Boolean(params.defaultBranch && head.mergeCommitSha),
+  );
   // Only merges whose content reached this checkout's default branch prove
   // the tip landed there: a direct default-base merge, or a landing through
   // another branch (feature -> release -> main) whose merge commit is now
   // contained in the default branch. A PR merged into an unpropagated
   // release/staging branch must not hide Create PR. Filtered here, not in
   // the snapshot cache, because the cache key has no default branch.
-  const defaultRef = params.defaultBranch ? `refs/remotes/origin/${params.defaultBranch}` : null;
   const landedHeads: MergedPullHead[] = [];
-  for (const head of params.mergedHeads) {
+  for (const head of possibleLandings) {
     if (head.baseRef === params.defaultBranch) {
       landedHeads.push(head);
     } else if (
-      defaultRef &&
+      defaultSha &&
       head.mergeCommitSha &&
-      (await isAncestor(root, head.mergeCommitSha, defaultRef))
+      (await isAncestor(root, head.mergeCommitSha, defaultSha))
     ) {
       landedHeads.push(head);
     }
   }
-  const landedShas = landedHeads.map((head) => head.sha);
-  const mergeBase = defaultRef ? await gitOutput(root, ["merge-base", defaultRef, "HEAD"]) : null;
+  // PRs may share a head; their distinct landing receipts still need individual checks below.
+  const landedShas = new Set(landedHeads.map((head) => head.sha));
+  const mergeBase =
+    defaultSha && headSha ? await gitOutput(root, ["merge-base", defaultSha, headSha]) : null;
   // The stats base is the newest commit whose content is known-published:
   // the ordinary default-branch merge base, or a merged PR head related to
   // HEAD by ancestry (a HEAD trailing the merged tip is fully landed, so
@@ -146,7 +185,7 @@ export async function resolveBranchLanding(
   // head or a fetch-stale tracking ref proves nothing, so those states keep
   // the row stats-only until a rebase or fetch.
   let provenNewPushedWork = false;
-  if (pushedSha && mergeBase && !landedShas.includes(pushedSha.toLowerCase())) {
+  if (pushedSha && mergeBase && !landedShas.has(pushedSha.toLowerCase())) {
     provenNewPushedWork = landedHeads.length > 0;
     for (const head of landedHeads) {
       const incorporated =
@@ -160,6 +199,7 @@ export async function resolveBranchLanding(
   }
   return {
     pushedSha,
+    defaultSha,
     statsBase,
     hasLandedPullRequest: landedHeads.length > 0,
     provenNewPushedWork,

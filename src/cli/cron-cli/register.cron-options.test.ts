@@ -57,6 +57,197 @@ describe("shared automation mutation options", () => {
     callGatewayFromCli.mockResolvedValue({ ok: true });
   });
 
+  it.each(
+    ["--at", "--every", "--cron", "--on-exit"].flatMap((flag) =>
+      ["", "   "].map((value) => ({ flag, value })),
+    ),
+  )("rejects explicit blank $flag=$value on edit before RPC", async ({ flag, value }) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        createMutationProgram().parseAsync(["edit", "job-1", flag, value], { from: "user" }),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("Schedule values must not be blank"),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it.each(
+    ["add", "create"].flatMap((operation) => ["", "   "].map((value) => ({ operation, value }))),
+  )("rejects a blank schedule mixed with --every on $operation", async ({ operation, value }) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        createMutationProgram().parseAsync(
+          [
+            operation,
+            "--name",
+            "blank-schedule",
+            "--agent",
+            "main",
+            "--message",
+            "hello",
+            "--every",
+            "1h",
+            "--cron",
+            value,
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("Schedule values must not be blank"),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("rejects a blank schedule before mutation after a pacing read", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) =>
+      method === "cron.get"
+        ? {
+            id: "job-1",
+            configRevision: "fixture-revision-1",
+            pacing: { min: "1m", max: "1h" },
+          }
+        : { ok: true },
+    );
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        createMutationProgram().parseAsync(
+          ["edit", "job-1", "--pacing-min", "30m", "--every", ""],
+          { from: "user" },
+        ),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("Schedule values must not be blank"),
+      );
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+        id: "job-1",
+      });
+      expect(callGatewayFromCli.mock.calls.map(([method]) => method)).not.toContain("cron.update");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    { label: "omitted", args: [], rejects: false },
+    { label: "blank", args: ["--every", ""], rejects: true },
+  ])("distinguishes an $label schedule from a name-only edit", async ({ args, rejects }) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      const run = createMutationProgram().parseAsync(
+        ["edit", "job-1", "--name", "Renamed", ...args],
+        { from: "user" },
+      );
+      if (rejects) {
+        await expect(run).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("Schedule values must not be blank"),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } else {
+        await run;
+        expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+          id: "job-1",
+          patch: { name: "Renamed" },
+        });
+        expect(errorSpy).not.toHaveBeenCalled();
+      }
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    { operation: "add", flag: "--every" },
+    { operation: "add", flag: "--stagger" },
+    { operation: "edit", flag: "--every" },
+    { operation: "edit", flag: "--stagger" },
+  ])(
+    "rejects out-of-range configured duration precision for $operation $flag before RPC",
+    async ({ operation, flag }) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const args =
+        operation === "add"
+          ? [
+              "add",
+              "--name",
+              "Duration boundary",
+              "--agent",
+              "main",
+              "--system-event",
+              "test",
+              "--disabled",
+            ]
+          : ["edit", "job-1"];
+      try {
+        await expect(
+          createMutationProgram().parseAsync(
+            [
+              ...args,
+              ...(flag === "--stagger" ? ["--cron", "0 * * * *", "--tz", "UTC"] : []),
+              flag,
+              "8640000000000001ms",
+            ],
+            { from: "user" },
+          ),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`Invalid ${flag}`));
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["--every", "--stagger"])(
+    "accepts the inclusive configured duration precision limit for %s",
+    async (flag) => {
+      await createMutationProgram().parseAsync(
+        [
+          "add",
+          "--name",
+          "Duration boundary",
+          "--agent",
+          "main",
+          "--system-event",
+          "test",
+          "--disabled",
+          ...(flag === "--stagger" ? ["--cron", "0 * * * *"] : []),
+          flag,
+          "8640000000000000ms",
+        ],
+        { from: "user" },
+      );
+
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "cron.add",
+        expect.anything(),
+        expect.objectContaining({
+          enabled: false,
+          schedule:
+            flag === "--every"
+              ? { kind: "every", everyMs: 8_640_000_000_000_000 }
+              : {
+                  kind: "cron",
+                  expr: "0 * * * *",
+                  tz: undefined,
+                  staggerMs: 8_640_000_000_000_000,
+                },
+        }),
+      );
+    },
+  );
+
   it("updates an existing automation to an exit-triggered schedule", async () => {
     await createMutationProgram().parseAsync(
       ["edit", "job-1", "--on-exit", "./watch.sh", "--on-exit-cwd", "/repo"],
@@ -74,15 +265,14 @@ describe("shared automation mutation options", () => {
     [["--on-exit", "./watch.sh", "--every", "5m"], "Choose at most one schedule change"],
   ])("rejects invalid exit-triggered schedule options", async (args, message) => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
     try {
-      await createMutationProgram().parseAsync(["edit", "job-1", ...args], { from: "user" });
+      await expect(
+        createMutationProgram().parseAsync(["edit", "job-1", ...args], { from: "user" }),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(message));
-      expect(exitSpy).toHaveBeenCalledWith(1);
       expect(callGatewayFromCli).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();
-      exitSpy.mockRestore();
     }
   });
 
@@ -98,19 +288,18 @@ describe("shared automation mutation options", () => {
     "rejects blank thread id $threadId before automation $operation",
     async ({ args, threadId }) => {
       const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
       try {
-        await createMutationProgram().parseAsync([...args, "--thread-id", threadId], {
-          from: "user",
-        });
+        await expect(
+          createMutationProgram().parseAsync([...args, "--thread-id", threadId], {
+            from: "user",
+          }),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
         expect(errorSpy).toHaveBeenCalledWith(
           expect.stringContaining("--thread-id must be a positive integer"),
         );
-        expect(exitSpy).toHaveBeenCalledWith(1);
         expect(callGatewayFromCli).not.toHaveBeenCalled();
       } finally {
         errorSpy.mockRestore();
-        exitSpy.mockRestore();
       }
     },
   );
@@ -141,31 +330,30 @@ describe("shared automation mutation options", () => {
     "rejects invalid thread id %j before loading an automation for a combined edit",
     async (threadId) => {
       const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
       try {
-        await createMutationProgram().parseAsync(
-          [
-            "edit",
-            "job-1",
-            "--pacing-min",
-            "30m",
-            "--channel",
-            "telegram",
-            "--to",
-            "group-123",
-            "--thread-id",
-            threadId,
-          ],
-          { from: "user" },
-        );
+        await expect(
+          createMutationProgram().parseAsync(
+            [
+              "edit",
+              "job-1",
+              "--pacing-min",
+              "30m",
+              "--channel",
+              "telegram",
+              "--to",
+              "group-123",
+              "--thread-id",
+              threadId,
+            ],
+            { from: "user" },
+          ),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
         expect(errorSpy).toHaveBeenCalledWith(
           expect.stringContaining("--thread-id must be a positive integer"),
         );
-        expect(exitSpy).toHaveBeenCalledWith(1);
         expect(callGatewayFromCli).not.toHaveBeenCalled();
       } finally {
         errorSpy.mockRestore();
-        exitSpy.mockRestore();
       }
     },
   );

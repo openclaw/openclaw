@@ -11,28 +11,41 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
+import { hasErrnoCode } from "./errno.js";
 import { createFileLockManager } from "./file-lock-manager.js";
+import {
+  acquireGatewayOwnerLease,
+  type GatewayOwnerLease,
+  type GatewayOwnerSupervisor,
+} from "./gateway-owner-lease.js";
 import {
   isGatewayArgv,
   isOpenClawArgv,
   isOpenClawCommandArgv,
   parseProcCmdline,
 } from "./gateway-process-argv.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
-import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
+import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
 import {
-  readWindowsProcessArgsSync,
-  readWindowsProcessStartTimeSync,
-} from "./windows-port-pids.js";
+  acquireGatewayLifecycleCoordinator,
+  acquireGatewayMaintenanceCoordinator,
+  StateDatabaseCoordinatorContentionError,
+} from "./state-database-coordinator.js";
+import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const DEFAULT_STALE_MS = 30_000;
 const GATEWAY_LOCKS = createFileLockManager("openclaw.gateway-lock");
+export const GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS = 5 * 60_000;
+const log = createSubsystemLogger("gateway");
 
 type LockPayload = {
   pid: number;
@@ -64,10 +77,10 @@ const LockPayloadSchema = z.object({
 type GatewayLockHandle = {
   lockPath: string;
   stateLockPath: string;
-  configPath: string;
   stateDir: string;
   releaseInTree: () => Promise<void>;
   release: () => Promise<void>;
+  run<T>(operation: () => T): T;
 };
 
 type GatewayLockRole = "gateway" | "agent-embedded" | "skill-workshop-apply" | "sqlite-maintenance";
@@ -98,6 +111,7 @@ export function isSameGatewayLockIdentity(
 export type GatewayLockOptions = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  lifecycleDeadlineMs?: number;
   pollIntervalMs?: number;
   staleMs?: number;
   allowInTests?: boolean;
@@ -107,6 +121,8 @@ export type GatewayLockOptions = {
   sleep?: (ms: number) => Promise<void>;
   lockDir?: string;
   role?: GatewayLockRole;
+  listenerMode?: "foreground" | "supervised";
+  supervisor?: GatewayOwnerSupervisor | null;
   /** Override process command-line reader (testing seam). */
   readProcessCmdline?: (pid: number) => string[] | null;
   /** Override process start-identity reader (testing seam). */
@@ -121,6 +137,14 @@ export class GatewayLockError extends Error {
     super(message);
     this.name = "GatewayLockError";
   }
+}
+
+export function isGatewayLifecycleContentionError(error: unknown): boolean {
+  return (
+    error instanceof GatewayLockError &&
+    error.cause instanceof StateDatabaseCoordinatorContentionError &&
+    error.cause.family === "gateway-lifecycle"
+  );
 }
 
 type LockOwnerStatus = "alive" | "dead" | "unknown";
@@ -151,6 +175,7 @@ function readWindowsCmdline(pid: number): string[] | null {
 function readDarwinCmdline(pid: number): string[] | null {
   try {
     const raw = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf8",
       timeout: CMDLINE_EXEC_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "ignore"],
@@ -169,9 +194,7 @@ function readProcessStartTime(pid: number, platform: NodeJS.Platform): number | 
   if (platform !== process.platform) {
     return null;
   }
-  return platform === "win32"
-    ? readWindowsProcessStartTimeSync(pid, CMDLINE_EXEC_TIMEOUT_MS)
-    : getFileLockProcessStartTime(pid);
+  return getFileLockProcessStartTime(pid, process.env, CMDLINE_EXEC_TIMEOUT_MS);
 }
 
 function defaultReadProcessCmdline(pid: number, platform: NodeJS.Platform): string[] | null {
@@ -245,11 +268,20 @@ async function resolveGatewayOwnerStatus(
   return isGatewayArgv(args, { allowGatewayBinary: true }) ? "alive" : "dead";
 }
 
-async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
+async function readLockPayload(
+  lockPath: string,
+  requireInspection = false,
+): Promise<LockPayload | null> {
   try {
-    const raw = await fs.readFile(lockPath, "utf8");
-    return parseGatewayLockPayload(raw);
-  } catch {
+    const payload = parseGatewayLockPayload(await fs.readFile(lockPath, "utf8"));
+    if (requireInspection && !payload) {
+      throw new GatewayLockError("Gateway lock payload could not be verified");
+    }
+    return payload;
+  } catch (error) {
+    if (requireInspection && !hasErrnoCode(error, "ENOENT")) {
+      throw new GatewayLockError("Gateway lock inspection is unavailable", error);
+    }
     return null;
   }
 }
@@ -309,20 +341,19 @@ function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: strin
   };
 }
 
+type GatewayLockObservationOptions = Pick<
+  GatewayLockOptions,
+  "env" | "lockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime"
+> & { requireInspection?: boolean };
+
 export async function readActiveGatewayLockPort(
-  opts: Pick<
-    GatewayLockOptions,
-    "env" | "lockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime"
-  > = {},
+  opts: GatewayLockObservationOptions = {},
 ): Promise<number | undefined> {
   return (await readActiveGatewayLockIdentity(opts))?.port;
 }
 
 export async function readActiveGatewayLockIdentity(
-  opts: Pick<
-    GatewayLockOptions,
-    "env" | "lockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime"
-  > = {},
+  opts: GatewayLockObservationOptions = {},
 ): Promise<GatewayLockIdentity | undefined> {
   const env = opts.env ?? process.env;
   const { configLockPath, stateLockPath } = resolveGatewayLockPaths(env, opts.lockDir);
@@ -332,10 +363,10 @@ export async function readActiveGatewayLockIdentity(
 
 async function readVerifiedGatewayLockIdentity(
   lockPath: string,
-  opts: Pick<GatewayLockOptions, "platform" | "readProcessCmdline" | "readProcessStartTime">,
+  opts: GatewayLockObservationOptions,
 ): Promise<GatewayLockIdentity | undefined> {
-  const payload = await readLockPayload(lockPath);
-  if (!payload?.port || (payload.role && payload.role !== "gateway")) {
+  const payload = await readLockPayload(lockPath, opts.requireInspection);
+  if (!payload || (payload.role && payload.role !== "gateway")) {
     return undefined;
   }
   const ownerStatus = await resolveGatewayOwnerStatus(
@@ -346,7 +377,15 @@ async function readVerifiedGatewayLockIdentity(
     opts.readProcessStartTime,
     { trustUnknownCmdlineOwner: false },
   );
-  if (ownerStatus !== "alive") {
+  // Discovery may omit an unverifiable owner; mutation preflight must preserve unknown.
+  if (
+    opts.requireInspection &&
+    ownerStatus !== "dead" &&
+    (ownerStatus === "unknown" || !payload.port)
+  ) {
+    throw new GatewayLockError("Gateway lock owner identity could not be verified");
+  }
+  if (ownerStatus !== "alive" || !payload.port) {
     return undefined;
   }
   return {
@@ -370,17 +409,75 @@ export async function acquireGatewayLock(
   const role = opts.role ?? "gateway";
   const ownerId = randomUUID();
   const paths = resolveGatewayLockPaths(env, opts.lockDir);
+  const databasePath = path.join(paths.stateDir, "state", "openclaw.sqlite");
+  const now = opts.now ?? performance.now.bind(performance);
+  const startedAt = now();
+  const timeoutMs = resolveTimerTimeoutMs(
+    opts.timeoutMs,
+    role === "gateway" ? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS : 0,
+    0,
+  );
+  const deadlineMs = opts.lifecycleDeadlineMs ?? startedAt + timeoutMs;
+  let waited = false;
   let stateLifecycle: ReturnType<typeof acquireGatewayLifecycleCoordinator>;
+  let resources: ReturnType<typeof createOpenClawDatabaseMaintenanceScope> | undefined;
   try {
-    stateLifecycle = acquireGatewayLifecycleCoordinator({
-      databasePath: path.join(paths.stateDir, "state", "openclaw.sqlite"),
-      busyTimeoutMs: opts.timeoutMs,
+    stateLifecycle = await acquireWithWait({
+      deadlineMs,
+      pollIntervalMs: resolvePositiveTimerTimeoutMs(opts.pollIntervalMs, 250),
+      maxPollIntervalMs: 2000,
+      now,
+      sleep: opts.sleep,
+      acquire: () => {
+        const options = { databasePath, busyTimeoutMs: 0 };
+        if (role === "sqlite-maintenance") {
+          const owner = acquireGatewayMaintenanceCoordinator(options);
+          resources = createOpenClawDatabaseMaintenanceScope(owner.createSchemaFenceDelegate);
+          return owner;
+        }
+        return acquireGatewayLifecycleCoordinator(options);
+      },
+      shouldRetry: (error) => {
+        if (
+          !(error instanceof StateDatabaseCoordinatorContentionError) ||
+          error.family !== "gateway-lifecycle"
+        ) {
+          return false;
+        }
+        if (!waited && deadlineMs > startedAt && role === "gateway") {
+          log.warn(
+            `waiting for gateway-lifecycle ownership held by another OpenClaw process, up to ${Math.ceil((deadlineMs - startedAt) / 1000)} s`,
+          );
+        }
+        waited = true;
+        return true;
+      },
     });
   } catch (error) {
-    throw new GatewayLockError("failed to acquire gateway state ownership", error);
+    const waitHint =
+      waited && role === "gateway"
+        ? `; waited ${Math.round(now() - startedAt)}ms for gateway-lifecycle ownership`
+        : "";
+    throw new GatewayLockError(`failed to acquire gateway state ownership${waitHint}`, error);
   }
+  if (waited && role === "gateway") {
+    log.info(
+      `gateway-lifecycle ownership acquired after ${((now() - startedAt) / 1000).toFixed(1)} s`,
+    );
+  }
+  let ownerLease: GatewayOwnerLease | undefined;
   let stateLock: Awaited<ReturnType<typeof acquireLockFile>>;
   try {
+    if (role === "gateway" && opts.listenerMode && opts.port) {
+      ownerLease = acquireGatewayOwnerLease({
+        env,
+        port: opts.port,
+        mode: opts.listenerMode,
+        supervisor: opts.supervisor ?? null,
+        owner: ownerId,
+      });
+      await ownerLease.ready;
+    }
     stateLock = await acquireLockFile({
       ...opts,
       configPath: paths.configPath,
@@ -391,11 +488,11 @@ export async function acquireGatewayLock(
       ownerId,
     });
   } catch (error) {
+    await ownerLease?.release();
     stateLifecycle.release();
     throw error;
   }
-  const shouldAcquireConfigLock = role !== "gateway" || env.OPENCLAW_ALLOW_MULTI_GATEWAY !== "1";
-  if (!shouldAcquireConfigLock) {
+  if (role === "gateway" && env.OPENCLAW_ALLOW_MULTI_GATEWAY === "1") {
     let inTreeReleased = false;
     const releaseInTree = async () => {
       if (inTreeReleased) {
@@ -406,10 +503,13 @@ export async function acquireGatewayLock(
     };
     return {
       ...stateLock,
+      run: (operation) => operation(),
       stateDir: paths.stateDir,
       stateLockPath: stateLock.lockPath,
       releaseInTree,
       release: async () => {
+        // Join the writer and remove its identity before relinquishing physical custody.
+        await ownerLease?.release();
         let releaseError: unknown;
         await releaseInTree().catch((error: unknown) => {
           releaseError = error;
@@ -436,6 +536,33 @@ export async function acquireGatewayLock(
       stateDir: paths.stateDir,
       ownerId,
     });
+    if (role === "sqlite-maintenance") {
+      let inTreeReleaseAttempt: Promise<void> | undefined;
+      const releaseInTree = () => {
+        inTreeReleaseAttempt ??= (async () => {
+          await resources?.close();
+          await configLock.release();
+          await stateLock.release();
+        })().catch((error: unknown) => {
+          // Retry only this handle's unfinished cleanup while lifecycle custody
+          // remains held. Successful drainage must not touch later resources.
+          inTreeReleaseAttempt = undefined;
+          throw error;
+        });
+        return inTreeReleaseAttempt;
+      };
+      return {
+        ...configLock,
+        run: (operation) => resources!.run(operation),
+        stateDir: paths.stateDir,
+        stateLockPath: stateLock.lockPath,
+        releaseInTree,
+        release: async () => {
+          await releaseInTree();
+          stateLifecycle.release();
+        },
+      };
+    }
     let inTreeReleased = false;
     const releaseInTree = async () => {
       if (inTreeReleased) {
@@ -465,10 +592,12 @@ export async function acquireGatewayLock(
     };
     return {
       ...configLock,
+      run: (operation) => operation(),
       stateDir: paths.stateDir,
       stateLockPath: stateLock.lockPath,
       releaseInTree,
       release: async () => {
+        await ownerLease?.release();
         let releaseError: Error | undefined;
         try {
           await releaseInTree();
@@ -493,6 +622,7 @@ export async function acquireGatewayLock(
     };
   } catch (error) {
     await stateLock.release().catch(() => undefined);
+    await ownerLease?.release();
     try {
       stateLifecycle.release();
     } catch {
@@ -510,7 +640,7 @@ async function acquireLockFile(
     stateDir: string;
     ownerId: string;
   },
-): Promise<Omit<GatewayLockHandle, "releaseInTree" | "stateDir" | "stateLockPath">> {
+): Promise<Omit<GatewayLockHandle, "releaseInTree" | "stateDir" | "stateLockPath" | "run">> {
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, DEFAULT_TIMEOUT_MS, 0);
   const pollIntervalMs = resolvePositiveTimerTimeoutMs(
     opts.pollIntervalMs,
@@ -586,7 +716,6 @@ async function acquireLockFile(
         });
         return {
           lockPath,
-          configPath,
           release: async () => {
             let releaseError: unknown;
             try {

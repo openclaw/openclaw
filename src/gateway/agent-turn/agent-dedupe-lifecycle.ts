@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  isSubagentCoordinationInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { CommittedResetCompletion } from "../server-methods/agent-reset-phase.js";
@@ -30,6 +34,8 @@ export function createAgentDedupeLifecycle(params: {
   lifecycleGeneration: string;
   agentDedupeKeys: string[];
   suppressVisibleSessionEffects: boolean;
+  inputProvenance?: InputProvenance;
+  privateCompletion?: true;
   ownerConnId?: string;
   ownerDeviceId?: string;
   context: AgentTurnContext;
@@ -44,6 +50,21 @@ export function createAgentDedupeLifecycle(params: {
     if (reserved) {
       return;
     }
+    // A private retry bypasses terminal cache replay to reconcile durable input.
+    // Preserve an exact intentional Stop for the resolved admission guard.
+    if (
+      isPreRegistrationAbortedAgentDedupeEntryForSession({
+        entry: readGatewayDedupeEntry({
+          dedupe: params.context.dedupe,
+          keys: params.agentDedupeKeys,
+        }),
+        runId: params.runId,
+        sessionKey,
+        agentId: dedupeAgentId,
+      })
+    ) {
+      return;
+    }
     const acceptedAt = Date.now();
     const pendingTimeoutMs = resolveAgentTimeoutMs({
       cfg: params.cfg,
@@ -53,6 +74,11 @@ export function createAgentDedupeLifecycle(params: {
     setGatewayDedupeEntries({
       dedupe: params.context.dedupe,
       keys: params.agentDedupeKeys,
+      // Durable private input decides replay after the prior controller ends.
+      // Its new reservation must retire stale sticky terminal projections.
+      ...(params.privateCompletion && !params.context.chatAbortControllers.has(params.runId)
+        ? { startNewAttempt: true as const }
+        : {}),
       entry: {
         ts: acceptedAt,
         ok: true,
@@ -62,7 +88,9 @@ export function createAgentDedupeLifecycle(params: {
           status: "accepted" as const,
           ...(sessionKey ? { sessionKey } : {}),
           ...(dedupeAgentId ? { agentId: dedupeAgentId } : {}),
-          controlUiVisible: !params.suppressVisibleSessionEffects,
+          controlUiVisible:
+            !params.suppressVisibleSessionEffects &&
+            !isSubagentCoordinationInputProvenance(params.inputProvenance),
           acceptedAt,
           dedupeKeys: params.agentDedupeKeys,
           expiresAtMs: resolveAgentRunExpiresAtMs({ now: acceptedAt, timeoutMs: pendingTimeoutMs }),

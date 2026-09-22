@@ -476,6 +476,45 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "plugin/install");
   });
 
+  it("probes unified Computer Use through its JavaScript tool", async () => {
+    const request = createComputerUseRequest({
+      installed: true,
+      pluginName: "unified-computer-use",
+      mcpServerName: "cua_repl",
+      mcpTools: ["js", "js_reset", "turn_ended"],
+    });
+
+    const status = await readCodexComputerUseStatus({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          marketplaceName: "desktop-tools",
+          pluginName: "unified-computer-use",
+          mcpServerName: "cua_repl",
+        },
+      },
+      request,
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      "mcpServer/tool/call",
+      {
+        threadId: "computer-use-probe-thread-1",
+        server: "cua_repl",
+        tool: "js",
+        arguments: { code: "await cua.getState();" },
+      },
+      { timeoutMs: 60_000 },
+    );
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      pluginName: "unified-computer-use",
+      mcpServerName: "cua_repl",
+      tools: ["js", "js_reset", "turn_ended"],
+    });
+  });
+
   it("inherits managed security policy when starting a Computer Use readiness probe", async () => {
     const request = createComputerUseRequest({ installed: true });
     const managedRequest = vi.fn(async (method: string, params?: unknown) => {
@@ -500,6 +539,23 @@ describe("Codex Computer Use setup", () => {
     });
 
     expect(status).toMatchObject({ ready: true, reason: "ready" });
+  });
+
+  it("treats MCP error results as failed readiness probes", async () => {
+    const request = createComputerUseRequest({ installed: true, liveTestResultErrors: 2 });
+
+    const status = await readCodexComputerUseStatus({
+      pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
+      request,
+    });
+
+    expect(status).toMatchObject({ ready: false, reason: "live_test_failed" });
+    expect(status.liveTest).toMatchObject({
+      status: "failed",
+      ok: false,
+      attempts: 2,
+      error: "Computer Use readiness tool computer-use.list_apps returned an error result",
+    });
   });
 
   it("repairs a failed probe through the owning MCP runtime without signaling sibling processes", async () => {
@@ -1743,6 +1799,63 @@ describe("Codex Computer Use setup", () => {
     ).toHaveLength(3);
   });
 
+  it("fails fast when Codex native plugins are disabled", async () => {
+    vi.useFakeTimers();
+    const request = createComputerUseRequest({
+      installed: false,
+      nativePluginsEnabled: false,
+      marketplaceAvailableAfterListCalls: Number.POSITIVE_INFINITY,
+    });
+    const install = installCodexComputerUse({
+      pluginConfig: { computerUse: {} },
+      request,
+    });
+    const pending = expectSetupErrorStatus(install, {
+      ready: false,
+      reason: "marketplace_missing",
+      message: expect.stringContaining("features.plugins = false"),
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await pending;
+
+    expect(requestCalls(request).filter(([method]) => method === "plugin/list")).toHaveLength(1);
+    expect(
+      requestCalls(request).filter(([method]) => method === "experimentalFeature/list"),
+    ).toHaveLength(1);
+    expectRequestMethodNotCalled(request, "plugin/install");
+    await expect(install).rejects.toThrow("/codex computer-use install");
+  });
+
+  it("keeps waiting for marketplace discovery when the feature list does not report plugins", async () => {
+    vi.useFakeTimers();
+    const request = createComputerUseRequest({
+      installed: false,
+      nativePluginsEnabled: "absent",
+      marketplaceAvailableAfterListCalls: 3,
+    });
+    const installed = installCodexComputerUse({
+      pluginConfig: { computerUse: {} },
+      request,
+    });
+
+    await vi.advanceTimersByTimeAsync(4_000);
+
+    expectStatusFields(await installed, { ready: true, reason: "ready" });
+    expect(requestCalls(request).filter(([method]) => method === "plugin/list")).toHaveLength(3);
+    expect(
+      requestCalls(request).filter(([method]) => method === "experimentalFeature/list"),
+    ).toHaveLength(1);
+  });
+
+  it("does not read native plugin state when the marketplace is immediately available", async () => {
+    const request = createComputerUseRequest({ installed: false });
+
+    await installCodexComputerUse({ pluginConfig: { computerUse: {} }, request });
+
+    expectRequestMethodNotCalled(request, "experimentalFeature/list");
+  });
+
   it("prefers the official Computer Use marketplace when multiple matches are present", async () => {
     const request = createMultiMarketplaceComputerUseRequest();
 
@@ -1766,8 +1879,13 @@ describe("Codex Computer Use setup", () => {
 function createComputerUseRequest(params: {
   installed: boolean;
   enabled?: boolean;
+  pluginName?: string;
+  mcpServerName?: string;
+  mcpTools?: readonly string[];
+  nativePluginsEnabled?: boolean | "absent";
   marketplaceAvailableAfterListCalls?: number;
   liveTestFailures?: number;
+  liveTestResultErrors?: number;
   reloadFailures?: number;
   mcpToolsAvailable?: boolean;
   remoteMarketplace?: {
@@ -1780,18 +1898,40 @@ function createComputerUseRequest(params: {
   let enabled = params.enabled ?? installed;
   let pluginListCalls = 0;
   let liveTestFailures = params.liveTestFailures ?? 0;
+  let liveTestResultErrors = params.liveTestResultErrors ?? 0;
   let reloadFailures = params.reloadFailures ?? 0;
   let threadStartCalls = 0;
+  const pluginName = params.pluginName ?? "computer-use";
+  const mcpServerName = params.mcpServerName ?? "computer-use";
+  const mcpTools = params.mcpTools ?? ["list_apps"];
   const marketplaceName = params.remoteMarketplace?.name ?? "desktop-tools";
   const marketplacePath = params.remoteMarketplace
     ? null
     : `/marketplaces/${marketplaceName}/.agents/plugins/marketplace.json`;
   const source = params.remoteMarketplace ? "remote" : "local";
   const currentPluginSummary = () =>
-    pluginSummary(installed, marketplaceName, enabled, source, params.remoteMarketplace?.pluginId);
+    pluginSummary(
+      installed,
+      marketplaceName,
+      enabled,
+      source,
+      params.remoteMarketplace?.pluginId,
+      pluginName,
+    );
   return vi.fn(async (method: string, requestParams?: unknown) => {
     if (method === "experimentalFeature/enablement/set") {
-      return { enablement: { plugins: true } };
+      return {
+        enablement: params.nativePluginsEnabled === false ? {} : { plugins: true },
+      };
+    }
+    if (method === "experimentalFeature/list") {
+      return {
+        data:
+          params.nativePluginsEnabled === "absent"
+            ? []
+            : [{ name: "plugins", enabled: params.nativePluginsEnabled ?? true }],
+        nextCursor: null,
+      };
     }
     if (method === "marketplace/add") {
       return {
@@ -1829,7 +1969,7 @@ function createComputerUseRequest(params: {
               remoteMarketplaceName: marketplaceName,
               pluginName: params.remoteMarketplace.pluginId,
             }
-          : { marketplacePath, pluginName: "computer-use" },
+          : { marketplacePath, pluginName },
       );
       return {
         plugin: {
@@ -1839,7 +1979,7 @@ function createComputerUseRequest(params: {
           description: "Control desktop apps.",
           skills: [],
           apps: [],
-          mcpServers: ["computer-use"],
+          mcpServers: [mcpServerName],
         },
       };
     }
@@ -1867,16 +2007,13 @@ function createComputerUseRequest(params: {
           installed && enabled
             ? [
                 {
-                  name: "computer-use",
+                  name: mcpServerName,
                   tools:
                     params.mcpToolsAvailable === false
                       ? {}
-                      : {
-                          list_apps: {
-                            name: "list_apps",
-                            inputSchema: { type: "object" },
-                          },
-                        },
+                      : Object.fromEntries(
+                          mcpTools.map((name) => [name, { name, inputSchema: { type: "object" } }]),
+                        ),
                   resources: [],
                   resourceTemplates: [],
                   authStatus: "unsupported",
@@ -1897,15 +2034,27 @@ function createComputerUseRequest(params: {
       };
     }
     if (method === "mcpServer/tool/call") {
-      expect(requestParams).toEqual({
+      const requestRecord = requireRecord(requestParams, "Computer Use readiness tool call");
+      const tool = requestRecord.tool;
+      if (typeof tool !== "string" || !mcpTools.includes(tool)) {
+        return {
+          content: [{ type: "text", text: `Unknown tool: ${String(tool)}` }],
+          isError: true,
+        };
+      }
+      expect(requestRecord).toEqual({
         threadId: `computer-use-probe-thread-${threadStartCalls}`,
-        server: "computer-use",
-        tool: "list_apps",
-        arguments: {},
+        server: mcpServerName,
+        tool,
+        arguments: tool === "js" ? { code: "await cua.getState();" } : {},
       });
       if (liveTestFailures > 0) {
         liveTestFailures -= 1;
-        throw new Error("list_apps timed out");
+        throw new Error(`${tool} timed out`);
+      }
+      if (liveTestResultErrors > 0) {
+        liveTestResultErrors -= 1;
+        return { content: [{ type: "text", text: `${tool} failed` }], isError: true };
       }
       return { content: [{ type: "text", text: "[]" }] };
     }
@@ -2217,14 +2366,15 @@ function pluginSummary(
   enabled = installed,
   source: "local" | "remote" = "local",
   remotePluginId?: string | null,
+  pluginName = "computer-use",
 ) {
   return {
-    id: `computer-use@${marketplaceName}`,
+    id: `${pluginName}@${marketplaceName}`,
     ...(source === "remote" ? { remotePluginId: remotePluginId ?? null } : {}),
-    name: "computer-use",
+    name: pluginName,
     source:
       source === "local"
-        ? { type: "local", path: `/marketplaces/${marketplaceName}/plugins/computer-use` }
+        ? { type: "local", path: `/marketplaces/${marketplaceName}/plugins/${pluginName}` }
         : { type: "remote" },
     installed,
     enabled,

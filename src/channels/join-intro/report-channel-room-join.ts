@@ -10,7 +10,7 @@ import {
   runClaimableDedupeClaimLoop,
 } from "../../plugin-sdk/persistent-dedupe.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { resolveAccountEntry } from "../../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../../routing/account-lookup.js";
 import { buildChannelJoinIntroPrompt, type ChannelJoinedRoomContext } from "./join-intro-prompt.js";
 
 export type { ChannelJoinedRoomContext } from "./join-intro-prompt.js";
@@ -71,9 +71,10 @@ function logChannelJoinIntroOutcome(
 function resolveChannelJoinIntroEnabled(params: ChannelJoinIntroParams): boolean {
   const channelConfig = asOptionalRecord(params.cfg.channels?.[params.channel]);
   const accountConfig = asOptionalRecord(
-    resolveAccountEntry(
+    resolveChannelAccountEntry(
       asOptionalRecord(channelConfig?.accounts),
       normalizeAccountId(params.accountId),
+      params.channel,
     ),
   );
   const enabled = accountConfig?.joinIntro ?? channelConfig?.joinIntro;

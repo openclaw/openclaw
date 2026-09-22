@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import os
 import Security
 import Testing
 @testable import OpenClaw
@@ -682,6 +683,25 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(defaults.string(forKey: "node.instanceId") == "node-from-keychain")
             #expect(defaults.string(forKey: "gateway.preferredStableID") == "preferred-from-keychain")
             #expect(defaults.string(forKey: "gateway.lastDiscoveredStableID") == "last-from-keychain")
+        }
+    }
+
+    @Test func `registry observers refresh only after successful mutations`() {
+        withLastGatewaySnapshot {
+            applyKeychain([gatewayRegistryKeychainEntry: nil, lastGatewayKeychainEntry: nil])
+            let notifications = OSAllocatedUnfairLock(initialState: 0)
+            let observer = NotificationCenter.default.addObserver(
+                forName: GatewaySettingsStore.gatewayRegistryDidChange,
+                object: nil,
+                queue: nil) { _ in notifications.withLock { $0 += 1 } }
+            defer { NotificationCenter.default.removeObserver(observer) }
+
+            #expect(GatewaySettingsStore.saveGatewayRegistry(.empty))
+            #expect(notifications.withLock { $0 } == 1)
+            #expect(!GatewaySettingsStore.setActiveGateway(stableID: "missing-gateway"))
+            #expect(notifications.withLock { $0 } == 1)
+            GatewaySettingsStore.clearGatewayRegistry()
+            #expect(notifications.withLock { $0 } == 2)
         }
     }
 

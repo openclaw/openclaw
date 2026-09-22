@@ -1,11 +1,17 @@
 // Embedded gateway stub tests cover in-process gateway methods used by agent
 // tools when no external gateway transport is available.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
+import {
+  bindEmbeddedSessionRowProjection,
+  createEmbeddedCallGateway,
+} from "./embedded-gateway-stub.js";
 
 const runtime = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main", default: true }] } })),
-  resolveDefaultAgentId: vi.fn(() => "main"),
+  getRuntimeConfig: vi.fn((): OpenClawConfig => ({
+    agents: { list: [{ id: "main", default: true }] },
+  })),
   resolveSessionStoreKey: vi.fn(({ sessionKey }: { sessionKey: string }) =>
     sessionKey === "main" ? "agent:main:main" : sessionKey,
   ),
@@ -18,6 +24,7 @@ const runtime = vi.hoisted(() => ({
           : `agent:${agentId}:${sessionKey}`,
   ),
   searchSessionTranscripts: vi.fn(() => ({ hits: [], indexing: false, truncated: false })),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/openclaw-sessions.json"),
   resolveSessionKeyFromResolveParams: vi.fn(),
   resolveSessionAgentId: vi.fn(() => "main"),
   loadSessionEntry: vi.fn(() => ({
@@ -35,7 +42,6 @@ const runtime = vi.hoisted(() => ({
     ({ offset, rawPageMessages }: { offset: number; rawPageMessages: number }) =>
       offset + rawPageMessages,
   ),
-  shouldReplayOldestChatHistoryRecord: vi.fn(() => false),
   resolveEffectiveChatHistoryMaxChars: vi.fn(() => 100_000),
   getMaxChatHistoryMessagesBytes: vi.fn(() => 100_000),
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
@@ -43,30 +49,32 @@ const runtime = vi.hoisted(() => ({
     messages,
   })),
   capArrayByJsonBytes: vi.fn((items: unknown[]) => ({ items })),
-  loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
-    storePath: "/tmp/openclaw-sessions.json",
-    store: {},
-  })),
-  listSessionsFromStoreAsync: vi.fn(async () => ({ sessions: [] })),
+  listProjectedSessions: vi.fn(
+    async (_params: { projection: SessionRowProjection; opts: unknown }) => ({ sessions: [] }),
+  ),
 }));
 
 vi.mock("./embedded-gateway-stub.runtime.js", () => runtime);
 
 describe("embedded gateway stub", () => {
+  // The stub forwards this owner to the mocked shared operations without inspecting its rows.
+  const projection = {} as SessionRowProjection;
+  let unbindProjection: () => void;
   beforeEach(() => {
+    unbindProjection = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
     runtime.getRuntimeConfig.mockClear();
     runtime.resolveSessionKeyFromResolveParams.mockReset();
     runtime.readChatHistoryPage.mockClear();
     runtime.resolveChatHistoryNextOffset.mockClear();
-    runtime.shouldReplayOldestChatHistoryRecord.mockClear();
     runtime.loadSessionEntry.mockClear();
     runtime.resolveSessionAgentId.mockClear();
     runtime.resolveSessionStoreKey.mockClear();
     runtime.resolveStoredSessionKeyForAgentStore.mockClear();
     runtime.searchSessionTranscripts.mockClear();
-    runtime.loadCombinedSessionStoreForGatewayCore.mockClear();
-    runtime.listSessionsFromStoreAsync.mockClear();
+    runtime.resolveSessionStorePathCore.mockClear();
+    runtime.listProjectedSessions.mockClear();
   });
+  afterEach(() => unbindProjection());
 
   it("scopes embedded session lists to the requested agent", async () => {
     const callGateway = createEmbeddedCallGateway();
@@ -75,16 +83,25 @@ describe("embedded gateway stub", () => {
       params: { agentId: "work", includeGlobal: true, search: "global" },
     });
 
-    expect(runtime.loadCombinedSessionStoreForGatewayCore).toHaveBeenCalledWith(
-      { agents: { list: [{ id: "main", default: true }] } },
-      { agentId: "work", projection: "list" },
-    );
-    expect(runtime.listSessionsFromStoreAsync).toHaveBeenCalledWith({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
-      storePath: "/tmp/openclaw-sessions.json",
-      store: {},
+    expect(runtime.listProjectedSessions).toHaveBeenCalledWith({
+      projection,
       opts: { agentId: "work", includeGlobal: true, search: "global" },
     });
+  });
+
+  it("keeps a replacement host bound when the earlier host stops", async () => {
+    const replacement = {} as SessionRowProjection;
+    const unbindReplacement = bindEmbeddedSessionRowProjection(Promise.resolve(replacement));
+    unbindProjection();
+    try {
+      await createEmbeddedCallGateway()({ method: "sessions.list" });
+      expect(runtime.listProjectedSessions.mock.calls[0]?.[0].projection).toBe(replacement);
+    } finally {
+      unbindReplacement();
+    }
+    await expect(createEmbeddedCallGateway()({ method: "sessions.list" })).rejects.toThrow(
+      "Embedded session projection is unavailable",
+    );
   });
 
   it("resolves sessions through the gateway session resolver", async () => {
@@ -102,6 +119,7 @@ describe("embedded gateway stub", () => {
     expect(result).toEqual({ ok: true, key: "agent:main:main" });
     expect(runtime.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
       cfg: { agents: { list: [{ id: "main", default: true }] } },
+      projection,
       client: null,
       p: { sessionId: "sess-main", includeGlobal: true },
     });
@@ -140,35 +158,78 @@ describe("embedded gateway stub", () => {
     ).rejects.toThrow("No session found: missing");
   });
 
-  it("canonicalizes embedded session search filters", async () => {
-    const callGateway = createEmbeddedCallGateway();
-    await callGateway({
-      method: "sessions.search",
-      params: {
+  it.each([undefined, "/stores/{agentId}.sqlite"])(
+    "canonicalizes embedded session search filters with store %s",
+    async (store) => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }] },
+        ...(store ? { session: { store } } : {}),
+      };
+      const storePath = store ? "/stores/main.sqlite" : "/tmp/openclaw-sessions.json";
+      runtime.getRuntimeConfig.mockReturnValueOnce(cfg);
+      runtime.resolveSessionStorePathCore.mockReturnValueOnce(storePath);
+      const callGateway = createEmbeddedCallGateway();
+      await callGateway({
+        method: "sessions.search",
+        params: {
+          agentId: "main",
+          query: "needle",
+          sessionKeys: ["main", "agent:main:other"],
+          limit: 3,
+        },
+      });
+
+      expect(runtime.resolveStoredSessionKeyForAgentStore).toHaveBeenNthCalledWith(1, {
+        cfg,
+        agentId: "main",
+        sessionKey: "main",
+      });
+      expect(runtime.resolveStoredSessionKeyForAgentStore).toHaveBeenNthCalledWith(2, {
+        cfg,
+        agentId: "main",
+        sessionKey: "agent:main:other",
+      });
+      expect(runtime.searchSessionTranscripts).toHaveBeenCalledWith({
         agentId: "main",
         query: "needle",
-        sessionKeys: ["main", "agent:main:other"],
         limit: 3,
-      },
-    });
+        sessionKeys: ["agent:main:main", "agent:main:other"],
+        storePath,
+      });
+      expect(runtime.resolveSessionStorePathCore).toHaveBeenCalledWith(store, { agentId: "main" });
+    },
+  );
 
-    expect(runtime.resolveStoredSessionKeyForAgentStore).toHaveBeenNthCalledWith(1, {
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
-      agentId: "main",
-      sessionKey: "main",
-    });
-    expect(runtime.resolveStoredSessionKeyForAgentStore).toHaveBeenNthCalledWith(2, {
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
-      agentId: "main",
-      sessionKey: "agent:main:other",
-    });
-    expect(runtime.searchSessionTranscripts).toHaveBeenCalledWith({
-      agentId: "main",
-      query: "needle",
-      limit: 3,
-      sessionKeys: ["agent:main:main", "agent:main:other"],
-    });
-  });
+  it.each(["main", "ops"])(
+    "resolves omitted search filters through the fixed-store owner %s",
+    async (agentId) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [{ id: "main", default: true }, { id: "ops" }],
+          defaults: { sessionStore: { agentId } },
+        },
+        session: { store: "/stores/shared.sqlite" },
+      };
+      runtime.getRuntimeConfig.mockReturnValueOnce(cfg);
+      runtime.resolveSessionAgentId.mockReturnValueOnce(agentId);
+      runtime.resolveSessionStorePathCore.mockReturnValueOnce("/stores/shared.sqlite");
+
+      await createEmbeddedCallGateway()({ method: "sessions.search", params: { query: "needle" } });
+
+      expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
+        sessionKey: "main",
+        config: cfg,
+      });
+      expect(runtime.listProjectedSessions).not.toHaveBeenCalled();
+      expect(runtime.searchSessionTranscripts).toHaveBeenCalledWith({
+        agentId,
+        query: "needle",
+        limit: undefined,
+        sessionKeys: undefined,
+        storePath: "/stores/shared.sqlite",
+      });
+    },
+  );
 
   it("rejects empty session-key filters instead of widening the search", async () => {
     const callGateway = createEmbeddedCallGateway();
@@ -223,19 +284,6 @@ describe("embedded gateway stub", () => {
       params: { sessionKey: "agent:main:main", limit: 1 },
     });
 
-    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith({
-      entry: { sessionId: "sess-main" },
-      provider: "openai",
-      sessionId: "sess-main",
-      storePath: "/tmp/openclaw-sessions.json",
-      sessionAgentId: "main",
-      canonicalKey: "agent:main:main",
-      max: 1,
-      maxHistoryBytes: 100_000,
-      effectiveMaxChars: 100_000,
-      offset: undefined,
-      messageId: undefined,
-    });
     expect(result.messages).toEqual(messages);
     expect(result).not.toHaveProperty("offset");
   });
@@ -298,7 +346,6 @@ describe("embedded gateway stub", () => {
       pagination: { offset: 0, totalMessages: 10, rawPageMessages: 5 },
     });
     runtime.capArrayByJsonBytes.mockReturnValueOnce({ items: bounded });
-    runtime.shouldReplayOldestChatHistoryRecord.mockReturnValueOnce(true);
     runtime.resolveChatHistoryNextOffset.mockReturnValueOnce(3);
 
     const result = await createEmbeddedCallGateway()({
@@ -311,7 +358,7 @@ describe("embedded gateway stub", () => {
       totalMessages: 10,
       offset: 0,
       rawPageMessages: 5,
-      replayOldestRecord: true,
+      projected: messages,
     });
     expect(result).toMatchObject({ messages: bounded, nextOffset: 3, hasMore: true });
   });

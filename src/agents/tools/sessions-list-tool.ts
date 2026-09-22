@@ -6,10 +6,16 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
-import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { Value } from "typebox/value";
+import {
+  SessionCreatedActorSchema,
+  SessionRowSchema,
+  SessionRunStatusSchema,
+  type SessionRunStatus,
+} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscript } from "../../gateway/session-transcript-title-reader.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
@@ -54,15 +60,37 @@ import {
 const SessionsListToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(stringEnum(SESSION_LIST_KINDS))),
   limit: optionalPositiveIntegerSchema(),
+  offset: optionalNonNegativeIntegerSchema({ maximum: Number.MAX_SAFE_INTEGER }),
   activeMinutes: optionalPositiveIntegerSchema(),
+  activeOnly: Type.Optional(Type.Boolean()),
+  excludeSubagents: Type.Optional(Type.Boolean()),
+  relationship: Type.Optional(
+    stringEnum(["owned", "created", "involving"], {
+      description:
+        "Relation to the authenticated requesting user; unavailable without a trusted user identity.",
+    }),
+  ),
+  ownerId: Type.Optional(Type.String({ minLength: 1 })),
+  creatorId: Type.Optional(Type.String({ minLength: 1 })),
+  projectId: Type.Optional(Type.String({ minLength: 1 })),
+  workspaceDir: Type.Optional(Type.String({ minLength: 1 })),
+  group: Type.Optional(Type.String()),
+  pinned: Type.Optional(Type.Boolean()),
   messageLimit: optionalNonNegativeIntegerSchema(),
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   search: Type.Optional(Type.String({ minLength: 1 })),
-  archived: Type.Optional(Type.Boolean()),
+  archived: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("all")])),
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
+
+const SessionInventoryActorSchema = Type.Pick(SessionCreatedActorSchema, [
+  "type",
+  "id",
+  "label",
+  "identity",
+]);
 
 const SessionListRowOutputSchema = Type.Object(
   {
@@ -74,7 +102,23 @@ const SessionListRowOutputSchema = Type.Object(
     archived: Type.Boolean(),
     pinned: Type.Boolean(),
     label: Type.Optional(Type.String()),
-    category: Type.Optional(Type.String()),
+    createdActor: Type.Optional(SessionInventoryActorSchema),
+    owner: Type.Optional(
+      Type.Object({ actor: SessionInventoryActorSchema }, { additionalProperties: false }),
+    ),
+    worktree: SessionRowSchema.properties.worktree,
+    repositoryWorkspaceId: SessionRowSchema.properties.repositoryWorkspaceId,
+    repository: SessionRowSchema.properties.repository,
+    execCwd: SessionRowSchema.properties.execCwd,
+    spawnedCwd: SessionRowSchema.properties.spawnedCwd,
+    spawnedWorkspaceDir: SessionRowSchema.properties.spawnedWorkspaceDir,
+    projectId: SessionRowSchema.properties.projectId,
+    workspaceDir: SessionRowSchema.properties.workspaceDir,
+    group: Type.Optional(
+      Type.String({
+        description: 'Custom sidebar group membership; unrelated to kind "group" (group chats).',
+      }),
+    ),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
@@ -84,15 +128,7 @@ const SessionListRowOutputSchema = Type.Object(
     model: Type.Optional(Type.String()),
     contextTokens: Type.Optional(Type.Number()),
     totalTokens: Type.Optional(Type.Number()),
-    status: Type.Optional(
-      Type.Union([
-        Type.Literal("running"),
-        Type.Literal("done"),
-        Type.Literal("failed"),
-        Type.Literal("killed"),
-        Type.Literal("timeout"),
-      ]),
-    ),
+    status: Type.Optional(SessionRunStatusSchema),
     abortedLastRun: Type.Optional(Type.Boolean()),
     childSessions: Type.Optional(Type.Array(Type.String())),
     messages: Type.Optional(Type.Array(Type.Unknown())),
@@ -104,6 +140,16 @@ const SessionsListOutputSchema = Type.Object(
   {
     count: Type.Number(),
     sessions: Type.Array(SessionListRowOutputSchema),
+    hasMore: Type.Boolean(),
+    nextOffset: Type.Optional(Type.Integer({ minimum: 0 })),
+    limitApplied: Type.Integer({ minimum: 1, maximum: 200 }),
+    truncationReason: Type.Optional(stringEnum(["scan-limit", "byte-limit"])),
+    enrichmentOmitted: Type.Optional(
+      Type.Boolean({
+        description:
+          "Inline messages and transcript previews were omitted to fit the byte budget; read session history separately.",
+      }),
+    ),
     sessionLinkRule: Type.Optional(
       Type.String({
         description: "How to build Control UI URLs for sessionKey values in this result.",
@@ -126,15 +172,16 @@ const SessionsListOutputSchema = Type.Object(
 type GatewayCaller = AgentToolGatewayRequestCaller;
 
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
+const SESSIONS_LIST_MAX_SCAN_PAGES = 5;
+const SESSIONS_LIST_MAX_RESULT_BYTES = 64 * 1024;
+
+function projectInventoryActor(actor: NonNullable<SessionListRow["createdActor"]>) {
+  const { type, id, label, identity } = actor;
+  return { type, id, label, identity };
+}
 
 function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
-  return value === "running" ||
-    value === "done" ||
-    value === "failed" ||
-    value === "killed" ||
-    value === "timeout"
-    ? value
-    : undefined;
+  return Value.Check(SessionRunStatusSchema, value) ? value : undefined;
 }
 
 /** Creates the sessions-list tool with gateway-backed listing and local transcript enrichment. */
@@ -145,16 +192,24 @@ export function createSessionsListTool(opts?: {
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
   sessionLinkBase?: string;
+  requesterProfileId?: string;
+  supportsActiveOnly?: boolean;
 }): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_list",
     displaySummary: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsListTool({ sessionLinkBase: opts?.sessionLinkBase }),
-    parameters: SessionsListToolSchema,
+    parameters:
+      opts?.supportsActiveOnly === false
+        ? Type.Omit(SessionsListToolSchema, ["activeOnly"])
+        : SessionsListToolSchema,
     outputSchema: SessionsListOutputSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
+      if (params.activeOnly === true && opts?.supportsActiveOnly === false) {
+        throw new Error("activeOnly requires a Gateway-backed inventory with live run state");
+      }
       const {
         cfg,
         mainKey,
@@ -179,13 +234,38 @@ export function createSessionsListTool(opts?: {
           : undefined;
 
       const limit = readPositiveIntegerParam(params, "limit");
+      const initialOffset = readNonNegativeIntegerParam(params, "offset") ?? 0;
       const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
       const messageLimitRaw = readNonNegativeIntegerParam(params, "messageLimit") ?? 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
       const label = readToolStringParam(params, "label");
       const agentId = readToolStringParam(params, "agentId");
       const search = readToolStringParam(params, "search");
-      const archived = params.archived === true;
+      const archived = params.archived === "all" ? "all" : params.archived === true;
+      const relationship = readToolStringParam(params, "relationship", {
+        required: params.relationship !== undefined,
+      });
+      if (relationship && !["owned", "created", "involving"].includes(relationship)) {
+        throw new Error("relationship must be owned, created, or involving");
+      }
+      const profileId = opts?.requesterProfileId?.trim();
+      if (relationship && !profileId) {
+        throw new Error(
+          "relationship requires an authenticated requesting user; use an explicit ownerId or creatorId instead",
+        );
+      }
+      const ownerId = readToolStringParam(params, "ownerId", {
+        required: params.ownerId !== undefined,
+      });
+      const creatorId = readToolStringParam(params, "creatorId", {
+        required: params.creatorId !== undefined,
+      });
+      const projectId = readToolStringParam(params, "projectId", {
+        required: params.projectId !== undefined,
+      });
+      const workspaceDir = readToolStringParam(params, "workspaceDir", {
+        required: params.workspaceDir !== undefined,
+      });
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
@@ -199,11 +279,33 @@ export function createSessionsListTool(opts?: {
         visibility,
         a2aPolicy,
       });
-      const sessions: GatewaySessionListRow[] = [];
-      const seenKeys = new Set<string>();
-      const resolvedAgentIdsByKey = new Map<string, string>();
-      const outputLimit = limit ?? 100;
-      let offset = 0;
+      const visibleReference = (key: string, parentSessionKey?: string) => {
+        if (isIncognitoSessionKey(key)) {
+          return undefined;
+        }
+        try {
+          const referenceAgentId = resolveSessionToolTargetAgentId({
+            cfg,
+            targetSessionKey: key,
+            requesterAgentId,
+          });
+          if (
+            !visibilityGuard.check({ key, agentId: referenceAgentId, parentSessionKey }).allowed
+          ) {
+            return undefined;
+          }
+          return resolveDisplaySessionKey({ key, alias, mainKey });
+        } catch {
+          return undefined;
+        }
+      };
+      const sessions: Array<{ entry: GatewaySessionListRow; agentId: string; offset: number }> = [];
+      const seenSessions = new Set<string>();
+      const outputLimit = Math.min(limit ?? 100, 200);
+      let offset = initialOffset;
+      let nextOffset: number | undefined;
+      let hasMore = false;
+      let truncationReason: "scan-limit" | "byte-limit" | undefined;
       let storePath: string | undefined;
       for (let pageIndex = 0; sessions.length < outputLimit; pageIndex += 1) {
         const page = await gatewayCall<{
@@ -213,6 +315,7 @@ export function createSessionsListTool(opts?: {
           nextOffset?: number | null;
         }>({
           method: "sessions.list",
+          ...(signal ? { signal } : {}),
           params: {
             limit: 200,
             offset,
@@ -221,6 +324,15 @@ export function createSessionsListTool(opts?: {
             agentId,
             search,
             archived,
+            activeOnly: params.activeOnly === true,
+            excludeSubagents: params.excludeSubagents === true,
+            ownerId,
+            creatorId,
+            profileRelation: relationship && profileId ? { profileId, relationship } : undefined,
+            projectId,
+            workspaceDir,
+            group: typeof params.group === "string" ? params.group : undefined,
+            pinned: typeof params.pinned === "boolean" ? params.pinned : undefined,
             includeDerivedTitles: false,
             includeLastMessage: false,
             includeGlobal: !restrictToSpawned,
@@ -230,13 +342,27 @@ export function createSessionsListTool(opts?: {
         });
         storePath ??= typeof page?.path === "string" ? page.path : undefined;
         const pageSessions = Array.isArray(page?.sessions) ? page.sessions : [];
-        for (const entry of pageSessions) {
+        if (pageSessions.length > 200) {
+          throw new Error("sessions.list returned more than the requested 200-row page");
+        }
+        const pageNextOffset = page?.hasMore === true ? offset + pageSessions.length : undefined;
+        if (
+          pageNextOffset !== undefined &&
+          (pageSessions.length === 0 ||
+            !Number.isSafeInteger(page.nextOffset) ||
+            page.nextOffset !== pageNextOffset)
+        ) {
+          throw new Error(
+            `sessions.list returned invalid pagination metadata (offset=${offset}, nextOffset=${String(page.nextOffset)})`,
+          );
+        }
+        for (let index = 0; index < pageSessions.length; index += 1) {
+          const entry = pageSessions[index]!;
           const key =
             entry && typeof entry === "object" && typeof entry.key === "string" ? entry.key : "";
-          if (!key || seenKeys.has(key)) {
+          if (!key) {
             continue;
           }
-          seenKeys.add(key);
           // Cross-session tool output is copied into durable transcripts, so exposing
           // incognito rows here would defeat their process-only lifetime.
           if (isIncognitoSessionKey(key)) {
@@ -260,6 +386,12 @@ export function createSessionsListTool(opts?: {
             // An unowned fixed-store row is unavailable rather than adopted by the requester.
             continue;
           }
+          // Sentinel keys repeat across agent stores; incarnation IDs distinguish replacements.
+          const identity = JSON.stringify([resolvedAgentId, key, readStringValue(entry.sessionId)]);
+          if (seenSessions.has(identity)) {
+            continue;
+          }
+          seenSessions.add(identity);
           const access = visibilityGuard.check({
             key,
             agentId: resolvedAgentId,
@@ -278,60 +410,50 @@ export function createSessionsListTool(opts?: {
             (key !== "global" || alias === "global") &&
             (!allowedKinds || allowedKinds.has(kind))
           ) {
-            resolvedAgentIdsByKey.set(key, resolvedAgentId);
-            sessions.push(entry);
+            sessions.push({ entry, agentId: resolvedAgentId, offset: offset + index });
             if (sessions.length === outputLimit) {
+              hasMore = index + 1 < pageSessions.length || page?.hasMore === true;
+              nextOffset = hasMore ? offset + index + 1 : undefined;
               break;
             }
           }
         }
-        if (sessions.length === outputLimit || page?.hasMore !== true) {
+        if (sessions.length === outputLimit) {
           break;
         }
-        const nextOffset = page.nextOffset;
-        if (
-          typeof nextOffset !== "number" ||
-          !Number.isSafeInteger(nextOffset) ||
-          nextOffset !== offset + pageSessions.length
-        ) {
-          throw new Error(
-            `sessions.list returned invalid pagination metadata (offset=${offset}, nextOffset=${String(nextOffset)})`,
-          );
+        if (pageNextOffset === undefined) {
+          hasMore = false;
+          nextOffset = undefined;
+          break;
         }
-        // Bound unstable Gateway snapshots by both request count and scanned rows.
-        if (pageIndex >= 49 || nextOffset > 10_000) {
-          throw new Error("sessions.list exceeded the 50-page/10,000-row pagination scan limit");
+        hasMore = true;
+        nextOffset = pageNextOffset;
+        // Continue in a later tool call instead of throwing away a sparse partial page.
+        if (pageIndex + 1 >= SESSIONS_LIST_MAX_SCAN_PAGES) {
+          truncationReason = "scan-limit";
+          break;
         }
-        offset = nextOffset;
+        offset = pageNextOffset;
       }
 
       const stateVersions = getSessionStateVersions(
-        sessions.flatMap((entry) => {
-          const key = entry.key;
-          const stateAgentId = resolvedAgentIdsByKey.get(key);
-          if (!stateAgentId) {
-            return [];
-          }
-          return [{ sessionKey: key, agentId: stateAgentId }];
-        }),
+        sessions.map(({ entry, agentId: stateAgentId }) => ({
+          sessionKey: entry.key,
+          agentId: stateAgentId,
+        })),
       );
       const rows: SessionListRow[] = [];
       const historyTargets: Array<{ row: SessionListRow; resolvedKey: string }> = [];
       const titleTargets: Array<{
         row: SessionListRow;
         titleEntry: SessionEntry;
-        sessionEntry: { sessionFile?: string; sessionId: string };
         sessionId: string;
         sessionKey: string;
         agentId: string;
       }> = [];
 
-      for (const entry of sessions) {
+      for (const { entry, agentId: resolvedAgentId } of sessions) {
         const key = entry.key;
-        const resolvedAgentId = resolvedAgentIdsByKey.get(key);
-        if (!resolvedAgentId) {
-          continue;
-        }
         const kind = classifySessionListKind(entry);
         const displayKey = resolveDisplaySessionKey({
           key,
@@ -354,15 +476,11 @@ export function createSessionsListTool(opts?: {
         });
 
         const sessionId = readStringValue(entry.sessionId);
-        const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
-        const sessionFile = readStringValue(sessionFileRaw);
-        // Version lookup keys on the store-owning agent (gateway row agentId), not the
-        // key-derived agent: bare "global" keys parse to the default agent id.
-        const stateVersionAgentId =
-          typeof entry.agentId === "string" && entry.agentId ? entry.agentId : resolvedAgentId;
-        const stateVersion = stateVersions[stateVersionAgentId]?.[key];
+        // Sentinel keys alone carry no agent identity; use the prepared store owner.
+        const stateVersion = stateVersions[resolvedAgentId]?.[key];
         const rowLabel = readStringValue(entry.label);
-        const category = readStringValue(entry.category);
+        // Gateway rows carry groups under the legacy wire field `category`.
+        const group = readStringValue(entry.category);
         const displayName = readStringValue(entry.displayName);
         const derivedTitle = readStringValue(entry.derivedTitle);
         const lastMessagePreview = readStringValue(entry.lastMessagePreview);
@@ -373,13 +491,7 @@ export function createSessionsListTool(opts?: {
               ? entry.spawnedBy
               : undefined;
         const parentSessionKey = parentSessionKeyRaw
-          ? isIncognitoSessionKey(parentSessionKeyRaw)
-            ? undefined
-            : resolveDisplaySessionKey({
-                key: parentSessionKeyRaw,
-                alias,
-                mainKey,
-              })
+          ? visibleReference(parentSessionKeyRaw)
           : undefined;
         const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : undefined;
         const model = readStringValue(entry.model);
@@ -392,18 +504,10 @@ export function createSessionsListTool(opts?: {
         const abortedLastRun =
           typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined;
         const childSessions = Array.isArray(entry.childSessions)
-          ? entry.childSessions
-              .filter(
-                (value): value is string =>
-                  typeof value === "string" && !isIncognitoSessionKey(value),
-              )
-              .map((value) =>
-                resolveDisplaySessionKey({
-                  key: value,
-                  alias,
-                  mainKey,
-                }),
-              )
+          ? entry.childSessions.flatMap((value) => {
+              const visible = typeof value === "string" ? visibleReference(value, key) : undefined;
+              return visible ? [visible] : [];
+            })
           : undefined;
         const row: SessionListRow = {
           key: displayKey,
@@ -414,7 +518,37 @@ export function createSessionsListTool(opts?: {
           archived: entry.archived === true,
           pinned: entry.pinned === true,
           ...(rowLabel ? { label: rowLabel } : {}),
-          ...(category ? { category } : {}),
+          ...(entry.createdActor
+            ? { createdActor: projectInventoryActor(entry.createdActor) }
+            : {}),
+          ...(entry.owner ? { owner: { actor: projectInventoryActor(entry.owner.actor) } } : {}),
+          ...(entry.worktree
+            ? {
+                worktree: {
+                  id: entry.worktree.id,
+                  branch: entry.worktree.branch,
+                  repoRoot: entry.worktree.repoRoot,
+                },
+              }
+            : {}),
+          ...(entry.repositoryWorkspaceId
+            ? { repositoryWorkspaceId: entry.repositoryWorkspaceId }
+            : {}),
+          ...(entry.repository
+            ? {
+                repository: {
+                  url: entry.repository.url,
+                  ref: entry.repository.ref,
+                  branch: entry.repository.branch,
+                },
+              }
+            : {}),
+          ...(entry.execCwd ? { execCwd: entry.execCwd } : {}),
+          ...(entry.spawnedCwd ? { spawnedCwd: entry.spawnedCwd } : {}),
+          ...(entry.spawnedWorkspaceDir ? { spawnedWorkspaceDir: entry.spawnedWorkspaceDir } : {}),
+          ...(entry.projectId ? { projectId: entry.projectId } : {}),
+          ...(entry.workspaceDir ? { workspaceDir: entry.workspaceDir } : {}),
+          ...(group ? { group } : {}),
           ...(displayName ? { displayName } : {}),
           ...(derivedTitle ? { derivedTitle } : {}),
           ...(lastMessagePreview ? { lastMessagePreview } : {}),
@@ -442,10 +576,6 @@ export function createSessionsListTool(opts?: {
               subject: readStringValue((entry as { subject?: unknown }).subject),
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
-            sessionEntry: {
-              sessionId,
-              ...(sessionFile ? { sessionFile } : {}),
-            },
             sessionId,
             sessionKey: resolveInternalSessionKey({
               key,
@@ -466,29 +596,20 @@ export function createSessionsListTool(opts?: {
         rows.push(row);
       }
 
-      if (titleTargets.length > 0) {
-        await pMap(
-          titleTargets,
-          async (target) => {
-            const fields = await readSessionTitleFieldsFromTranscriptAsync({
-              agentId: target.agentId,
-              sessionEntry: target.sessionEntry,
-              sessionId: target.sessionId,
-              sessionKey: target.sessionKey,
-              storePath,
-            });
-            if (includeDerivedTitles && !target.row.derivedTitle) {
-              target.row.derivedTitle = deriveSessionTitle(
-                target.titleEntry,
-                fields.firstUserMessage,
-              );
-            }
-            if (includeLastMessage && fields.lastMessagePreview) {
-              target.row.lastMessagePreview = fields.lastMessagePreview;
-            }
-          },
-          { concurrency: 4, stopOnError: true },
-        );
+      for (const target of titleTargets) {
+        const fields = readSessionTitleFieldsFromTranscript({
+          agentId: target.agentId,
+          sessionEntry: target.titleEntry,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          storePath,
+        });
+        if (includeDerivedTitles && !target.row.derivedTitle) {
+          target.row.derivedTitle = deriveSessionTitle(target.titleEntry, fields.firstUserMessage);
+        }
+        if (includeLastMessage && fields.lastMessagePreview) {
+          target.row.lastMessagePreview = fields.lastMessagePreview;
+        }
       }
 
       if (messageLimit > 0 && historyTargets.length > 0) {
@@ -497,6 +618,7 @@ export function createSessionsListTool(opts?: {
           async (target) => {
             const history = await gatewayCall<{ messages: Array<unknown> }>({
               method: "chat.history",
+              ...(signal ? { signal } : {}),
               params: {
                 sessionKey: target.resolvedKey,
                 agentId: target.row.agentId,
@@ -521,14 +643,64 @@ export function createSessionsListTool(opts?: {
               warning: `Session visibility is restricted (effective tools.sessions.visibility=${visibility}: ${describeSessionVisibilityScope(visibility, { spawnRestricted: restrictToSpawned })}). Sessions outside that scope are omitted from results and count.`,
             };
 
-      return jsonResult({
-        count: rows.length,
-        sessions: rows,
+      let enrichmentOmitted = false;
+      const resultFor = (count: number) => ({
+        count,
+        sessions: rows.slice(0, count),
+        hasMore: count < rows.length || hasMore,
+        ...(count < rows.length
+          ? { nextOffset: sessions[count]?.offset }
+          : nextOffset !== undefined
+            ? { nextOffset }
+            : {}),
+        limitApplied: outputLimit,
+        ...(enrichmentOmitted ? { enrichmentOmitted: true } : {}),
+        ...(count < rows.length
+          ? { truncationReason: "byte-limit" as const }
+          : truncationReason
+            ? { truncationReason }
+            : {}),
         ...(opts?.sessionLinkBase
           ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
           : {}),
         ...(visibilityMetadata ? { visibility: visibilityMetadata } : {}),
       });
+      const fits = (count: number) =>
+        Buffer.byteLength(JSON.stringify(resultFor(count), null, 2), "utf8") <=
+        SESSIONS_LIST_MAX_RESULT_BYTES;
+      // A large optional preview must not make an otherwise usable inventory fail.
+      // Keep identity/metadata intact and report the enrichment downgrade explicitly.
+      if (rows.length > 0 && !fits(1)) {
+        for (const row of rows) {
+          enrichmentOmitted ||=
+            row.messages !== undefined ||
+            row.derivedTitle !== undefined ||
+            row.lastMessagePreview !== undefined;
+          delete row.messages;
+          delete row.derivedTitle;
+          delete row.lastMessagePreview;
+        }
+      }
+      let count = rows.length;
+      if (!fits(count)) {
+        let lower = 0;
+        let upper = count;
+        while (lower < upper) {
+          const middle = Math.ceil((lower + upper) / 2);
+          if (fits(middle)) {
+            lower = middle;
+          } else {
+            upper = middle - 1;
+          }
+        }
+        count = lower;
+        if (count === 0) {
+          throw new Error(
+            "Session metadata exceeds the 64 KiB result budget even without previews; use a narrower inventory query",
+          );
+        }
+      }
+      return jsonResult(resultFor(count));
     },
   };
 }

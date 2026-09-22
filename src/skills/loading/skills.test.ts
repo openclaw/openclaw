@@ -9,9 +9,15 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
-import { captureEnv, withPathResolutionEnv } from "../../test-utils/env.js";
+import {
+  captureEnv,
+  createPathResolutionEnv,
+  withEnvAsync,
+  withPathResolutionEnv,
+} from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import { listReservedChatSlashCommandNames } from "../discovery/chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import {
   applySkillEnvOverrides,
@@ -43,10 +49,10 @@ const resolveTestSkillDirs = (workspaceDir: string) => ({
 });
 
 const makeWorkspace = async () => await fixtureSuite.createCaseDir("workspace");
-const buildWorkspaceSkillsPrompt = (
+const buildWorkspaceSkillsPrompt = async (
   workspaceDir: string,
   opts?: Parameters<typeof buildSkillSnapshot>[1],
-): string => buildSkillSnapshot(workspaceDir, opts).prompt;
+): Promise<string> => (await buildSkillSnapshot(workspaceDir, opts)).prompt;
 const apiKeyField = ["api", "Key"].join("");
 
 function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
@@ -184,6 +190,24 @@ afterEach(() => {
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
+  it("moves a colliding dashboard skill to the documented generated alias", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "dashboard"),
+      name: "dashboard",
+      description: "Custom dashboard skill",
+    });
+
+    const [command] = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        reservedNames: listReservedChatSlashCommandNames(),
+      }),
+    );
+
+    expect(command).toMatchObject({ name: "dashboard_2", skillName: "dashboard" });
+  });
+
   it("sanitizes and de-duplicates command names", async () => {
     const workspaceDir = await makeWorkspace();
     await writeSkill({
@@ -345,8 +369,10 @@ describe("buildWorkspaceSkillsPrompt", () => {
   it("returns empty prompt when skills dirs are missing", async () => {
     const workspaceDir = await makeWorkspace();
 
-    const prompt = withWorkspaceHome(workspaceDir, () =>
-      buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir)),
+    const prompt = await withEnvAsync(
+      createPathResolutionEnv(workspaceDir, { PATH: "" }),
+      async () =>
+        await buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir)),
     );
 
     expect(prompt).toBe("");
@@ -364,7 +390,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       body: "# Peekaboo\n",
     });
 
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+    const prompt = await buildWorkspaceSkillsPrompt(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
       bundledSkillsDir: bundledDir,
     });
@@ -377,29 +403,31 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const workspaceDir = await makeWorkspace();
     await writePromptLimitSkills(workspaceDir);
 
-    const prompt = withWorkspaceHome(workspaceDir, () =>
-      buildWorkspaceSkillsPrompt(workspaceDir, {
-        ...resolveTestSkillDirs(workspaceDir),
-        config: {
-          skills: {
-            limits: {
-              maxSkillsPromptChars: 4_000,
+    const prompt = await withEnvAsync(
+      createPathResolutionEnv(workspaceDir, { PATH: "" }),
+      async () =>
+        await buildWorkspaceSkillsPrompt(workspaceDir, {
+          ...resolveTestSkillDirs(workspaceDir),
+          config: {
+            skills: {
+              limits: {
+                maxSkillsPromptChars: 4_000,
+              },
+            },
+            agents: {
+              list: [
+                {
+                  id: "writer",
+                  workspace: workspaceDir,
+                  skillsLimits: {
+                    maxSkillsPromptChars: 220,
+                  },
+                },
+              ],
             },
           },
-          agents: {
-            list: [
-              {
-                id: "writer",
-                workspace: workspaceDir,
-                skillsLimits: {
-                  maxSkillsPromptChars: 220,
-                },
-              },
-            ],
-          },
-        },
-        agentId: "writer",
-      }),
+          agentId: "writer",
+        }),
     );
 
     expect(prompt).toContain("Skills truncated: included 0 of 3");
@@ -409,28 +437,30 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const workspaceDir = await makeWorkspace();
     await writePromptLimitSkills(workspaceDir);
 
-    const prompt = withWorkspaceHome(workspaceDir, () =>
-      buildWorkspaceSkillsPrompt(workspaceDir, {
-        ...resolveTestSkillDirs(workspaceDir),
-        config: {
-          skills: {
-            limits: {
-              maxSkillsPromptChars: 4_000,
+    const prompt = await withEnvAsync(
+      createPathResolutionEnv(workspaceDir, { PATH: "" }),
+      async () =>
+        await buildWorkspaceSkillsPrompt(workspaceDir, {
+          ...resolveTestSkillDirs(workspaceDir),
+          config: {
+            skills: {
+              limits: {
+                maxSkillsPromptChars: 4_000,
+              },
+            },
+            agents: {
+              list: [
+                {
+                  id: "main",
+                  workspace: workspaceDir,
+                  skillsLimits: {
+                    maxSkillsPromptChars: 220,
+                  },
+                },
+              ],
             },
           },
-          agents: {
-            list: [
-              {
-                id: "main",
-                workspace: workspaceDir,
-                skillsLimits: {
-                  maxSkillsPromptChars: 220,
-                },
-              },
-            ],
-          },
-        },
-      }),
+        }),
     );
 
     expect(prompt).not.toContain("Skills truncated:");
@@ -470,7 +500,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       body: "# Workspace\n",
     });
 
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+    const prompt = await buildWorkspaceSkillsPrompt(workspaceDir, {
       bundledSkillsDir: bundledDir,
       managedSkillsDir: managedDir,
       config: { skills: { load: { extraDirs: [extraDir] } } },
@@ -500,7 +530,10 @@ describe("buildWorkspaceSkillsPrompt", () => {
       frontmatterExtra: "disable-model-invocation: true",
     });
 
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
+    const prompt = await buildWorkspaceSkillsPrompt(
+      workspaceDir,
+      resolveTestSkillDirs(workspaceDir),
+    );
 
     expect(prompt).toContain("demo-skill");
     expect(prompt).toContain("Does demo things");

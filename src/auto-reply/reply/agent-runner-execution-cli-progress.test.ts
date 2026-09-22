@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createCliJsonlStreamingParser } from "../../agents/cli-output-stream.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
+  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
@@ -16,7 +18,7 @@ import type {
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: CLI progress bridging", () => {
   it("bridges CLI assistant agent events into onPartialReply for live preview (#76869)", async () => {
@@ -64,18 +66,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       } as unknown as TemplateContext,
       opts: { onPartialReply },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     const partialTexts = onPartialReply.mock.calls.map((call) => call[0].text);
@@ -142,18 +133,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       } as unknown as TemplateContext,
       opts: { onPartialReply },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     await firstPreviewPromise;
@@ -218,18 +198,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onToolStart },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);
@@ -282,6 +251,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     const typingSignals = createMockTypingSignaler();
     vi.mocked(typingSignals.signalTextDelta).mockReturnValue(typingPending);
     const callbackOrder: string[] = [];
+    const toolStarted = createDeferred();
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
@@ -297,27 +267,19 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         },
         onToolStart: () => {
           callbackOrder.push("tool");
+          toolStarted.resolve();
         },
       },
       typingSignals,
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
+    });
+    onTestFinished(async () => {
+      releaseTyping?.();
+      await runPromise;
     });
 
     try {
-      await vi.waitFor(() => {
-        expect(callbackOrder).toContain("tool");
-      });
+      await Promise.race([toolStarted.promise, runPromise]);
       expect(callbackOrder).toEqual([
         "partial:answer before tool",
         "partial:answer before tool 2",
@@ -374,6 +336,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     const typingSignals = createMockTypingSignaler();
     vi.mocked(typingSignals.signalToolStart).mockReturnValue(typingPending);
     const callbackOrder: string[] = [];
+    const partialReplyStarted = createDeferred();
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
@@ -386,30 +349,22 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         preserveProgressCallbackStartOrder: true,
         onPartialReply: (payload) => {
           callbackOrder.push(`partial:${payload.text}`);
+          partialReplyStarted.resolve();
         },
         onToolStart: (payload) => {
           callbackOrder.push(`tool:${payload.phase}`);
         },
       },
       typingSignals,
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
+    });
+    onTestFinished(async () => {
+      releaseTyping?.();
+      await runPromise;
     });
 
     try {
-      await vi.waitFor(() => {
-        expect(callbackOrder).toContain("partial:answer after tool");
-      });
+      await Promise.race([partialReplyStarted.promise, runPromise]);
       expect(callbackOrder).toEqual(["tool:start", "tool:update", "partial:answer after tool"]);
     } finally {
       releaseTyping?.();
@@ -459,18 +414,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         progressPreambleEnabled: true,
       },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);
@@ -516,18 +460,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         progressPreambleEnabled: false,
       },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
@@ -572,18 +505,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onToolStart },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);
@@ -632,18 +554,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onPartialReply },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);
@@ -703,18 +614,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       } as unknown as TemplateContext,
       opts: { onReasoningStream },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(onReasoningStream.mock.calls.map((call) => call[0])).toEqual([
@@ -807,18 +707,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onPartialReply, onReasoningStream },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(onReasoningStream.mock.calls.map(([payload]) => payload.text)).toEqual([
@@ -871,18 +760,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onReasoningStream },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);
@@ -925,18 +803,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onReasoningStream },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);
@@ -987,18 +854,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onReasoningStream, runId: "api-run" },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);

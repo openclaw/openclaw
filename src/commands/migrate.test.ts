@@ -1,16 +1,19 @@
 // Top-level migrate command tests cover provider planning, interactive selection, apply flow, and JSON output.
 import fs from "node:fs/promises";
+import { CANCEL_SYMBOL } from "@clack/prompts";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
-import type { RuntimeEnv } from "../runtime.js";
+import type {
+  MigrationApplyResult,
+  MigrationPlan,
+  MigrationProviderPlugin,
+} from "../plugins/types.js";
+import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   backupCreateCommand: vi.fn(),
-  cancelSymbol: Symbol("cancel"),
   clackCancel: vi.fn(),
   clackConfirm: vi.fn(),
-  clackIsCancel: vi.fn(),
   clackLogMessage: vi.fn(),
   multiselect: vi.fn(),
   progress: {
@@ -59,10 +62,10 @@ vi.mock("../cli/progress.js", () => ({
   withProgress: mocks.withProgress,
 }));
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
   cancel: mocks.clackCancel,
   confirm: mocks.clackConfirm,
-  isCancel: mocks.clackIsCancel,
   log: { message: mocks.clackLogMessage },
 }));
 
@@ -71,9 +74,10 @@ vi.mock("./migrate/skill-selection-prompt.js", () => ({
 }));
 
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
-  ensureStandaloneMigrationProviderRegistryLoaded: vi.fn(),
-  resolvePluginMigrationProvider: () => mocks.provider,
-  resolvePluginMigrationProviders: () => [mocks.provider],
+  withPluginMigrationProviders: async (
+    params: { providerId?: string },
+    run: (providers: MigrationProviderPlugin[]) => Promise<unknown>,
+  ) => await run([{ ...mocks.provider, id: params.providerId ?? mocks.provider.id }]),
 }));
 
 vi.mock("./backup.js", () => ({
@@ -314,8 +318,6 @@ describe("migrateApplyCommand", () => {
     mocks.multiselect.mockReset();
     mocks.clackCancel.mockReset();
     mocks.clackConfirm.mockReset();
-    mocks.clackIsCancel.mockReset();
-    mocks.clackIsCancel.mockImplementation((value) => value === mocks.cancelSymbol);
     mocks.clackLogMessage.mockReset();
     mocks.promptYesNo.mockReset();
     mocks.backupCreateCommand.mockReset();
@@ -568,7 +570,7 @@ describe("migrateApplyCommand", () => {
     });
     const skippedAuthPlan = authPlan("skipped");
     mocks.provider.plan.mockResolvedValue(skippedAuthPlan);
-    mocks.clackConfirm.mockResolvedValue(mocks.cancelSymbol);
+    mocks.clackConfirm.mockResolvedValue(CANCEL_SYMBOL);
 
     await expect(
       migrateDefaultCommand(runtime, { provider: "hermes", dryRun: true }),
@@ -670,6 +672,46 @@ describe("migrateApplyCommand", () => {
     expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
     expect(mocks.provider.apply).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    { label: "skills", command: migrateDefaultCommand, acceptSkills: false },
+    { label: "plugins after skills (default)", command: migrateDefaultCommand, acceptSkills: true },
+    { label: "plugins after skills (apply)", command: migrateApplyCommand, acceptSkills: true },
+  ])(
+    "stops before confirmation and apply when cancelling $label",
+    async ({ command, acceptSkills }) => {
+      Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+      const skillPlan = codexSkillPlan();
+      const items = [...skillPlan.items, ...codexPluginPlan().items];
+      const planned = codexSkillPlan({
+        items,
+        summary: { ...skillPlan.summary, total: items.length, planned: items.length },
+      });
+      const original = structuredClone(planned);
+      mocks.provider.plan.mockResolvedValue(planned);
+      if (acceptSkills) {
+        mocks.multiselect.mockResolvedValueOnce(["skill:alpha"]);
+      }
+      mocks.multiselect.mockResolvedValueOnce(CANCEL_SYMBOL);
+
+      const result = await command(runtime, { provider: "codex" });
+
+      expect(result).toBe(planned);
+      expect(planned).toStrictEqual(original);
+      expect(mocks.clackCancel).toHaveBeenCalledWith("Migration cancelled.");
+      expect(runtime.log).toHaveBeenCalledWith("Migration cancelled.");
+      expect(mocks.multiselect).toHaveBeenCalledTimes(acceptSkills ? 2 : 1);
+      expect(String(multiselectPrompt().message)).toContain("Select Codex skills");
+      if (acceptSkills) {
+        expect(String(multiselectPrompt(1).message)).toContain("Select native Codex plugins");
+        expect(runtime.log).toHaveBeenCalledWith("Selected 1 of 2 Codex skills for migration.");
+      }
+      expect(mocks.clackConfirm).not.toHaveBeenCalled();
+      expect(mocks.promptYesNo).not.toHaveBeenCalled();
+      expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
+      expect(mocks.provider.apply).not.toHaveBeenCalled();
+    },
+  );
 
   it("prompts for Codex skills before interactive default apply", async () => {
     Object.defineProperty(process.stdin, "isTTY", {
@@ -1256,6 +1298,49 @@ describe("migrateApplyCommand", () => {
     expect(mocks.backupCreateCommand).toHaveBeenCalled();
   });
 
+  it.each(["planned", "conflict"] as const)(
+    "keeps --skill configuration inside the selected copy when unselected policy is %s",
+    async (unselectedStatus) => {
+      const planned = plan({
+        items: [
+          {
+            id: "skill:folder",
+            kind: "skill",
+            action: "copy",
+            status: "planned",
+            source: "/tmp/hermes/skills/folder",
+            details: { skillName: "selected" },
+          },
+          ...["selected", "unselected", "target-only"].map((key) => ({
+            id: `config:skill:${key}`,
+            kind: "config" as const,
+            action: "merge" as const,
+            status: key === "selected" ? ("planned" as const) : unselectedStatus,
+            details: { path: ["skills", "entries", key], value: { enabled: false } },
+          })),
+          { id: "other-config", kind: "config", action: "merge", status: "planned" },
+        ],
+      });
+      mocks.provider.plan.mockResolvedValue(planned);
+      mocks.provider.apply.mockImplementation(async (_ctx, selectedPlan: MigrationPlan) => ({
+        ...selectedPlan,
+        summary: { ...selectedPlan.summary, planned: 0, migrated: 3 },
+        items: selectedPlan.items.map((item) =>
+          item.status === "planned" ? { ...item, status: "migrated" as const } : item,
+        ),
+      }));
+
+      await migrateApplyCommand(runtime, { provider: "hermes", yes: true, skills: ["folder"] });
+
+      expect(
+        firstAppliedPlan()
+          .items.filter((item) => item.status === "planned")
+          .map((item) => item.id),
+      ).toEqual(["skill:folder", "config:skill:selected", "other-config"]);
+      expect(firstAppliedPlan().summary.conflicts).toBe(0);
+    },
+  );
+
   it("filters explicit Codex plugins before apply", async () => {
     const planned = codexPluginPlan();
     mocks.provider.plan.mockResolvedValue(planned);
@@ -1434,6 +1519,7 @@ describe("migrateApplyCommand", () => {
     const logs: string[] = [];
     const jsonRuntime: RuntimeEnv = {
       ...runtime,
+      exit: createNonExitingRuntime().exit,
       log(message) {
         logs.push(String(message));
       },
@@ -1443,7 +1529,7 @@ describe("migrateApplyCommand", () => {
 
     await expect(
       migrateApplyCommand(jsonRuntime, { provider: "hermes", yes: true, json: true }),
-    ).rejects.toThrow("Migration finished with 1 error");
+    ).rejects.toBeInstanceOf(ExitError);
 
     expect(logs).toHaveLength(1);
     const logPayload = JSON.parse(logs[0] ?? "{}") as {
@@ -1474,6 +1560,7 @@ describe("migrateApplyCommand", () => {
     const logs: string[] = [];
     const jsonRuntime: RuntimeEnv = {
       ...runtime,
+      exit: createNonExitingRuntime().exit,
       log(message) {
         logs.push(String(message));
       },
@@ -1483,7 +1570,7 @@ describe("migrateApplyCommand", () => {
 
     await expect(
       migrateApplyCommand(jsonRuntime, { provider: "hermes", yes: true, json: true }),
-    ).rejects.toThrow("Migration finished with 1 conflict");
+    ).rejects.toBeInstanceOf(ExitError);
 
     expect(logs).toHaveLength(1);
     const logPayload = JSON.parse(logs[0] ?? "{}") as {

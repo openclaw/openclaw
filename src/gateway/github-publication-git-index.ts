@@ -3,12 +3,14 @@ import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gitNullConfigPath } from "../infra/git-exec.js";
+import { GitHubPublicationWorkspaceChangedError } from "./github-publication-failure.js";
 
 type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
 
 const HARDENED_GIT = ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false"];
 
-class GitHubPublicationRefCasRejectedError extends Error {}
+class GitHubPublicationRefCasRejectedError extends GitHubPublicationWorkspaceChangedError {}
 export class GitHubPublicationRecoveryPendingError extends Error {}
 
 export function assertGitHubPublicationRefCasCompleted(result: {
@@ -205,8 +207,8 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
     recoveryPath = publicationRecoveryPath(indexPath, params.requestId);
     const gitEnv = {
       ...params.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
     };
     await params.run([...HARDENED_GIT, "read-tree", params.headCommit], {
       cwd: params.cwd,
@@ -281,7 +283,9 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
       env: { ...gitEnv, GIT_INDEX_FILE: observedIndex },
     });
     if (currentIndexTree !== params.sourceIndexTree && currentIndexTree !== params.workspaceTree) {
-      throw new Error("GitHub publication workspace index changed after its accepted snapshot.");
+      throw new GitHubPublicationWorkspaceChangedError(
+        "GitHub publication workspace index changed after its accepted snapshot.",
+      );
     }
     params.assertCurrent();
     // The request-owned recovery inode proves whether a retained standard Git

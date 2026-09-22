@@ -1,11 +1,16 @@
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
+import {
+  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
+} from "../../packages/normalization-core/src/string-normalization.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import {
   normalizeCommandDescriptorName,
   sanitizeCommandDescriptorDescription,
 } from "../cli/program/command-descriptor-utils.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { isRecord } from "../utils.js";
 import type {
@@ -14,6 +19,7 @@ import type {
   PluginManifestChannelCommandDefaults,
   PluginManifestChannelConfig,
   PluginManifestCliCommand,
+  PluginManifestControlUi,
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
   PluginManifestDashboardDataBinding,
@@ -26,6 +32,7 @@ import type {
   PluginManifestSetupProviderAuthEvidence,
   PluginConfigUiHint,
 } from "./manifest-types.js";
+import { normalizeSetupPresentationHttpsUrl } from "./setup-presentation-url.js";
 
 export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
   if (!isRecord(value)) {
@@ -61,6 +68,29 @@ export function normalizeManifestActivation(value: unknown): PluginManifestActiv
   return Object.keys(activation).length > 0 ? activation : undefined;
 }
 
+export function normalizeChannelAccountKeyPolicies(
+  value: unknown,
+  channels: readonly string[],
+): Record<string, ChannelAccountKeyPolicy> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const policies: Record<string, ChannelAccountKeyPolicy> = Object.create(null);
+  for (const channel of channels) {
+    if (isBlockedObjectKey(channel) || !Object.hasOwn(value, channel)) {
+      continue;
+    }
+    const entry = value[channel];
+    const field = isRecord(entry)
+      ? normalizeOptionalString(entry.canonicalAliasesRequireOwnField)
+      : undefined;
+    if (field && !isBlockedObjectKey(field)) {
+      policies[channel] = { canonicalAliasesRequireOwnField: field };
+    }
+  }
+  return Object.keys(policies).length ? policies : undefined;
+}
+
 export function normalizeManifestCliCommands(
   value: unknown,
 ): PluginManifestCliCommand[] | undefined {
@@ -88,7 +118,7 @@ export function normalizeManifestCliCommands(
   return commands;
 }
 
-const MANIFEST_DEFAULT_ENABLEMENT_PLATFORMS = new Set<PluginManifestDefaultPlatform>([
+const MANIFEST_PLATFORMS = new Set<PluginManifestDefaultPlatform>([
   "aix",
   "android",
   "darwin",
@@ -102,10 +132,10 @@ const MANIFEST_DEFAULT_ENABLEMENT_PLATFORMS = new Set<PluginManifestDefaultPlatf
   "netbsd",
 ]);
 
-export function normalizeManifestDefaultPlatforms(value: unknown): PluginManifestDefaultPlatform[] {
+export function normalizeManifestPlatforms(value: unknown): PluginManifestDefaultPlatform[] {
   return normalizeTrimmedStringList(value).filter(
     (platform): platform is PluginManifestDefaultPlatform =>
-      MANIFEST_DEFAULT_ENABLEMENT_PLATFORMS.has(platform as PluginManifestDefaultPlatform),
+      MANIFEST_PLATFORMS.has(platform as PluginManifestDefaultPlatform),
   );
 }
 
@@ -180,12 +210,34 @@ export function normalizeManifestSetup(value: unknown): PluginManifestSetup | un
   const providers = normalizeManifestSetupProviders(value.providers);
   const cliBackends = normalizeTrimmedStringList(value.cliBackends);
   const configMigrations = normalizeTrimmedStringList(value.configMigrations);
+  const nativeSessionCatalog = isRecord(value.nativeSessionCatalog)
+    ? {
+        label: normalizeOptionalString(value.nativeSessionCatalog.label) ?? "",
+        description: normalizeOptionalString(value.nativeSessionCatalog.description),
+        nodeCommands: normalizeTrimmedStringList(value.nativeSessionCatalog.nodeCommands),
+        legacyDefaultEnabled: value.nativeSessionCatalog.legacyDefaultEnabled === true,
+      }
+    : undefined;
   const requiresRuntime =
     typeof value.requiresRuntime === "boolean" ? value.requiresRuntime : undefined;
   const setup = {
     ...(providers ? { providers } : {}),
     ...(cliBackends.length > 0 ? { cliBackends } : {}),
     ...(configMigrations.length > 0 ? { configMigrations } : {}),
+    ...(nativeSessionCatalog?.label
+      ? {
+          nativeSessionCatalog: {
+            label: nativeSessionCatalog.label,
+            ...(nativeSessionCatalog.legacyDefaultEnabled ? { legacyDefaultEnabled: true } : {}),
+            ...(nativeSessionCatalog.nodeCommands.length > 0
+              ? { nodeCommands: nativeSessionCatalog.nodeCommands }
+              : {}),
+            ...(nativeSessionCatalog.description
+              ? { description: nativeSessionCatalog.description }
+              : {}),
+          },
+        }
+      : {}),
     ...(requiresRuntime !== undefined ? { requiresRuntime } : {}),
   } satisfies PluginManifestSetup;
   return Object.keys(setup).length > 0 ? setup : undefined;
@@ -294,24 +346,57 @@ export function normalizeManifestDashboard(value: unknown): DashboardManifestRes
   };
 }
 
-function normalizeManifestHttpsUrl(value: unknown): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
+export function normalizeManifestControlUi(
+  value: unknown,
+): Result<PluginManifestControlUi | undefined, string> {
+  if (value === undefined) {
+    return ok(undefined);
+  }
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "entry" && key !== "styles")) {
+    return err("controlUi must contain only entry and optional styles");
+  }
+  const entry = typeof value.entry === "string" ? value.entry.replace(/^\.\//u, "") : "";
+  // A dedicated built directory prevents a declaration from publishing package sources.
+  const builtEntry = /^dist\/(?:[\w-][\w.-]*\/)+[\w-][\w.-]*\.m?js$/u;
+  if (entry.length > 512 || !builtEntry.test(entry)) {
+    return err("controlUi.entry must be a JavaScript file in a dedicated dist subdirectory");
+  }
+  if (value.styles !== undefined && (!Array.isArray(value.styles) || value.styles.length > 16)) {
+    return err("controlUi.styles must be an array of at most 16 stylesheets");
+  }
+  const assetPrefix = entry.slice(0, entry.lastIndexOf("/") + 1);
+  const styles: string[] = [];
+  for (const rawStyle of value.styles ?? []) {
+    const style = typeof rawStyle === "string" ? rawStyle.replace(/^\.\//u, "") : "";
+    if (
+      style.length > 512 ||
+      !style.startsWith(assetPrefix) ||
+      !/^(?:[\w-][\w.-]*\/)+[\w-][\w.-]*\.css$/u.test(style)
+    ) {
+      return err("controlUi.styles must contain CSS files under the entry's asset directory");
+    }
+    if (!styles.includes(style)) {
+      styles.push(style);
+    }
+  }
+  return ok({ entry, ...(styles.length > 0 ? { styles } : {}) });
+}
+
+function normalizeProviderChannelLogin(
+  value: unknown,
+): PluginManifestProviderAuthChoice["channelLogin"] | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "aliases")) {
     return undefined;
   }
-  try {
-    const url = new URL(normalized);
-    const canonical = url.toString();
-    return url.protocol === "https:" &&
-      url.hostname &&
-      !url.username &&
-      !url.password &&
-      canonical.length <= 2048
-      ? canonical
-      : undefined;
-  } catch {
+  if (
+    value.aliases !== undefined &&
+    (!Array.isArray(value.aliases) ||
+      value.aliases.some((alias) => typeof alias !== "string" || !alias.trim()))
+  ) {
     return undefined;
   }
+  const aliases = normalizeUniqueTrimmedStringList(value.aliases);
+  return aliases.length > 0 ? { aliases } : {};
 }
 
 export function normalizeProviderAuthChoices(
@@ -333,14 +418,16 @@ export function normalizeProviderAuthChoices(
     }
     const choiceLabel = normalizeOptionalString(entry.choiceLabel) ?? "";
     const choiceHint = normalizeOptionalString(entry.choiceHint) ?? "";
-    const icon = normalizeManifestHttpsUrl(entry.icon);
-    const website = normalizeManifestHttpsUrl(entry.website);
+    const icon = normalizeSetupPresentationHttpsUrl(entry.icon);
+    const website = normalizeSetupPresentationHttpsUrl(entry.website);
     const assistantPriority =
       typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
         ? entry.assistantPriority
         : undefined;
     const assistantVisibility =
-      entry.assistantVisibility === "manual-only" || entry.assistantVisibility === "visible"
+      entry.assistantVisibility === "manual-only" ||
+      entry.assistantVisibility === "visible" ||
+      entry.assistantVisibility === "detected-only"
         ? entry.assistantVisibility
         : undefined;
     const deprecatedChoiceIds = normalizeTrimmedStringList(entry.deprecatedChoiceIds);
@@ -363,10 +450,15 @@ export function normalizeProviderAuthChoices(
         scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
     );
     const appGuidedDiscovery = entry.appGuidedDiscovery === true;
+    const channelLogin = normalizeProviderChannelLogin(entry.channelLogin);
     normalized.push({
       provider,
       method,
       choiceId,
+      ...(entry.modelTarget === "utility" ? { modelTarget: "utility" as const } : {}),
+      ...(entry.platforms !== undefined
+        ? { platforms: normalizeManifestPlatforms(entry.platforms) }
+        : {}),
       ...(choiceLabel ? { choiceLabel } : {}),
       ...(choiceHint ? { choiceHint } : {}),
       ...(icon ? { icon } : {}),
@@ -384,8 +476,11 @@ export function normalizeProviderAuthChoices(
       ...(cliOption ? { cliOption } : {}),
       ...(cliDescription ? { cliDescription } : {}),
       ...(appGuidedSecret ? { appGuidedSecret: true } : {}),
+      ...(entry.personalAccount === true ? { personalAccount: true } : {}),
       ...(appGuidedActionLabel ? { appGuidedActionLabel } : {}),
       ...(appGuidedAuth ? { appGuidedAuth } : {}),
+      ...(entry.credentialOnly === true ? { credentialOnly: true } : {}),
+      ...(channelLogin ? { channelLogin } : {}),
       ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),
     });
   }

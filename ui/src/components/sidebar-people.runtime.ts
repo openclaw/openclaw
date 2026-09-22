@@ -1,10 +1,11 @@
 import { nothing, render } from "lit";
+import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { i18n, t } from "../i18n/index.ts";
-import { projectOnlinePresenceViewers } from "../lib/presence-users.ts";
+import { presenceUserLabel, projectOnlinePresenceViewers } from "../lib/presence-users.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
 import {
   resolveSessionPreferredFace,
@@ -37,7 +38,6 @@ export class SidebarPeopleRuntime {
   } | null = null;
   private readonly portal = new PortaledHovercardController(() => this.close(), 100);
   private readonly observer = new MutationObserver(() => this.sync());
-  private suppressFocus = false;
   private lastOpenAt = -Infinity;
   private readonly stopLocale: () => void;
 
@@ -56,17 +56,11 @@ export class SidebarPeopleRuntime {
   handleEvent(event: Event, bootstrapStartedAt?: number): void {
     const row =
       event.target instanceof Element
-        ? event.target.closest<HTMLElement>(".sidebar-online__row")
+        ? event.target.closest<HTMLElement>("[data-person-card]")
         : null;
-    const details =
-      event.target instanceof Element && event.target.closest(".sidebar-online__details");
     if (event.type === "keydown" && event instanceof KeyboardEvent) {
-      if (event.key === "Tab" && !event.shiftKey && event.target === this.active?.trigger) {
-        const first = this.portal.focusables()[0];
-        if (first) {
-          event.preventDefault();
-          first.focus();
-        }
+      if (event.key === "Tab") {
+        this.portal.handleTriggerKeyDown(event);
       }
       return;
     }
@@ -82,10 +76,6 @@ export class SidebarPeopleRuntime {
       return;
     }
     if (event.type === "click") {
-      if (!details) {
-        this.close();
-        return;
-      }
       if (this.active?.row === row && this.portal.explicitHold) {
         this.close();
         return;
@@ -115,8 +105,8 @@ export class SidebarPeopleRuntime {
       if (event.relatedTarget instanceof Node && row.contains(event.relatedTarget)) {
         return;
       }
-      this.portal.schedulePointerExit(event, row);
-    } else if (event.type === "focusin" && !this.suppressFocus) {
+      this.portal.schedulePointerExit();
+    } else if (event.type === "focusin" && !this.portal.restoringFocus) {
       this.activate(row, 0);
       this.portal.focusInside = true;
       this.portal.clearClose();
@@ -135,9 +125,9 @@ export class SidebarPeopleRuntime {
   }
 
   private activate(row: HTMLElement, delay: number): void {
-    const id = row.querySelector<HTMLElement>("[data-online-user-id]")?.dataset.onlineUserId;
-    const trigger = row.querySelector<HTMLElement>(".sidebar-online__details");
-    if (!id || !trigger || !this.host.connected) {
+    const trigger = row.querySelector<HTMLElement>("[data-person-card-trigger]") ?? row;
+    const id = trigger.dataset.personCardKey;
+    if (!id || !this.host.connected) {
       return;
     }
     if (this.active?.id === id && this.active.row === row) {
@@ -158,8 +148,8 @@ export class SidebarPeopleRuntime {
     };
     this.portal.markTrigger(trigger);
     this.observer.observe(this.host, { childList: true, subtree: true });
-    document.addEventListener("pointerdown", this.outsidePointer, true);
-    document.addEventListener("focusin", this.outsideFocus, true);
+    document.addEventListener("pointerdown", this.outsideInteraction, true);
+    document.addEventListener("focusin", this.outsideInteraction, true);
     document.addEventListener("keydown", this.outsideKey, true);
     this.portal.scheduleOpen(delay, () => {
       if (this.portal.held) {
@@ -180,7 +170,8 @@ export class SidebarPeopleRuntime {
       active.client === gateway.snapshot.client &&
       active.scope === this.scope() &&
       this.host.contains(active.row) &&
-      !this.host.collapsedSessionSections.has("online"),
+      (active.row.dataset.personCardSection === undefined ||
+        !this.host.collapsedSessionSections.has(active.row.dataset.personCardSection)),
     );
   }
 
@@ -205,11 +196,31 @@ export class SidebarPeopleRuntime {
       presenceEntries: readPresenceEntries(data.presencePayload),
       presenceInstanceId: data.presenceInstanceId,
     });
-    const user = projectOnlinePresenceViewers(
+    let user = projectOnlinePresenceViewers(
       data.presencePayload,
-      self?.id,
+      self,
       data.presenceInstanceId,
-    ).find((person) => person.id === active.id);
+    ).find((person) => presenceUserKey(person) === active.id);
+    if (!user && active.id.startsWith("profile:")) {
+      const profileId = active.id.slice("profile:".length);
+      const actor = [data.sessionsResult, ...Object.values(data.sessionResultsByAgent)]
+        .flatMap((result) => result?.sessions ?? [])
+        .flatMap((row) => [row.owner?.actor, row.createdActor])
+        .find(
+          (candidate) =>
+            candidate?.identity?.type === "profile" && candidate.identity.id === profileId,
+        );
+      if (actor) {
+        user = {
+          id: profileId,
+          identity: { type: "profile", id: profileId },
+          name: actor.label,
+          avatarUrl: actor.avatarUrl,
+          watchedSessions: [],
+          entries: [],
+        };
+      }
+    }
     if (!user) {
       this.close();
       return;
@@ -226,10 +237,8 @@ export class SidebarPeopleRuntime {
         "session-progress-hovercard person-activity-hovercard",
       );
     const focused = card.contains(document.activeElement) ? document.activeElement : null;
-    card.setAttribute(
-      "aria-label",
-      t("presence.card.ariaLabel", { name: user.name ?? user.email ?? t("presence.card.person") }),
-    );
+    const label = presenceUserLabel(user, t("presence.card.person"));
+    card.setAttribute("aria-label", t("presence.card.ariaLabel", { name: label.name }));
     render(
       renderPersonActivityCard({
         user,
@@ -300,23 +309,8 @@ export class SidebarPeopleRuntime {
       return;
     }
     this.lastOpenAt = performance.now();
-    card.addEventListener("pointerenter", () => {
-      this.portal.pointerOverCard = true;
-      this.portal.clearClose();
-    });
     card.addEventListener("pointerleave", () => {
       this.portal.pointerOverCard = false;
-      this.portal.scheduleClose();
-    });
-    card.addEventListener("focusin", () => {
-      this.portal.cardFocusInside = true;
-      this.portal.clearClose();
-    });
-    card.addEventListener("focusout", (event) => {
-      if (event.relatedTarget instanceof Node && card.contains(event.relatedTarget)) {
-        return;
-      }
-      this.portal.cardFocusInside = false;
       this.portal.scheduleClose();
     });
     card.addEventListener("keydown", (event) => {
@@ -334,23 +328,11 @@ export class SidebarPeopleRuntime {
   }
 
   private returnFocus(): void {
-    this.suppressFocus = true;
-    this.active?.trigger.focus({ preventScroll: true });
-    this.suppressFocus = false;
+    this.portal.returnFocus(this.active?.trigger ?? null);
     this.portal.focusInside = document.activeElement === this.active?.trigger;
   }
 
-  private readonly outsidePointer = (event: Event) => {
-    if (
-      event.target instanceof Node &&
-      !this.active?.row.contains(event.target) &&
-      !this.portal.card?.contains(event.target)
-    ) {
-      this.close();
-    }
-  };
-
-  private readonly outsideFocus = (event: Event) => {
+  private readonly outsideInteraction = (event: Event) => {
     if (
       event.target instanceof Node &&
       !this.active?.row.contains(event.target) &&
@@ -377,8 +359,8 @@ export class SidebarPeopleRuntime {
       this.lastOpenAt = performance.now();
     }
     this.observer.disconnect();
-    document.removeEventListener("pointerdown", this.outsidePointer, true);
-    document.removeEventListener("focusin", this.outsideFocus, true);
+    document.removeEventListener("pointerdown", this.outsideInteraction, true);
+    document.removeEventListener("focusin", this.outsideInteraction, true);
     document.removeEventListener("keydown", this.outsideKey, true);
     this.portal.reset();
     this.active?.trigger.setAttribute("aria-haspopup", "dialog");

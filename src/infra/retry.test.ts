@@ -2,7 +2,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 // Tests retry backoff timing and cancellation behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRetryAttemptErrors } from "./retry-attempt-errors.js";
-import { resolveRetryConfig, retryAsync } from "./retry.js";
+import { resolveRetryConfig, retryAsync, type RetryOptions } from "./retry.js";
 
 const randomMocks = vi.hoisted(() => ({
   generateSecureFraction: vi.fn(),
@@ -278,11 +278,12 @@ describe("retryAsync", () => {
     expect(delays[0]).toBe(expectedDelay);
   });
 
-  async function runFullJitterCase(params: {
+  async function runRetryDelayCase(params: {
     attempts: number;
     minDelayMs: number;
     maxDelayMs: number;
     random: () => number;
+    jitter?: RetryOptions["jitter"];
     failures: number;
     retryAfterMs?: number;
   }): Promise<number[]> {
@@ -299,13 +300,14 @@ describe("retryAsync", () => {
         attempts: params.attempts,
         minDelayMs: params.minDelayMs,
         maxDelayMs: params.maxDelayMs,
-        jitter: "full",
+        jitter: params.jitter ?? "full",
         random: params.random,
         retryAfterMs: params.retryAfterMs === undefined ? undefined : () => params.retryAfterMs,
         onRetry: (info) => delays.push(info.delayMs),
       });
       await vi.runAllTimersAsync();
       await expect(promise).resolves.toBe("ok");
+      expect(fn).toHaveBeenCalledTimes(params.failures + 1);
       return delays;
     } finally {
       vi.clearAllTimers();
@@ -314,6 +316,13 @@ describe("retryAsync", () => {
   }
 
   it.each([
+    {
+      name: "without jitter uses exponential backoff",
+      jitter: 0,
+      minDelayMs: 500,
+      random: () => 0.75,
+      expectedDelays: [500, 1000],
+    },
     {
       name: "full jitter draws uniformly from [delay, 2*delay)",
       random: () => 0.5,
@@ -329,19 +338,20 @@ describe("retryAsync", () => {
       random: () => 0.999,
       expectedDelays: [200, 400],
     },
-  ])("$name", async ({ random, expectedDelays }) => {
-    const delays = await runFullJitterCase({
+  ])("$name", async ({ random, expectedDelays, jitter, minDelayMs = 100 }) => {
+    const delays = await runRetryDelayCase({
       attempts: 3,
-      minDelayMs: 100,
+      minDelayMs,
       maxDelayMs: 10_000,
       random,
+      jitter,
       failures: 2,
     });
     expect(delays).toEqual(expectedDelays);
   });
 
   it("full jitter applies maxDelayMs after the draw", async () => {
-    const delays = await runFullJitterCase({
+    const delays = await runRetryDelayCase({
       attempts: 4,
       minDelayMs: 1000,
       maxDelayMs: 2500,
@@ -354,7 +364,7 @@ describe("retryAsync", () => {
   });
 
   it("full jitter draws on top of the minDelayMs floor for Retry-After hints", async () => {
-    const delays = await runFullJitterCase({
+    const delays = await runRetryDelayCase({
       attempts: 2,
       minDelayMs: 250,
       maxDelayMs: 1000,
@@ -366,7 +376,7 @@ describe("retryAsync", () => {
   });
 
   it("full jitter spreads below the cap for unsatisfiable Retry-After hints", async () => {
-    const delays = await runFullJitterCase({
+    const delays = await runRetryDelayCase({
       attempts: 2,
       minDelayMs: 100,
       maxDelayMs: 1000,
@@ -381,7 +391,7 @@ describe("retryAsync", () => {
   });
 
   it("uses the injected random source instead of the secure default", async () => {
-    const delays = await runFullJitterCase({
+    const delays = await runRetryDelayCase({
       attempts: 2,
       minDelayMs: 100,
       maxDelayMs: 1000,

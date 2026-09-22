@@ -4,7 +4,7 @@
  */
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-registration";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildCodexAppInventoryCacheKey,
@@ -13,38 +13,16 @@ import {
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
+  resolveCodexAppServerUserHomeDir,
 } from "./auth-start-options.js";
 import type { CodexAppServerRuntimeIdentity } from "./client.js";
-import {
-  resolveCodexAppServerUserHomeDir,
-  type CodexAppServerRuntimeOptions,
-  type CodexAppServerStartOptions,
-} from "./config.js";
+import type {
+  CodexAppServerRuntimeOptions,
+  CodexAppServerStartOptions,
+} from "./config-contracts.js";
 
 const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
-
-type CodexCatalogConnectionHome = {
-  agentDir: string;
-  fingerprint: string;
-  codexHome: string;
-};
-
-let catalogConnectionHomes = new Map<string, string>();
-
-function catalogConnectionHomeKey(fingerprint: string, agentDir?: string): string {
-  return `${agentDir ?? ""}\0${fingerprint}`;
-}
-
-/** Replaces the lifecycle-owned catalog connection snapshot used by supervised bindings. */
-export function replaceCodexCatalogConnectionHomes(homes: CodexCatalogConnectionHome[]): void {
-  catalogConnectionHomes = new Map(
-    homes.map((home) => [
-      catalogConnectionHomeKey(home.fingerprint, home.agentDir),
-      home.codexHome,
-    ]),
-  );
-}
 
 /** Inputs that identify the Codex app inventory cache scope for one runtime. */
 type CodexPluginAppCacheKeyParams = Omit<
@@ -115,14 +93,6 @@ export function buildCodexAppServerConnectionFingerprint(
     codexHome: resolveCodexAppServerConnectionHome(appServer.start, agentDir),
     cwd: appServer.start.cwd ?? null,
   });
-}
-
-/** Looks up a snapshotted catalog store without repeating filesystem discovery on a run. */
-export function resolveCodexCatalogConnectionHome(
-  fingerprint: string,
-  agentDir?: string,
-): string | undefined {
-  return catalogConnectionHomes.get(catalogConnectionHomeKey(fingerprint, agentDir));
 }
 
 function resolveCodexAppServerConnectionHome(

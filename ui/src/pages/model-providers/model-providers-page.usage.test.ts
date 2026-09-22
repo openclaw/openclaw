@@ -1,12 +1,16 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   advanceUsageRetries,
   appendPage,
   createHarness,
+  createAuthStatus,
   focusDocument,
+  requestCount,
+  type ModelProvidersPageTestElement,
 } from "./model-providers-page.test-support.ts";
 
 afterEach(() => {
@@ -16,6 +20,98 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage usage convergence", () => {
+  it("keeps account quotas during config saves and refreshes them from the page", async () => {
+    const { context, request, snapshot, runtimeConfig, notifyRuntimeConfig } =
+      createHarness("main");
+    snapshot.hello = {
+      type: "hello-ok",
+      protocol: 3,
+      features: { methods: ["config.get", "config.patch", "codex.accountUsage"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    };
+    const original = request.getMockImplementation()!;
+    let usedPercent = 10;
+    const accountRequests: unknown[] = [];
+    request.mockImplementation(async (method, params?: unknown) => {
+      if (method === "models.authStatus") {
+        return createAuthStatus([
+          {
+            profiles: [
+              { profileId: "openai:one", type: "oauth", status: "ok" },
+              { profileId: "openai:two", type: "token", status: "static" },
+              { profileId: "openai:key", type: "api_key", status: "static" },
+            ],
+          },
+          {
+            provider: "anthropic",
+            displayName: "Anthropic",
+            profiles: [{ profileId: "anthropic:one", type: "oauth", status: "ok" }],
+          },
+        ]);
+      }
+      if (method === "codex.accountUsage") {
+        accountRequests.push(params);
+        return {
+          updatedAt: 1,
+          providers: [
+            { provider: "openai", displayName: "OpenAI", windows: [{ label: "5h", usedPercent }] },
+          ],
+        };
+      }
+      return original(method);
+    });
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.textContent).toContain("90% left"));
+    expect(accountRequests).toEqual([
+      { agentId: "main", profileId: "openai:one" },
+      { agentId: "main", profileId: "openai:two" },
+    ]);
+    expect(
+      page.querySelector('[data-profile-id="anthropic:one"] openclaw-model-account-usage'),
+    ).toBeNull();
+    expect(
+      page.querySelector('[data-profile-id="openai:key"] openclaw-model-account-usage'),
+    ).toBeNull();
+    runtimeConfig.state.configSaving = true;
+    notifyRuntimeConfig();
+    await page.updateComplete;
+    expect(page.textContent).toContain("90% left");
+    runtimeConfig.state.configSaving = false;
+    notifyRuntimeConfig();
+    usedPercent = 90;
+    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
+    await vi.waitFor(() => expect(page.textContent).toContain("10% left"));
+  });
+
+  it("waits for the route loader before starting provider requests, including after reconnect", async () => {
+    const harness = createHarness("main");
+    const page = document.createElement(
+      "openclaw-model-providers-page",
+    ) as ModelProvidersPageTestElement;
+    page.context = harness.context;
+    document.body.append(page);
+    await page.updateComplete;
+    expect(harness.request.mock.calls.filter(([method]) => method !== "config.get")).toEqual([]);
+
+    harness.publishPhase("offline");
+    harness.publishPhase("connected");
+    await page.updateComplete;
+    expect(harness.request.mock.calls.filter(([method]) => method !== "config.get")).toEqual([]);
+
+    page.routeData = {
+      gateway: harness.context.gateway,
+      gatewaySnapshot: harness.context.gateway.snapshot,
+      selectionIntentRevision: harness.context.settingsAgentSelection.intentRevision,
+      client: harness.context.gateway.snapshot.client,
+      agentId: "main",
+      data: { ...EMPTY_MODEL_PROVIDERS_DATA, updatedAt: Date.now() },
+    };
+    await vi.waitFor(() => expect(page.data?.costByProvider).toEqual([]));
+    expect(requestCount(harness.request, "models.authStatus")).toBe(0);
+    expect(requestCount(harness.request, "usage.status")).toBe(1);
+    expect(requestCount(harness.request, "sessions.usage")).toBe(1);
+  });
+
   it("restarts an exhausted retry cycle on same-client reconnect", async () => {
     vi.useFakeTimers();
     focusDocument();
@@ -85,9 +181,9 @@ describe("ModelProvidersPage usage convergence", () => {
     await page.updateComplete;
     expect(page.textContent ?? "").toContain("did not finish loading");
 
-    // loadModelProvidersData turns a rejected usage.status into providerUsage:
-    // null. Read as a completed load that would reset the budget and erase the
-    // notice, leaving broken usage looking exactly like absent usage.
+    // The supplemental load turns a rejected usage.status into a failed result.
+    // Treating it as complete would reset the budget and erase the notice,
+    // leaving broken usage looking exactly like absent usage.
     harness.failUsageStatus();
     page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
     await page.updateComplete;
@@ -95,6 +191,36 @@ describe("ModelProvidersPage usage convergence", () => {
     await page.updateComplete;
 
     expect(page.textContent ?? "").toContain("did not finish loading");
+  });
+
+  it("retries incomplete usage without restarting pending cost", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const harness = createHarness("main");
+    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
+    const pendingCost = deferred<unknown>();
+    const originalRequest = harness.request.getMockImplementation()!;
+    let costSignal: AbortSignal | undefined;
+    harness.request.mockImplementation(
+      async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+        if (method === "sessions.usage") {
+          costSignal = options?.signal;
+          return pendingCost.promise;
+        }
+        return originalRequest(method);
+      },
+    );
+
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(requestCount(harness.request, "usage.status")).toBeGreaterThan(1);
+    expect(requestCount(harness.request, "sessions.usage")).toBe(1);
+    expect(costSignal?.aborted).toBe(false);
+
+    pendingCost.resolve({ aggregates: { byProvider: [] } });
+    await vi.waitFor(() => expect(page.data?.costByProvider).toEqual([]));
   });
 
   it("does not warn about a stall while disconnected", async () => {
@@ -109,6 +235,7 @@ describe("ModelProvidersPage usage convergence", () => {
     page.routeData = {
       gateway: harness.context.gateway,
       gatewaySnapshot: harness.context.gateway.snapshot,
+      selectionIntentRevision: harness.context.settingsAgentSelection.intentRevision,
       data: EMPTY_MODEL_PROVIDERS_DATA,
       client: null,
       agentId: "main",
@@ -137,7 +264,7 @@ describe("ModelProvidersPage usage convergence", () => {
     await vi.waitFor(() =>
       expect(
         harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
-      ).toBe(2),
+      ).toBe(1),
     );
     releaseOldLoad();
     await vi.waitFor(() =>
@@ -146,5 +273,67 @@ describe("ModelProvidersPage usage convergence", () => {
         value: { updatedAt: 2 },
       }),
     );
+  });
+
+  it("cancels and replaces supplemental work on forced refresh", async () => {
+    const harness = createHarness("main");
+    const oldUsage = deferred<unknown>();
+    const oldCost = deferred<unknown>();
+    const originalRequest = harness.request.getMockImplementation()!;
+    let firstUsageSignal: AbortSignal | undefined;
+    let firstCostSignal: AbortSignal | undefined;
+    let usageCall = 0;
+    let costCall = 0;
+    harness.request.mockImplementation(
+      async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+        if (method === "sessions.usage") {
+          costCall += 1;
+          if (costCall === 1) {
+            firstCostSignal = options?.signal;
+            return oldCost.promise;
+          }
+          return originalRequest(method);
+        }
+        if (method === "usage.status") {
+          usageCall += 1;
+          if (usageCall === 1) {
+            firstUsageSignal = options?.signal;
+            return oldUsage.promise;
+          }
+          return { updatedAt: 2, providers: [] };
+        }
+        return originalRequest(method);
+      },
+    );
+    const page = appendPage(harness.context);
+    await vi.waitFor(() => expect(requestCount(harness.request, "usage.status")).toBe(1));
+    await vi.waitFor(() => expect(requestCount(harness.request, "sessions.usage")).toBe(1));
+
+    const releaseCoreRefresh = harness.deferNextAuthStatus();
+    const refresh = page.refresh("forced");
+    expect(firstUsageSignal?.aborted).toBe(true);
+    expect(firstCostSignal?.aborted).toBe(true);
+
+    oldUsage.resolve({ updatedAt: 1, providers: [] });
+    oldCost.resolve({
+      aggregates: { byProvider: [{ provider: "stale", totals: { totalCost: 1 } }] },
+    });
+    await Promise.resolve();
+    expect(page.data?.providerUsage).toBeNull();
+    expect(page.data?.costByProvider).toBeNull();
+
+    releaseCoreRefresh();
+    await refresh;
+
+    await vi.waitFor(() => expect(requestCount(harness.request, "usage.status")).toBe(2));
+    await vi.waitFor(() => expect(requestCount(harness.request, "sessions.usage")).toBe(2));
+    await vi.waitFor(() =>
+      expect(page.data?.providerUsage).toMatchObject({ ok: true, value: { updatedAt: 2 } }),
+    );
+    await vi.waitFor(() => expect(page.data?.costByProvider).toEqual([]));
+
+    expect(requestCount(harness.request, "usage.status")).toBe(2);
+    expect(requestCount(harness.request, "sessions.usage")).toBe(2);
+    expect(page.data?.providerUsage).toMatchObject({ ok: true, value: { updatedAt: 2 } });
   });
 });

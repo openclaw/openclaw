@@ -1,15 +1,40 @@
 // Exercises restart-notice retries against the real SQLite outbound queue.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
+import { runOutboundDeliveryInternal } from "../infra/outbound/deliver-queue.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
+import { attachOutboundDeliveryCommitHook } from "../infra/outbound/delivery-commit-hooks.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../infra/outbound/delivery-queue-media-staging.js";
+import * as deliveryQueueStorage from "../infra/outbound/delivery-queue-storage.js";
 import {
   loadPendingDelivery,
   markDeliveryPlatformSendAttemptStarted,
 } from "../infra/outbound/delivery-queue-storage.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunVerification,
+} from "../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../infra/update-run-report.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActiveGatewayRootWorkCount,
+  isGatewayWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { resolveUpdateRunNoticeTarget } from "./update-run-notice-target.js";
 
 const mocks = vi.hoisted(() => ({
   sendDurableMessageBatch: vi.fn(),
@@ -31,7 +56,8 @@ vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloadsInternal: mocks.recoveryDeliver,
 }));
 
-vi.mock("../infra/outbound/channel-resolution.js", () => ({
+vi.mock("../infra/outbound/channel-resolution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/outbound/channel-resolution.js")>()),
   resolveOutboundChannelMessageAdapter: mocks.resolveOutboundChannelMessageAdapter,
 }));
 
@@ -40,7 +66,7 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => mocks.hookRunner,
 }));
 
-const { deliverRestartSentinelNotice, enqueueRestartSentinelNotice } =
+const { deliverRestartSentinelNotice, enqueueRestartSentinelNotice, sendGatewayLifecycleNotice } =
   await import("./server-restart-sentinel-notice.js");
 
 type DeliveryRequest = {
@@ -57,6 +83,10 @@ describe("restart sentinel notice recovery", () => {
   let stateDir = "";
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      resetGatewayWorkAdmission();
+      resetPluginRuntimeStateForTest();
       closeOpenClawStateDatabaseForTest();
       envSnapshot?.restore();
       envSnapshot = undefined;
@@ -117,26 +147,286 @@ describe("restart sentinel notice recovery", () => {
     return getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir);
   }
 
-  it("reuses an existing stable notice without preparing another owner", async () => {
-    const first = await enqueueRestartSentinelNotice({
+  function sendLifecycleNotice(deliveryIntentId: string) {
+    return sendGatewayLifecycleNotice({
       cfg: {},
+      deps: {},
       channel: "whatsapp",
       to: "+15550002",
-      message: "restart complete",
+      message: "update starting",
       sessionKey: "agent:main:main",
-      revision: 123,
+      deliveryIntentId,
     });
-    const second = await enqueueRestartSentinelNotice({
-      cfg: {},
-      channel: "whatsapp",
-      to: "+15550002",
-      message: "restart complete",
-      sessionKey: "agent:main:main",
-      revision: 123,
+  }
+
+  it.each(["owner", "non-owner", "no-owners", "control-ui"] as const)(
+    "sends the four update milestones only to a configured owner (%s)",
+    async (destination) => {
+      const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "matrix",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "matrix",
+              outbound: {
+                deliveryMode: "direct",
+                sendText: async () => ({ channel: "matrix", messageId: "notice" }),
+              },
+            }),
+          },
+        ]),
+      );
+      mocks.sendDurableMessageBatch.mockImplementation(async (request) => {
+        await markAttempt(request);
+        return { status: "sent", results: [{ channel: "matrix", messageId: "notice" }] };
+      });
+      const cfg = {
+        commands: {
+          ownerAllowFrom: destination === "no-owners" ? [] : ["matrix:@owner:example.org"],
+        },
+      };
+      const sessionKey = "agent:main:matrix:direct:contact";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "update-contact",
+          updatedAt: 1,
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "matrix",
+              to: destination === "owner" ? "@owner:example.org" : "@contact:example.org",
+            },
+          }),
+        },
+      );
+      let run = createUpdateRun({
+        trigger: destination === "control-ui" ? "control-ui" : "chat",
+        before: { version: "2026.9.1" },
+        target: { version: "2026.9.2" },
+        origin: destination === "control-ui" ? {} : { sessionKey },
+      });
+      const target = resolveUpdateRunNoticeTarget({ cfg, sessionKey: run.origin.sessionKey });
+      expect.soft(target.kind).toBe(destination === "owner" ? "route" : "none");
+      const notify = createUpdateRunNotifier(run, () => cfg, {});
+      await notify(run, "ack");
+      await notify(run, "ack");
+      for (const phase of ["staging", "validating", "activating"] as const) {
+        run = recordUpdateRunPhase(run.runId, phase);
+        await notify(run, "activating");
+      }
+      await notify(run, "activating");
+      run = recordUpdateRunPhase(run.runId, "verifying");
+      run = recordUpdateRunVerification(run.runId, { booted: true, runningVersion: "2026.9.2" });
+      const successor = createUpdateRunNotifier(run, () => cfg, {});
+      await successor(run, "verifying");
+      await successor(run, "verifying");
+      run = finishUpdateRun(run.runId, { status: "succeeded", after: { version: "2026.9.2" } });
+      await successor(run, "finished");
+      await notify(run, "finished");
+      expect(
+        mocks.sendDurableMessageBatch.mock.calls.map(([request]) => request.payloads[0].text),
+      ).toEqual(
+        destination === "owner"
+          ? [
+              "⬆️ Updating OpenClaw 2026.9.1 → 2026.9.2. The gateway stays available while the update is validated; you'll get a message here when it finishes.",
+              "⏳ Restarting the gateway now (v2026.9.1 → v2026.9.2)…",
+              "🔁 Back on v2026.9.2, verifying…",
+              renderUpdateRunReport(run).markdown,
+            ]
+          : [],
+      );
+      expect(getUpdateRun(run.runId)?.verification.noticeDelivered).toBe(destination === "owner");
+      if (destination !== "owner") {
+        for (const kind of ["ack", "activating", "verifying", "finished"]) {
+          expect(
+            deliveryQueueStorage.findDeliveryIntentOwner(`update-run-${kind}:${run.runId}`),
+          ).toBeNull();
+        }
+      }
+      expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["sent", "suppressed", "failed", "throw"] as const)(
+    "reports %s lifecycle delivery without starting inline recovery",
+    async (outcome) => {
+      const queueId = `update-run-ack:${outcome}`;
+      mocks.sendDurableMessageBatch.mockImplementationOnce(async () => {
+        if (outcome === "throw") {
+          throw new Error("transport unavailable");
+        }
+        return outcome === "failed"
+          ? { status: outcome, error: new Error("transport unavailable") }
+          : {
+              status: outcome,
+              results: outcome === "sent" ? [{ channel: "whatsapp", messageId: "ack-1" }] : [],
+            };
+      });
+
+      await expect(sendLifecycleNotice(queueId)).resolves.toBe(outcome === "sent");
+
+      expect(mocks.sendDurableMessageBatch).toHaveBeenCalledOnce();
+      expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
+      expect(queueStatus(queueId)).toBe(
+        outcome === "sent" || outcome === "suppressed" ? "completed" : "pending",
+      );
+    },
+  );
+
+  it("reports observed delivery even when queue acknowledgement fails", async () => {
+    const queueId = "update-run-ack:commit-failed";
+    vi.spyOn(deliveryQueueStorage, "ackDelivery").mockRejectedValueOnce(
+      new Error("queue acknowledgement unavailable"),
+    );
+    mocks.sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "sent",
+      results: [{ channel: "whatsapp", messageId: "ack-before-commit-failed" }],
     });
 
-    expect(first.created).toBe(true);
-    expect(second).toEqual({ id: first.id, created: false });
+    await expect(sendLifecycleNotice(queueId)).resolves.toBe(true);
+
+    expect(await loadPendingDelivery(queueId)).toMatchObject({
+      recoveryState: "unknown_after_send",
+    });
+    expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
+  });
+
+  it("bounds a blocked lifecycle send while its work owner retains queue settlement", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const queueId = "update-run-ack:timeout";
+    const started = createDeferredCore();
+    const finish = createDeferredCore();
+    const work = new AsyncWorkScope();
+    mocks.sendDurableMessageBatch.mockImplementationOnce(async () => {
+      started.resolve();
+      await finish.promise;
+      return { status: "sent", results: [{ channel: "whatsapp", messageId: "late-ack" }] };
+    });
+    let settled = false;
+    const send = work
+      .track(() => sendLifecycleNotice(queueId))
+      .finally(() => {
+        settled = true;
+      });
+    await started.promise;
+
+    let drained = false;
+    let draining: Promise<void> | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(send).resolves.toBe(false);
+      expect(queueStatus(queueId)).toBe("pending");
+      draining = work.drain().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(false);
+    } finally {
+      finish.resolve();
+      await (draining ?? work.drain());
+      await vi.waitFor(() => expect(queueStatus(queueId)).toBe("completed"));
+    }
+    expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
+  });
+
+  it("preserves observed delivery when an after-commit hook exceeds the notice deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const queueId = "update-run-ack:commit-timeout";
+    const started = createDeferredCore();
+    const finish = createDeferredCore();
+    const completed = createDeferredCore();
+    const work = new AsyncWorkScope();
+    const result = attachOutboundDeliveryCommitHook(
+      { channel: "whatsapp", messageId: "ack-before-hook-timeout" },
+      async () => {
+        started.resolve();
+        await finish.promise;
+        completed.resolve();
+      },
+    );
+    mocks.sendDurableMessageBatch.mockResolvedValueOnce({ status: "sent", results: [result] });
+    const send = work.track(() => sendLifecycleNotice(queueId));
+    await started.promise;
+
+    let drained = false;
+    let draining: Promise<void> | undefined;
+    try {
+      expect(queueStatus(queueId)).toBe("completed");
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(send).resolves.toBe(true);
+      draining = work.drain().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(false);
+    } finally {
+      finish.resolve();
+      await (draining ?? work.drain());
+      await completed.promise;
+    }
+    expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
+  });
+
+  it("finishes a real durable send under the admitted RPC root after restart admission closes", async () => {
+    const { sendDurableMessageBatchCore } = await import("../channels/message/send.js");
+    mocks.sendDurableMessageBatch.mockImplementation(sendDurableMessageBatchCore);
+    mocks.recoveryDeliver.mockImplementation(runOutboundDeliveryInternal);
+    const started = createDeferredCore();
+    const finish = createDeferredCore();
+    const sendText = vi.fn(async () => {
+      started.resolve();
+      await finish.promise;
+      return { channel: "matrix" as const, messageId: "ack-during-drain" };
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+    const root = tryBeginGatewayRootWorkAdmission("ws:update.run");
+    if (!root) {
+      throw new Error("expected update RPC root admission");
+    }
+    const queueId = "update-run-ack:admitted-root";
+    const send = root
+      .run(async () => {
+        markGatewayRestartDraining();
+        return await sendGatewayLifecycleNotice({
+          cfg: {},
+          deps: {},
+          channel: "matrix",
+          to: "!operator:example",
+          message: "update starting",
+          deliveryIntentId: queueId,
+        });
+      })
+      .finally(root.release);
+    try {
+      await started.promise;
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+      expect(tryBeginGatewayRootWorkAdmission("unrelated")).toBeNull();
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(await loadPendingDelivery(queueId)).not.toBeNull();
+    } finally {
+      finish.resolve();
+    }
+
+    await expect(send).resolves.toBe(true);
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(await loadPendingDelivery(queueId)).toBeNull();
+    expect(queueStatus(queueId)).toBe("completed");
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("serializes stable notice preparation before modifiers can run twice", async () => {
@@ -175,6 +465,7 @@ describe("restart sentinel notice recovery", () => {
       id: "restart-sentinel-notice:agent:main:main:123",
       created: false,
     });
+    await expect(enqueueRestartSentinelNotice(request)).resolves.toEqual(await second);
     expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
   });
 

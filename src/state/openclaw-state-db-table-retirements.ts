@@ -82,13 +82,6 @@ CREATE TABLE commitments (${RETIRED_COMMITMENTS_COLUMNS_SQL.slice(1, -1)}
 ${RETIRED_COMMITMENTS_BASE_INDEXES_SQL}
 `;
 
-const RETIRED_COMMITMENTS_INDEX_FINGERPRINTS = new Map(
-  getCanonicalSqliteNamedIndexContracts(RETIRED_COMMITMENTS_SCHEMA_SQL).map(
-    ({ fingerprint, name }) => [name, JSON.stringify(fingerprint)],
-  ),
-);
-const RETIRED_COMMITMENTS_INDEX_NAMES = [...RETIRED_COMMITMENTS_INDEX_FINGERPRINTS.keys()];
-
 const RETIRED_COMMITMENTS_ADDITIVE_COLUMNS = [
   "commitments.account_id",
   "commitments.recipient_id",
@@ -113,30 +106,40 @@ const RETIRED_COMMITMENTS_ADDITIVE_COLUMNS = [
   "commitments.expired_at_ms",
 ] as const;
 
-const RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
-  // These defaults shipped as independent same-version additive repairs, so
-  // supported databases may mix canonical and defaulted definitions. The
-  // surrounding exact-object check still rejects every other schema change.
-  allowedColumnDefinitions: {
-    "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
-    "commitments.confidence": ["confidence REAL NOT NULL DEFAULT 0"],
-    "commitments.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
-    "commitments.dedupe_key": ["dedupe_key TEXT NOT NULL DEFAULT ''"],
-    "commitments.due_timezone": ["due_timezone TEXT NOT NULL DEFAULT 'UTC'"],
-    "commitments.kind": ["kind TEXT NOT NULL DEFAULT 'followup'"],
-    "commitments.reason": ["reason TEXT NOT NULL DEFAULT ''"],
-    "commitments.sensitivity": ["sensitivity TEXT NOT NULL DEFAULT 'normal'"],
-    "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
-    "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
-  },
-  allowedMissingColumns: RETIRED_COMMITMENTS_ADDITIVE_COLUMNS,
-  allowedMissingIndexes: RETIRED_COMMITMENTS_INDEX_NAMES,
-};
+function deriveRetiredCommitmentsContract() {
+  // Derivation opens guarded SQLite. Diagnostics must be importable before that
+  // capability is available; the canonical schema cache owns reuse after admission.
+  const indexFingerprints = new Map(
+    getCanonicalSqliteNamedIndexContracts(RETIRED_COMMITMENTS_SCHEMA_SQL).map(
+      ({ fingerprint, name }) => [name, JSON.stringify(fingerprint)],
+    ),
+  );
+  const compatibility: SqliteSchemaCompatibility = {
+    // These defaults shipped as independent same-version additive repairs, so
+    // supported databases may mix canonical and defaulted definitions. The
+    // surrounding exact-object check still rejects every other schema change.
+    allowedColumnDefinitions: {
+      "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
+      "commitments.confidence": ["confidence REAL NOT NULL DEFAULT 0"],
+      "commitments.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
+      "commitments.dedupe_key": ["dedupe_key TEXT NOT NULL DEFAULT ''"],
+      "commitments.due_timezone": ["due_timezone TEXT NOT NULL DEFAULT 'UTC'"],
+      "commitments.kind": ["kind TEXT NOT NULL DEFAULT 'followup'"],
+      "commitments.reason": ["reason TEXT NOT NULL DEFAULT ''"],
+      "commitments.sensitivity": ["sensitivity TEXT NOT NULL DEFAULT 'normal'"],
+      "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
+      "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
+    },
+    allowedMissingColumns: RETIRED_COMMITMENTS_ADDITIVE_COLUMNS,
+    allowedMissingIndexes: [...indexFingerprints.keys()],
+  };
+  return { indexFingerprints, compatibility };
+}
 
 function hasSupportedRetiredCommitmentsSchema(
   db: DatabaseSync,
   schemaSql: string,
-  compatibility: SqliteSchemaCompatibility,
+  { compatibility, indexFingerprints }: ReturnType<typeof deriveRetiredCommitmentsContract>,
 ): boolean {
   if (collectSqliteSchemaIssues(db, schemaSql, compatibility).length > 0) {
     return false;
@@ -156,7 +159,7 @@ function hasSupportedRetiredCommitmentsSchema(
     (object) =>
       object.type === "index" &&
       JSON.stringify(collectSqliteNamedIndexContract(db, object.name)) ===
-        RETIRED_COMMITMENTS_INDEX_FINGERPRINTS.get(object.name),
+        indexFingerprints.get(object.name),
   );
 }
 
@@ -168,7 +171,7 @@ function assertRecognizedRetiredCommitmentsSchema(db: DatabaseSync): void {
     db,
     "retired OpenClaw commitments schema",
     RETIRED_COMMITMENTS_SCHEMA_SQL,
-    RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
+    deriveRetiredCommitmentsContract().compatibility,
   );
   throw new Error(
     "Retired OpenClaw commitments schema has unsupported additional indexes; refusing destructive migration.",
@@ -176,17 +179,10 @@ function assertRecognizedRetiredCommitmentsSchema(db: DatabaseSync): void {
 }
 
 export function hasRecognizedRetiredCommitmentsSchema(db: DatabaseSync): boolean {
+  const contract = deriveRetiredCommitmentsContract();
   return (
-    hasSupportedRetiredCommitmentsSchema(
-      db,
-      RETIRED_COMMITMENTS_SCHEMA_SQL,
-      RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
-    ) ||
-    hasSupportedRetiredCommitmentsSchema(
-      db,
-      SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL,
-      RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
-    )
+    hasSupportedRetiredCommitmentsSchema(db, RETIRED_COMMITMENTS_SCHEMA_SQL, contract) ||
+    hasSupportedRetiredCommitmentsSchema(db, SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL, contract)
   );
 }
 

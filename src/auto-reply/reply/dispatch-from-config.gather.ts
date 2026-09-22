@@ -24,7 +24,11 @@ import {
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
+import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { FinalizedRuntimeMsgContext as FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type {
@@ -64,11 +68,13 @@ import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js
 export async function gatherDispatchRequest(
   params: DispatchFromConfigParams,
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
+  allowActiveQueueResolution = false,
 ) {
   const ctx = isFinalizedInboundContext(params.ctx)
     ? params.ctx
     : finalizeInboundContext(params.ctx);
   const turnAdoptionLifecycle = params.replyOptions?.turnAdoptionLifecycle;
+  prepareChannelParticipantObservation(ctx);
   const turnAdoptionState = { adopted: false };
   const normalizedParams: DispatchFromConfigParams = {
     ...params,
@@ -80,8 +86,8 @@ export async function gatherDispatchRequest(
             turnAdoptionLifecycle: {
               ...turnAdoptionLifecycle,
               onAdopted: async () => {
-                // The upstream owner is durable only after its callback commits.
-                // A rejected callback must leave replay dedupe releasable.
+                // Adoption is durable only after this callback commits. Input
+                // already retained by another run separately forbids replay.
                 await turnAdoptionLifecycle.onAdopted();
                 turnAdoptionState.adopted = true;
               },
@@ -90,16 +96,50 @@ export async function gatherDispatchRequest(
         : {}),
     },
   };
+  const replyOperationRunState: ReplyOperationRunState =
+    resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
+  let replayUnsafeActivity = false;
   const state = {
     params: normalizedParams,
     messageAuditTerminal,
-    inboundDedupeReplayUnsafe: false,
+    allowInboundHandlers: replyOperationRunState.heartbeat === undefined,
+    get inboundDedupeReplayUnsafe() {
+      // Read the recorded input outcome even when source adoption or cleanup fails.
+      // Queued followups have not transferred custody to the active run yet.
+      const admission = replyOperationRunState.admission;
+      return (
+        replayUnsafeActivity ||
+        (admission?.status === "accepted" && admission.mode === "steer") ||
+        (admission?.status === "skipped" && admission.reason === "question-response-indeterminate")
+      );
+    },
     turnAdoptionState: turnAdoptionLifecycle ? turnAdoptionState : undefined,
   };
   const { cfg, dispatcher } = normalizedParams;
   bindReplyDispatcherConversationContext(dispatcher, ctx.agentText);
-  const replyOperationRunState: ReplyOperationRunState =
-    resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
+  const targetAgentId = resolveSessionAgentId({
+    sessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
+    config: cfg,
+    fallbackAgentId: ctx.AgentId,
+  });
+  const refusal = readAgentDatabaseAdmissionRefusal(targetAgentId);
+  if (refusal) {
+    const aborted = params.replyOptions?.abortSignal?.aborted === true;
+    const queuedFinal =
+      !aborted &&
+      dispatcher.sendFinalReply({
+        text: `${refusal.reason}\n${refusal.repairHint}`,
+        isError: true,
+      });
+    const outcome = aborted ? "skipped" : "error";
+    const reason = aborted ? "reply_operation_aborted" : refusal.code;
+    noteDispatchProcessedOutcome({ outcome, reason });
+    messageAuditTerminal?.note(outcome, { reason });
+    return {
+      status: "complete" as const,
+      result: { queuedFinal, counts: dispatcher.getQueuedCounts() },
+    };
+  }
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
   const channel = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider ?? "unknown");
   const chatId = ctx.To ?? ctx.From;
@@ -188,6 +228,7 @@ export async function gatherDispatchRequest(
       return;
     }
     agentDispatchStartedAt = Date.now();
+    replyHotPathTiming.logPreparationIfSlow({ channel, messageId, sessionKey });
     logMessageDispatchStarted({
       channel,
       sessionKey: acpDispatchSessionKey,
@@ -225,10 +266,12 @@ export async function gatherDispatchRequest(
   };
 
   const markInboundDedupeReplayUnsafe = () => {
-    state.inboundDedupeReplayUnsafe = true;
+    replayUnsafeActivity = true;
   };
 
-  const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
+  const boundAcpDispatchSessionKey = state.allowInboundHandlers
+    ? resolveBoundAcpDispatchSessionKey({ ctx, cfg })
+    : undefined;
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
   // initialSessionStoreEntry stays command-target-aware for handler/store
@@ -282,6 +325,7 @@ export async function gatherDispatchRequest(
   const sessionStoreEntry = boundAcpDispatchSessionKey
     ? resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
     : initialSessionStoreEntry;
+  const dispatchKind = resolveSessionDispatchKind(acpDispatchSessionKey, sessionStoreEntry.entry);
   let preparedSessionBinding: ReplySessionBinding | undefined =
     sessionStoreEntry.sessionKey && sessionStoreEntry.entry?.sessionId
       ? {
@@ -366,15 +410,18 @@ export async function gatherDispatchRequest(
     : sessionAgentId;
   let preparedReplyDispatchRuntime: PreparedReplyDispatchRuntime | undefined;
   try {
-    preparedReplyDispatchRuntime = params.usePublishedModelRuntime
-      ? await traceReplyPhase("reply.load_prepared_dispatch_runtime", async () => {
-          const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
-          return await loadPublishedGatewayReplyDispatchRuntime({
-            agentId: preparedReplyDispatchAgentId,
-            abortSignal: params.replyOptions?.abortSignal,
-          });
-        })
-      : undefined;
+    // Channel monitors can retain an older config across hot reloads. The Gateway
+    // publication owns admission; outside its lifecycle this returns undefined.
+    preparedReplyDispatchRuntime = await traceReplyPhase(
+      "reply.load_prepared_dispatch_runtime",
+      async () => {
+        const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
+        return await loadPublishedGatewayReplyDispatchRuntime({
+          agentId: preparedReplyDispatchAgentId,
+          abortSignal: params.replyOptions?.abortSignal,
+        });
+      },
+    );
   } catch (error) {
     if (params.replyOptions?.abortSignal?.aborted && isAbortError(error)) {
       return finishReplyOperationAborted();
@@ -384,6 +431,9 @@ export async function gatherDispatchRequest(
   const workspaceDir =
     preparedReplyDispatchRuntime?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const replyOperationCoordinator = createDispatchReplyOperationCoordinator({
+    allowActiveQueueResolution,
+    agentId: operationSessionStoreEntry.agentId ?? sessionAgentId,
+    cfg,
     ctx,
     dispatcher,
     dispatchOperationSessionKey,
@@ -400,6 +450,7 @@ export async function gatherDispatchRequest(
     dispatchHookDispatcher,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
+    getAgentRunId,
     getAgentRunTerminalOutcome,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
@@ -472,9 +523,11 @@ export async function gatherDispatchRequest(
       stageRemoteInboundMediaIfNeeded({
         ctx: hookCtx,
         cfg,
+        agentId: sessionAgentId,
         sessionKey: acpDispatchSessionKey,
         workspaceDir,
         remoteMediaMode: "cache",
+        abortSignal: getPreDispatchAbortSignal(),
       }),
     );
     if (staged) {
@@ -520,11 +573,15 @@ export async function gatherDispatchRequest(
     markIdle,
     markInboundDedupeReplayUnsafe,
     acpDispatchSessionKey,
+    dispatchKind,
     markProgress,
     sessionStoreEntry,
     notePreparedSession,
     resolvePreparedTranscriptBinding,
     sessionAgentId,
+    dispatchOperationSessionKey,
+    operationSessionStoreEntry,
+    noteRunVerbosity: verboseProgress.noteRunVerbosity,
     shouldEmitVerboseProgress,
     shouldEmitFullVerboseProgress,
     replyRoute,
@@ -539,6 +596,7 @@ export async function gatherDispatchRequest(
     dispatchHookDispatcher,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
+    getAgentRunId,
     getAgentRunTerminalOutcome,
     getDispatchAbortOperation,
     getDispatchAbortSignal,

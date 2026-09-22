@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
@@ -56,6 +55,7 @@ export function migrateLegacyJsonState<Value>(params: {
   stateDir: string;
   label: string;
   normalize: (value: unknown) => Value;
+  recoverableReadFailure?: (error: unknown) => string | undefined;
   shouldMigrate?: (value: Value) => boolean;
   migrate: (db: DatabaseSync, value: Value) => LegacyJsonImportOutcome;
   retire?: (params: { sourcePath: string; changes: string[]; warnings: string[] }) => void;
@@ -70,6 +70,10 @@ export function migrateLegacyJsonState<Value>(params: {
   try {
     value = params.normalize(readLegacyJsonObject(params.sourcePath));
   } catch (err) {
+    const advisory = params.recoverableReadFailure?.(err);
+    if (advisory) {
+      return { changes, warnings: [advisory], warningDisposition: "recoverable" };
+    }
     warnings.push(`Failed reading legacy ${params.label} ${params.sourcePath}: ${String(err)}`);
     return { changes, warnings };
   }
@@ -662,8 +666,6 @@ function normalizeLegacyCurrentConversationBindingFile(input: unknown): SessionB
 function currentConversationBindingRow(record: SessionBindingRecord): {
   binding_key: string;
   binding_id: string;
-  target_agent_id: string;
-  target_session_id: string | null;
   target_session_key: string;
   channel: string;
   account_id: string;
@@ -682,8 +684,6 @@ function currentConversationBindingRow(record: SessionBindingRecord): {
   return {
     binding_key: currentConversationBindingKey(conversation),
     binding_id: record.bindingId,
-    target_agent_id: resolveAgentIdFromSessionKey(record.targetSessionKey),
-    target_session_id: null,
     target_session_key: record.targetSessionKey,
     channel: conversation.channel,
     account_id: conversation.accountId,

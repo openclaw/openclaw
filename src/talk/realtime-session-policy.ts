@@ -10,10 +10,13 @@ import {
   resolveRealtimeVoiceAgentConsultToolsAllow,
   type RealtimeVoiceAgentConsultToolPolicy,
 } from "./agent-consult-tool.js";
+import type { InternalRealtimeVoiceProviderCapabilities } from "./provider-internal.js";
+import type { RealtimeVoiceBridge } from "./provider-types.js";
 
 export type RealtimeVoiceWakeNamePolicy = "always" | "automatic" | "never";
 
 export type RealtimeVoiceSessionPolicy = {
+  handlesAgentConsult: boolean;
   toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
   consultToolsAllow: string[] | undefined;
   consultPolicy: "auto" | "always";
@@ -25,7 +28,8 @@ export type RealtimeVoiceSessionPolicy = {
 /** Resolve generic consult, activation-name, and auto-response session policy. */
 export function resolveRealtimeVoiceSessionPolicy(params: {
   isAgentProxy: boolean;
-  supportsActivationNameGating: boolean;
+  capabilities?: InternalRealtimeVoiceProviderCapabilities;
+  supportsActivationNameGating?: boolean;
   configuredToolPolicy: unknown;
   configuredConsultPolicy: "auto" | "always" | undefined;
   requireWakeName: boolean | undefined;
@@ -33,12 +37,29 @@ export function resolveRealtimeVoiceSessionPolicy(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): RealtimeVoiceSessionPolicy {
+  const handlesAgentConsult = params.capabilities?.handlesAgentConsult === true;
+  if (
+    handlesAgentConsult &&
+    (params.requireWakeName === true || params.configuredConsultPolicy === "always")
+  ) {
+    throw new Error(
+      "This realtime model owns voice responses and delegation. Remove requireWakeName: true and consultPolicy: always, or select a model that supports host-controlled turns.",
+    );
+  }
   const toolPolicy = resolveRealtimeVoiceAgentConsultToolPolicy(
     params.configuredToolPolicy,
     params.isAgentProxy ? "owner" : "safe-read-only",
   );
-  const consultPolicy = params.configuredConsultPolicy ?? (params.isAgentProxy ? "always" : "auto");
-  const wakeNamePolicy = resolveRealtimeVoiceWakeNamePolicy(params);
+  const consultPolicy =
+    params.configuredConsultPolicy ??
+    (params.isAgentProxy && !handlesAgentConsult ? "always" : "auto");
+  const wakeNamePolicy = resolveRealtimeVoiceWakeNamePolicy({
+    ...params,
+    supportsActivationNameGating:
+      !handlesAgentConsult &&
+      (params.capabilities?.supportsActivationNameGating ?? params.supportsActivationNameGating) ===
+        true,
+  });
   const wakeNames =
     wakeNamePolicy === "never"
       ? []
@@ -49,6 +70,7 @@ export function resolveRealtimeVoiceSessionPolicy(params: {
         });
 
   return {
+    handlesAgentConsult,
     toolPolicy,
     consultToolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(toolPolicy),
     consultPolicy,
@@ -73,7 +95,12 @@ export function resolveRealtimeVoiceInterruptResponseOnInputAudio(value: unknown
 export function resolveRealtimeVoiceBargeIn(params: {
   configuredBargeIn: boolean | undefined;
   interruptResponseOnInputAudio: unknown;
+  capabilities?: InternalRealtimeVoiceProviderCapabilities;
+  outputAudioMode?: RealtimeVoiceBridge["outputAudioMode"];
 }): boolean {
+  if (params.capabilities?.supportsBargeIn === false || params.outputAudioMode === "continuous") {
+    return false;
+  }
   if (typeof params.configuredBargeIn === "boolean") {
     return params.configuredBargeIn;
   }

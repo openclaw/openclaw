@@ -115,6 +115,7 @@ export class CodexReasoningProjection {
     this.emitPlanUpdate(
       {
         explanation,
+        ...(params.explanationFormat === "plain" ? { explanationFormat: "plain" as const } : {}),
         steps: plan,
       },
       source,
@@ -153,7 +154,7 @@ export class CodexReasoningProjection {
   }
 
   private emitPlanUpdate(
-    params: { explanation?: string | null; steps?: AgentPlanStep[] },
+    params: { explanation?: string | null; explanationFormat?: "plain"; steps?: AgentPlanStep[] },
     source: PlanUpdateSource = "codex-app-server",
   ): void {
     if (!params.explanation && params.steps === undefined) {
@@ -166,6 +167,7 @@ export class CodexReasoningProjection {
         title: "Plan updated",
         source,
         ...(params.explanation ? { explanation: params.explanation } : {}),
+        ...(params.explanationFormat ? { explanationFormat: params.explanationFormat } : {}),
         ...(params.steps ? { steps: params.steps } : {}),
       },
     });

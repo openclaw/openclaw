@@ -22,6 +22,12 @@ let authenticatedUserProfile:
   | { profileId: string; displayName: string | null; hasAvatar: boolean; updatedAt: number }
   | undefined;
 let sessionVisibleToProfile = true;
+let currentSessionId = "session-1";
+let currentLifecycleRevision = "before-reset";
+let currentSessionStartedAt = 1;
+let beforeHistoryReadReturns: (() => Promise<void>) | undefined;
+let beforeHistoryRefreshReturns: (() => Promise<void>) | undefined;
+let beforeAuthCheckReturns: (() => Promise<void>) | undefined;
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({
@@ -69,6 +75,7 @@ vi.mock("./http-utils.js", () => ({
     allowRealIpFallback?: boolean;
   }) => {
     authCheckCalls += 1;
+    await beforeAuthCheckReturns?.();
     if (authRevoked) {
       return {
         ok: false as const,
@@ -105,7 +112,12 @@ vi.mock("./session-sharing.js", () => ({
   resolveSessionSharingTarget: () => ({
     canonicalKey: "agent:main",
     agentId: "main",
-    entry: { sessionId: "session-1" },
+    entry: {
+      sessionId: currentSessionId,
+      lifecycleRevision: currentLifecycleRevision,
+      sessionStartedAt: currentSessionStartedAt,
+    },
+    storePath: "/tmp",
   }),
 }));
 
@@ -119,24 +131,28 @@ vi.mock("./session-utils.js", () => ({
   }),
   resolveCanonicalSessionEntryFromStoreKeys: () => ({
     sessionId: "session-1",
+    lifecycleRevision: currentLifecycleRevision,
+    sessionStartedAt: currentSessionStartedAt,
     sessionFile: "/tmp/session-1.jsonl",
   }),
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
 }));
 
 vi.mock("./session-history-state.js", () => ({
-  buildSessionHistorySnapshot: () => ({
-    history: { items: [], nextCursor: null, messages: [] },
-  }),
-  resolveCursorSeq: (_cursor: string | undefined) => undefined,
-  readSessionHistoryRawSnapshotAsync: async () => {
+  readSessionHistorySnapshotAsync: async () => {
     if (transcriptReadError) {
       throw transcriptReadError;
     }
-    return { rawMessages: [] };
+    await beforeHistoryReadReturns?.();
+    return {
+      history: { items: [], nextCursor: null, messages: [] },
+      rawTranscriptSeq: 0,
+      turnBoundaryPending: false,
+      assistantErrorPending: false,
+    };
   },
   SessionHistorySseState: {
-    fromRawSnapshot: (_params: unknown) => ({
+    fromSnapshot: (_params: unknown) => ({
       snapshot: () => ({ items: [], nextCursor: null, messages: [] }),
       retainRecentMessages: () => ({ items: [], nextCursor: null, messages: [] }),
       appendInlineMessage: ({ message, messageId }: { message: unknown; messageId?: string }) => ({
@@ -145,12 +161,21 @@ vi.mock("./session-history-state.js", () => ({
         messageId,
       }),
       shouldRefreshForTranscriptPath: () => false,
-      refreshAsync: async () => ({ items: [], nextCursor: null, messages: [] }),
+      refreshAsync: async () => {
+        await beforeHistoryRefreshReturns?.();
+        return {
+          items: [],
+          nextCursor: null,
+          messages: [{ role: "assistant", content: "private refreshed history" }],
+        };
+      },
     }),
   },
 }));
 
+import { createDeferred } from "../../test/helpers/promise.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
 
 const SESSION_HISTORY_URL = "/sessions/agent%3Amain/history";
@@ -237,6 +262,9 @@ async function openSessionHistoryStreamPair(
   );
 
   expect(handled).toBe(true);
+  if (params?.closeOnFrame === "history" || params?.expectSubscribed !== false) {
+    await vi.waitFor(() => expect(res.writes.join("")).toContain("event: history"));
+  }
   if (params?.expectSubscribed === false) {
     expect(transcriptUpdateHandler).toBeUndefined();
   } else {
@@ -249,16 +277,15 @@ async function openSessionHistoryStreamPair(
 async function withRealNodeSessionHistoryStream(
   run: (pair: { req: IncomingMessage; res: ServerResponse }) => Promise<void>,
 ) {
-  let resolvePair: (pair: { req: IncomingMessage; res: ServerResponse }) => void;
-  const pairPromise = new Promise<{ req: IncomingMessage; res: ServerResponse }>((resolve) => {
-    resolvePair = resolve;
-  });
-  let resolveHandled: (handled: boolean) => void;
-  let rejectHandled: (error: unknown) => void;
-  const handledPromise = new Promise<boolean>((resolve, reject) => {
-    resolveHandled = resolve;
-    rejectHandled = reject;
-  });
+  const { promise: pairPromise, resolve: resolvePair } = createDeferred<{
+    req: IncomingMessage;
+    res: ServerResponse;
+  }>();
+  const {
+    promise: handledPromise,
+    resolve: resolveHandled,
+    reject: rejectHandled,
+  } = createDeferred<boolean>();
   const server = createServer((req, res) => {
     resolvePair({ req, res });
     void handleSessionHistoryHttpRequest(req, res, TRUSTED_PROXY_STARTUP_OPTIONS).then(
@@ -370,6 +397,12 @@ afterEach(() => {
   transcriptReadError = undefined;
   authenticatedUserProfile = undefined;
   sessionVisibleToProfile = true;
+  currentSessionId = "session-1";
+  currentLifecycleRevision = "before-reset";
+  currentSessionStartedAt = 1;
+  beforeHistoryReadReturns = undefined;
+  beforeHistoryRefreshReturns = undefined;
+  beforeAuthCheckReturns = undefined;
   gatewayConfig = {
     trustedProxies: ["10.0.0.1"],
     allowRealIpFallback: false,
@@ -394,6 +427,110 @@ describe("session history SSE auth revocation", () => {
     expect(res.writes.join("")).toContain("Session not found");
   });
 
+  it.each([
+    { accept: "application/json", change: "revocation" },
+    { accept: "text/event-stream", change: "revocation" },
+    { accept: "application/json", change: "replacement" },
+    { accept: "text/event-stream", change: "replacement" },
+    { accept: "application/json", change: "reset" },
+    { accept: "text/event-stream", change: "reset" },
+    { accept: "application/json", change: "authentication" },
+    { accept: "text/event-stream", change: "authentication" },
+  ] as const)(
+    "withholds initial $accept history after $change during its read",
+    async ({ accept, change }) => {
+      authenticatedUserProfile = {
+        profileId: "profile-guest",
+        displayName: "Guest",
+        hasAvatar: false,
+        updatedAt: 1,
+      };
+      const entered = createDeferred();
+      const release = createDeferred();
+      beforeHistoryReadReturns = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      const req = new MockReq(SESSION_HISTORY_URL);
+      req.headers.accept = accept;
+      const res = new MockRes();
+      const pending = handleSessionHistoryHttpRequest(
+        req as unknown as IncomingMessage,
+        res as unknown as ServerResponse,
+        TRUSTED_PROXY_STARTUP_OPTIONS,
+      );
+      try {
+        await Promise.race([entered.promise, pending]);
+        expect(res.writes).toEqual([]);
+        if (change === "revocation") {
+          sessionVisibleToProfile = false;
+        } else if (change === "replacement") {
+          currentSessionId = "replacement";
+        } else if (change === "reset") {
+          currentLifecycleRevision = "after-reset";
+          currentSessionStartedAt = 2;
+        } else {
+          authRevoked = true;
+        }
+      } finally {
+        release.resolve();
+        await pending;
+      }
+      try {
+        expect(res.statusCode).toBe(404);
+        expect(res.writes.join("")).not.toContain("event: history");
+        expect(res.writes.join("")).not.toContain('"messages"');
+        expect(transcriptUpdateHandler).toBeUndefined();
+      } finally {
+        res.end();
+      }
+    },
+  );
+
+  it.each(["revocation", "replacement", "reset", "authentication"] as const)(
+    "withholds an SSE refresh after %s while its read is pending",
+    async (change) => {
+      if (change === "revocation") {
+        authenticatedUserProfile = {
+          profileId: "profile-guest",
+          displayName: "Guest",
+          hasAvatar: false,
+          updatedAt: 1,
+        };
+      }
+      const res = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
+      const entered = createDeferred();
+      const release = createDeferred();
+      beforeHistoryRefreshReturns = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
+      try {
+        await entered.promise;
+        if (change === "revocation") {
+          sessionVisibleToProfile = false;
+        } else if (change === "replacement") {
+          currentSessionId = "replacement";
+        } else if (change === "reset") {
+          currentLifecycleRevision = "after-reset";
+          currentSessionStartedAt = 2;
+        } else {
+          authRevoked = true;
+        }
+      } finally {
+        release.resolve();
+      }
+      try {
+        await expectStreamClosedWithoutMessage(res, "private refreshed history");
+        expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(1);
+        expect(transcriptUpdateHandler).toBeUndefined();
+      } finally {
+        res.end();
+      }
+    },
+  );
+
   it("closes an existing stream before disclosure when profile access is revoked", async () => {
     authenticatedUserProfile = {
       profileId: "profile-guest",
@@ -409,6 +546,43 @@ describe("session history SSE auth revocation", () => {
     await expectStreamClosedWithoutMessage(res, "role-revoked secret");
   });
 
+  it("keeps inline delivery between coalesced refreshes while authorization is pending", async () => {
+    const res = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
+    const entered = createDeferred();
+    const release = createDeferred();
+    let refreshCount = 0;
+    beforeAuthCheckReturns = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    beforeHistoryRefreshReturns = async () => {
+      refreshCount++;
+    };
+    try {
+      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
+      await entered.promise;
+      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
+      emitTranscriptTextUpdate({ text: "inline between refreshes", messageId: "inline-barrier" });
+      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
+      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
+      release.resolve();
+
+      await vi.waitFor(() =>
+        expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(3),
+      );
+      expect(refreshCount).toBe(2);
+      expect(
+        res.writes
+          .filter((frame) => frame.startsWith("event:"))
+          .map((frame) => frame.split("\n")[0]),
+      ).toEqual(["event: history", "event: history", "event: message", "event: history"]);
+      expect(res.writes.join("")).toContain("inline between refreshes");
+    } finally {
+      release.resolve();
+      res.end();
+    }
+  });
+
   it("returns retryable HTTP unavailable while a dirty projection rebuilds", async () => {
     transcriptReadError = new SessionTranscriptProjectionUnavailableError("session-1");
 
@@ -420,6 +594,46 @@ describe("session history SSE auth revocation", () => {
     expect(res.headers.get("retry-after")).toBe("1");
     expect(res.writes.join("")).toContain('"retryable":true');
     expect(req.listenerCount("error")).toBe(0);
+  });
+
+  it.each([
+    { code: "overloaded", message: "session history is busy; retry shortly" },
+    { code: "unavailable", message: "session history is temporarily unavailable; retry shortly" },
+    { code: "timeout", message: "session history read timed out; retry shortly" },
+  ] as const)(
+    "returns retryable HTTP unavailable when a history worker is $code",
+    async ({ code, message }) => {
+      transcriptReadError = new WorkerTaskError("internal worker failure detail", code);
+
+      const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS, {
+        expectSubscribed: false,
+      });
+
+      expect(res.statusCode).toBe(503);
+      expect(res.headers.get("retry-after")).toBe("1");
+      expect(JSON.parse(res.writes.join(""))).toEqual({
+        ok: false,
+        error: { type: "unavailable", message, retryable: true },
+      });
+      expect(req.listenerCount("error")).toBe(0);
+    },
+  );
+
+  it("preserves unexpected HTTP history worker failures for the request error owner", async () => {
+    const failure = new WorkerTaskError("unexpected worker task failure", "failed");
+    transcriptReadError = failure;
+    const req = new MockReq(SESSION_HISTORY_URL);
+    const res = new MockRes();
+
+    await expect(
+      handleSessionHistoryHttpRequest(
+        req as unknown as IncomingMessage,
+        res as unknown as ServerResponse,
+        TRUSTED_PROXY_STARTUP_OPTIONS,
+      ),
+    ).rejects.toBe(failure);
+    expect(res.writes).toEqual([]);
+    expect(transcriptUpdateHandler).toBeUndefined();
   });
 
   it("closes the stream before delivering transcript updates after auth is revoked", async () => {

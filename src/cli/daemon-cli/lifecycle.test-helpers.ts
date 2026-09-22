@@ -1,4 +1,5 @@
 type RestartPostCheckContext = {
+  activationAccepted: boolean;
   json: boolean;
   stdout: NodeJS.WritableStream;
   warnings: string[];
@@ -38,4 +39,28 @@ export async function expectRestartError(
     return error as Error & { hints?: string[] };
   }
   throw new Error("expected restart to fail");
+}
+
+export type RestartHealthSnapshot = {
+  healthy: boolean;
+  staleGatewayPids: number[];
+  runtime: { status?: string };
+  portUsage: { port: number; status: string; listeners: []; hints: []; errors?: string[] };
+  waitOutcome?: string;
+  elapsedMs?: number;
+};
+
+export function createHealthyRestartSnapshot(): RestartHealthSnapshot {
+  return {
+    healthy: true,
+    staleGatewayPids: [],
+    runtime: { status: "running" },
+    portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+  };
+}
+
+export function failRestartCheck(message: string, hints?: string[]) {
+  const error: Error & { hints?: string[] } = new Error(message);
+  error.hints = hints;
+  throw error;
 }

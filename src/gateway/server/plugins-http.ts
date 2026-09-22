@@ -7,8 +7,10 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runPluginHttpRoute } from "../../plugins/http-route-owner.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
 import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
@@ -59,14 +61,12 @@ function createPluginRouteRuntimeClient(
   requestAuth?: AuthorizedGatewayHttpRequest,
 ): GatewayRequestOptions["client"] {
   const authenticatedUserProfile = requestAuth?.authenticatedUserProfile;
-  const sharedSecretOwner =
-    !authenticatedUserProfile &&
-    (requestAuth?.authMethod === "token" || requestAuth?.authMethod === "password");
+  const operatorRoleActor = requestAuth?.operatorRoleActor;
   return {
     connId: `plugin-http:${clientIp ?? "unknown"}`,
     ...(clientIp ? { clientIp } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-    ...(sharedSecretOwner ? { internal: { operatorRoleActor: { kind: "system" as const } } } : {}),
+    ...(operatorRoleActor ? { internal: { operatorRoleActor } } : {}),
     connect: {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -80,11 +80,6 @@ function createPluginRouteRuntimeClient(
       scopes: [...scopes],
     },
   };
-}
-
-function writeUpgradeUnauthorized(socket: Duplex) {
-  socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-  socket.destroy();
 }
 
 type PluginRouteRuntimeDispatchContext = {
@@ -144,6 +139,9 @@ function createPluginRouteRuntimeScope(params: {
   );
   return {
     pluginRegistry: params.registry,
+    ...(params.route.auth === "gateway" && params.gatewayRequestAuth?.revalidate
+      ? { revalidate: params.gatewayRequestAuth.revalidate }
+      : {}),
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
     isWebchatConnect: () => false,
@@ -267,7 +265,7 @@ export function createGatewayPluginRequestHandler(params: {
         const runRoute = async () =>
           (await withPluginRuntimeGatewayRequestScope(
             createPluginRouteRuntimeScope({
-              registry: params.registry,
+              registry,
               route,
               req,
               gatewayRequestContext,
@@ -275,7 +273,8 @@ export function createGatewayPluginRequestHandler(params: {
               gatewayRequestOperatorScopes,
               gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
             }),
-            async () => route.handler(req, res),
+            async () =>
+              runPluginHttpRoute(registry, route, route.handler, () => route.handler(req, res)),
           )) !== false;
         // Entitled trusted-operator routes delegate substantive work through Gateway dispatch.
         // An outer root would make gateway.suspend.prepare nested and permanently unreachable.
@@ -320,7 +319,7 @@ export function createGatewayPluginUpgradeHandler(params: {
     const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);
     if (requiresGatewayAuth && dispatchContext?.gatewayAuthSatisfied !== true) {
       log.warn(`plugin http upgrade blocked without gateway auth (${pathContext.canonicalPath})`);
-      writeUpgradeUnauthorized(socket);
+      rejectWebSocketUpgrade(socket, { status: 401 });
       return true;
     }
     const gatewayRequestAuth = dispatchContext?.gatewayRequestAuth;
@@ -335,7 +334,7 @@ export function createGatewayPluginUpgradeHandler(params: {
         log.warn(
           `plugin http upgrade blocked without ${missingRuntimeContext} (${pathContext.canonicalPath})`,
         );
-        writeUpgradeUnauthorized(socket);
+        rejectWebSocketUpgrade(socket, { status: 401 });
         return true;
       }
     }
@@ -347,7 +346,7 @@ export function createGatewayPluginUpgradeHandler(params: {
           async () =>
             (await withPluginRuntimeGatewayRequestScope(
               createPluginRouteRuntimeScope({
-                registry: params.registry,
+                registry,
                 route,
                 req,
                 gatewayRequestContext,
@@ -355,7 +354,12 @@ export function createGatewayPluginUpgradeHandler(params: {
                 gatewayRequestOperatorScopes,
                 gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
               }),
-              async () => route.handleUpgrade?.(req, socket, head),
+              async () => {
+                const handleUpgrade = route.handleUpgrade!;
+                return runPluginHttpRoute(registry, route, handleUpgrade, () =>
+                  handleUpgrade(req, socket, head),
+                );
+              },
             )) !== false,
         );
         if (handled) {

@@ -1,9 +1,10 @@
 // Connect CLI tests cover accepted targets and handoff to the canonical node runtime.
 import fs from "node:fs/promises";
-import os from "node:os";
+import net from "node:net";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { NodeHostConfig } from "../node-host/config.js";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
@@ -50,9 +51,13 @@ function setupCode(): string {
 
 async function runConnect(args: string[]): Promise<void> {
   const program = new Command();
+  program.exitOverride();
+  program.configureOutput({ writeErr: () => undefined });
   registerConnectCli(program);
   await program.parseAsync(["connect", ...args], { from: "user" });
 }
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("connect cli", () => {
   beforeEach(() => {
@@ -153,26 +158,95 @@ describe("connect cli", () => {
           displayName,
         }),
       );
+      expect(mocks.runNodeHost.mock.calls[0]?.[0].ephemeral === true).toBe(flag === "--ephemeral");
       expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
       expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
     },
   );
 
   it("consumes an environment-managed target file before connecting", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-connect-target-"));
+    const root = tempDirs.make("openclaw-connect-target-");
     const targetFile = path.join(root, "setup-code");
     await fs.writeFile(targetFile, setupCode(), { mode: 0o600 });
-    try {
+
+    await runConnect(["--target-file", targetFile, "--ephemeral"]);
+
+    expect(mocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ forceWorkerRuns: true }),
+    );
+    await expect(fs.stat(targetFile)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a socket target without removing it",
+    async () => {
+      // Keep the Unix socket below Darwin's path limit even under a long test TMPDIR.
+      const root = tempDirs.make("openclaw-connect-target-socket-", "/tmp");
+      const targetFile = path.join(root, "setup-code.sock");
+      const server = net.createServer();
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(targetFile, resolve);
+      });
+      try {
+        await runConnect(["--target-file", targetFile, "--ephemeral"]);
+
+        expect(mocks.runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("path must be a regular file"),
+        );
+        expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+        expect(mocks.runNodeHost).not.toHaveBeenCalled();
+        const stat = await fs.lstat(targetFile);
+        expect(stat.isSocket()).toBe(true);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "empty",
+      contents: Buffer.alloc(0),
+      message: "Connect target file is empty.",
+    },
+    {
+      name: "oversized",
+      contents: Buffer.alloc(64 * 1024 + 1, 0x61),
+      message: "max 65536 bytes",
+    },
+  ])("rejects an $name target file without removing it", async ({ contents, message }) => {
+    const root = tempDirs.make("openclaw-connect-target-invalid-");
+    const targetFile = path.join(root, "setup-code");
+    await fs.writeFile(targetFile, contents, { mode: 0o600 });
+
+    await runConnect(["--target-file", targetFile, "--ephemeral"]);
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(message));
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runNodeHost).not.toHaveBeenCalled();
+    await expect(fs.readFile(targetFile)).resolves.toEqual(contents);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "consumes a symlinked target file and keeps the backing file intact",
+    async () => {
+      const root = tempDirs.make("openclaw-connect-target-symlink-");
+      const targetFile = path.join(root, "setup-code");
+      const backingFile = path.join(root, "backing-setup-code");
+      await fs.writeFile(backingFile, setupCode(), { mode: 0o600 });
+      await fs.symlink(backingFile, targetFile);
       await runConnect(["--target-file", targetFile, "--ephemeral"]);
 
       expect(mocks.runNodeHost).toHaveBeenCalledWith(
         expect.objectContaining({ forceWorkerRuns: true }),
       );
       await expect(fs.stat(targetFile)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
+      await expect(fs.stat(backingFile)).resolves.toBeDefined();
+    },
+  );
 
   it.each([
     {
@@ -208,6 +282,55 @@ describe("connect cli", () => {
       displayName: "Service Node",
       force: true,
     });
+  });
+
+  it.each([false, true])(
+    "forwards repeatable command restrictions through connect (service=%s)",
+    async (service) => {
+      await runConnect([
+        setupCode(),
+        ...(service ? ["--service"] : []),
+        "--commands",
+        "fixture.read,fixture.list",
+        "--commands",
+        "fixture.read",
+      ]);
+      const commands = ["fixture.list", "fixture.read"];
+      expect(mocks.runNodeHost).toHaveBeenCalledWith(expect.objectContaining({ commands }));
+      if (service) {
+        expect(mocks.runNodeDaemonInstall).toHaveBeenCalledWith(
+          expect.objectContaining({ commands, force: true }),
+        );
+      } else {
+        expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "forwards --all-commands through connect (service=%s)",
+    async (service) => {
+      await runConnect([setupCode(), "--all-commands", ...(service ? ["--service"] : [])]);
+      expect(mocks.runNodeHost).toHaveBeenCalledWith(
+        expect.objectContaining({ allCommands: true }),
+      );
+      if (service) {
+        expect(mocks.runNodeDaemonInstall).toHaveBeenCalledWith(
+          expect.objectContaining({ allCommands: true, force: true }),
+        );
+      } else {
+        expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("rejects --all-commands with --commands before consuming the join target", async () => {
+    await expect(
+      runConnect([setupCode(), "--all-commands", "--commands", "fixture.read"]),
+    ).rejects.toThrow(/--all-commands.*--commands/);
+    expect(mocks.loadNodeHostConfig).not.toHaveBeenCalled();
+    expect(mocks.runNodeHost).not.toHaveBeenCalled();
+    expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   });
 
   it("authenticates before persisting hosting consent and installing the service", async () => {

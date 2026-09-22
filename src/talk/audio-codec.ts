@@ -14,8 +14,13 @@ const RESAMPLE_WINDOW = Array.from(
   (_, tapIndex) => 0.5 - 0.5 * Math.cos((2 * Math.PI * tapIndex) / (RESAMPLE_FILTER_TAPS - 1)),
 );
 
+type ResamplePhase = {
+  coefficients: Float64Array;
+  weightSum: number;
+};
+
 type ResampleKernel = {
-  coefficients: readonly Float64Array[];
+  coefficients: readonly ResamplePhase[];
   inputStep: number;
   phaseCount: number;
 };
@@ -97,13 +102,16 @@ function buildResampleKernel(
   const coefficients = Array.from({ length: phaseCount }, (_, phaseIndex) => {
     const phase = phaseIndex / phaseCount;
     const phaseCoefficients = new Float64Array(RESAMPLE_FILTER_TAPS);
+    let weightSum = 0;
     for (let tap = -RESAMPLE_HALF_TAPS; tap <= RESAMPLE_HALF_TAPS; tap += 1) {
       const distance = tap - phase;
       const lowPass = 2 * cutoffCyclesPerSample * sinc(2 * cutoffCyclesPerSample * distance);
       const tapIndex = tap + RESAMPLE_HALF_TAPS;
-      phaseCoefficients[tapIndex] = lowPass * (RESAMPLE_WINDOW[tapIndex] ?? 0);
+      const coefficient = lowPass * (RESAMPLE_WINDOW[tapIndex] ?? 0);
+      phaseCoefficients[tapIndex] = coefficient;
+      weightSum += coefficient;
     }
-    return phaseCoefficients;
+    return { coefficients: phaseCoefficients, weightSum };
   });
   return { coefficients, inputStep, phaseCount };
 }
@@ -112,9 +120,21 @@ function buildResampleKernel(
 function sampleBandlimitedWithCoefficients(
   input: Int16Array,
   center: number,
-  coefficients: Float64Array,
+  phase: ResamplePhase,
 ): number {
+  const { coefficients } = phase;
   let weighted = 0;
+  // Interior samples use the whole phase; retain the tap order so PCM rounding stays exact.
+  if (
+    center >= RESAMPLE_HALF_TAPS &&
+    center + RESAMPLE_HALF_TAPS < input.length &&
+    phase.weightSum !== 0
+  ) {
+    for (let tap = -RESAMPLE_HALF_TAPS; tap <= RESAMPLE_HALF_TAPS; tap += 1) {
+      weighted += (input[center + tap] ?? 0) * (coefficients[tap + RESAMPLE_HALF_TAPS] ?? 0);
+    }
+    return weighted / phase.weightSum;
+  }
   let weightSum = 0;
 
   for (let tap = -RESAMPLE_HALF_TAPS; tap <= RESAMPLE_HALF_TAPS; tap += 1) {

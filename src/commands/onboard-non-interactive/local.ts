@@ -4,6 +4,7 @@
  * This entrypoint applies config changes, optionally installs the gateway
  * daemon, verifies health, and emits machine-readable setup output.
  */
+import path from "node:path";
 import { listAgentEntries } from "../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { resolveGatewayPort } from "../../config/config.js";
@@ -12,6 +13,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
 import { resolveConfiguredSecretInputWithFallback } from "../../gateway/resolve-configured-secret-input-string.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
 import { resolveGatewayStartupTiming } from "../gateway-startup-timing.js";
@@ -126,14 +128,6 @@ async function resolveGatewayHealthProbeToken(
   return probeAuth;
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.onboardNonInteractiveLocalTestApi")
-  ] = {
-    resolveGatewayHealthProbeToken,
-  };
-}
-
 function formatGatewayHealthFailureDetail(params: {
   probeDetail?: string;
   unresolvedRefReason?: string;
@@ -147,9 +141,10 @@ export async function runNonInteractiveLocalSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  sourceConfigBeforeMigrations: OpenClawConfig;
   baseHash?: string;
 }) {
-  const { opts, runtime, baseConfig, baseHash } = params;
+  const { opts, runtime, baseConfig, sourceConfigBeforeMigrations, baseHash } = params;
   const mode = "local" as const;
 
   const requestedWorkspaceDir = resolveNonInteractiveWorkspaceDir({
@@ -157,7 +152,21 @@ export async function runNonInteractiveLocalSetup(params: {
     baseConfig,
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
-  const workspaceConflict = resolveOnboardingWorkspaceConflict(baseConfig, requestedWorkspaceDir);
+  // Injected main is not authored membership; legacy workspace state still owns its guard.
+  const hasAuthoredRoster = listAgentEntries(sourceConfigBeforeMigrations).length > 0;
+  if (opts.team && hasAuthoredRoster) {
+    rejectOnboardingOption(
+      opts,
+      runtime,
+      "An agent roster already exists. Use `openclaw agents team create` to add a team.",
+    );
+    return;
+  }
+  const firstAgentName = opts.agentName ?? (opts.team ? "coordinator" : "main");
+  const workspaceConflict = resolveOnboardingWorkspaceConflict(
+    sourceConfigBeforeMigrations,
+    requestedWorkspaceDir,
+  );
   const workspaceDir = workspaceConflict?.currentWorkspaceDir ?? requestedWorkspaceDir;
   if (workspaceConflict) {
     runtime.error(
@@ -173,6 +182,7 @@ export async function runNonInteractiveLocalSetup(params: {
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
     baseConfig,
     requestedWorkspaceDir,
+    { allowWorkspaceChange: !hasAuthoredRoster && !workspaceConflict },
   );
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
@@ -181,8 +191,13 @@ export async function runNonInteractiveLocalSetup(params: {
   // that requested owner before first-agent creation is allowed to write.
   const authTarget = resolveOnboardingSetupTarget(
     nextConfig,
-    opts.agentName && listAgentEntries(baseConfig).length === 0
-      ? { name: opts.agentName, workspaceDir }
+    !hasAuthoredRoster && (opts.agentName || opts.team)
+      ? {
+          name: firstAgentName,
+          workspaceDir: opts.team
+            ? path.join(workspaceDir, normalizeAgentId(firstAgentName))
+            : workspaceDir,
+        }
       : undefined,
   );
 
@@ -247,7 +262,8 @@ export async function runNonInteractiveLocalSetup(params: {
     config: nextConfig,
     workspace: workspaceDir,
     baseConfig,
-    firstAgent: { name: opts.agentName ?? "main" },
+    firstAgent: { name: firstAgentName, ...(opts.team ? { team: true } : {}) },
+    expectedConfigHash: baseHash ?? null,
   });
   for (const warning of created.sessionMigrationWarnings ?? []) {
     runtime.log(`Warning: ${warning}`);
@@ -269,6 +285,7 @@ export async function runNonInteractiveLocalSetup(params: {
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   nextConfig = await commitNonInteractiveOnboardConfig({
     nextConfig,
+    baseConfig: created.configBase,
     baseHash: effectiveBaseHash,
     reset: opts.reset,
   });

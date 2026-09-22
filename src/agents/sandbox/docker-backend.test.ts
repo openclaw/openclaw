@@ -1,6 +1,7 @@
 // Docker backend manager tests cover runtime image matching and removal error
 // handling for sandbox and browser containers.
 import fs from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -26,6 +27,11 @@ vi.mock("./docker.js", async () => {
     validateSandboxContainerEngineTarget: dockerMocks.validateSandboxContainerEngineTarget,
   };
 });
+
+vi.mock("./container-engine.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./container-engine.js")>()),
+  execContainer: dockerMocks.execContainer,
+}));
 
 const {
   createDockerSandboxBackend,
@@ -74,11 +80,15 @@ describe("docker sandbox backend manager", () => {
       exists: true,
       running: true,
     });
-    dockerMocks.execContainer.mockResolvedValue({
+    dockerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => ({
       code: 0,
-      stdout: "unused-image",
+      stdout: args.includes('{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}')
+        ? JSON.stringify({ Mounts: [], Tmpfs: null })
+        : args.includes("/proc/self/mountinfo")
+          ? "1 1 0:1 / / rw - overlay overlay rw\n2 1 8:1 /workspace /workspace rw - ext4 /dev/root rw\n"
+          : "unused-image",
       stderr: "",
-    });
+    }));
     dockerMocks.resolvePodmanSandboxRuntimeInfo.mockResolvedValue({
       machine: false,
       rootless: true,
@@ -89,18 +99,241 @@ describe("docker sandbox backend manager", () => {
   it("forwards the canonical scope key to container provisioning", async () => {
     dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
     const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
+    const readOnlyResourceMounts = [
+      { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
+    ];
 
     await createDockerSandboxBackend({
       sessionKey: "agent:poly:msteams:channel-1",
       scopeKey,
       workspaceDir: "/tmp/customer/workspace",
       agentWorkspaceDir: "/tmp/customer/workspace",
+      readOnlyResourceMounts,
       cfg: resolveSandboxConfigForAgent(createConfig(), "poly"),
     });
 
     expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
-      expect.objectContaining({ scopeKey }),
+      expect.objectContaining({ scopeKey, readOnlyResourceMounts }),
     );
+  });
+
+  it("captures image-volume masks once for the filesystem bridge after provisioning", async () => {
+    dockerMocks.execContainer
+      .mockResolvedValueOnce({
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          Mounts: [
+            { Type: "bind", Source: "/host/project", Destination: "/workspace", RW: true },
+            { Type: "volume", Source: "/engine/volume", Destination: "/workspace/cache", RW: true },
+            {
+              Type: "bind",
+              Source: "/host/export",
+              Destination: "/workspace/cache/export",
+              RW: false,
+            },
+          ],
+          Tmpfs: { "/tmp": "rw" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        stderr: "",
+        stdout: [
+          "1 1 0:1 / / rw - overlay overlay rw",
+          "2 1 8:1 /project /workspace rw - ext4 /dev/root rw",
+          "3 2 8:1 /volume /workspace/cache rw - ext4 /dev/root rw",
+          "4 3 8:1 /export /workspace/cache/export ro - ext4 /dev/root rw",
+        ].join("\n"),
+      });
+    const backend = await createDockerExecBackend();
+    const bridge = backend.createFsBridge!({
+      sandbox: {
+        workspaceDir: "/host/project",
+        agentWorkspaceDir: "/host/project",
+        workspaceAccess: "rw",
+        containerName: backend.runtimeId,
+        containerWorkdir: "/workspace",
+        docker: { binds: ["/host/export:/workspace/cache/export:ro"] },
+        backend,
+      },
+    });
+    expect(() => bridge.resolvePath({ filePath: "cache/marker" })).toThrow("container-only");
+    expect(() => bridge.resolvePath({ filePath: "/workspace/cache/marker" })).toThrow(
+      "container-only",
+    );
+    expect(bridge.resolvePath({ filePath: "cache/export/marker" }).hostPath).toBe(
+      path.resolve("/host/export/marker"),
+    );
+    expect(dockerMocks.execContainer).toHaveBeenCalledTimes(2);
+    expect(dockerMocks.ensureSandboxContainer.mock.invocationCallOrder[0]).toBeLessThan(
+      dockerMocks.execContainer.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it.each([
+    {
+      name: "tmpfs destination alias and retained retarget",
+      binds: [],
+      tmpfs: { "/workspace/link": "rw" },
+      table: ["3 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw"],
+      masked: ["/workspace/link/marker", "/workspace/cache/marker"],
+      readable: ["/workspace/other/marker"],
+    },
+    {
+      name: "different backing stacked on a declared bind",
+      binds: [
+        { source: "/host/cache", target: "/workspace/cache", writable: true },
+        { source: "/host/hidden", target: "/workspace/cache/hidden", writable: true },
+        { source: "/host/live", target: "/workspace/cache/live", writable: true },
+      ],
+      tmpfs: { "/workspace/aliases/link": "rw" },
+      table: [
+        "3 2 8:1 /cache /workspace/cache rw - ext4 /dev/root rw",
+        "4 3 8:1 /hidden /workspace/cache/hidden rw - ext4 /dev/root rw",
+        "5 3 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
+        "6 5 8:1 /live /workspace/cache/live rw - ext4 /dev/root rw",
+      ],
+      masked: ["/workspace/cache/marker", "/workspace/cache/hidden/marker"],
+      readable: ["/workspace/cache/live/marker"],
+    },
+    {
+      name: "intervening tmpfs hides an older sibling bind",
+      binds: [{ source: "/host/export", target: "/workspace/cache/export", writable: true }],
+      tmpfs: { "/workspace/aliases/deep/link": "rw" },
+      table: [
+        "3 2 8:1 /export /workspace/cache/export rw - ext4 /dev/root rw",
+        "4 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
+      ],
+      masked: ["/workspace/cache/marker", "/workspace/cache/export/marker"],
+      readable: ["/workspace/other/marker"],
+    },
+    {
+      name: "bind attached inside the intervening tmpfs remains visible",
+      binds: [{ source: "/host/export", target: "/workspace/cache/export", writable: true }],
+      tmpfs: { "/workspace/aliases/deep/link": "rw" },
+      table: [
+        "3 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
+        "4 3 8:1 /export /workspace/cache/export rw - ext4 /dev/root rw",
+      ],
+      masked: ["/workspace/cache/marker"],
+      readable: ["/workspace/cache/export/marker"],
+    },
+    {
+      name: "identical recursive bind backing with a readonly top",
+      binds: [{ source: "/host/export", target: "/workspace/export", writable: false }],
+      tmpfs: {},
+      table: [
+        "3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw",
+        "4 3 8:1 /export /workspace/export ro - ext4 /dev/root rw",
+      ],
+      masked: [],
+      readable: ["/workspace/export/marker"],
+    },
+    {
+      name: "readonly bind with mismatched realized access",
+      binds: [{ source: "/host/export", target: "/workspace/export", writable: false }],
+      tmpfs: {},
+      table: ["3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw"],
+      masked: ["/workspace/export/marker"],
+      readable: [],
+    },
+    {
+      name: "escaped whitespace in realized bind paths",
+      binds: [{ source: "/host/export ", target: "/workspace/export ", writable: false }],
+      tmpfs: {},
+      table: ["3 2 8:1 /export\\040 /workspace/export\\040 ro - ext4 /dev/root rw"],
+      masked: [],
+      readable: ["/workspace/export /marker"],
+    },
+    {
+      name: "visible recursive child above a hidden older child",
+      binds: [{ source: "/host/export", target: "/workspace/export", writable: false }],
+      tmpfs: {},
+      table: [
+        "3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw",
+        "4 2 8:1 /project /workspace rw - ext4 /dev/root rw",
+        "5 4 8:1 /export /workspace/export rw - ext4 /dev/root rw",
+        "6 5 8:1 /export /workspace/export ro - ext4 /dev/root rw",
+      ],
+      masked: [],
+      readable: ["/workspace/export/marker"],
+    },
+    {
+      name: "different backing above a hidden older bind",
+      binds: [{ source: "/host/cache", target: "/workspace/cache", writable: true }],
+      tmpfs: { "/workspace/aliases/link": "rw" },
+      table: [
+        "3 2 8:1 /cache /workspace/cache rw - ext4 /dev/root rw",
+        "4 2 8:1 /project /workspace rw - ext4 /dev/root rw",
+        "5 4 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
+      ],
+      masked: ["/workspace/cache/marker"],
+      readable: ["/workspace/other/marker"],
+    },
+    {
+      name: "bind destination alias without a realized lexical mount",
+      binds: [{ source: "/host/export", target: "/workspace/link", writable: true }],
+      tmpfs: {},
+      table: ["3 2 8:1 /export /workspace/cache rw - ext4 /dev/root rw"],
+      masked: ["/workspace/link/marker", "/workspace/cache/marker"],
+      readable: ["/workspace/other/marker"],
+    },
+  ])("captures realized masks for $name", async ({ binds, tmpfs, table, masked, readable }) => {
+    dockerMocks.execContainer
+      .mockResolvedValueOnce({
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          Mounts: [
+            { Type: "bind", Source: "/host/project", Destination: "/workspace", RW: true },
+            ...binds.map((bind) => ({
+              Type: "bind",
+              Source: bind.source,
+              Destination: bind.target,
+              RW: bind.writable,
+            })),
+          ],
+          Tmpfs: tmpfs,
+        }),
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        stderr: "",
+        stdout: [
+          "1 1 0:1 / / rw - overlay overlay rw",
+          "2 1 8:1 /project /workspace rw - ext4 /dev/root rw",
+          ...table,
+        ].join("\n"),
+      });
+    const backend = await createDockerExecBackend();
+    const bridge = backend.createFsBridge!({
+      sandbox: {
+        workspaceDir: "/host/project",
+        agentWorkspaceDir: "/host/project",
+        workspaceAccess: "rw",
+        containerName: backend.runtimeId,
+        containerWorkdir: "/workspace",
+        docker: {
+          binds: binds.map(
+            (bind) => `${bind.source}:${bind.target}:${bind.writable ? "rw" : "ro"}`,
+          ),
+        },
+        backend,
+      },
+    });
+    for (const filePath of masked) {
+      expect(() => bridge.resolvePath({ filePath })).toThrow("container-only");
+    }
+    for (const filePath of readable) {
+      expect(bridge.resolvePath({ filePath }).containerPath).toBe(filePath);
+    }
+    expect(dockerMocks.execContainer).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not return a backend when its filesystem snapshot cannot be read", async () => {
+    dockerMocks.execContainer.mockRejectedValueOnce(new Error("inspect failed"));
+    await expect(createDockerExecBackend()).rejects.toThrow("inspect failed");
   });
 
   it("binds Podman provisioning and later execs to the resolved target", async () => {
@@ -138,6 +371,11 @@ describe("docker sandbox backend manager", () => {
 
     expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
       expect.objectContaining({ podmanTarget }),
+    );
+    expect(dockerMocks.execContainer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "podman", globalArgs: podmanTarget.globalArgs }),
+      expect.arrayContaining(["inspect", "sandbox-podman"]),
+      expect.anything(),
     );
     expect(dockerMocks.validateSandboxContainerEngineTarget).toHaveBeenCalledWith(
       expect.objectContaining({ id: "podman" }),

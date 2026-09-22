@@ -1,6 +1,7 @@
 // Matrix tests cover shared plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { authFor, createMockClient } from "./shared.test-support.js";
 import type { MatrixAuth } from "./types.js";
 
 const resolveMatrixAuthMock = vi.hoisted(() => vi.fn());
@@ -20,52 +21,6 @@ vi.mock("./create-client.js", () => ({
 
 let acquireSharedMatrixClient: typeof import("./shared.js").acquireSharedMatrixClient;
 let stopSharedClientForAccount: typeof import("./shared.js").stopSharedClientForAccount;
-
-function authFor(accountId: string): MatrixAuth {
-  return {
-    accountId,
-    homeserver: "https://matrix.example.org",
-    userId: `@${accountId}:example.org`,
-    accessToken: `token-${accountId}`,
-    password: "secret", // pragma: allowlist secret
-    deviceId: `${accountId.toUpperCase()}-DEVICE`,
-    deviceName: `${accountId} device`,
-    initialSyncLimit: undefined,
-    encryption: false,
-  };
-}
-
-function createMockClient(name: string, callOrder: string[] = []) {
-  return {
-    name,
-    start: vi.fn(async (_params?: { abortSignal?: AbortSignal }) => {
-      callOrder.push("start");
-    }),
-    quiesceSync: vi.fn(async () => {
-      callOrder.push("quiesce");
-    }),
-    stop: vi.fn(() => {
-      callOrder.push("stop");
-    }),
-    stopAndPersist: vi.fn(async () => {
-      callOrder.push("persist");
-    }),
-    stopWithoutPersist: vi.fn(async () => {
-      callOrder.push("discard");
-    }),
-    drainPendingDecryptions: vi.fn(async (reason: string) => {
-      callOrder.push(
-        reason === "matrix monitor sync quiesce"
-          ? "drain-quiesce"
-          : reason === "matrix shared client final shutdown"
-            ? "drain-final"
-            : "drain-poison",
-      );
-    }),
-    getJoinedRooms: vi.fn(async () => [] as string[]),
-    crypto: undefined,
-  };
-}
 
 function createMonitorRetirement(callOrder: string[]) {
   return {
@@ -138,10 +93,8 @@ describe("shared Matrix client generations", () => {
       accessToken: "shared-token",
       encryption: true,
     } satisfies MatrixAuth;
-    const firstCrypto = { prepare: vi.fn(async () => undefined) };
-    const secondCrypto = { prepare: vi.fn(async () => undefined) };
-    const firstClient = { ...createMockClient("first"), crypto: firstCrypto };
-    const secondClient = { ...createMockClient("second"), crypto: secondCrypto };
+    const firstClient = createMockClient("first");
+    const secondClient = createMockClient("second");
 
     createMatrixClientMock.mockResolvedValueOnce(firstClient).mockResolvedValueOnce(secondClient);
 
@@ -153,8 +106,8 @@ describe("shared Matrix client generations", () => {
     expect(repeatedFirstLease.client).toBe(firstClient);
     expect(secondLease.client).toBe(secondClient);
     expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
-    expect(firstCrypto.prepare).toHaveBeenCalledTimes(1);
-    expect(secondCrypto.prepare).toHaveBeenCalledTimes(1);
+    expect(firstClient.start).toHaveBeenCalledTimes(1);
+    expect(secondClient.start).toHaveBeenCalledTimes(1);
 
     await firstLease.release();
     expect(firstClient.stopAndPersist).not.toHaveBeenCalled();

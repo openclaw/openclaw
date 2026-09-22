@@ -6,6 +6,7 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session section visibility", () => {
@@ -81,7 +82,7 @@ describe("AppSidebar session section visibility", () => {
     const filter = toolbar?.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     expect(filter).not.toBeNull();
     expect(filter?.getAttribute("aria-label")).toBe("Filter & sort");
-    expect(toolbar?.querySelector('[aria-label="New session"]')).not.toBeNull();
+    expect(toolbar?.querySelector('[aria-label="New conversation"]')).not.toBeNull();
     filter?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
@@ -161,6 +162,57 @@ describe("AppSidebar session section visibility", () => {
     sidebar.requestUpdate();
     await sidebar.updateComplete;
     expect(sidebar.querySelector('[data-session-section="ungrouped"]')).not.toBeNull();
+  });
+
+  it("persists hiding empty groups without hiding collapsed populated groups", async () => {
+    const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:alpha"]);
+    const alpha = harness.sessions.state.result!.sessions.find(
+      (row) => row.key === "agent:main:alpha",
+    )!;
+    alpha.category = "Alpha";
+    harness.publish({ groups: ["Empty", "Alpha"] });
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const mounted = await mountSidebar(gateway, harness.sessions);
+    let sidebar = mounted.sidebar;
+    sidebar.sessionOrganizer.saveCollapsedSessionSections(new Set(["category:Alpha"]));
+    await sidebar.updateComplete;
+
+    const groupNames = () =>
+      [...sidebar.querySelectorAll("[data-session-section^='category:']")].map((group) =>
+        group.getAttribute("data-session-section"),
+      );
+    const chooseEmptyGroups = async (mode: "filtering" | "always" | "never") => {
+      sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
+      await sidebar.updateComplete;
+      const menu = sidebar.querySelector(".sidebar-session-sort-menu")!;
+      const choice = menu.querySelector(`[value="empty-groups:${mode}"]`);
+      expect(choice).not.toBeNull();
+      await waitForFast(() => expect(choice?.getAttribute("role")).toBe("menuitemradio"));
+      menu.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          detail: { item: { value: `empty-groups:${mode}` } },
+        }),
+      );
+      await sidebar.updateComplete;
+    };
+
+    expect(groupNames()).toEqual(["category:Empty", "category:Alpha"]);
+    await chooseEmptyGroups("always");
+    expect(groupNames()).toEqual(["category:Alpha"]);
+
+    mounted.provider.remove();
+    ({ sidebar } = await mountSidebar(gateway, harness.sessions));
+    expect(groupNames()).toEqual(["category:Alpha"]);
+    expect(sidebar.querySelector('[data-session-key="agent:main:alpha"]')).toBeNull();
+
+    // Membership changes reveal and hide groups without changing the preference.
+    alpha.category = "Empty";
+    harness.publish({ groups: ["Empty", "Alpha"] });
+    await sidebar.updateComplete;
+    expect(groupNames()).toEqual(["category:Empty"]);
+    await chooseEmptyGroups("never");
+    expect(groupNames()).toEqual(["category:Empty", "category:Alpha"]);
   });
 
   it("renders no chat rows when only the main session exists", async () => {

@@ -41,7 +41,7 @@ function selectQaFlowSuiteScenarios(params: {
   resolveModuleFlowSupport?: (channel?: string) => boolean;
 }) {
   const requestedScenarioIds =
-    params.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
+    params.scenarioIds && params.scenarioIds.length > 0 ? params.scenarioIds : null;
   if (requestedScenarioIds) {
     const scenarioById = new Map(params.scenarios.map((scenario) => [scenario.id, scenario]));
     const missingScenarioIds = [...requestedScenarioIds].filter(
@@ -50,8 +50,10 @@ function selectQaFlowSuiteScenarios(params: {
     if (missingScenarioIds.length > 0) {
       throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
     }
-    const selectedScenarios = [...requestedScenarioIds].map((scenarioId) =>
-      scenarioById.get(scenarioId)!,
+    // Requests are scheduled instances, not a set of labels. Distinct objects
+    // preserve repeated IDs through worker maps and evidence anchor assignment.
+    const selectedScenarios = requestedScenarioIds.map((scenarioId) =>
+      structuredClone(scenarioById.get(scenarioId)!),
     );
     const unsupportedScenarios = selectedScenarios.filter(
       (scenario) => scenario.execution.kind !== "flow",
@@ -274,6 +276,7 @@ function collectQaSuiteGatewayRuntimeOptions(
 function collectQaSuiteTransportPolicy(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
+  let directMessageOnly = false;
   let requireGroupMention = false;
   let topLevelReplies = false;
   let senderAllowlist: readonly string[] | undefined;
@@ -282,6 +285,7 @@ function collectQaSuiteTransportPolicy(
       continue;
     }
     const policy = scenario.execution.transportPolicy;
+    directMessageOnly ||= policy?.directMessageOnly === true;
     requireGroupMention ||= policy?.requireGroupMention === true;
     topLevelReplies ||= policy?.topLevelReplies === true;
     if (!policy?.senderAllowlist) {
@@ -295,8 +299,9 @@ function collectQaSuiteTransportPolicy(
     }
     senderAllowlist = policy.senderAllowlist;
   }
-  return requireGroupMention || topLevelReplies || senderAllowlist
+  return directMessageOnly || requireGroupMention || topLevelReplies || senderAllowlist
     ? {
+        ...(directMessageOnly ? { directMessageOnly: true as const } : {}),
         ...(requireGroupMention ? { requireGroupMention: true as const } : {}),
         ...(senderAllowlist ? { senderAllowlist } : {}),
         ...(topLevelReplies ? { topLevelReplies: true as const } : {}),
@@ -422,7 +427,7 @@ async function mapQaSuiteWithConcurrency<T, U>(
     }
     void (async () => {
       try {
-        if (startStaggerMs > 0) {
+        if (!stopped && startStaggerMs > 0) {
           await sleepImpl(startStaggerMs);
         }
       } finally {
@@ -430,7 +435,7 @@ async function mapQaSuiteWithConcurrency<T, U>(
       }
     })();
   }
-  const { results } = await runTasksWithConcurrency({
+  const { results, hasError, firstError } = await runTasksWithConcurrency({
     tasks: items.map((item, index) => async () => {
       if (stopped) {
         return undefined;
@@ -447,8 +452,15 @@ async function mapQaSuiteWithConcurrency<T, U>(
     }),
     limit: Math.max(1, Math.floor(concurrency)),
     errorMode: "stop",
-    throwOnError: true,
+    // Stop staggered workers too, but drain every started task before teardown.
+    onTaskError: () => {
+      stopped = true;
+    },
   });
+  await nextStartGate;
+  if (hasError) {
+    throw firstError;
+  }
   const completed: U[] = [];
   for (const result of results) {
     if (result !== undefined) {

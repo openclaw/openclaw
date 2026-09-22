@@ -1,17 +1,19 @@
 // Xiaomi tests cover index plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
   resolveProviderPluginChoice,
-  type RegisteredProviderCollections,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import xiaomiPlugin from "./index.js";
-import { createMiMoThinkingWrapper } from "./stream.js";
 
 type OpenAICompletionsModel = Model<"openai-completions">;
 
@@ -32,24 +34,7 @@ type ReplayToolCall = {
   };
 };
 
-type RegisteredProvider = RegisteredProviderCollections["providers"][number];
-const emptyUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-function requireThinkingProfileResolver(
-  provider: RegisteredProvider,
-): NonNullable<RegisteredProvider["resolveThinkingProfile"]> {
-  if (!provider.resolveThinkingProfile) {
-    throw new Error("Xiaomi provider did not register a thinking profile resolver");
-  }
-  return provider.resolveThinkingProfile;
-}
+const emptyUsage = createZeroUsageFixture();
 
 const readToolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
 const readToolResult = {
@@ -145,15 +130,14 @@ function mimoReasoningToolReplayContext(provider = "xiaomi") {
   );
 }
 
-function createPayloadCapturingStream(capture: PayloadCapture, model: OpenAICompletionsModel) {
-  return (
-    _streamModel: OpenAICompletionsModel,
-    streamContext: Context,
-    options?: { onPayload?: (payload: unknown, m: unknown) => unknown },
-  ) => {
+function createPayloadCapturingStream(
+  capture: PayloadCapture,
+  model: OpenAICompletionsModel,
+): StreamFn {
+  return (_streamModel, streamContext, options) => {
     capture.payload = buildOpenAICompletionsParams(model, streamContext, {
       reasoning: "high",
-    } as never);
+    });
     options?.onPayload?.(capture.payload, model);
     const stream = createAssistantMessageEventStream();
     queueMicrotask(() => stream.end());
@@ -161,14 +145,23 @@ function createPayloadCapturingStream(capture: PayloadCapture, model: OpenAIComp
   };
 }
 
-function requireThinkingWrapper(
-  wrapper: ReturnType<typeof createMiMoThinkingWrapper>,
-  label: string,
-): NonNullable<ReturnType<typeof createMiMoThinkingWrapper>> {
-  if (!wrapper) {
-    throw new Error(`expected MiMo thinking wrapper for ${label}`);
-  }
-  return wrapper;
+async function createRegisteredThinkingStream(
+  capture: PayloadCapture,
+  model: OpenAICompletionsModel,
+  thinkingLevel: "off" | "high",
+) {
+  const { providers } = await registerXiaomiPlugin();
+  const provider = requireRegisteredProvider(providers, model.provider);
+  return expectDefined(
+    provider.wrapStreamFn?.({
+      provider: model.provider,
+      modelId: model.id,
+      model,
+      streamFn: createPayloadCapturingStream(capture, model),
+      thinkingLevel,
+    }),
+    "Registered MiMo thinking stream",
+  );
 }
 
 function readThinking(payload: Record<string, unknown> | undefined): ThinkingPayload | undefined {
@@ -256,7 +249,7 @@ describe("xiaomi provider plugin", () => {
 
   it("builds the static Xiaomi model catalog with reasoning flags", async () => {
     const provider = await getXiaomiProvider();
-    const catalogProvider = await runSingleProviderCatalog(provider);
+    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
 
     expect(catalogProvider.api).toBe("openai-completions");
     expect(catalogProvider.baseUrl).toBe("https://api.xiaomimimo.com/v1");
@@ -273,54 +266,74 @@ describe("xiaomi provider plugin", () => {
   });
 
   it("exposes Token Plan v2.5 catalog rows only after a provider config selects a region", async () => {
-    const provider = await getXiaomiTokenPlanProvider();
+    const response = Response.json({ data: [{ id: "mimo-v2.5" }, { id: "mimo-v2.5-pro" }] });
+    const release = vi.fn(async () => undefined);
+    const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
+      response,
+      finalUrl: "https://token-plan-cn.xiaomimimo.com/v1/models",
+      release,
+    });
 
-    const missingConfig = await provider.catalog?.run({
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: "tp-test" }),
-      resolveProviderAuth: () => ({
-        apiKey: "tp-test",
-        mode: "api_key",
-        source: "env",
-      }),
-    } as never);
-    expect(missingConfig).toBeNull();
+    try {
+      const provider = await getXiaomiTokenPlanProvider();
 
-    const configured = await provider.catalog?.run({
-      config: {
-        models: {
-          providers: {
-            "xiaomi-token-plan": {
-              baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+      const missingConfig = await provider.catalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: "tp-test" }),
+        resolveProviderAuth: () => ({
+          apiKey: "tp-test",
+          mode: "api_key",
+          source: "env",
+        }),
+      } as never);
+      expect(missingConfig).toBeNull();
+      expect(guardedFetch).not.toHaveBeenCalled();
+
+      const configured = await provider.catalog?.run({
+        config: {
+          models: {
+            providers: {
+              "xiaomi-token-plan": {
+                baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+              },
             },
           },
         },
-      },
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: "tp-test" }),
-      resolveProviderAuth: () => ({
-        apiKey: "tp-test",
-        mode: "api_key",
-        source: "profile",
-        profileId: "xiaomi-token-plan:default",
-      }),
-    } as never);
-    if (!configured || !("provider" in configured)) {
-      throw new Error("expected configured Xiaomi Token Plan catalog");
-    }
-    expect(configured.provider.baseUrl).toBe("https://token-plan-cn.xiaomimimo.com/v1");
-    expect(configured.provider.api).toBe("openai-completions");
-    expect(configured.provider.models?.map((model) => model.id)).toEqual([
-      "mimo-v2.5-pro",
-      "mimo-v2.5",
-    ]);
-    expect(configured.provider.models?.find((model) => model.id === "mimo-v2.5")?.input).toEqual([
-      "text",
-      "image",
-    ]);
-    for (const model of configured.provider.models ?? []) {
-      expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: "tp-test" }),
+        resolveProviderAuth: () => ({
+          apiKey: "tp-test",
+          mode: "api_key",
+          source: "profile",
+          profileId: "xiaomi-token-plan:default",
+        }),
+      } as never);
+      if (!configured || !("provider" in configured)) {
+        throw new Error("expected configured Xiaomi Token Plan catalog");
+      }
+      expect(configured.provider.baseUrl).toBe("https://token-plan-cn.xiaomimimo.com/v1");
+      expect(configured.provider.api).toBe("openai-completions");
+      expect(configured.provider.models?.map((model) => model.id)).toEqual([
+        "mimo-v2.5",
+        "mimo-v2.5-pro",
+      ]);
+      expect(configured.provider.models?.find((model) => model.id === "mimo-v2.5")?.input).toEqual([
+        "text",
+        "image",
+      ]);
+      for (const model of configured.provider.models ?? []) {
+        expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+      }
+      expect(guardedFetch).toHaveBeenCalledOnce();
+      const request = guardedFetch.mock.calls[0]?.[0];
+      expect(request?.url).toBe("https://token-plan-cn.xiaomimimo.com/v1/models");
+      expect(request?.init?.method ?? "GET").toBe("GET");
+      expect(new Headers(request?.init?.headers).get("authorization")).toBe("Bearer tp-test");
+      expect(response.bodyUsed).toBe(true);
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      guardedFetch.mockRestore();
     }
   });
 
@@ -455,7 +468,10 @@ describe("xiaomi provider plugin", () => {
 
   it("advertises thinking profiles for MiMo reasoning models only", async () => {
     const provider = await getXiaomiProvider();
-    const resolveThinkingProfile = requireThinkingProfileResolver(provider);
+    const resolveThinkingProfile = expectDefined(
+      provider.resolveThinkingProfile,
+      "Xiaomi thinking profile resolver",
+    );
     const expectedLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
     for (const modelId of ["mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-pro"]) {
@@ -494,12 +510,7 @@ describe("xiaomi provider plugin", () => {
         stopReason: "toolUse",
       }),
     );
-    const baseStreamFn = createPayloadCapturingStream(capture, model);
-
-    const wrapThinkingHigh = requireThinkingWrapper(
-      createMiMoThinkingWrapper(baseStreamFn as never, "high"),
-      "high",
-    );
+    const wrapThinkingHigh = await createRegisteredThinkingStream(capture, model, "high");
     await wrapThinkingHigh(model, context, {});
 
     const assistantMessage = readPayloadMessage(capture, 1);
@@ -516,12 +527,7 @@ describe("xiaomi provider plugin", () => {
     const capture: PayloadCapture = {};
     const model = mimoReasoningModel("mimo-v2.5-pro", "xiaomi-token-plan");
     const context = mimoReasoningToolReplayContext("xiaomi-token-plan");
-    const baseStreamFn = createPayloadCapturingStream(capture, model);
-
-    const wrapThinkingHigh = requireThinkingWrapper(
-      createMiMoThinkingWrapper(baseStreamFn as never, "high"),
-      "high",
-    );
+    const wrapThinkingHigh = await createRegisteredThinkingStream(capture, model, "high");
     await wrapThinkingHigh(model, context, {});
 
     expect(readThinking(capture.payload)?.type).toBe("enabled");
@@ -538,13 +544,8 @@ describe("xiaomi provider plugin", () => {
     const capture: PayloadCapture = {};
     const model = mimoReasoningModel("mimo-v2.5");
     const context = mimoReasoningToolReplayContext();
-    const baseStreamFn = createPayloadCapturingStream(capture, model);
-
-    const wrapThinkingNone = requireThinkingWrapper(
-      createMiMoThinkingWrapper(baseStreamFn as never, "none" as never),
-      "none",
-    );
-    await wrapThinkingNone(model, context, {});
+    const wrapThinkingOff = await createRegisteredThinkingStream(capture, model, "off");
+    await wrapThinkingOff(model, context, {});
 
     expect(readThinking(capture.payload)?.type).toBe("disabled");
     expect((capture.payload!.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(

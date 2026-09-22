@@ -54,20 +54,60 @@ describe("qa suite runtime agent media helpers", () => {
     waitForTransportReadyMock.mockClear();
   });
 
-  it("extracts media paths from structured tool output details", () => {
-    expect(
-      extractMediaPathFromText(
-        JSON.stringify({ details: { media: { mediaUrls: ["", "/tmp/image.png"] } } }),
-      ),
-    ).toBe("/tmp/image.png");
-    expect(
-      extractMediaPathFromText(
-        JSON.stringify({
-          details: { media: { attachments: [{ path: "/tmp/from-attachment.png" }] } },
-        }),
-      ),
-    ).toBe("/tmp/from-attachment.png");
-    expect(extractMediaPathFromText("done")).toBeUndefined();
+  it.each([
+    [
+      "mediaUrl before other direct fields, URLs, and attachments",
+      '{"details":{"media":{"mediaUrl":" /tmp/direct.png ","path":"/tmp/path.png","filePath":"/tmp/file.png","mediaUrls":["/tmp/url.png"],"attachments":[{"path":"/tmp/attachment.png"}]}}}',
+      "/tmp/direct.png",
+    ],
+    [
+      "path after a blank mediaUrl and before filePath",
+      '{"details":{"media":{"mediaUrl":" ","path":" /tmp/path.png ","filePath":"/tmp/file.png"}}}',
+      "/tmp/path.png",
+    ],
+    [
+      "filePath after nonstring direct fields",
+      '{"details":{"media":{"mediaUrl":7,"path":false,"filePath":" /tmp/file.png "}}}',
+      "/tmp/file.png",
+    ],
+    [
+      "first valid URL before later URLs and attachments",
+      '{"details":{"media":{"mediaUrl":null,"path":"","filePath":{},"mediaUrls":[null,4," "," /tmp/image.png ","/tmp/later.png"],"attachments":[{"path":"/tmp/attachment.png"}]}}}',
+      "/tmp/image.png",
+    ],
+    [
+      "depth-first attachment before a later sibling",
+      '{"details":{"media":{"attachments":[{"attachments":[{"path":" /tmp/nested.png "}]},{"mediaUrl":"/tmp/later.png"}]}}}',
+      "/tmp/nested.png",
+    ],
+    [
+      "attachment after invalid URLs and attachment entries",
+      '{"details":{"media":{"mediaUrls":[null," ",false],"attachments":[null,[],false,{},{"path":" /tmp/from-attachment.png "}]}}}',
+      "/tmp/from-attachment.png",
+    ],
+  ])("extracts %s from structured tool output details", (_name, text, expected) => {
+    expect(extractMediaPathFromText(text)).toBe(expected);
+  });
+
+  it.each([
+    undefined,
+    "",
+    "done",
+    "null",
+    "[]",
+    "42",
+    '"text"',
+    "{}",
+    '{"details":null}',
+    '{"details":[]}',
+    '{"details":"invalid"}',
+    '{"details":{"media":null}}',
+    '{"details":{"media":[]}}',
+    '{"details":{"media":42}}',
+    '{"details":{"media":{}}}',
+    '{"details":{"media":{"mediaUrl":false,"path":" ","filePath":0,"mediaUrls":[null,false,""],"attachments":[null,[],{},{"path":false}]}}}',
+  ])("returns no media path for invalid or empty tool output %j", (text) => {
+    expect(extractMediaPathFromText(text)).toBeUndefined();
   });
 
   it("resolves generated image paths from mock request logs first", async () => {
@@ -194,7 +234,6 @@ describe("qa suite runtime agent media helpers", () => {
     const patchCall = firstPatchConfigCall();
     expect(patchCall.env).toBe(env);
     expect(patchCall.patch.plugins.allow).toStrictEqual([
-      "acpx",
       "memory-core",
       "openai",
       "qa-channel",
@@ -206,7 +245,7 @@ describe("qa suite runtime agent media helpers", () => {
   it("preserves plugins already allowed by the gateway when configuring media", async () => {
     readConfigSnapshotMock.mockResolvedValue({
       hash: "hash",
-      config: { plugins: { allow: ["openai", "anthropic", "qa-channel"] } },
+      config: { plugins: { allow: ["acpx", "openai", "anthropic", "qa-channel"] } },
     });
 
     await ensureImageGenerationConfigured({
@@ -218,8 +257,8 @@ describe("qa suite runtime agent media helpers", () => {
     expect(patchConfigMock).toHaveBeenCalledTimes(1);
     const patchCall = firstPatchConfigCall();
     expect(patchCall.patch.plugins.allow).toStrictEqual([
-      "acpx",
       "memory-core",
+      "acpx",
       "openai",
       "anthropic",
       "qa-channel",

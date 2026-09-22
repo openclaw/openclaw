@@ -8,8 +8,8 @@ import { resolveGatewayService, type GatewayService } from "../daemon/service.js
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { formatStatusServiceValue } from "./status-all/format.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
+import { getStatusOverviewRowValue } from "./status.test-support.ts";
 
 function createService(overrides: Partial<GatewayService>): GatewayService {
   return createMockGatewayService({
@@ -29,6 +29,15 @@ function requireMockArg(mock: { mock: { calls: unknown[][] } }, label: string): 
 }
 
 describe("readServiceStatusSummary", () => {
+  it.each(["user", "system"] as const)("labels the observed %s manager", async (scope) => {
+    const summary = await readServiceStatusSummary(
+      createService({
+        readRuntime: vi.fn(async () => ({ status: "running", systemd: { scope } })),
+      }),
+      "Daemon",
+    );
+    expect(summary.label).toBe(`systemd ${scope}`);
+  });
   it("marks OpenClaw-managed services as installed", async () => {
     const summary = await readServiceStatusSummary(
       createService({
@@ -71,7 +80,9 @@ describe("readServiceStatusSummary", () => {
       expect(summary.managedByOpenClaw).toBe(false);
       expect(summary.externallyManaged).toBe(false);
       expect(summary.loadedText).toBe("disabled");
-      expect(formatStatusServiceValue(summary)).toBe("systemd not installed");
+      expect(getStatusOverviewRowValue("Gateway service", { gatewayService: summary })).toBe(
+        "systemd not installed",
+      );
     },
   );
 
@@ -108,11 +119,19 @@ describe("readServiceStatusSummary", () => {
             }
           : { status: "not-loaded" },
       );
-      expect(formatStatusServiceValue(summary)).toBe(
+      expect(getStatusOverviewRowValue("Gateway service", { gatewayService: summary })).toBe(
         probe === "load"
           ? "systemd unknown (inspection failed: Error: service manager permission denied) · stopped"
-          : "systemd disabled (inspection failed: Error: service manager permission denied) · unknown",
+          : probe === "runtime"
+            ? "systemd disabled (inspection failed: service runtime inspection failed) · unknown"
+            : "systemd disabled (inspection failed: Error: service manager permission denied) · unknown",
       );
+      if (probe === "runtime") {
+        expect(summary.runtime?.inspectionFailure).toEqual({
+          code: "service-runtime-inspection-failed",
+          detail: "service manager permission denied",
+        });
+      }
     },
   );
 

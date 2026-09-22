@@ -5,6 +5,7 @@ const MAX_SESSION_LIST_PASSES = 4;
 export async function fetchPagedSessionRows(params: {
   list: (offset: number) => Promise<SessionsListResult | null>;
   initialResult?: SessionsListResult | null;
+  resultKind?: "page" | "window";
   isCurrent?: () => boolean;
   mapPageRows?: (rows: GatewaySessionRow[]) => GatewaySessionRow[];
   missingResultError: string;
@@ -32,6 +33,12 @@ export async function fetchPagedSessionRows(params: {
       if (!result) {
         throw new Error(params.missingResultError);
       }
+      if (params.resultKind === "window") {
+        // Managed pagination already owns accumulated membership. A replacement
+        // must retire old rows instead of completing against a cross-pass union.
+        rowsByKey.clear();
+        expectedTotal = result.totalCount;
+      }
       // Optional later-page counts must never erase a known larger roster.
       if (typeof result.totalCount === "number") {
         expectedTotal = Math.max(expectedTotal ?? 0, result.totalCount);
@@ -57,7 +64,7 @@ export async function fetchPagedSessionRows(params: {
       offset = nextOffset;
     }
     if (
-      rowsByKey.size === rowsBeforePass ||
+      (params.resultKind !== "window" && rowsByKey.size === rowsBeforePass) ||
       expectedTotal === undefined ||
       rowsByKey.size >= expectedTotal
     ) {

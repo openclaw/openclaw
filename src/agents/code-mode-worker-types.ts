@@ -1,10 +1,18 @@
-import type { Result } from "@openclaw/normalization-core/result";
+import type { Snapshot } from "quickjs-wasi";
+import type { CodeModeJsonSource, CodeModeOutputSource } from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
+
+// Also bounds queued ordinary guest requests independently of configured in-flight slots.
+export const MAX_CODE_MODE_PENDING_TOOL_CALLS = 128;
+export const CODE_MODE_WORKER_WATCHDOG_GRACE_MS = 2_000;
 
 type CodeModeBridgeMethod =
   | "search"
   | "describe"
   | "callValue"
+  | "resultSave"
+  | "resultLoad"
+  | "resultDelete"
   | "nodes"
   | "yield"
   | "namespace"
@@ -15,7 +23,10 @@ type CodeModeBridgeMethod =
   | "sleep"
   | "swarmNote";
 
+export type CodeModeLanguage = "javascript" | "typescript";
+
 export type CodeModeConfig = {
+  languages: CodeModeLanguage[];
   timeoutMs: number;
   memoryLimitBytes: number;
   maxOutputBytes: number;
@@ -29,7 +40,7 @@ export type PendingBridgeRequest = {
   args: unknown[];
 };
 
-export type SettledBridgeRequest = { id: string } & Result<unknown, string>;
+export type SettledBridgeRequest = { id: string; ok: boolean; json: string };
 
 type SerializedCodeModeNamespaceValue =
   | { kind: "array"; items: SerializedCodeModeNamespaceValue[] }
@@ -48,6 +59,10 @@ type CodeModeWorkerInput =
   | {
       kind: "exec";
       source: string;
+      language?: CodeModeLanguage;
+      prelude?: string;
+      preflightDeclarations?: string;
+      executionTimeoutMs?: number;
       config: CodeModeConfig;
       catalog: unknown[];
       apiFiles?: CodeModeApiVirtualFile[];
@@ -56,35 +71,58 @@ type CodeModeWorkerInput =
     }
   | {
       kind: "resume";
-      snapshotBytes: Uint8Array;
+      snapshot: Snapshot;
       config: CodeModeConfig;
       settledRequests: SettledBridgeRequest[];
       pendingRequests?: PendingBridgeRequest[];
     };
 
 export type CodeModeWorkerPayload = CodeModeWorkerInput & {
+  /** Only interactive, non-replay cells can hand full final JSON to the run store. */
+  retainFinalValue?: boolean;
   wasmModule: WebAssembly.Module;
+  wasmExtensions: Array<{ name: string; wasm: WebAssembly.Module }>;
 };
 
 export type CodeModeSettlementMode =
   | { kind: "awaiting" }
   | { kind: "draining"; requiredRequestIds: string[] };
 
+/** Transient worker boundary; no heap serialization and no resumable handle. */
+export type CodeModeWorkerBoundary = {
+  status: "boundary";
+  pendingRequests: PendingBridgeRequest[];
+  canceledRequestIds: string[];
+  settlementMode: CodeModeSettlementMode;
+  output: CodeModeOutputSource;
+  /** QuickJS-owned allocations, not WASM capacity or process RSS. */
+  memoryUsedBytes: number;
+};
+
+export type CodeModeWorkerContinuation =
+  | { kind: "checkpoint" }
+  | {
+      kind: "continue";
+      timeoutMs: number;
+      settledRequests: SettledBridgeRequest[];
+      pendingRequests: PendingBridgeRequest[];
+    };
+
 export type CodeModeFailurePhase = "input" | "guest" | "bridge" | "host";
 
-export type CodeModeWorkerThreadResult =
+type CodeModeWorkerOutcome<Output, Value> =
   | {
       status: "completed";
-      value: unknown;
-      output: unknown[];
+      value: Value;
+      output: Output;
     }
   | {
       status: "waiting";
-      snapshotBytes: Uint8Array;
+      snapshot: Snapshot;
       pendingRequests: PendingBridgeRequest[];
       canceledRequestIds: string[];
       settlementMode: CodeModeSettlementMode;
-      output: unknown[];
+      output: Output;
     }
   | {
       status: "failed";
@@ -97,5 +135,11 @@ export type CodeModeWorkerThreadResult =
         | "internal_error";
       failurePhase: Extract<CodeModeFailurePhase, "input" | "guest">;
       bridgeDispatchStarted: false;
-      output: unknown[];
+      output: Output;
     };
+
+export type CodeModeVmResult = CodeModeWorkerOutcome<unknown[], unknown>;
+export type CodeModeWorkerThreadResult = CodeModeWorkerOutcome<
+  CodeModeOutputSource,
+  CodeModeJsonSource
+>;

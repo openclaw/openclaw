@@ -281,7 +281,7 @@ export async function runMatrixQaOpenClawCli(params: {
   return await startMatrixQaOpenClawCli(params).wait();
 }
 
-async function assertMatrixQaPrivatePathMode(pathToCheck: string, label: string) {
+export async function assertMatrixQaPrivatePathMode(pathToCheck: string, label: string) {
   if (process.platform === "win32") {
     return;
   }

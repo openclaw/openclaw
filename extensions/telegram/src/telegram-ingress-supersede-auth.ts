@@ -4,10 +4,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTelegramDmAllow } from "./access-groups.js";
 import { mergeTelegramAccountConfig } from "./account-config.js";
 import {
-  resolveTelegramCommandAuthorization,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
+import { resolveTelegramEffectiveGroupPolicy } from "./group-access.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 
@@ -92,7 +92,6 @@ export type TelegramSupersedeAuthContext = {
   accountId: string;
   /** Bot username for @bot command targeting (from getMe / botInfo). */
   botUsername?: string;
-  /** Test seam / preloaded pairing-store ids; defaults to live pairing store. */
 };
 
 /**
@@ -132,6 +131,18 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
   const { resolvedThreadId, storeAllowFrom, groupAllowOverride, effectiveGroupAllow } =
     groupAllowContext;
 
+  if (
+    facts.isGroup &&
+    resolveTelegramEffectiveGroupPolicy({
+      cfg: auth.cfg,
+      telegramCfg: accountCfg,
+      groupConfig: groupAllowContext.groupConfig,
+      topicConfig: groupAllowContext.topicConfig,
+    }) === "disabled"
+  ) {
+    return false;
+  }
+
   const dmAllow = await resolveTelegramDmAllow({
     cfg: auth.cfg,
     groupAllowOverride,
@@ -142,15 +153,6 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
     dmPolicy,
   });
 
-  const ownerAccess = resolveTelegramCommandAuthorization({
-    cfg: auth.cfg,
-    accountId: auth.accountId,
-    chatId: facts.chatId,
-    isGroup: facts.isGroup,
-    threadSpec,
-    senderId: facts.senderId,
-    ...(facts.senderUsername !== undefined ? { senderUsername: facts.senderUsername } : {}),
-  });
   const gate = await resolveTelegramCommandIngressAuthorization({
     accountId: auth.accountId,
     cfg: auth.cfg,
@@ -161,7 +163,6 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
     senderId: facts.senderId,
     effectiveDmAllow: dmAllow.effectiveAllow,
     effectiveGroupAllow,
-    ownerAccess,
     eventKind: "message",
     allowTextCommands: true,
     hasControlCommand: true,

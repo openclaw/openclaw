@@ -40,6 +40,7 @@ describe("Git backup command agent selection", () => {
       commit: "backup-commit",
       noChanges: false,
       pushed: false,
+      warnings: [],
       repositoryPath: "/tmp/repository",
     });
     mocks.getRuntimeConfig.mockReset().mockReturnValue({
@@ -115,9 +116,7 @@ describe("Git backup command agent selection", () => {
   });
 
   it("preserves the Git-specific warning when outcome recording fails", async () => {
-    mocks.recordBackupRunOutcome.mockImplementation(() => {
-      throw new Error("record failed");
-    });
+    mocks.recordBackupRunOutcome.mockRejectedValue(new Error("record failed"));
     const runtime = createTestRuntime();
 
     await backupGitCreateCommand(runtime, {

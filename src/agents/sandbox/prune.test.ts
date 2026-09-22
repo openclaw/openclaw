@@ -1,6 +1,7 @@
 // Sandbox prune tests cover runtime removal ordering and registry cleanup
 // behavior for stale sandbox entries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SandboxRegistryEntry } from "./registry.js";
 import type { SandboxConfig } from "./types.js";
 
 let maybePruneSandboxes: typeof import("./prune.js").maybePruneSandboxes;
@@ -40,6 +41,7 @@ vi.mock("../../runtime.js", () => ({
 
 vi.mock("./backend.js", () => ({
   getSandboxBackendManager: backendMocks.getSandboxBackendManager,
+  usesSandboxRuntimeReservations: () => false,
 }));
 
 vi.mock("./docker-backend.js", () => ({
@@ -51,6 +53,13 @@ vi.mock("./registry.js", () => ({
   readRegistry: registryMocks.readRegistry,
   removeBrowserRegistryEntry: registryMocks.removeBrowserRegistryEntry,
   removeRegistryEntry: registryMocks.removeRegistryEntry,
+  removeSandboxRegistryRuntime: async (
+    entry: SandboxRegistryEntry,
+    removeRuntime: (current: SandboxRegistryEntry) => Promise<void>,
+  ) => {
+    await removeRuntime(entry);
+    await registryMocks.removeRegistryEntry(entry.containerName);
+  },
 }));
 
 vi.mock("../../plugin-sdk/browser-bridge.js", () => ({

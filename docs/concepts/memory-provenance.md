@@ -57,6 +57,11 @@ edits and external writers during a sensitive cleanup; they do not share the
 memory plugin's mutation lock. Run the preview again afterward to check for
 remaining attributable artifacts.
 
+If deletion fails, resolve the reported storage or filesystem error, rerun the
+same command, then repeat it with `--dry-run`. A failure can leave partial
+cleanup. The purge keeps corpus and origin evidence until dependent artifacts
+are cleaned; do not delete that evidence manually to clear an error.
+
 The full flags, selector semantics, and report fields are in
 [`memory forget`](/cli/memory#memory-forget).
 
@@ -80,8 +85,27 @@ reconciliation transfers the parents' origins to the surviving entry. It
 runs in code around the model call, including for participating agents that
 share a workspace; the model does not own the origin rows.
 
+A file replacement can succeed before a later file error is reported. In that
+case, or when publication is uncertain, consolidation keeps the replacement's
+origins so a later `memory forget` can still target it. It does not automatically
+retry an uncertain replacement as an append.
+
+Origins for replaced entries remain while retained rewrite preimages still
+reference their promotion markers. Backup rotation prunes those origins only
+when live entries, retained preimages, diary excerpts, and indexed snapshots no longer reference them.
+
+New consolidation-history excerpts retain the replacement entry's lineage,
+including its merged or superseded parents. Their origin rows remain while
+those excerpts remain, even after backup rotation. Diary history has no
+automatic expiry; long revision histories can retain growing origin sets.
+
 When backfill coalesces the same claim from several sessions, it retains every
 source origin without counting the repeated claim as extra evidence.
+Session-backfill diary lines also carry markers tied to source origins before
+publication. This includes REM facts, reflections, and combined claims, even
+when displayed citations are shortened or a later apply step fails. Forgetting
+any contributing session removes the whole marked line, not unrelated diary
+lines. Earlier unmarked backfill diaries do not gain lineage retroactively.
 
 Coverage is not universal. Handwritten notes, direct agent edits, and entries
 staged before lineage tracking may lack entry origins. The report's
@@ -112,6 +136,9 @@ To keep Gmail hook sessions out of **dreaming ingestion and session backfill**:
 }
 ```
 
+IMAP uses the exact hook source `email`; Gmail hooks use `gmail`. Include both
+values to exclude both sources. Generic webhooks use `webhook`.
+
 You can also exclude channel/plugin identifiers (not room IDs) or chat types.
 Empty or omitted lists add no policy exclusions. A match in any list excludes
 the whole session; values
@@ -137,7 +164,13 @@ for exact matching rules and exclusion reasons.
 | Direct writes and session hooks | Not applied                              |
 
 Matching requires retained session metadata; missing fields do not match a
-rule. Automatic dreaming separately skips retained archives. To exclude an
+rule. Both controls honor the configured `session.store`, including custom
+and shared stores, while keeping selection scoped to the chosen agent. Older
+retained records may have only a coarse `webhook` classification; without the
+original exact source, OpenClaw does not infer `email` or `webhook` for matching.
+Select those sessions explicitly by full ID.
+
+Automatic dreaming separately skips retained archives. To exclude an
 archived session from backfill and transcript indexing too, explicitly forget
 its full session ID. Those paths check forgotten-session records even when
 the former channel, chat type, or hook-source metadata is no longer available.
@@ -164,9 +197,14 @@ merged prose. Surviving sources may support a new entry later, but automatic
 reconstruction is not guaranteed.
 
 The cleanup covers matching promoted entries, session-corpus lines, memory
-index chunks and their full-text/vector rows, cached embeddings, short-term
-state, ingestion deduplication state, and dreaming rewrite preimages. It also
-removes whole lines containing exact selected corpus snippets from scanned
+index chunks and their full-text/vector rows, short-term state, ingestion
+deduplication state, and dreaming rewrite preimages. A nonempty session selection
+also clears the selected agent's entire embedding cache, including results from
+unfinished rebuilds that are not yet linked to published chunks. Unrelated
+published index entries remain usable; later indexing may need to regenerate
+cached embeddings. Dry runs report this removal without applying it.
+
+The purge also removes whole lines containing exact selected corpus snippets from scanned
 memory files and dream diaries. The
 [command reference](/cli/memory#memory-forget) describes the counters and
 selection limits.
@@ -182,7 +220,11 @@ reason `forgotten`.
 The memory plugin coordinates purges with its staging and file mutations.
 A pending dream narrative is skipped if its tracked source entries or prior
 diary context were removed before publication. This does not retroactively
-identify untracked paraphrases in older diary entries.
+identify untracked paraphrases in older diary entries. Historical consolidation
+highlights with quoted markers also lack reliable deletion boundaries. The
+report warns in `refusals` when it recognizes remaining highlights in that
+format; review them manually. The warning is not an inventory of all untracked
+history, and missing historical lineage is not reconstructed.
 
 Indexing checks again before publishing chunks or cached embeddings, so a
 result prepared before the purge cannot restore forgotten session data or a
@@ -203,7 +245,8 @@ or hook source. Keep an admission rule for future matching sessions, within
   have been erased.
 - **Untracked older memories.** No origin row means no lineage-based deletion.
   New session backfill preserves origins, but it does not retroactively supply
-  lineage for candidates staged by older versions. Inspect those separately.
+  lineage for candidates or rewrite backups whose origins were lost in older
+  versions. Inspect those separately; a prior purge is not automatically repaired.
 - **Freeform edits.** `curatedWrites` reports recognized writes or write
   attempts with a `relativePath` and `observedAt`. That record alone does
   not delete a file or identify contributing lines. Supported write/edit/patch

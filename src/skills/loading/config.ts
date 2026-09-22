@@ -126,6 +126,7 @@ export function shouldIncludeSkill(params: {
   config?: OpenClawConfig;
   bundledAllowlist: ReadonlySet<string> | undefined;
   eligibility?: SkillEligibilityContext;
+  hasBin?: (bin: string) => boolean;
 }): boolean {
   const { entry, config, bundledAllowlist, eligibility } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
@@ -145,7 +146,7 @@ export function shouldIncludeSkill(params: {
     remotePlatforms: eligibility?.remote?.platforms,
     always: entry.metadata?.always,
     requires: entry.metadata?.requires,
-    hasBin: hasBinary,
+    hasBin: params.hasBin ?? hasBinary,
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
     hasEnv: (envName) =>

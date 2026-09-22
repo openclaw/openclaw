@@ -1,7 +1,6 @@
-// Runs the gateway-backed runtime that delivers native approval events.
+import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import { readConnectErrorDetailCode } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
-import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { isApprovalMethod } from "../gateway/method-scopes.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
@@ -26,16 +25,20 @@ import type {
 } from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
+import type { SystemAgentApprovalResolved } from "./system-agent-approvals.js";
 export type {
   ExecApprovalChannelRuntime,
   ExecApprovalChannelRuntimeAdapter,
 } from "./exec-approval-channel-runtime.types.js";
 
 type ApprovalRequestEvent = ApprovalRequestInput;
-type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
+type ApprovalResolvedEvent =
+  | ExecApprovalResolved
+  | PluginApprovalResolved
+  | SystemAgentApprovalResolved;
 type ApprovalReplayMethod = Extract<
   GatewayNativeApprovalMethod,
-  "exec.approval.list" | "plugin.approval.list"
+  "exec.approval.list" | "plugin.approval.list" | "openclaw.approval.list"
 >;
 
 type ApprovalReplayClient = {
@@ -81,6 +84,9 @@ function resolveApprovalReplayMethods(
   }
   if (eventKinds.has("plugin")) {
     methods.push("plugin.approval.list");
+  }
+  if (eventKinds.has("system-agent")) {
+    methods.push("openclaw.approval.list");
   }
   return methods;
 }
@@ -188,6 +194,10 @@ export function createExecApprovalChannelRuntime<
   };
 
   const handleResolved = async (resolved: TResolved): Promise<void> => {
+    if ("terminalStatus" in resolved && resolved.terminalStatus === "expired") {
+      await handleExpired(resolved.id);
+      return;
+    }
     const settled = pending.settle(resolved.id, async (entry) => {
       log.debug(`resolved ${resolved.id} with ${resolved.decision}`);
       await adapter.finalizeResolved({
@@ -216,11 +226,24 @@ export function createExecApprovalChannelRuntime<
       );
       return;
     }
+    if (evt.event === "openclaw.approval.requested" && eventKinds.has("system-agent")) {
+      spawn(
+        "error handling approval request",
+        // SAFETY: The event name and handled kind select the canonical approval request union.
+        handleRequested(evt.payload as TRequest, { ignoreIfInactive: true }),
+      );
+      return;
+    }
     if (evt.event === "exec.approval.resolved" && eventKinds.has("exec")) {
       spawn("error handling approval resolved", handleResolved(evt.payload as TResolved));
       return;
     }
     if (evt.event === "plugin.approval.resolved" && eventKinds.has("plugin")) {
+      spawn("error handling approval resolved", handleResolved(evt.payload as TResolved));
+      return;
+    }
+    if (evt.event === "openclaw.approval.resolved" && eventKinds.has("system-agent")) {
+      // SAFETY: The event name and handled kind select the canonical approval resolution union.
       spawn("error handling approval resolved", handleResolved(evt.payload as TResolved));
     }
   };

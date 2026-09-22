@@ -102,6 +102,35 @@ describe("matrix verification actions", () => {
     });
   });
 
+  function mockCompletedSelfVerificationCrypto() {
+    const requested = {
+      completed: false,
+      hasSas: false,
+      id: "verification-1",
+      phaseName: "requested",
+      transactionId: "tx-self",
+    };
+    const sas = {
+      ...requested,
+      hasSas: true,
+      phaseName: "started",
+      sas: {
+        decimal: [1, 2, 3],
+      },
+    };
+    const completed = {
+      ...sas,
+      completed: true,
+      phaseName: "done",
+    };
+    return {
+      confirmVerificationSas: vi.fn(async () => completed),
+      listVerifications: vi.fn(async () => [sas]),
+      requestVerification: vi.fn(async () => requested),
+      startVerification: vi.fn(async () => sas),
+    };
+  }
+
   function mockVerifiedOwnerStatus() {
     return {
       backup: {
@@ -499,32 +528,7 @@ describe("matrix verification actions", () => {
   });
 
   it("does not complete self-verification until the OpenClaw device has full Matrix identity trust", async () => {
-    const requested = {
-      completed: false,
-      hasSas: false,
-      id: "verification-1",
-      phaseName: "requested",
-      transactionId: "tx-self",
-    };
-    const sas = {
-      ...requested,
-      hasSas: true,
-      phaseName: "started",
-      sas: {
-        decimal: [1, 2, 3],
-      },
-    };
-    const completed = {
-      ...sas,
-      completed: true,
-      phaseName: "done",
-    };
-    const crypto = {
-      confirmVerificationSas: vi.fn(async () => completed),
-      listVerifications: vi.fn(async () => [sas]),
-      requestVerification: vi.fn(async () => requested),
-      startVerification: vi.fn(async () => sas),
-    };
+    const crypto = mockCompletedSelfVerificationCrypto();
     const getOwnDeviceVerificationStatus = vi
       .fn()
       .mockResolvedValueOnce(mockUnverifiedOwnerStatus())
@@ -563,32 +567,7 @@ describe("matrix verification actions", () => {
   });
 
   it("does not let the SDK identity-only status read hang completed self-verification", async () => {
-    const requested = {
-      completed: false,
-      hasSas: false,
-      id: "verification-1",
-      phaseName: "requested",
-      transactionId: "tx-self",
-    };
-    const sas = {
-      ...requested,
-      hasSas: true,
-      phaseName: "started",
-      sas: {
-        decimal: [1, 2, 3],
-      },
-    };
-    const completed = {
-      ...sas,
-      completed: true,
-      phaseName: "done",
-    };
-    const crypto = {
-      confirmVerificationSas: vi.fn(async () => completed),
-      listVerifications: vi.fn(async () => [sas]),
-      requestVerification: vi.fn(async () => requested),
-      startVerification: vi.fn(async () => sas),
-    };
+    const crypto = mockCompletedSelfVerificationCrypto();
     const getOwnDeviceIdentityVerificationStatus = vi.fn(
       async () => await new Promise<never>(() => {}),
     );
@@ -626,32 +605,7 @@ describe("matrix verification actions", () => {
   });
 
   it("does not complete self-verification until cross-signing keys are published", async () => {
-    const requested = {
-      completed: false,
-      hasSas: false,
-      id: "verification-1",
-      phaseName: "requested",
-      transactionId: "tx-self",
-    };
-    const sas = {
-      ...requested,
-      hasSas: true,
-      phaseName: "started",
-      sas: {
-        decimal: [1, 2, 3],
-      },
-    };
-    const completed = {
-      ...sas,
-      completed: true,
-      phaseName: "done",
-    };
-    const crypto = {
-      confirmVerificationSas: vi.fn(async () => completed),
-      listVerifications: vi.fn(async () => [sas]),
-      requestVerification: vi.fn(async () => requested),
-      startVerification: vi.fn(async () => sas),
-    };
+    const crypto = mockCompletedSelfVerificationCrypto();
     const getOwnDeviceVerificationStatus = vi.fn(async () => mockVerifiedOwnerStatus());
     const getOwnCrossSigningPublicationStatus = vi
       .fn()
@@ -825,32 +779,7 @@ describe("matrix verification actions", () => {
   });
 
   it("allows completed self-verification when only backup health remains degraded", async () => {
-    const requested = {
-      completed: false,
-      hasSas: false,
-      id: "verification-1",
-      phaseName: "requested",
-      transactionId: "tx-self",
-    };
-    const sas = {
-      ...requested,
-      hasSas: true,
-      phaseName: "started",
-      sas: {
-        decimal: [1, 2, 3],
-      },
-    };
-    const completed = {
-      ...sas,
-      completed: true,
-      phaseName: "done",
-    };
-    const crypto = {
-      confirmVerificationSas: vi.fn(async () => completed),
-      listVerifications: vi.fn(async () => [sas]),
-      requestVerification: vi.fn(async () => requested),
-      startVerification: vi.fn(async () => sas),
-    };
+    const crypto = mockCompletedSelfVerificationCrypto();
     const bootstrapOwnDeviceVerification = vi.fn(async () => ({
       crossSigning: mockCrossSigningPublicationStatus(),
       success: false,
@@ -1094,4 +1023,3 @@ describe("matrix verification actions", () => {
     expect(summary.error).toMatch(/verifier rejected mid-protocol/);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

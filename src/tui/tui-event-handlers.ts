@@ -1,9 +1,10 @@
-// Handles TUI keyboard, paste, backend, and command events.
 import {
   hasSessionProjectionAcceptedFinal,
   reduceSessionProjectionRunEvent,
   type SessionProjectionRunStatus,
 } from "../../packages/gateway-client/src/session-projection.js";
+// Handles TUI keyboard, paste, backend, and command events.
+import type { ChatLogOperations } from "./components/chat-log.js";
 import {
   formatPrimitiveString,
   extractTextFromMessage,
@@ -11,6 +12,7 @@ import {
   formatTuiAbortDiagnostic,
   isCommandMarkedMessage,
 } from "./tui-formatters.js";
+import { extractTuiImageSources } from "./tui-images.js";
 import { createTuiRunLifecycle } from "./tui-run-lifecycle.js";
 import { matchesSelectedTuiSession, readTuiSessionUserMessage } from "./tui-session-events.js";
 import {
@@ -38,41 +40,24 @@ import type {
   TuiStateAccess,
 } from "./tui-types.js";
 
-type EventHandlerChatLog = {
-  addLiveUser: (text: string, options: { messageId: string; runId?: string }) => void;
-  startTool: (toolCallId: string, toolName: string, args: unknown, runId?: string) => void;
-  updateToolResult: (
-    toolCallId: string,
-    result: unknown,
-    options?: { partial?: boolean; isError?: boolean },
-  ) => void;
-  addSystem: (text: string) => void;
-  addPendingSystem: (runId: string, text: string) => void;
-  dismissPendingSystem: (runId: string) => void;
-  updateAssistant: (text: string, runId: string) => void;
-  finalizeAssistant: (text: string, runId: string) => void;
-  dropAssistant: (runId: string) => void;
-};
-
 type EventHandlerTui = { requestRender: (force?: boolean) => void };
-
-type EventHandlerBtwPresenter = {
-  showResult: (params: { question: string; text: string; isError?: boolean }) => void;
-  clear: () => void;
-};
 
 function isFailedTuiRunStatus(status: SessionProjectionRunStatus | undefined): boolean {
   return status === "aborted" || status === "error" || status === "timeout";
 }
 
 type EventHandlerContext = {
-  chatLog: EventHandlerChatLog;
-  btw: EventHandlerBtwPresenter;
+  chatLog: ChatLogOperations;
+  btw: {
+    showResult: (params: { question: string; text: string; isError?: boolean }) => void;
+    clear: () => void;
+  };
   tui: EventHandlerTui;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
+  updateFooter: () => void;
   refreshSessionInfo?: () => Promise<void>;
-  loadHistory?: () => Promise<TuiHistoryLoadResult>;
+  loadHistory: () => Promise<TuiHistoryLoadResult>;
   noteLocalRunId?: (runId: string) => void;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
@@ -106,7 +91,6 @@ export function createEventHandlers(context: EventHandlerContext) {
   const runCoordinator = new TuiSessionRunCoordinator({
     state,
     loadHistory,
-    refreshSessionInfo,
     restoreTerminalError: (message) => chatLog.addSystem(message),
     requestRender: (force) => tui.requestRender(force),
     finalizeHistoryOwnedRun: ({ runId, result, previouslyDisplayed }) => {
@@ -339,7 +323,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
       } else {
-        chatLog.finalizeAssistant(finalText, evt.runId);
+        const images = extractTuiImageSources(evt.message);
+        if (images.length > 0) {
+          chatLog.finalizeAssistant(finalText, evt.runId, images);
+        } else {
+          chatLog.finalizeAssistant(finalText, evt.runId);
+        }
       }
       finalizeRun({
         runId: evt.runId,
@@ -379,23 +368,6 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
-  const collectTrackedSessionRunIds = () => {
-    const runIds = new Set(sessionRuns.keys());
-    if (state.activeChatRunId) {
-      runIds.add(state.activeChatRunId);
-    }
-    const pendingRunId = getPendingSubmitAcceptedRunId(state);
-    if (pendingRunId) {
-      runIds.add(pendingRunId);
-    }
-    const finalizedRunIds = new Set(finalizedRuns.keys());
-    const displayedRunIds = new Set(finalizedRunsWithDisplay.keys());
-    for (const runId of finalizedRunIds) {
-      runIds.add(runId);
-    }
-    return { runIds, finalizedRunIds, displayedRunIds };
-  };
-
   const handleSessionsChangedEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -416,7 +388,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       // Legacy atomic batches expose no replayable message identity. Refresh
       // their authoritative history without resetting the current run or stream.
-      runCoordinator.queueHistoryReload();
+      void runCoordinator.queueHistoryReload();
       return;
     }
 
@@ -428,7 +400,11 @@ export function createEventHandlers(context: EventHandlerContext) {
           const displayedRunIds = finalizedRunsWithDisplay.has(persistedRunId)
             ? [persistedRunId]
             : [];
-          runCoordinator.queueHistoryReload([persistedRunId], [persistedRunId], displayedRunIds);
+          void runCoordinator.queueHistoryReload(
+            [persistedRunId],
+            [persistedRunId],
+            displayedRunIds,
+          );
         } else {
           void refreshSessionInfo?.();
         }
@@ -446,7 +422,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       nextSessionId !== null &&
       state.currentSessionId !== nextSessionId;
     if (evt.reason === "new" && !replacesKnownSession) {
-      const { runIds, displayedRunIds } = collectTrackedSessionRunIds();
+      const { runIds, displayedRunIds } = runCoordinator.collectTrackedSessionRunIds();
       if (runIds.size > 0) {
         if (nextSessionId) {
           state.currentSessionId = nextSessionId;
@@ -462,17 +438,14 @@ export function createEventHandlers(context: EventHandlerContext) {
             pendingNewSessionRunIds.add(runId);
           }
         }
-        runCoordinator.queueHistoryReload(persistedRunIds, persistedRunIds, displayedRunIds);
+        void runCoordinator.queueHistoryReload(persistedRunIds, persistedRunIds, displayedRunIds);
         tui.requestRender();
         return;
       }
     }
 
-    const {
-      runIds: reloadingRunIds,
-      finalizedRunIds,
-      displayedRunIds,
-    } = collectTrackedSessionRunIds();
+    const { runIds, finalizedRunIds, displayedRunIds } =
+      runCoordinator.collectTrackedSessionRunIds();
     state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
     // Reduce the old epoch before adopting its replacement ID; otherwise the
     // canonical reducer correctly rejects the reset as a foreign session.
@@ -491,11 +464,27 @@ export function createEventHandlers(context: EventHandlerContext) {
       state.sessionInfo.updatedAt = evt.updatedAt;
     }
     getTuiSessionProjection(state);
-    if (reloadingRunIds.size > 0) {
-      runCoordinator.queueHistoryReload(reloadingRunIds, finalizedRunIds, displayedRunIds);
-    } else {
-      runCoordinator.queueHistoryReload();
-    }
+    const selection = { sessionKey: state.currentSessionKey, agentId: state.currentAgentId };
+    const generation = state.sessionGeneration;
+    const historyReload = runCoordinator.queueHistoryReload(
+      runIds.size > 0 ? runIds : undefined,
+      finalizedRunIds,
+      displayedRunIds,
+    );
+    // The reset event can retire its own RPC acknowledgement. Its authoritative
+    // receipt belongs after the last queued history rebuild, which clears chat.
+    void historyReload.then((current) => {
+      if (
+        current &&
+        evt.reason === "reset" &&
+        generation === state.sessionGeneration &&
+        matchesSelectedTuiSession(state, selection) &&
+        selection.agentId === state.currentAgentId
+      ) {
+        chatLog.addSystem(`session ${state.currentSessionKey} reset`);
+        tui.requestRender();
+      }
+    });
     tui.requestRender();
   };
 
@@ -528,10 +517,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const liveUserMessage = readTuiSessionUserMessage(evt);
     if (liveUserMessage) {
-      chatLog.addLiveUser(liveUserMessage.text, {
-        messageId: liveUserMessage.messageId,
-        ...(liveUserMessage.runId ? { runId: liveUserMessage.runId } : {}),
-      });
+      chatLog.addLiveUser(liveUserMessage.text, liveUserMessage);
       tui.requestRender();
     }
 
@@ -594,6 +580,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (isActiveRun) {
         armStreamingWatchdog(evt.runId);
       }
+      context.updateFooter();
       tui.requestRender();
       return;
     }
@@ -729,19 +716,14 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
-  // True once any event for this runId has been seen, even before sendChat
-  // resolves. Lets the optimistic-submit path know an accepted run already
-  // registered so it does not re-arm a draft the abort path would then drop.
-  const isRunObserved = (runId: string) => sessionRuns.has(runId);
-
   const reconcileHistoryAfterGap = () => {
     reduceTuiSessionProjection(state, {
       type: "transportGap",
       scope: readTuiSessionProjectionScope(state),
     });
-    const { runIds, displayedRunIds } = collectTrackedSessionRunIds();
+    const { runIds, displayedRunIds } = runCoordinator.collectTrackedSessionRunIds();
     if (runIds.size === 0) {
-      runCoordinator.queueHistoryReload();
+      void runCoordinator.queueHistoryReload();
       return;
     }
     // A dropped final cannot distinguish a finished run from a still-streaming
@@ -758,7 +740,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend: (runId: string) => completedRuns.delete(runId),
-    isRunObserved,
+    // Events can register before sendChat resolves; do not re-arm their draft.
+    isRunObserved: (runId: string) => sessionRuns.has(runId),
+    captureHistoryRunMembership: () => runCoordinator.captureHistoryRunMembership(),
     reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
     dispose,

@@ -4,6 +4,19 @@ import { cronFailureNotificationEventContext, emit, type CronServiceState } from
 import { tryFinishCronTaskRun } from "./task-runs.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 
+/** Records a terminal task/event fact before the fallible runtime-row commit. */
+export function emitCronOutcomeForJob(
+  state: CronServiceState,
+  job: CronJob,
+  result: TimedCronRunOutcome,
+): void {
+  if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
+    return;
+  }
+  recordCronOutcomeForJob(state, job, result);
+  emitCronOutcomeEventForJob(state, job, result);
+}
+
 function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: number) {
   return {
     jobId: job.id,

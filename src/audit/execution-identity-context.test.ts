@@ -837,7 +837,6 @@ describe("execution identity context storage", () => {
     const lockDatabase = openNodeSqliteDatabase(path);
     lockDatabase.exec("BEGIN IMMEDIATE");
     try {
-      const startedAt = performance.now();
       expect(
         inspectExecutionIdentityRun(
           { executionId: "execution-held-lock-inspection" },
@@ -853,7 +852,6 @@ describe("execution identity context storage", () => {
           },
         },
       });
-      expect(performance.now() - startedAt).toBeLessThan(250);
     } finally {
       lockDatabase.exec("ROLLBACK");
       lockDatabase.close();

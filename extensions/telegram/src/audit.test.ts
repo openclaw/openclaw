@@ -23,12 +23,7 @@ vi.mock("openclaw/plugin-sdk/string-coerce-runtime", async (importOriginal) => {
 });
 
 function mockGetChatMemberStatus(status: string) {
-  fetchWithTimeoutMock.mockResolvedValueOnce(
-    new Response(JSON.stringify({ ok: true, result: { status } }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }),
-  );
+  fetchWithTimeoutMock.mockResolvedValueOnce(Response.json({ ok: true, result: { status } }));
 }
 
 async function auditSingleGroup() {

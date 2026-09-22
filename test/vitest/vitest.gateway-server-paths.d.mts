@@ -1,3 +1,5 @@
+export const gatewayPluginTestFiles: string[];
+export const gatewayDatabaseWorkerTestFiles: string[];
 export const gatewayMethodsIsolatedTestFiles: string[];
 export const gatewayServerBackedHttpTestFiles: string[];
 export const gatewayServerExcludedTestFiles: string[];

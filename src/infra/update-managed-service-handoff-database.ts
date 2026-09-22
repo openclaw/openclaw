@@ -1,0 +1,377 @@
+import fs, { type BigIntStats, type Stats } from "node:fs";
+import path from "node:path";
+import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
+import { sql } from "kysely";
+import {
+  requireDirectorySync,
+  syncDirectorySync,
+  type DirectoryReceipt,
+} from "./directory-durability.js";
+import { acquireFileLockSyncWithRetry } from "./file-lock-sync.js";
+import { sameFileIdentity } from "./fs-safe-advanced.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import {
+  withExistingSqliteRollbackDatabase,
+  type ExistingSqliteTransaction,
+} from "./sqlite-existing-database.js";
+import {
+  runSqliteImmediateTransactionSync,
+  type SqliteTransactionOptions,
+} from "./sqlite-transaction.js";
+import { quarantineManagedHandoffStore } from "./update-managed-service-handoff-store-repair.js";
+import { createPrivateWindowsFile } from "./windows-private-directory.js";
+
+export type LeaseRow = { owner: string; payload_json: string; updated_at: number };
+export type LeaseTable = LeaseRow & { install_root: string };
+export const leaseQueries = (db: HandoffDatabase) =>
+  getNodeSqliteKysely<{ managed_update_handoffs: LeaseTable }>(db);
+
+function initializeLeaseSchema(db: HandoffDatabase): void {
+  executeSqliteQuerySync(
+    db,
+    leaseQueries(db)
+      .schema.createTable("managed_update_handoffs")
+      .ifNotExists()
+      .addColumn("install_root", "text", (column) => column.notNull().primaryKey())
+      .addColumn("owner", "text", (column) => column.notNull())
+      .addColumn("payload_json", "text", (column) => column.notNull())
+      .addColumn("updated_at", "integer", (column) => column.notNull())
+      .modifyEnd(sql`STRICT`),
+  );
+}
+
+function errorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
+}
+
+export type ManagedUpdateLeaseDatabaseIdentity = Readonly<{
+  databasePath: string;
+  databaseIdentity: string;
+  parentIdentity: string;
+}>;
+
+function assertPath(stat: Stats | BigIntStats, kind: "directory" | "file") {
+  if (
+    stat.isSymbolicLink() ||
+    !(kind === "directory" ? stat.isDirectory() : stat.isFile()) ||
+    (kind === "file" && BigInt(stat.nlink) !== 1n) ||
+    (typeof process.getuid === "function" && BigInt(stat.uid) !== BigInt(process.getuid())) ||
+    (process.platform !== "win32" && (BigInt(stat.mode) & 0o077n) !== 0n)
+  ) {
+    throw new Error("managed handoff lease " + kind + " is unsafe");
+  }
+}
+
+/**
+ * Earlier writers created the file under the caller's umask and chmodded it
+ * after schema creation. Excess read bits on a path we own can therefore be
+ * that interrupted work. Restore the
+ * invariant instead of refusing, which would otherwise lock the product out of its
+ * own state for every install root until an operator deleted the file by hand.
+ *
+ * Excess bits here are defense in depth rather than a live exposure: assertPath
+ * enforces a 0700 owned directory on every read and every write, and a single
+ * link, so no other user could traverse to this inode or hold a descriptor on it
+ * whatever the file's own mode said. Write bits are still refused rather than
+ * repaired, because chmod cannot revoke a descriptor and integrity is the one
+ * thing the directory guarantee would not restore. Ownership, type and link count
+ * are likewise not ours to repair; all of those still refuse in assertPath.
+ */
+function repairPrivateFileMode(databasePath: string, stat: Stats): Stats {
+  if (
+    process.platform === "win32" ||
+    (stat.mode & 0o077) === 0 ||
+    (stat.mode & 0o022) !== 0 ||
+    stat.isSymbolicLink() ||
+    !stat.isFile() ||
+    stat.nlink !== 1 ||
+    (typeof process.getuid === "function" && stat.uid !== process.getuid())
+  ) {
+    return stat;
+  }
+  fs.chmodSync(databasePath, 0o600);
+  return fs.lstatSync(databasePath);
+}
+
+function assertSamePath(
+  stat: Stats | BigIntStats,
+  expected: Stats | BigIntStats,
+  kind: "directory" | "file",
+): void {
+  assertPath(stat, kind);
+  if (
+    (process.platform === "win32" &&
+      [stat.dev, stat.ino, expected.dev, expected.ino].some(
+        (value) => value === 0 || value === 0n,
+      )) ||
+    !sameFileIdentity(stat, expected)
+  ) {
+    throw new Error("managed handoff lease " + kind + " changed during initialization");
+  }
+}
+
+function createMissingDatabaseFile(databasePath: string, parentReceipt: DirectoryReceipt): void {
+  let descriptor: number | undefined;
+  try {
+    descriptor =
+      process.platform === "win32"
+        ? createPrivateWindowsFile(databasePath)
+        : fs.openSync(
+            databasePath,
+            fs.constants.O_RDWR |
+              fs.constants.O_CREAT |
+              fs.constants.O_EXCL |
+              fs.constants.O_NOFOLLOW,
+            0o600,
+          );
+  } catch (error) {
+    if (errorCode(error) !== "EEXIST") {
+      throw error;
+    }
+  }
+  try {
+    if (descriptor !== undefined) {
+      fs.fchmodSync(descriptor, 0o600);
+      // SQLite commits schema on this inode; a crash here leaves its existing empty-file recovery.
+      fs.fsyncSync(descriptor);
+    }
+    // Windows file IDs can exceed Number's exact integer range.
+    const identity =
+      descriptor === undefined
+        ? repairPrivateFileMode(databasePath, fs.lstatSync(databasePath))
+        : fs.fstatSync(descriptor, { bigint: true });
+    const currentIdentity =
+      descriptor === undefined
+        ? fs.lstatSync(databasePath)
+        : fs.lstatSync(databasePath, { bigint: true });
+    assertSamePath(currentIdentity, identity, "file");
+    assertSamePath(fs.lstatSync(parentReceipt.path), parentReceipt.identity, "directory");
+    requireDirectorySync(syncDirectorySync(parentReceipt), "Managed handoff lease directory");
+  } finally {
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
+  }
+}
+
+/**
+ * Bytes we could never adopt: the path is not our regular single-linked file, or
+ * it carries write bits, which mean a descriptor we cannot revoke may already
+ * exist. Excess read bits are excluded — repairPrivateFileMode restores those in
+ * place, because the store sets 0600 after every write and keeps its directory
+ * private, so they are its own interrupted work.
+ */
+function isUnadoptableStore(stat: Stats): boolean {
+  return (
+    stat.isSymbolicLink() ||
+    !stat.isFile() ||
+    stat.nlink !== 1 ||
+    (typeof process.getuid === "function" && stat.uid !== process.getuid()) ||
+    (process.platform !== "win32" && (stat.mode & 0o022) !== 0)
+  );
+}
+
+/** Capture only an already-admitted database, never provision one during recovery. */
+export function captureManagedUpdateLeaseDatabaseIdentity(
+  databasePath: string,
+): ManagedUpdateLeaseDatabaseIdentity {
+  const canonical = fs.realpathSync(databasePath);
+  const file = fs.lstatSync(canonical);
+  const parent = fs.lstatSync(path.dirname(canonical));
+  assertPath(file, "file");
+  assertPath(parent, "directory");
+  return Object.freeze({
+    databasePath: canonical,
+    databaseIdentity: `${file.dev}:${file.ino}`,
+    parentIdentity: `${parent.dev}:${parent.ino}`,
+  });
+}
+
+export function assertManagedUpdateLeaseDatabaseIdentity(
+  binding: ManagedUpdateLeaseDatabaseIdentity,
+): void {
+  const actual = captureManagedUpdateLeaseDatabaseIdentity(binding.databasePath);
+  if (
+    actual.databasePath !== binding.databasePath ||
+    actual.databaseIdentity !== binding.databaseIdentity ||
+    actual.parentIdentity !== binding.parentIdentity
+  ) {
+    throw new Error("managed handoff lease database identity changed");
+  }
+}
+
+/** Existing managed-update lease storage; extraction does not change its schema. */
+export function createManagedHandoffLeaseDatabase(
+  databasePath: string,
+  existingIdentity?: ManagedUpdateLeaseDatabaseIdentity,
+) {
+  if (existingIdentity && databasePath !== existingIdentity.databasePath) {
+    throw new Error("managed handoff lease database path changed");
+  }
+  const existingTransactions = new WeakMap<HandoffDatabase, ExistingSqliteTransaction>();
+  /**
+   * The store keeps its directory at 0700, so drift on a directory we own is its
+   * own interrupted work. Ownership and type stay the temp-root resolver's call.
+   */
+  function recoverDirectoryMode(target: string): void {
+    if (process.platform === "win32") {
+      return;
+    }
+    try {
+      const stat = fs.lstatSync(target);
+      if (
+        stat.isDirectory() &&
+        !stat.isSymbolicLink() &&
+        (stat.mode & 0o077) !== 0 &&
+        (typeof process.getuid !== "function" || stat.uid === process.getuid())
+      ) {
+        fs.chmodSync(target, 0o700);
+      }
+    } catch {
+      // A missing or unreadable directory is the resolver's to answer, not ours.
+    }
+  }
+
+  /**
+   * Coordination state lives in a shared temp directory, so a store we cannot
+   * adopt used to end config mutation and native service operations for every
+   * install root on the host, permanently and with no in-product recovery.
+   * Retain it under a name recording the defect and leave a usable store behind.
+   *
+   * Repairers must not race: renaming on a stale observation lets one process
+   * retain the clean store another already opened, leaving two authoritative
+   * databases and defeating the lock this store exists to provide. The decision
+   * is therefore retaken under the lock, where the replacement is visible.
+   */
+  function recoverUnadoptableStore(target: string, parent: DirectoryReceipt): void {
+    if (!observeUnadoptable(target)) {
+      return;
+    }
+    const release = acquireFileLockSyncWithRetry(target);
+    try {
+      if (!observeUnadoptable(target)) {
+        return;
+      }
+      quarantineManagedHandoffStore(target, "unsafe-file");
+      // Readers open read-only and cannot create a store, so removing the blocker
+      // without replacing it would move the dead end rather than clear it.
+      createMissingDatabaseFile(target, parent);
+    } finally {
+      release();
+    }
+  }
+
+  function observeUnadoptable(target: string): boolean {
+    try {
+      return isUnadoptableStore(fs.lstatSync(target));
+    } catch {
+      return false;
+    }
+  }
+
+  function withDatabase<T>(write: boolean, operation: (db: HandoffDatabase) => T): T {
+    if (existingIdentity) {
+      return withExistingSqliteRollbackDatabase(
+        databasePath,
+        {
+          write,
+          busyTimeoutMs: 5000,
+          assertIdentity: () => assertManagedUpdateLeaseDatabaseIdentity(existingIdentity),
+          validate: (db) => {
+            executeSqliteQuerySync(
+              db,
+              leaseQueries(db).selectFrom("managed_update_handoffs").selectAll().limit(0),
+            );
+          },
+        },
+        (db, transact) => {
+          existingTransactions.set(db, transact);
+          try {
+            return operation(db);
+          } finally {
+            existingTransactions.delete(db);
+          }
+        },
+      );
+    }
+    const dir = path.dirname(databasePath);
+    if (write) {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const stat = fs.lstatSync(dir);
+      if (
+        !stat.isDirectory() ||
+        stat.isSymbolicLink() ||
+        (typeof process.getuid === "function" && stat.uid !== process.getuid())
+      ) {
+        throw new Error("managed handoff lease directory is unsafe");
+      }
+      fs.chmodSync(dir, 0o700);
+    }
+    recoverDirectoryMode(dir);
+    const directoryIdentity = fs.lstatSync(dir);
+    assertPath(directoryIdentity, "directory");
+    recoverUnadoptableStore(databasePath, {
+      path: dir,
+      realPath: fs.realpathSync.native(dir),
+      identity: directoryIdentity,
+    });
+    if (write && !fs.existsSync(databasePath)) {
+      createMissingDatabaseFile(databasePath, {
+        path: dir,
+        realPath: fs.realpathSync.native(dir),
+        identity: directoryIdentity,
+      });
+    }
+    const databaseIdentity = repairPrivateFileMode(databasePath, fs.lstatSync(databasePath));
+    assertPath(databaseIdentity, "file");
+    const db = openNodeSqliteDatabase(
+      write ? resolveExistingSqliteFileUri(databasePath) : databasePath,
+      { readOnly: !write },
+    );
+    try {
+      assertSamePath(fs.lstatSync(dir), directoryIdentity, "directory");
+      assertSamePath(fs.lstatSync(databasePath), databaseIdentity, "file");
+      setSqliteBusyTimeout(db, 5000);
+      if (write) {
+        initializeLeaseSchema(db);
+      }
+      return operation(db);
+    } finally {
+      // Canonical rollback may already close a damaged handle; keep its original error.
+      if (db.isOpen) {
+        db.close();
+      }
+    }
+  }
+  return Object.assign(withDatabase, {
+    transact<T>(db: HandoffDatabase, operation: () => T, options: SqliteTransactionOptions): T {
+      const assertCurrent = () => {
+        if (existingIdentity) {
+          assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
+        }
+      };
+      assertCurrent();
+      const transact: ExistingSqliteTransaction =
+        existingTransactions.get(db) ??
+        ((write, transactionOptions) =>
+          runSqliteImmediateTransactionSync(db, write, transactionOptions));
+      return transact(
+        () => {
+          assertCurrent();
+          return operation();
+        },
+        {
+          ...options,
+          withCommit: (commit) => {
+            assertCurrent();
+            commit();
+          },
+        },
+      );
+    },
+  });
+}

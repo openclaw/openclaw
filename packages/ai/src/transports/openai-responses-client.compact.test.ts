@@ -49,6 +49,10 @@ const context = {
   messages: [{ role: "user", content: "Remember NORTH-COPPER-17.", timestamp: 1 }],
 } satisfies Context;
 
+function mockCompactResponse(body: unknown): void {
+  sdkState.post.mockResolvedValue(body);
+}
+
 describe("responses compact endpoint", () => {
   beforeEach(() => {
     sdkState.clients.length = 0;
@@ -56,7 +60,7 @@ describe("responses compact endpoint", () => {
   });
 
   it("accepts retained-message prefixes from the official OpenAI endpoint", async () => {
-    sdkState.post.mockResolvedValue({
+    mockCompactResponse({
       object: "response.compaction",
       output: [
         {
@@ -98,6 +102,11 @@ describe("responses compact endpoint", () => {
       }),
     );
     expect(result).toMatchObject({
+      output: [
+        expect.objectContaining({ role: "developer" }),
+        expect.objectContaining({ role: "user" }),
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      ],
       item: { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
       historyMode: "retained-users",
       usage: { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 },
@@ -111,7 +120,7 @@ describe("responses compact endpoint", () => {
   });
 
   it("rejects retained-message prefixes from native xAI", async () => {
-    sdkState.post.mockResolvedValue({
+    mockCompactResponse({
       object: "response.compaction",
       output: [
         {
@@ -165,7 +174,7 @@ describe("responses compact endpoint", () => {
       ],
     ],
   ])("rejects a %s compaction item", async (_case, output) => {
-    sdkState.post.mockResolvedValue({
+    mockCompactResponse({
       object: "response.compaction",
       output,
       usage: { input_tokens: 1, output_tokens: 1 },
@@ -182,7 +191,7 @@ describe("responses compact endpoint", () => {
   });
 
   it("keeps the checkpoint-only response shape distinct from retained user history", async () => {
-    sdkState.post.mockResolvedValue({
+    mockCompactResponse({
       object: "response.compaction",
       output: [{ type: "compaction", id: "cmp_1", encrypted_content: "opaque" }],
       usage: { input_tokens: 1, output_tokens: 1 },
@@ -199,7 +208,79 @@ describe("responses compact endpoint", () => {
   });
 
   it.each([
+    { type: "input_text", text: 1 },
+    { type: "input_image", detail: "auto" },
+    { type: "input_image", detail: "invalid", image_url: "https://media.example/image.png" },
+    { type: "input_file", file_id: 42 },
+    { type: "output_text", text: "not supported input" },
+  ])("rejects unsupported retained content without rewriting it: %j", async (block) => {
+    mockCompactResponse({
+      object: "response.compaction",
+      output: [
+        { type: "message", role: "user", content: [block] },
+        { type: "compaction", encrypted_content: "opaque" },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    await expect(
+      requestPreparedOpenAIResponsesCompaction(
+        createOpenAIResponsesTransportStreamFn(),
+        officialOpenAIModel,
+        context,
+        { apiKey: "test-key" },
+      ),
+    ).rejects.toThrow("one trailing compaction item");
+  });
+
+  it.each([model, { ...model, provider: "custom", baseUrl: "https://responses.example/v1" }])(
+    "rejects endpoint output altered by the $provider route's status policy",
+    async (route) => {
+      mockCompactResponse({
+        object: "response.compaction",
+        output: [{ type: "compaction", encrypted_content: "opaque", status: "completed" }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+      await expect(
+        requestPreparedOpenAIResponsesCompaction(
+          createOpenAIResponsesTransportStreamFn(),
+          route,
+          context,
+          { apiKey: "test-key" },
+        ),
+      ).rejects.toThrow("one trailing compaction item");
+    },
+  );
+
+  it.each([
+    "data:image/png;base64,invalid",
+    "data:image/bmp;base64,Qk0=",
+    "data:image/png;base64,/9j/",
+  ])("rejects canonical image output that the transport would change: %s", async (imageUrl) => {
+    mockCompactResponse({
+      object: "response.compaction",
+      output: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_image", detail: "auto", image_url: imageUrl }],
+        },
+        { type: "compaction", encrypted_content: "opaque" },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    await expect(
+      requestPreparedOpenAIResponsesCompaction(
+        createOpenAIResponsesTransportStreamFn(),
+        officialOpenAIModel,
+        context,
+        { apiKey: "test-key" },
+      ),
+    ).rejects.toThrow("one trailing compaction item");
+  });
+
+  it.each([
     ["native xAI default", model, undefined, true],
+    ["native xAI budget default", model, undefined, true, "budget"],
     ["native xAI alias default", { ...model, provider: "x-ai" }, undefined, true],
     ["native xAI opt-out", model, { responsesCompactEndpoint: false }, false],
     [
@@ -220,13 +301,78 @@ describe("responses compact endpoint", () => {
       { responsesCompactEndpoint: true },
       false,
     ],
+    ["OpenAI manual default", officialOpenAIModel, undefined, false],
+    ["OpenAI budget default", officialOpenAIModel, undefined, true, "budget"],
     [
-      "OpenAI default",
-      { ...model, provider: "openai", baseUrl: "https://api.openai.com/v1" },
+      "OpenAI budget opt-out",
+      officialOpenAIModel,
+      { responsesCompactEndpoint: false },
+      false,
+      "budget",
+    ],
+    [
+      "noncanonical OpenAI transport",
+      { ...officialOpenAIModel, api: "openclaw-openai-responses-transport" },
       undefined,
       false,
+      "budget",
     ],
-  ] as const)("resolves the %s gate", (_name, route, extraParams, enabled) => {
-    expect(resolveOpenAIResponsesCompactEndpointPlan(route, extraParams).enabled).toBe(enabled);
-  });
+    [
+      "OpenAI with an unverified endpoint",
+      { ...officialOpenAIModel, baseUrl: "https://responses.example/v1" },
+      undefined,
+      false,
+      "budget",
+    ],
+    [
+      "OpenAI without a resolved endpoint",
+      { ...officialOpenAIModel, baseUrl: undefined },
+      undefined,
+      false,
+      "budget",
+    ],
+    [
+      "ChatGPT default",
+      {
+        ...officialOpenAIModel,
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+      undefined,
+      false,
+      "budget",
+    ],
+    [
+      "ChatGPT transport at the public API",
+      { ...officialOpenAIModel, api: "openai-chatgpt-responses" },
+      undefined,
+      false,
+      "budget",
+    ],
+    [
+      "Azure default",
+      {
+        ...officialOpenAIModel,
+        provider: "azure-openai",
+        baseUrl: "https://example.openai.azure.com",
+      },
+      undefined,
+      false,
+      "budget",
+    ],
+    [
+      "custom provider at the public API",
+      { ...officialOpenAIModel, provider: "custom" },
+      undefined,
+      false,
+      "budget",
+    ],
+  ] as const)(
+    "resolves the %s gate",
+    (_name, route, extraParams, enabled, purpose: "manual" | "budget" = "manual") => {
+      expect(resolveOpenAIResponsesCompactEndpointPlan(route, extraParams, purpose).enabled).toBe(
+        enabled,
+      );
+    },
+  );
 });

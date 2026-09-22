@@ -47,7 +47,7 @@ afterAll(() => {
 });
 
 describe("session upstream links", () => {
-  it("stores links and returns only watcher-joined rows grouped by catalog", () => {
+  it("returns each watched link once and skips ambiguous agent ownership", () => {
     const database = createDatabaseOptions();
     const watched = "agent:main:adopted:watched";
     const unwatched = "agent:main:adopted:unwatched";
@@ -56,6 +56,35 @@ describe("session upstream links", () => {
     expect(
       registerSessionStateWatch(
         { watcherSessionKey: "agent:main:main", targetSessionKey: watched },
+        database,
+      ),
+    ).toBe(true);
+    expect(
+      registerSessionStateWatch(
+        { watcherSessionKey: "agent:other:main", targetSessionKey: watched },
+        database,
+      ),
+    ).toBe(true);
+    const ambiguous = "agent:main:adopted:ambiguous";
+    upsertLink(ambiguous, "claude", database);
+    expect(
+      upsertSessionUpstreamLink(
+        {
+          sessionKey: ambiguous,
+          agentId: "other",
+          catalogId: "codex",
+          hostId: "gateway:local",
+          threadId: "ambiguous-thread",
+          upstreamKind: "codex-app-server",
+          upstreamRef: null,
+          marker: null,
+        },
+        database,
+      ),
+    ).toBe(true);
+    expect(
+      registerSessionStateWatch(
+        { watcherSessionKey: "agent:main:main", targetSessionKey: ambiguous },
         database,
       ),
     ).toBe(true);

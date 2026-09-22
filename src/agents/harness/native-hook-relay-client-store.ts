@@ -1,57 +1,37 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
-import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import {
-  createNewerSqliteSchemaVersionError,
-  readSqliteUserVersion,
-} from "../../infra/sqlite-user-version.js";
-import {
-  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  OPENCLAW_STATE_SCHEMA_VERSION,
-} from "../../state/openclaw-state-db-contract.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import { restoreNativeErrorResponse } from "../../infra/native-error-response.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { SqliteSchemaVersionError } from "../../infra/sqlite-user-version.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import {
-  readNativeHookRelayBridgeRecordRow,
-  type NativeHookRelayBridgeRecord,
-} from "./native-hook-relay-bridge-record.js";
-
-type NativeHookRelayBridgeDatabase = Pick<OpenClawStateKyselyDatabase, "native_hook_relay_bridges">;
-
-function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
-  const userVersion = readSqliteUserVersion(db);
-  if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw createNewerSqliteSchemaVersionError(
-      "OpenClaw state database",
-      pathname,
-      userVersion,
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
-  }
-}
+import type { NativeHookRelayBridgeRecord } from "./native-hook-relay-bridge-record.js";
+import type {
+  NativeHookRelayClientRead,
+  NativeHookRelayClientReadResult,
+} from "./native-hook-relay-client.worker.js";
 
 /** Read one native relay locator without loading the shared-state writer lifecycle. */
-export function readNativeHookRelayClientBridgeRecord(params: {
+export async function readNativeHookRelayClientBridgeRecord(params: {
   relayId: string;
   stateDbPath?: string;
-}): NativeHookRelayBridgeRecord | undefined {
+}): Promise<NativeHookRelayBridgeRecord | undefined> {
   const pathname = path.resolve(params.stateDbPath ?? resolveOpenClawStateSqlitePath());
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  const pool = new WorkerTaskPool<NativeHookRelayClientRead, NativeHookRelayClientReadResult>({
+    workerUrl: resolveRuntimeProcessEntrypointUrl("nativeHookRelayClient"),
+    maxWorkers: 1,
+  });
   try {
-    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    assertSupportedSchemaVersion(db, pathname);
-    const query = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(db)
-      .selectFrom("native_hook_relay_bridges")
-      .selectAll()
-      .where("relay_id", "=", params.relayId);
-    return readNativeHookRelayBridgeRecordRow(executeSqliteQueryTakeFirstSync(db, query));
+    const result = await pool.run(
+      { relayId: params.relayId, stateDbPath: pathname },
+      { inputBytes: 2 * (params.relayId.length + pathname.length) },
+    );
+    if (!result.ok) {
+      throw result.newerSchema
+        ? new SqliteSchemaVersionError(result.error.message)
+        : restoreNativeErrorResponse(result.error);
+    }
+    return result.record;
   } finally {
-    clearNodeSqliteKyselyCacheForDatabase(db);
-    db.close();
+    await pool.close();
   }
 }

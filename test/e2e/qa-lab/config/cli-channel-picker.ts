@@ -19,6 +19,15 @@ type ProducerOptions = {
   timeoutMs: number;
 };
 
+class PickerRunError extends Error {
+  constructor(
+    message: string,
+    readonly transcript: string,
+  ) {
+    super(message);
+  }
+}
+
 function sanitizePickerTranscript(transcript: string) {
   return stripAnsiSequences(transcript).replaceAll(
     /123456(?:(?::|…)[A-Za-z0-9_…-]*)?/gu,
@@ -165,7 +174,8 @@ async function runRealPicker(options: ProducerOptions, openclawHome: string) {
     await sendAndWait(`${TEST_BOT_TOKEN}\r`, /Telegram DM access warning[\s\S]*Select a channel/u);
     await sendAndWait("\u001b[A", /●\s+Finished \(Done\)/u);
     await sendAndWait("\r", /Configure DM access policies now\?/u);
-    await sendAndWait("\r", /Configuration updated\./u);
+    await sendAndWait("\r", /Set up administration from your own chat account\?/u);
+    send("\r");
 
     for (;;) {
       if (exit) {
@@ -193,7 +203,7 @@ async function runRealPicker(options: ProducerOptions, openclawHome: string) {
         await delay(25);
       }
     }
-    throw error;
+    throw new PickerRunError(formatErrorMessage(error), output);
   }
 }
 
@@ -276,6 +286,9 @@ async function runCliChannelPickerProducer(options: ProducerOptions) {
       status: "pass",
     });
   } catch (error) {
+    if (error instanceof PickerRunError) {
+      writer.appendLog(sanitizePickerTranscript(error.transcript));
+    }
     const details = formatErrorMessage(error);
     writer.appendLog(`\nfail: ${details}\n`);
     return await writer.write({

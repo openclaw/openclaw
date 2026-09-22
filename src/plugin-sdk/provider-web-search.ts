@@ -7,6 +7,7 @@ import type {
   WebSearchProviderToolDefinition,
   WebSearchProviderToolExecutionContext,
 } from "../plugins/types.js";
+export { readProviderEnvValue } from "../secrets/provider-credential-values.js";
 export {
   jsonResult,
   readNonNegativeIntegerParam,
@@ -29,7 +30,6 @@ export {
   parseWebSearchTimeFilters,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readProviderEnvValue,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,

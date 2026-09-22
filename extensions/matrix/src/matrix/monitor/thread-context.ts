@@ -1,12 +1,14 @@
 // Matrix plugin module implements thread context behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixClient } from "../sdk.js";
-import { summarizeMatrixMessageContextEvent } from "./context-summary.js";
+import { setBoundedMap } from "./bounded-cache.js";
+import {
+  summarizeMatrixMessageContextEvent,
+  truncateMatrixContextBody,
+} from "./context-summary.js";
 import type { MatrixRawEvent } from "./types.js";
 
 const MAX_TRACKED_THREAD_STARTERS = 256;
-const MAX_THREAD_STARTER_BODY_LENGTH = 500;
 
 type MatrixThreadContext = {
   threadStarterBody?: string;
@@ -15,17 +17,10 @@ type MatrixThreadContext = {
   summary?: string;
 };
 
-function truncateThreadStarterBody(value: string): string {
-  if (value.length <= MAX_THREAD_STARTER_BODY_LENGTH) {
-    return value;
-  }
-  return `${sliceUtf16Safe(value, 0, MAX_THREAD_STARTER_BODY_LENGTH - 3)}...`;
-}
-
 function summarizeMatrixThreadStarterEvent(event: MatrixRawEvent): string | undefined {
   const body = summarizeMatrixMessageContextEvent(event);
   if (body) {
-    return truncateThreadStarterBody(body);
+    return truncateMatrixContextBody(body);
   }
   const content = event.content as { msgtype?: unknown };
   const msgtype = normalizeOptionalString(content.msgtype);
@@ -58,13 +53,7 @@ export function createMatrixThreadContextResolver(params: {
   const cache = new Map<string, MatrixThreadContext>();
 
   const remember = (key: string, value: MatrixThreadContext): MatrixThreadContext => {
-    cache.set(key, value);
-    if (cache.size > MAX_TRACKED_THREAD_STARTERS) {
-      const oldest = cache.keys().next().value;
-      if (typeof oldest === "string") {
-        cache.delete(oldest);
-      }
-    }
+    setBoundedMap(cache, key, value, MAX_TRACKED_THREAD_STARTERS);
     return value;
   };
 

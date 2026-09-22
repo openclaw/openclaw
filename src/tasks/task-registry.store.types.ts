@@ -6,3 +6,10 @@ export type TaskRegistryStoreSnapshot = {
   tasks: Map<string, TaskRecord>;
   deliveryStates: Map<string, TaskDeliveryState>;
 };
+
+export type TaskRegistryMutationScope = {
+  taskId: string;
+  flowId: string;
+  runId?: string;
+  childSessionKey?: string;
+};

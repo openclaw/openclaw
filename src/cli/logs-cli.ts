@@ -52,6 +52,7 @@ type LogsTailPayload = {
   lines?: string[];
   truncated?: boolean;
   reset?: boolean;
+  skippedBytes?: number;
   localFallback?: boolean;
 };
 
@@ -113,7 +114,7 @@ const JOURNAL_MAX_LIMIT = 5000;
 const JOURNAL_MAX_BYTES = 1_000_000;
 
 function parsePositiveInt(value: string | undefined, fallback: number, flag: string): number {
-  if (!value) {
+  if (value === undefined) {
     return fallback;
   }
   const parsed = parseStrictPositiveInteger(value);
@@ -298,7 +299,8 @@ async function readSystemdJournalFallback(params: {
   if (typeof params.cursor === "string" && params.cursor.trim().length > 0) {
     args.push(`--after-cursor=${params.cursor}`);
   } else if (params.since) {
-    args.push(`--since=${params.since}`);
+    // journalctl requires its own timestamp syntax, not the ISO poll timestamp.
+    args.push(`--since=${params.since.replace("T", " ").replace("Z", " UTC")}`);
   } else {
     args.push("-n", String(limit));
   }
@@ -336,6 +338,12 @@ function normalizeTailText(text: string, truncated: boolean): { text: string; tr
     return { text: "", truncated };
   }
   return { text: text.slice(firstNewline + 1), truncated };
+}
+
+function formatLogResetNotice(skippedBytes: number | undefined): string {
+  return skippedBytes !== undefined && skippedBytes > 0
+    ? `Log cursor re-anchored (skipped ${skippedBytes} bytes).`
+    : "Log cursor reset (file rotated).";
 }
 
 function parseJournalctlOutput(output: string): { lines: string[]; cursor?: string } {
@@ -385,11 +393,7 @@ function isTransientFollowError(error: unknown): boolean {
   return isPlainGatewayRequestCloseError(message) || isPlainGatewayRequestTimeoutError(message);
 }
 
-export function formatLogTimestamp(
-  value?: string,
-  mode: "pretty" | "plain" = "plain",
-  localTime = true,
-) {
+function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain", localTime = true) {
   if (!value) {
     return "";
   }
@@ -416,7 +420,7 @@ function formatLogLine(
   if (!parsed) {
     return raw;
   }
-  const label = parsed.subsystem ?? parsed.module ?? "";
+  const label = parsed.subsystem ?? parsed.module ?? parsed.plugin ?? "";
   const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain", opts.localTime);
   const level = parsed.level ?? "";
   const levelLabel = level.padEnd(5).trim();
@@ -428,22 +432,16 @@ function formatLogLine(
 
   const timeLabel = colorize(opts.rich, theme.muted, time);
   const labelValue = colorize(opts.rich, theme.accent, label);
-  const levelValue =
+  const levelStyle =
     level === "error" || level === "fatal"
-      ? colorize(opts.rich, theme.error, levelLabel)
+      ? theme.error
       : level === "warn"
-        ? colorize(opts.rich, theme.warn, levelLabel)
+        ? theme.warn
         : level === "debug" || level === "trace"
-          ? colorize(opts.rich, theme.muted, levelLabel)
-          : colorize(opts.rich, theme.info, levelLabel);
-  const messageValue =
-    level === "error" || level === "fatal"
-      ? colorize(opts.rich, theme.error, message)
-      : level === "warn"
-        ? colorize(opts.rich, theme.warn, message)
-        : level === "debug" || level === "trace"
-          ? colorize(opts.rich, theme.muted, message)
-          : colorize(opts.rich, theme.info, message);
+          ? theme.muted
+          : theme.info;
+  const levelValue = colorize(opts.rich, levelStyle, levelLabel);
+  const messageValue = colorize(opts.rich, levelStyle, message);
 
   const head = [timeLabel, levelValue, labelValue].filter(Boolean).join(" ");
   return [head, messageValue].filter(Boolean).join(" ").trim();
@@ -482,7 +480,6 @@ async function emitGatewayError(
   emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
   errorLine: (text: string) => boolean,
 ) {
-  const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
   const errorText = redactSensitiveUrlLikeString(formatErrorMessage(err));
 
@@ -490,20 +487,16 @@ async function emitGatewayError(
     isGatewayTransportError(err) ? err.connectionDetails : opts.connection,
   );
   if (mode === "json") {
-    if (
-      !emitJsonLine(
-        {
-          type: "error",
-          message,
-          error: errorText,
-          details,
-          hint,
-        },
-        true,
-      )
-    ) {
-      return;
-    }
+    emitJsonLine(
+      {
+        type: "error",
+        message: errorText,
+        error: errorText,
+        details,
+        hint,
+      },
+      true,
+    );
     return;
   }
 
@@ -576,7 +569,7 @@ export function registerLogsCli(program: Command) {
     let lastSourceIdentity: string | undefined;
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
-    const rich = isRich() && opts.color !== false;
+    const rich = isRich() && opts.color !== false && !opts.plain;
     const localTime = !opts.utc;
 
     const startGatewayRecoveryProbe = () => {
@@ -735,7 +728,7 @@ export function registerLogsCli(program: Command) {
           if (
             !emitJsonLine({
               type: "notice",
-              message: "Log cursor reset (file rotated).",
+              message: formatLogResetNotice(payload.skippedBytes),
             })
           ) {
             return;
@@ -790,7 +783,7 @@ export function registerLogsCli(program: Command) {
           }
         }
         if (payload.reset) {
-          if (!errorLine("Log cursor reset (file rotated).")) {
+          if (!errorLine(formatLogResetNotice(payload.skippedBytes))) {
             return;
           }
         }

@@ -15,6 +15,7 @@ import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { coerceDiscordComponentParam, readDiscordComponentSpec } from "./components.js";
 import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
+import { matchesDiscordToolContextTarget, normalizeDiscordMessagingTarget } from "./normalize.js";
 import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.js";
 
 const localExecutionActions = new Set<ChannelMessageActionName>([
@@ -30,6 +31,46 @@ const localExecutionActions = new Set<ChannelMessageActionName>([
 
 function resolveDiscordActionExecutionMode({ action }: { action: ChannelMessageActionName }) {
   return localExecutionActions.has(action) ? "local" : "gateway";
+}
+
+function resolveDiscordThreadReplyDeliveryAlias(args: Record<string, unknown>): string | undefined {
+  if (
+    normalizeOptionalString(args.target) ||
+    normalizeOptionalString(args.to) ||
+    normalizeOptionalString(args.channelId)
+  ) {
+    return undefined;
+  }
+  const threadId = normalizeOptionalString(args.threadId);
+  return threadId ? normalizeDiscordMessagingTarget(`channel:${threadId}`) : undefined;
+}
+
+function resolveDiscordThreadReplyTarget(args: Record<string, unknown>): string | undefined {
+  const threadId = normalizeOptionalString(args.threadId);
+  const target =
+    threadId !== undefined
+      ? `channel:${threadId}`
+      : (normalizeOptionalString(args.channelId) ??
+        normalizeOptionalString(args.to) ??
+        normalizeOptionalString(args.target));
+  return target ? normalizeDiscordMessagingTarget(target) : undefined;
+}
+
+function matchesCurrentDiscordThread(params: {
+  args: Record<string, unknown>;
+  toolContext: {
+    currentChannelId?: string;
+    currentMessagingTarget?: string;
+  };
+}): boolean {
+  const requestedTarget = resolveDiscordThreadReplyTarget(params.args);
+  if (!requestedTarget) {
+    return false;
+  }
+  return matchesDiscordToolContextTarget({
+    target: requestedTarget,
+    toolContext: params.toolContext,
+  });
 }
 
 const loadDiscordChannelActionsRuntime = createLazyRuntimeModule(
@@ -227,12 +268,37 @@ function describeDiscordMessageTool({
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
   providerOwnedReadGates: true,
+  readAuthorityActions: [
+    "read",
+    "search",
+    "reactions",
+    "list-pins",
+    "thread-list",
+    "channel-info",
+    "permissions",
+    "member-info",
+    "role-info",
+    "emoji-list",
+    "channel-list",
+    "voice-status",
+    "event-list",
+  ],
+  writeAuthorityActions: ["channel-edit", "delete", "edit", "pin", "unpin"],
   // Credential-only Discord actions run in the gateway when one is available.
   // Send/file-style actions stay local because core owns their thread, media,
   // component, and client-local payload semantics.
   resolveExecutionMode: resolveDiscordActionExecutionMode,
   describeMessageTool: describeDiscordMessageTool,
   supportsAction: ({ action }) => action !== "poll",
+  messageActionTargetAliases: {
+    "thread-reply": {
+      aliases: ["threadId"],
+      deliveryTargetAliases: ["threadId"],
+      resolveDeliveryTarget: ({ args }) => resolveDiscordThreadReplyDeliveryAlias(args),
+      matchesCurrentConversation: ({ args, toolContext }) =>
+        matchesCurrentDiscordThread({ args, toolContext }),
+    },
+  },
   requiresTrustedRequesterSender: ({ action, toolContext }) =>
     Boolean(toolContext) && isTrustedRequesterGuildAdminAction(action),
   extractToolSend: ({ args }) => {
@@ -307,6 +373,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     inboundEventKind,
     conversationReadOrigin,
     reply,
+    assertDirectAdapterHandoff,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -326,6 +393,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       ...(requesterAccountId ? { requesterAccountId } : {}),
       ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
       ...(reply ? { reply } : {}),
+      ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
     });
   },
 };

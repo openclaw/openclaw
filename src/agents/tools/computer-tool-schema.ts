@@ -28,21 +28,42 @@ export function availableComputerActions(
   actions: readonly ComputerUseV2ActionName[],
   hasCleanupOwner: boolean,
 ): readonly ComputerUseV2ActionName[] {
-  return hasCleanupOwner
+  const available = hasCleanupOwner
     ? actions
     : actions.filter((action) => !EXECUTION_OWNED_ACTIONS.has(action));
+  // Local pacing uses snapshot authority; providers need no native wait action.
+  return available.includes("screenshot") && !available.includes("wait")
+    ? [...available, "wait"]
+    : available;
 }
 
-export function createComputerToolSchema(actions: readonly ComputerUseV2ActionName[]) {
+export function createComputerToolSchema(
+  actions: readonly ComputerUseV2ActionName[],
+  targetScope: "paired" | "session" = "paired",
+) {
+  const supportsHold = actions.includes("hold_key");
+  const accessibilityTarget = actions.includes("get_window_state")
+    ? "get_window_state with windowRef"
+    : actions.includes("get_accessibility_tree")
+      ? "get_accessibility_tree"
+      : "Accessibility observations";
   return Type.Object({
     action: stringEnum(actions),
-    ...gatewayCallOptionSchemaProperties(),
-    node: Type.Optional(
-      Type.String({
-        description:
-          "Paired node id or display name. Omit when exactly one connected computer-capable node exists.",
-      }),
-    ),
+    ...(targetScope === "paired"
+      ? {
+          ...gatewayCallOptionSchemaProperties(),
+          target: optionalStringEnum(["gateway", "node"] as const, {
+            description:
+              "Computer host. Defaults to the Gateway desktop when configured, otherwise a paired node. Later calls retain the selected host.",
+          }),
+          node: Type.Optional(
+            Type.String({
+              description:
+                "Paired node id or display name; implies target=node. Omit when selecting the sole connected computer-capable node.",
+            }),
+          ),
+        }
+      : {}),
     // Codex accepts a single schema in array `items`, not tuple item arrays.
     // Fixed bounds preserve the coordinate-pair contract across runtimes.
     coordinate: Type.Optional(
@@ -69,7 +90,7 @@ export function createComputerToolSchema(actions: readonly ComputerUseV2ActionNa
     text: Type.Optional(
       Type.String({
         description:
-          'type: text to type; key/hold_key: key combo such as "cmd+shift+t" or "Return"; ' +
+          `type: text to type; ${supportsHold ? "key/hold_key" : "key"}: key combo such as "cmd+shift+t" or "Return"; ` +
           'click/scroll actions: modifier keys to hold ("shift", "ctrl", "alt", "cmd").',
       }),
     ),
@@ -81,17 +102,22 @@ export function createComputerToolSchema(actions: readonly ComputerUseV2ActionNa
     duration: optionalFiniteNumberSchema({
       minimum: 0,
       maximum: MAX_WAIT_SECONDS,
-      description: `Seconds. hold_key: >0 to ${MAX_HOLD_SECONDS}; wait: 0 to ${MAX_WAIT_SECONDS}.`,
+      description: supportsHold
+        ? `Seconds. hold_key: >0 to ${MAX_HOLD_SECONDS}; wait: 0 to ${MAX_WAIT_SECONDS}.`
+        : `Seconds. wait: 0 to ${MAX_WAIT_SECONDS}; this does not extend a key tap.`,
     }),
     screenIndex: optionalNonNegativeIntegerSchema(),
     frameId: Type.Optional(
       Type.String({
         description:
-          "Coordinate actions: exact frame id returned by the most recent screenshot result.",
+          "Desktop coordinate actions: exact frame id returned by the most recent screenshot result.",
       }),
     ),
     windowRef: Type.Optional(
-      Type.String({ description: "Opaque window reference from observation." }),
+      Type.String({
+        description:
+          "Opaque window reference for window actions; not valid for screenshot or wait.",
+      }),
     ),
     browserRef: Type.Optional(
       Type.String({ description: "Opaque browser reference from get_browser_state." }),
@@ -103,12 +129,38 @@ export function createComputerToolSchema(actions: readonly ComputerUseV2ActionNa
       Type.String({ description: "Opaque accessibility element reference from observation." }),
     ),
     observationId: Type.Optional(
-      Type.String({ description: "Observation id that issued window or element references." }),
+      Type.String({
+        description:
+          "Window/browser input: observation id from the latest targeted observation; a desktop frameId cannot replace it.",
+      }),
     ),
-    deliveryMode: optionalStringEnum(["background", "foreground"] as const),
-    query: Type.Optional(Type.String()),
-    depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 64 })),
-    maxElements: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000 })),
+    deliveryMode: optionalStringEnum(["background", "foreground"] as const, {
+      description:
+        "Window-targeted input delivery. This does not turn desktop input into background window input.",
+    }),
+    query: Type.Optional(
+      Type.String({
+        description:
+          `${accessibilityTarget}: text filter.` +
+          (actions.includes("get_browser_state")
+            ? " get_browser_state: requires snapshotFormat=semantic_v2 with browserRef and pageRef."
+            : ""),
+      }),
+    ),
+    depth: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        maximum: 64,
+        description: `${accessibilityTarget}: maximum tree depth.`,
+      }),
+    ),
+    maxElements: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 2_000,
+        description: `${accessibilityTarget}: maximum returned elements.`,
+      }),
+    ),
     app: Type.Optional(Type.String()),
     value: Type.Optional(Type.String()),
     path: Type.Optional(
@@ -138,7 +190,7 @@ export function createComputerToolSchema(actions: readonly ComputerUseV2ActionNa
     dialogRef: Type.Optional(Type.String()),
     promptText: Type.Optional(Type.String()),
     resourceHandle: Type.Optional(
-      Type.String({ description: "Opaque node-owned Computer Use resource handle." }),
+      Type.String({ description: "Opaque host-owned Computer Use resource handle." }),
     ),
     resourceHandles: Type.Optional(
       Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32 }),

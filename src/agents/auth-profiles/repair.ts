@@ -54,7 +54,8 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
   }
 
   const oauthProfiles = listProfilesForProvider(params.store, providerKey).filter(
-    (id) => params.store.profiles[id]?.type === "oauth",
+    (id) =>
+      params.store.profiles[id]?.type === "oauth" && !params.store.profiles[id]?.setup?.replacement,
   );
   if (oauthProfiles.length === 0) {
     return null;

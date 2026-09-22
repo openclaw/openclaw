@@ -1,9 +1,12 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { agentHandlers } from "../server-methods/agent.js";
 import type { DedupeEntry } from "../server-shared.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
+import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 
 function waitThroughGateway(
   params: { runId: string; timeoutMs: number },
@@ -29,10 +32,14 @@ function waitThroughGateway(
   return { promise, respond };
 }
 
-function completeRun(dedupe: Map<string, DedupeEntry>, runId: string): void {
+function completeRun(
+  dedupe: Map<string, DedupeEntry>,
+  runId: string,
+  source: "agent" | "chat" = "agent",
+): void {
   setGatewayDedupeEntry({
     dedupe,
-    key: `agent:${runId}`,
+    key: `${source}:${runId}`,
     entry: {
       ts: Date.now(),
       ok: true,
@@ -59,6 +66,126 @@ afterEach(() => {
 });
 
 describe("agent.wait gateway dedupe observations", () => {
+  it.each([undefined, true] as const)(
+    "retires a sticky terminal only for an admitted new attempt: %s",
+    async (startNewAttempt) => {
+      const runId = `private-retry-${startNewAttempt ?? "ordinary"}`;
+      const key = `agent:${runId}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      setGatewayDedupeEntry({
+        dedupe,
+        key,
+        entry: {
+          ts: 100,
+          ok: true,
+          requestIdentity: "original-input-binding",
+          payload: { runId, status: "timeout", stopReason: "restart" },
+        },
+      });
+      setGatewayDedupeEntry({
+        dedupe,
+        key,
+        startNewAttempt: true,
+        entry: { ts: 150, ok: true, payload: { runId, status: "ok" } },
+      });
+      expect(dedupe.get(key)?.payload).toMatchObject({ status: "timeout", stopReason: "restart" });
+      setGatewayDedupeEntry({
+        dedupe,
+        key,
+        startNewAttempt,
+        entry: {
+          ts: 200,
+          ok: true,
+          requestIdentity: "replacement-must-not-change-binding",
+          payload: { runId, status: "accepted", reservationId: "new-admission" },
+        },
+      });
+      expect(dedupe.get(key)?.requestIdentity).toBe("original-input-binding");
+      expect(dedupe.get(key)?.payload).toMatchObject({
+        status: startNewAttempt ? "accepted" : "timeout",
+      });
+      const observed = await waitForAgentJob({ runId, timeoutMs: 0 });
+      if (startNewAttempt) {
+        expect(observed).toBeNull();
+        completeRun(dedupe, runId);
+        expect(await waitForAgentJob({ runId, timeoutMs: 0 })).toMatchObject({ status: "ok" });
+      } else {
+        expect(observed).toMatchObject({ status: "error", stopReason: "restart" });
+      }
+    },
+  );
+
+  it("expires terminal observations from their latest write without extending unrelated runs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const dedupe = new Map<string, DedupeEntry>();
+    completeRun(dedupe, "cache-refreshed");
+    completeRun(dedupe, "cache-original");
+    vi.setSystemTime(1_000_100);
+    completeRun(dedupe, "cache-refreshed");
+    // Wall-clock correction can insert an earlier expiry after newer records.
+    vi.setSystemTime(999_900);
+    completeRun(dedupe, "cache-clock-correction");
+
+    for (const [now, expected] of [
+      [1_599_900, ["ok", "ok", "ok"]],
+      [1_599_901, ["ok", "ok", "timeout"]],
+      [1_600_000, ["ok", "ok", "timeout"]],
+      [1_600_001, ["ok", "timeout", "timeout"]],
+      [1_600_100, ["ok", "timeout", "timeout"]],
+      [1_600_101, ["timeout", "timeout", "timeout"]],
+    ] as const) {
+      vi.setSystemTime(now);
+      const runIds = ["cache-refreshed", "cache-original", "cache-clock-correction"];
+      for (const [index, runId] of runIds.entries()) {
+        const waiter = waitThroughGateway({ runId, timeoutMs: 0 });
+        await waiter.promise;
+        expect(waiter.respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ runId, status: expected[index] }),
+        );
+      }
+    }
+  });
+
+  it("retains chat input identity when terminal writers replace admission metadata", async () => {
+    const runId = "run-chat-request-identity";
+    const key = `chat:${runId}`;
+    const dedupe = new Map<string, DedupeEntry>([
+      [
+        key,
+        {
+          ts: 100,
+          ok: true,
+          requestIdentity: "submitted-mention-selection",
+        },
+      ],
+    ]);
+    setGatewayDedupeEntry({
+      dedupe,
+      key,
+      entry: { ts: 200, ok: true, payload: { runId, status: "ok", endedAt: 200 } },
+    });
+    expect(dedupe.get(key)?.requestIdentity).toBe("submitted-mention-selection");
+    setGatewayDedupeEntry({
+      dedupe,
+      key,
+      entry: {
+        ts: 300,
+        ok: false,
+        requestIdentity: "stale-writer-selection",
+        payload: { runId, status: "error", endedAt: 300 },
+      },
+    });
+    expect(dedupe.get(key)?.requestIdentity).toBe("submitted-mention-selection");
+    const waiter = waitThroughGateway({ runId, timeoutMs: 0 }, "chat");
+    await waiter.promise;
+    expect(waiter.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId, status: "error", endedAt: 300 }),
+    );
+  });
+
   it.each([
     ["agent", "timeout"],
     ["chat", "ok"],
@@ -112,20 +239,92 @@ describe("agent.wait gateway dedupe observations", () => {
     expect(second.respond).toHaveBeenCalledWith(true, expected);
   });
 
-  it("lets a fresh wait observe completion after an earlier waiter times out", async () => {
-    vi.useFakeTimers();
-    const runId = "run-public-timeout-cleanup";
+  it("retires only its scope's observer without ending the shared run", async () => {
+    const runId = "run-scope-observers";
     const dedupe = new Map<string, DedupeEntry>();
-    const timedOut = waitThroughGateway({ runId, timeoutMs: 10 });
+    const first = new AsyncWorkScope();
+    const second = new AsyncWorkScope();
+    let firstSettled = false;
+    let secondSettled = false;
+    const firstWait = first
+      .track(() => waitForAgentJob({ runId, timeoutMs: 600_000 }))
+      .then((result) => {
+        firstSettled = true;
+        return result;
+      });
+    const secondWait = second
+      .track(() => waitForAgentJob({ runId, timeoutMs: 600_000 }))
+      .then((result) => {
+        secondSettled = true;
+        return result;
+      });
+    try {
+      first.beginClose();
+      await nextTurn();
+      expect(firstSettled).toBe(true);
+      expect(secondSettled).toBe(false);
+      expect(await firstWait).toBeNull();
+      completeRun(dedupe, runId);
+      await expect(secondWait).resolves.toMatchObject({ status: "ok", endedAt: 200 });
+      await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+        status: "ok",
+        endedAt: 200,
+      });
+    } finally {
+      // The old owner has no shutdown observer: release it without waiting ten minutes.
+      if (!firstSettled || !secondSettled) {
+        completeRun(dedupe, runId);
+      }
+      await Promise.all([firstWait, secondWait, first.drain(), second.drain()]);
+    }
+  });
 
-    await vi.advanceTimersByTimeAsync(11);
-    await timedOut.promise;
-    expect(timedOut.respond).toHaveBeenCalledWith(true, {
+  it.each(
+    ([undefined, "agent", "chat"] as const).flatMap((activeKind) =>
+      [0, 10].map((timeoutMs) => ({ activeKind, timeoutMs })),
+    ),
+  )(
+    "keeps $activeKind observation timeout after $timeoutMs ms nonterminal",
+    async ({ activeKind, timeoutMs }) => {
+      vi.useFakeTimers();
+      const runId = `run-public-timeout-${activeKind ?? "untracked"}-${timeoutMs}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      const timedOut = waitThroughGateway({ runId, timeoutMs }, activeKind);
+
+      await vi.advanceTimersByTimeAsync(timeoutMs);
+      await timedOut.promise;
+      expect(timedOut.respond).toHaveBeenCalledWith(true, {
+        runId,
+        status: "timeout",
+      });
+
+      completeRun(dedupe, runId, activeKind);
+      const completed = waitThroughGateway({ runId, timeoutMs: 0 }, activeKind);
+      await completed.promise;
+      expect(completed.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, status: "ok", endedAt: 200 }),
+      );
+    },
+  );
+
+  it("attributes lifecycle reset without caching a terminal run outcome", async () => {
+    vi.useFakeTimers();
+    const runId = "run-public-lifecycle-reset";
+    const dedupe = new Map<string, DedupeEntry>();
+    const interrupted = waitThroughGateway({ runId, timeoutMs: 1_000 });
+
+    await drainGlobalSingletonLifecycleState("restart");
+    await interrupted.promise;
+    expect(interrupted.respond).toHaveBeenCalledWith(true, {
       runId,
       status: "timeout",
-      timeoutPhase: "queue",
-      providerStarted: false,
+      timeoutPhase: "gateway_draining",
     });
+
+    const fresh = waitThroughGateway({ runId, timeoutMs: 0 });
+    await fresh.promise;
+    expect(fresh.respond).toHaveBeenCalledWith(true, { runId, status: "timeout" });
 
     completeRun(dedupe, runId);
     const completed = waitThroughGateway({ runId, timeoutMs: 0 });

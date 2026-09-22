@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 SCRIPT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -154,13 +158,13 @@ fi
 openclaw_live_collect_auth_for_providers "$CLI_PROVIDER"
 if [[ "${CLAUDE_SUBSCRIPTION_AUTH_SOURCE:-}" == "env-token" ]]; then
   retained_auth_files=()
-  for auth_file in "${AUTH_FILES[@]}"; do
+  for auth_file in ${AUTH_FILES[@]+"${AUTH_FILES[@]}"}; do
     case "$auth_file" in
       .claude.json | .claude/.credentials.json) ;;
       *) retained_auth_files+=("$auth_file") ;;
     esac
   done
-  AUTH_FILES=("${retained_auth_files[@]}")
+  AUTH_FILES=(${retained_auth_files[@]+"${retained_auth_files[@]}"})
 fi
 openclaw_live_finalize_auth_mounts
 
@@ -176,12 +180,6 @@ export npm_config_cache="$NPM_CONFIG_CACHE"
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
-run_setup_command() {
-  openclaw_live_run_setup_command \
-    "${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:?missing live CLI backend setup timeout seconds}" \
-    "live CLI backend setup" \
-    "$@"
-}
 trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
 source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_mounted_auth
@@ -195,24 +193,15 @@ fi
 if [ -z "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ -n "$binary_name" ]; then
   export OPENCLAW_LIVE_CLI_BACKEND_COMMAND="$NPM_CONFIG_PREFIX/bin/$binary_name"
 fi
-package_has_explicit_version() {
-  case "$1" in
-    @*/*@*) return 0 ;;
-    *@*)
-      [[ "$1" != @* ]]
-      return
-      ;;
-    *) return 1 ;;
-  esac
-}
-if [ -n "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ ! -x "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" ] && [ -n "$docker_package" ]; then
-  run_setup_command npm install -g "$docker_package"
-elif [ -n "$docker_package" ] && package_has_explicit_version "$docker_package"; then
-  run_setup_command npm install -g "$docker_package"
-fi
+openclaw_live_prepare_cli_backend \
+  "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:?missing CLI backend command}" \
+  "$docker_package" "$OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS"
 if [ -n "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ -x "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" ]; then
   echo "==> CLI backend binary: ${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}"
   "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" -V || "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" --version || true
+fi
+if [ "$provider" = "google-gemini-cli" ]; then
+  openclaw_live_stage_gemini_auth
 fi
 if [ "$provider" = "claude-cli" ]; then
   auth_mode="${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}"
@@ -309,7 +298,7 @@ openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
-node --import tsx scripts/test-live.mts -- src/gateway/gateway-cli-backend.live.test.ts
+openclaw_live_run_staged_script scripts/test-live -- src/gateway/gateway-cli-backend.live.test.ts
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"

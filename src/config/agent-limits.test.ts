@@ -13,9 +13,11 @@ describe("resolveAgentMaxConcurrent", () => {
   });
 
   it.each([
+    { availableParallelism: 1, expected: 8 },
     { availableParallelism: 2, expected: 8 },
-    { availableParallelism: 12, expected: 12 },
-    { availableParallelism: 48, expected: 16 },
+    { availableParallelism: 8, expected: 32 },
+    { availableParallelism: 12, expected: 48 },
+    { availableParallelism: 48, expected: 192 },
   ])(
     "derives the default from $availableParallelism available CPUs",
     async ({ availableParallelism, expected }) => {
@@ -51,20 +53,23 @@ describe("resolveAgentMaxConcurrent", () => {
 
     try {
       const runtime = await importFreshAgentLimits("cpus-fallback");
-      expect(runtime.resolveAgentMaxConcurrent()).toBe(8);
+      expect(runtime.resolveAgentMaxConcurrent()).toBe(24);
       expect(cpusSpy).toHaveBeenCalledOnce();
     } finally {
       Object.defineProperty(os, "availableParallelism", availableParallelismDescriptor);
     }
   });
 
-  it("uses an explicit config override without resolving the CPU default", async () => {
-    const availableParallelismSpy = vi.spyOn(os, "availableParallelism").mockReturnValue(48);
-    const runtime = await importFreshAgentLimits("explicit-override");
+  it.each([3, 256])(
+    "uses an explicit limit of %i without resolving the CPU default",
+    async (limit) => {
+      const availableParallelismSpy = vi.spyOn(os, "availableParallelism").mockReturnValue(48);
+      const runtime = await importFreshAgentLimits("explicit-override");
 
-    expect(runtime.resolveAgentMaxConcurrent({ agents: { defaults: { maxConcurrent: 3 } } })).toBe(
-      3,
-    );
-    expect(availableParallelismSpy).not.toHaveBeenCalled();
-  });
+      expect(
+        runtime.resolveAgentMaxConcurrent({ agents: { defaults: { maxConcurrent: limit } } }),
+      ).toBe(limit);
+      expect(availableParallelismSpy).not.toHaveBeenCalled();
+    },
+  );
 });

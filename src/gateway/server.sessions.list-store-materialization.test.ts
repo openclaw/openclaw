@@ -1,20 +1,19 @@
 /**
- * Sharing resolution runs per row, and each call materialized a whole session
- * lookup store. That made `sessions.list` quadratic in entries even after
- * connection reuse removed the per-row SQLite opens.
+ * Session listing keeps whole-store materialization, sharing refreshes, and
+ * transcript projection work bounded at their owning storage boundaries.
  */
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import * as agentScope from "../agents/agent-scope.js";
 import * as sessionsConfig from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as sessionEntryReader from "../config/sessions/session-accessor.sqlite-entry.js";
+import * as sessionEntryStatus from "../config/sessions/session-accessor.sqlite-status.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import * as agentDatabaseRegistry from "../state/openclaw-agent-db-registry.js";
-import {
-  OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -23,6 +22,8 @@ import {
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+
+const EXPECTED_OPEN_HANDLE_CAP = 64;
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
@@ -35,51 +36,31 @@ const LIST_PARAMS = {
   limit: 100,
 };
 
-async function countMaterializedEntriesForRows(rows: number): Promise<number> {
-  await createSessionStoreDir();
-  const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
-    main: sessionStoreEntry("sess-main"),
-  };
-  for (let index = 0; index < rows; index++) {
-    entries[`agent:main:row-${index}`] = sessionStoreEntry(`sess-row-${index}`, {
-      updatedAt: 1_781_000_000_000 - index * 1_000,
-    });
-  }
-  await writeSessionStore({ entries });
-  // Warm lazily-initialized module state so only steady-state reads are counted.
-  await directSessionReq("sessions.list", LIST_PARAMS);
-
-  let materialized = 0;
-  // Only the lookup-store path used by sharing resolution goes through
-  // `listSessionEntriesCore`; the listing itself and ACP metadata use the read-only
-  // variant, so this isolates the per-row store loads under test.
-  const original = sessionAccessor.listSessionEntriesCore;
-  const spies = [
-    vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation(((...args: never[]) => {
-      const result = (original as (...inner: never[]) => unknown[])(...args);
-      materialized += Array.isArray(result) ? result.length : 0;
-      return result;
-    }) as never),
-  ];
-  try {
-    const result = await directSessionReq("sessions.list", LIST_PARAMS);
-    expect(result.ok).toBe(true);
-    return materialized;
-  } finally {
-    for (const spy of spies) {
-      spy.mockRestore();
+test.each([5, 40])(
+  "sessions.list refreshes sharing without rematerializing a %i-row lookup store",
+  async (rows) => {
+    await createSessionStoreDir();
+    const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
+      main: sessionStoreEntry("sess-main"),
+    };
+    for (let index = 0; index < rows; index++) {
+      entries[`agent:main:row-${index}`] = sessionStoreEntry(`sess-row-${index}`, {
+        updatedAt: 1_781_000_000_000 - index * 1_000,
+      });
     }
-  }
-}
-
-test("sessions.list does not materialize the lookup store once per row", async () => {
-  const small = await countMaterializedEntriesForRows(5);
-  const large = await countMaterializedEntriesForRows(40);
-
-  // The post-await sharing refresh intentionally rereads current ACL state,
-  // but one request-scoped load per store keeps that refresh linear.
-  expect(large).toBeLessThan(small * 12);
-});
+    await writeSessionStore({ entries });
+    // The initial listing uses read-only access; sharing must not reload the full lookup store.
+    const lookupStoreRead = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
+    try {
+      const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS);
+      expect(result.ok).toBe(true);
+      expect(result.payload?.sessions).toHaveLength(rows + 1);
+      expect(lookupStoreRead).not.toHaveBeenCalled();
+    } finally {
+      lookupStoreRead.mockRestore();
+    }
+  },
+);
 
 test("sessions.list reuses prepared store targets for sharing", async () => {
   await createSessionStoreDir();
@@ -101,13 +82,45 @@ test("sessions.list reuses prepared store targets for sharing", async () => {
   }
 });
 
-test("sessions.list keeps cold and warm transcript title batches valid beyond the database handle cap", async () => {
+test("sessions.list keeps roster enumeration bounded as ordinary rows grow", async () => {
+  await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  const rosterReads: number[] = [];
+  for (const rows of [20, 200]) {
+    const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
+      main: sessionStoreEntry("sess-main", { updatedAt: 1_781_000_000_001 }),
+    };
+    for (let index = 0; index < rows; index++) {
+      entries[`agent:main:ordinary-${index}`] = sessionStoreEntry(`ordinary-${index}`, {
+        updatedAt: 1_781_000_000_000 - index,
+      });
+    }
+    await writeSessionStore({ entries });
+    expect((await directSessionReq("sessions.list", LIST_PARAMS)).ok).toBe(true);
+    const roster = vi.spyOn(agentScope, "listAgentIds");
+    try {
+      const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS);
+      expect(result.ok).toBe(true);
+      expect(result.payload?.totalCount).toBe(rows + 1);
+      expect(result.payload?.sessions.map(({ key }) => key)).toEqual([
+        "agent:main:main",
+        ...Array.from({ length: Math.min(rows, 99) }, (_, index) => `agent:main:ordinary-${index}`),
+      ]);
+      rosterReads.push(roster.mock.calls.length);
+    } finally {
+      roster.mockRestore();
+    }
+  }
+  expect(rosterReads[1]).toBeLessThanOrEqual(rosterReads[0]!);
+});
+
+test("sessions.list retains transcript titles beyond the database handle cap", async () => {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
   }
   const agentIds = Array.from(
-    { length: OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP + 1 },
+    { length: EXPECTED_OPEN_HANDLE_CAP + 1 },
     (_, index) => `batch-agent-${index}`,
   );
   const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
@@ -139,68 +152,37 @@ test("sessions.list keeps cold and warm transcript title batches valid beyond th
     });
   }
 
-  const watermarkBatchSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptWatermarkBatch");
+  const cfg = { session: { store: storeTemplate }, agents: testState.agentsConfig };
+  const projection = await createSessionRowProjection({ cfg });
   try {
-    for (const phase of ["cold", "warm"]) {
-      const result = await directSessionReq<SessionsListResult>("sessions.list", {
-        includeDerivedTitles: true,
-        includeLastMessage: true,
-        ...(phase === "warm" ? { limit: 100 } : {}),
-      });
-
-      expect(result.ok, `${phase} transcript title batch`).toBe(true);
-      expect(result.payload?.sessions, `${phase} transcript title batch`).toHaveLength(
-        agentIds.length,
+    for (const limit of [undefined, 100]) {
+      const result = await directSessionReq<SessionsListResult>(
+        "sessions.list",
+        { includeDerivedTitles: true, includeLastMessage: true, limit },
+        {
+          context: {
+            getRuntimeConfig: () => cfg,
+            ...bindSessionRowProjection({}, () => projection),
+          },
+        },
       );
+
+      expect(result.ok).toBe(true);
+      expect(result.payload?.sessions).toHaveLength(agentIds.length);
       expect(
         result.payload?.sessions.every(
           (session) =>
             session.derivedTitle?.startsWith("Title ") &&
             session.lastMessagePreview?.startsWith("Reply "),
         ),
-        `${phase} transcript title batch`,
       ).toBe(true);
-      if (phase === "warm") {
-        expect(
-          watermarkBatchSpy.mock.calls.some(([scopes]) => scopes.length === agentIds.length),
-        ).toBe(true);
-      }
-      watermarkBatchSpy.mockClear();
     }
   } finally {
-    watermarkBatchSpy.mockRestore();
+    projection.dispose();
   }
 });
 
-test("startup prewarm reuses requested durable targets when no incognito store is open", async () => {
-  const stateDir = process.env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
-  }
-  const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
-  const storePath = storeTemplate.replace("{agentId}", "main");
-  await writeSessionStore({
-    entries: { main: sessionStoreEntry("sess-main") },
-    storePath,
-  });
-  const matcher = vi.spyOn(agentDatabaseRegistry, "createOpenClawAgentDatabasePathMatcher");
-  try {
-    expect(
-      sessionsConfig.canPrewarmCombinedSessionStoresForGateway(
-        {
-          agents: { list: [{ id: "main", default: true }] },
-          session: { store: storeTemplate },
-        },
-        { agentIds: ["main"], maxRows: 10 },
-      ),
-    ).toBe(true);
-    expect(matcher).toHaveBeenCalledTimes(1);
-  } finally {
-    matcher.mockRestore();
-  }
-});
-
-test("startup prewarm fills session snapshot and title caches before the first list", async () => {
+test("projection startup retains transcript titles for clean snapshots", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:warm-cache";
   const sessionId = "warm-cache";
@@ -219,76 +201,34 @@ test("startup prewarm fills session snapshot and title caches before the first l
     sessionKey,
     storePath,
   });
-  const titleBatchSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptTitleProbeBatch");
-  const titlePageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage");
-  let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
-  vi.useFakeTimers();
-  try {
-    const cfg = {
+  const projection = await createSessionRowProjection({
+    cfg: {
       agents: { list: [{ id: "main", default: true }] },
       session: { store: storePath },
-    } as never;
-    let resolveSessionPrewarm!: () => void;
-    const sessionPrewarm = new Promise<void>((resolve) => {
-      resolveSessionPrewarm = resolve;
-    });
-    sidecar = scheduleGatewayHandlerPrewarm({
-      cfgAtStart: cfg,
-      log: { warn: vi.fn() },
-      startupTrace: {
-        measure: async (name, run) => {
-          try {
-            return await run();
-          } finally {
-            if (name === "post-ready.gateway-data.sessions.main") {
-              resolveSessionPrewarm();
-            }
-          }
-        },
-      },
-    });
-    await vi.advanceTimersToNextTimerAsync();
-    await sessionPrewarm;
-    sidecar.stop();
-    expect(titleBatchSpy).toHaveBeenCalled();
-    expect(titlePageSpy).not.toHaveBeenCalled();
-    titleBatchSpy.mockClear();
-    titlePageSpy.mockClear();
-    vi.useRealTimers();
-    const cachedEntries = sessionAccessor.listSessionEntriesReadOnly({
-      agentId: "main",
-      clone: false,
-      projection: "list",
-      storePath,
-    });
-
-    const result = await directSessionReq<SessionsListResult>("sessions.list", {
-      ...LIST_PARAMS,
-      includeDerivedTitles: true,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.payload?.sessions).toContainEqual(
-      expect.objectContaining({ key: sessionKey, derivedTitle: "Warm title" }),
+    },
+  });
+  const titlePageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage");
+  try {
+    expect(
+      projection.snapshot(
+        { agentId: "main", key: sessionKey },
+        { includeDerivedTitles: true, includeLastMessage: true },
+      ).row,
+    ).toEqual(
+      expect.objectContaining({
+        key: sessionKey,
+        derivedTitle: "Warm title",
+        lastMessagePreview: "Warm response",
+      }),
     );
-    expect(titleBatchSpy).not.toHaveBeenCalled();
     expect(titlePageSpy).not.toHaveBeenCalled();
-    const afterListEntries = sessionAccessor.listSessionEntriesReadOnly({
-      agentId: "main",
-      clone: false,
-      projection: "list",
-      storePath,
-    });
-    expect(afterListEntries[0]?.entry).toBe(cachedEntries[0]?.entry);
   } finally {
-    sidecar?.stop();
-    vi.useRealTimers();
-    titleBatchSpy.mockRestore();
+    projection.dispose();
     titlePageSpy.mockRestore();
   }
 });
 
-test("startup skips a large session prewarm while request-time listing remains available", async () => {
+test("projection startup retains every row beyond the former prewarm limit", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
     entries: Object.fromEntries(
@@ -298,49 +238,19 @@ test("startup skips a large session prewarm while request-time listing remains a
       ]),
     ),
   });
-  const info = vi.fn();
-  const listSpy = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
-  let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
-  vi.useFakeTimers();
+  const projection = await createSessionRowProjection({
+    cfg: {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { store: storePath },
+    },
+  });
   try {
-    let resolveSessionPrewarm!: () => void;
-    const sessionPrewarm = new Promise<void>((resolve) => {
-      resolveSessionPrewarm = resolve;
-    });
-    sidecar = scheduleGatewayHandlerPrewarm({
-      cfgAtStart: {
-        agents: { list: [{ id: "main", default: true }] },
-        session: { store: storePath },
-      } as never,
-      log: { info, warn: vi.fn() },
-      startupTrace: {
-        measure: async (name, run) => {
-          try {
-            return await run();
-          } finally {
-            if (name === "post-ready.gateway-data.sessions.main") {
-              resolveSessionPrewarm();
-            }
-          }
-        },
-      },
-    });
-
-    await vi.advanceTimersToNextTimerAsync();
-    await sessionPrewarm;
-    sidecar.stop();
-    expect(info).toHaveBeenCalledWith(
-      "skipping optional dashboard session prewarm: combined stores exceed 2000 rows",
+    expect(projection.select().length).toBe(2_001);
+    expect(projection.snapshot({ agentId: "main", key: "agent:main:large-2000" }).row).toEqual(
+      expect.objectContaining({ key: "agent:main:large-2000", sessionId: "large-2000" }),
     );
-    expect(listSpy).not.toHaveBeenCalled();
-
-    vi.useRealTimers();
-    const result = await directSessionReq("sessions.list", LIST_PARAMS);
-    expect(result.ok).toBe(true);
   } finally {
-    sidecar?.stop();
-    vi.useRealTimers();
-    listSpy.mockRestore();
+    projection.dispose();
   }
 });
 
@@ -387,29 +297,41 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   expect(fullEntries[0]?.entry.skillsSnapshot).toBeDefined();
   expect(fullEntries[0]?.entry.systemPromptReport?.source).toBe("run");
 
-  const projections: Array<string | undefined> = [];
-  const originalReadOnly = sessionAccessor.listSessionEntriesReadOnly;
-  const originalWritable = sessionAccessor.listSessionEntriesCore;
-  const spies = [
-    vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly").mockImplementation((scope) => {
-      projections.push(scope?.projection);
-      return originalReadOnly(scope);
-    }),
-    vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation((scope) => {
-      projections.push(scope?.projection);
-      return originalWritable(scope);
-    }),
-  ];
+  const readonly = vi.spyOn(sessionEntryReader, "listSessionEntriesReadOnly");
+  const decode = vi.spyOn(sessionEntryStatus, "parseSessionEntryJson");
+  const cfg = {
+    agents: { list: [{ id: "main", default: true }] },
+    session: { store: storePath },
+  };
+  let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
   try {
-    const result = await directSessionReq("sessions.list", LIST_PARAMS);
+    projection = await createSessionRowProjection({ cfg });
+    expect(readonly).toHaveBeenCalledWith(
+      expect.objectContaining({ projection: "list", clone: false }),
+    );
+    expect(readonly.mock.calls.every(([scope]) => scope?.projection === "list")).toBe(true);
+    const resident = projection.describe({ agentId: "main", key: stored.session_key });
+    expect(resident?.storedEntry?.skillsSnapshot).toBeUndefined();
+    expect(resident?.storedEntry?.systemPromptReport).toBeUndefined();
+    readonly.mockClear();
+    decode.mockClear();
+
+    const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS, {
+      context: { getRuntimeConfig: () => cfg, ...bindSessionRowProjection({}, () => projection) },
+    });
     expect(result.ok).toBe(true);
-    expect(projections.length).toBeGreaterThan(0);
-    expect(projections).toEqual(projections.map(() => "list"));
+    expect(result.payload?.sessions.map((row) => row.sessionId)).toEqual(["sess-main"]);
+    expect(readonly).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalled();
   } finally {
-    for (const spy of spies) {
-      spy.mockRestore();
-    }
+    projection?.dispose();
+    readonly.mockRestore();
+    decode.mockRestore();
   }
+
+  expect(sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath })).toEqual(
+    fullEntries,
+  );
 
   const listEntries = sessionAccessor.listSessionEntriesReadOnly({
     agentId: "main",

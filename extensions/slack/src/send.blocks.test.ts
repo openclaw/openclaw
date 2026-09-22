@@ -67,9 +67,7 @@ function interleavedNativeDataBlocks(): Array<Record<string, unknown>> {
           type: "static_select",
           action_id: "private-select",
           placeholder: { type: "plain_text", text: "Choose owner" },
-          options: [
-            { text: { type: "plain_text", text: "Secret option" }, value: "private-option" },
-          ],
+          options: [{ text: { type: "plain_text", text: "Operations" }, value: "private-option" }],
         },
       ],
     },
@@ -81,7 +79,7 @@ const INTERLEAVED_NATIVE_DATA_ACCESSIBILITY = [
   "Before",
   "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
   "After",
-  "Approve\nChoose owner",
+  "Approve\nChoose owner\nOperations",
 ].join("\n\n");
 
 function slackDnsRequestError(): Error {
@@ -504,7 +502,7 @@ describe("sendMessageSlack blocks", () => {
       mrkdwn: false,
       text: INTERLEAVED_NATIVE_DATA_ACCESSIBILITY,
     });
-    expect(postedMessage(client).text).not.toMatch(/private|Secret option/u);
+    expect(postedMessage(client).text).not.toMatch(/private/u);
   });
 
   it("keeps interleaved native data and raw controls ordered after invalid_blocks", async () => {
@@ -540,7 +538,7 @@ describe("sendMessageSlack blocks", () => {
       text: INTERLEAVED_NATIVE_DATA_ACCESSIBILITY,
     });
     for (const index of [0, 1]) {
-      expect(postedMessage(client, index).text).not.toMatch(/private|Secret option/u);
+      expect(postedMessage(client, index).text).not.toMatch(/private/u);
     }
   });
 

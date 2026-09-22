@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import { writeSessionStore } from "../test-helpers.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
@@ -98,10 +99,7 @@ describe("worker environment service", () => {
   });
 
   it("stays bootstrapping until the SSH install receipt is durable", async () => {
-    let finishBootstrap: (() => void) | undefined;
-    const bootstrapPending = new Promise<void>((resolve) => {
-      finishBootstrap = resolve;
-    });
+    const { promise: bootstrapPending, resolve: finishBootstrap } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async () => {
       await bootstrapPending;
       return support.BOOTSTRAP_RECEIPT;
@@ -237,15 +235,18 @@ describe("worker environment service", () => {
       runnerAvailability: { read: () => undefined, version: () => 0 },
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-      runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),
+      runRecoveryBarrier: async ({ run }) =>
+        await run({ kind: "local", path: "/gateway/workspace" }),
       runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
-      runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
+      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
+      runReclaimBarrier: async ({ begin, reclaim }) =>
+        await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      resolveWorkspacePath: async () => "/gateway/workspace",
+      resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
       reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
     });
 
     await expect(
@@ -331,10 +332,7 @@ describe("worker environment service", () => {
 
   it("bounds worker identity resolution as a provider operation", async () => {
     const events: string[] = [];
-    let finishIdentity: (() => void) | undefined;
-    const identityPending = new Promise<void>((resolve) => {
-      finishIdentity = resolve;
-    });
+    const { promise: identityPending, resolve: finishIdentity } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async ({ installation, resolveIdentity, signal }) => {
       signal.addEventListener("abort", () => void events.push("abort"), { once: true });
       await resolveIdentity(support.SSH_ENDPOINT.keyRef);
@@ -415,10 +413,7 @@ describe("worker environment service", () => {
       ...support.BUNDLE_ARTIFACT,
       tarballBytes: 243_000_000,
     }));
-    let finishBootstrap: (() => void) | undefined;
-    const bootstrapPending = new Promise<void>((resolve) => {
-      finishBootstrap = resolve;
-    });
+    const { promise: bootstrapPending, resolve: finishBootstrap } = createDeferred();
     let bootstrapSignal: AbortSignal | undefined;
     support.testState.bootstrapWorker = vi.fn(async ({ signal }) => {
       bootstrapSignal = signal;

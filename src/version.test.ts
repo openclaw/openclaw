@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "./test-helpers/temp-dir.js";
 import {
   VERSION,
@@ -83,6 +83,18 @@ describe("version resolution", () => {
     });
   });
 
+  it("reports the built version when dist lags the source package version", async () => {
+    await withVersionFixtureDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2026.9.2" });
+      await writeJsonFixture(root, "build-info.json", { version: "2026.8.1" });
+      const moduleUrl = await ensureModuleFixture(root);
+      // A git checkout that pulled but never rebuilt still executes the old dist,
+      // so reporting the source version hides the stale runtime from operators.
+      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBe("2026.9.2");
+      expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("2026.8.1");
+    });
+  });
+
   it("reads the bounded immutable build id from generated provenance", async () => {
     await withVersionFixtureDir(async (root) => {
       const moduleUrl = await ensureModuleFixture(root);
@@ -94,6 +106,23 @@ describe("version resolution", () => {
       await writeJsonFixture(root, "build-info.json", { buildId: "x".repeat(97) });
       expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBeNull();
     });
+  });
+
+  it("captures the runtime commit from startup provenance once", async () => {
+    let startupCommit = "aaaaaaa";
+    vi.doMock("./infra/git-commit.js", () => ({
+      resolveLoadedCommitHash: () => startupCommit,
+    }));
+    vi.resetModules();
+    try {
+      const runtimeVersion = await import("./version.js");
+      expect(runtimeVersion.resolveRuntimeServiceCommit()).toBe("aaaaaaa");
+      startupCommit = "bbbbbbb";
+      expect(runtimeVersion.resolveRuntimeServiceCommit()).toBe("aaaaaaa");
+    } finally {
+      vi.doUnmock("./infra/git-commit.js");
+      vi.resetModules();
+    }
   });
 
   it("returns null when no version metadata exists", async () => {

@@ -18,27 +18,7 @@ import {
   planLobsterPasser,
   resolveLobsterLoadIdentity,
 } from "./lobster-pet-plans.ts";
-import "./lobster-pet.runtime.ts";
-
-type LobsterPetMode = ReturnType<typeof resolveLobsterPetMode>;
-
-type LobsterPetElement = HTMLElement & {
-  gatewayVersion: string | null;
-  mode: LobsterPetMode;
-  runOutcome: "ok" | "error" | "aborted";
-  seed: number;
-  soundsEnabled: boolean;
-  updateComplete: Promise<boolean>;
-  visitsEnabled: boolean;
-};
-
-function createPet(seed: number, mode: LobsterPetMode = "idle"): LobsterPetElement {
-  const element = document.createElement("openclaw-lobster-pet") as LobsterPetElement;
-  element.seed = seed;
-  element.mode = mode;
-  document.body.append(element);
-  return element;
-}
+import { createPet, type LobsterPetElement } from "./lobster-pet.test-support.ts";
 
 function poke(element: LobsterPetElement): void {
   const sprite = element.querySelector(".lobster-pet");
@@ -86,10 +66,9 @@ async function advanceUntil(
   return predicate();
 }
 
-// Seed 42's visit schedule is not shy and first arrives at ~89s; jump past
-// the maximum first-arrival delay so tests start with a perched pet.
+// Cover the maximum first-arrival delay, including the shy familiarity tier.
 async function arrive(element: LobsterPetElement): Promise<void> {
-  await advanceUntil(element, () => spritePresent(element), 200_000);
+  await advanceUntil(element, () => spritePresent(element), 12_000);
 }
 
 async function startVigilOnlyRun(
@@ -206,24 +185,50 @@ describe("resolveLobsterRunOutcome", () => {
 });
 
 describe("lobster pet element", () => {
+  it("hides a shed floor shell when resized controls consume its lane", async () => {
+    vi.useFakeTimers();
+    const element = createPet(42, "offline") as LobsterPetElement & {
+      floorEnabled: boolean;
+      anchor: "top" | "floor";
+      performAct: (act: "molt") => void;
+    };
+    element.floorEnabled = true;
+    await element.updateComplete;
+    await element.updateComplete;
+    element.anchor = "floor";
+    element.performAct("molt");
+    await vi.advanceTimersByTimeAsync(2600);
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet--shell")).not.toBeNull();
+    const lead = element.parentElement!.querySelector(".agent-chat__composer-lead")!;
+    lead.getBoundingClientRect().width = 720;
+    window.dispatchEvent(new Event("resize"));
+    await vi.advanceTimersByTimeAsync(0);
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet--shell")).toBeNull();
+  });
+
   it("starts hidden and arrives on its seeded visit schedule", async () => {
     vi.useFakeTimers();
     const element = createPet(42);
     await element.updateComplete;
 
     expect(spritePresent(element)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await element.updateComplete;
+    expect(spritePresent(element)).toBe(false);
     await arrive(element);
     expect(element.querySelector(".lobster-pet__svg")).not.toBeNull();
     expect(spriteClasses(element)).toContain("lobster-pet--idle");
-    expect(["ledge", "bar"]).toContain(element.getAttribute("data-spot"));
+    expect(["top", "floor"]).toContain(element.getAttribute("data-spot"));
   });
 
-  it("shy seeds never visit on their own", async () => {
+  it.each([7, 191])("shy seed %s never visits on its own", async (seed) => {
     vi.useFakeTimers();
-    const element = createPet(7);
+    const element = createPet(seed);
     await element.updateComplete;
 
-    const arrived = await advanceUntil(element, () => spritePresent(element), 600_000);
+    const arrived = await advanceUntil(element, () => spritePresent(element), 12_000);
     expect(arrived).toBe(false);
   });
 
@@ -235,7 +240,8 @@ describe("lobster pet element", () => {
     const departed = await advanceUntil(element, () => !spritePresent(element), 400_000);
     expect(departed).toBe(true);
 
-    const returned = await advanceUntil(element, () => spritePresent(element), 1_300_000);
+    expect(await advanceUntil(element, () => spritePresent(element), 1_200_000)).toBe(false);
+    const returned = await advanceUntil(element, () => spritePresent(element), 2_500_000);
     expect(returned).toBe(true);
   });
 
@@ -278,6 +284,7 @@ describe("lobster pet element", () => {
     expect(spriteClasses(element)).toContain("lobster-pet--act-cheer");
 
     const offline = createPet(7, "offline");
+    await offline.updateComplete;
     await offline.updateComplete;
     expect(spritePresent(offline)).toBe(true);
     expect(spriteClasses(offline)).toContain("lobster-pet--offline");
@@ -366,7 +373,7 @@ describe("lobster pet element", () => {
     expect(gone).toBe(true);
 
     // Dismissal outlasts later scheduled visits and even offline summons.
-    const revisited = await advanceUntil(element, () => spritePresent(element), 2_400_000);
+    const revisited = await advanceUntil(element, () => spritePresent(element), 3_700_000);
     expect(revisited).toBe(false);
     element.mode = "offline";
     await element.updateComplete;
@@ -448,7 +455,7 @@ describe("lobster pet element", () => {
     const gone = await advanceUntil(element, () => !spritePresent(element), 5_000);
     expect(gone).toBe(true);
 
-    const returned = await advanceUntil(element, () => spritePresent(element), 1_300_000);
+    const returned = await advanceUntil(element, () => spritePresent(element), 3_700_000);
     expect(returned).toBe(true);
   });
 
@@ -877,8 +884,8 @@ describe("lobster plans", () => {
         continue;
       }
       counts.set(plan.kind, (counts.get(plan.kind) ?? 0) + 1);
-      expect(plan.atMs).toBeGreaterThanOrEqual(60_000);
-      expect(plan.atMs).toBeLessThanOrEqual(900_000);
+      expect(plan.atMs).toBeGreaterThanOrEqual(2500);
+      expect(plan.atMs).toBeLessThanOrEqual(9000);
     }
     for (const kind of ["stranger", "crab", "snail", "duck", "jellyfish"]) {
       expect(counts.get(kind) ?? 0).toBeGreaterThan(0);
@@ -983,7 +990,8 @@ describe("lobster plans", () => {
         continue;
       }
       bottles++;
-      expect(plan.atMs).toBeGreaterThanOrEqual(45_000);
+      expect(plan.atMs).toBeGreaterThanOrEqual(3500);
+      expect(plan.atMs).toBeLessThanOrEqual(10_000);
       expect(plan.spotPct).toBeGreaterThanOrEqual(15);
       expect(plan.spotPct).toBeLessThanOrEqual(85);
       expect(LOBSTER_BOTTLE_FORTUNES[plan.fortuneIndex]).toBeTruthy();
@@ -994,7 +1002,7 @@ describe("lobster plans", () => {
 });
 
 describe("rare lobster loads", () => {
-  // Probe seeds (deterministic per stream): 644 hosts the Elder; 191 rolls
+  // Probe seeds (deterministic per stream): 644 hosts the Elder; 636 rolls
   // an old-friend return plus a balloon entrance; 4689 hatches a shiny variant;
   // 104 is a shy load that beaches a bottle at ~194s; 37 is a shy load with
   // a snail crossing at ~407s.
@@ -1019,15 +1027,14 @@ describe("rare lobster loads", () => {
       "openclaw.control.lobsterdex.v1",
       JSON.stringify({
         gold: { firstSeenAt: 1, name: "Goldenrod" },
-        // Sorts after "gold" (as retired tangerine did) so probe seed 191 keeps
-        // picking index 0 = gold from the sorted candidate list.
+        // Sorts after "gold" so seed 636 picks gold from the sorted candidates.
         watermelon: { firstSeenAt: 2, name: "Pips" },
       }),
     );
-    const element = createPet(191);
+    const element = createPet(636);
     await arrive(element);
 
-    // The seeded crimson look is repainted as the remembered gold visitor.
+    // The seeded look is repainted as the remembered gold visitor.
     expect(spriteClasses(element)).toContain("lobster-pet--palette-gold");
     expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toBe(
       "Goldenrod · an old friend",

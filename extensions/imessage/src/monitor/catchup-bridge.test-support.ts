@@ -1,15 +1,16 @@
 // Imessage test support covers catchup bridge plugin behavior.
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getIMessageRuntime } from "../runtime.js";
-import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
-import { runIMessageCatchup } from "./catchup-bridge.js";
 import {
   IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
   IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
-  resolveCatchupConfig,
   resolveIMessageCatchupCursorKey,
   type IMessageCatchupCursor,
-} from "./catchup.js";
+} from "../state-contract.js";
+import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
+import { runIMessageCatchup } from "./catchup-bridge.js";
+import { resolveCatchupConfig } from "./catchup.js";
 import type { IMessagePayload } from "./types.js";
 
 type RpcCall = {
@@ -72,12 +73,14 @@ function seedCatchupCursor(
 }
 
 describe("runIMessageCatchup", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     installIMessageStateRuntimeForTest();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
+    await closeOpenClawStateDatabaseAsync();
   });
 
   it("fetches chats then per-chat history and dispatches each row in rowid order", async () => {

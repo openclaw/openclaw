@@ -2,9 +2,10 @@
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileHandleBounded } from "../infra/fs-safe-advanced.js";
+import { FsSafeError } from "../infra/fs-safe.js";
 
 const MAX_MCPORTER_REGISTRY_BYTES = 16 * 1024 * 1024;
-const READ_CHUNK_SIZE = 64 * 1024;
 
 export type McporterRegistryRejectReason = "oversized" | "unreadable" | "non-regular" | "malformed";
 
@@ -42,29 +43,20 @@ export async function readBoundedMcporterRegistry(
     if (stat.size > MAX_MCPORTER_REGISTRY_BYTES) {
       return { status: "rejected", reason: "oversized" };
     }
-    const chunks: Buffer[] = [];
-    const scratch = Buffer.allocUnsafe(Math.min(READ_CHUNK_SIZE, MAX_MCPORTER_REGISTRY_BYTES + 1));
-    let total = 0;
-    while (true) {
-      const { bytesRead } = await handle.read(scratch, 0, scratch.length, null);
-      if (bytesRead === 0) {
-        break;
-      }
-      total += bytesRead;
-      if (total > MAX_MCPORTER_REGISTRY_BYTES) {
-        return { status: "rejected", reason: "oversized" };
-      }
-      chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
-    }
+    const content = await readFileHandleBounded(handle, MAX_MCPORTER_REGISTRY_BYTES);
     let value: unknown;
     try {
-      value = JSON.parse(Buffer.concat(chunks, total).toString("utf-8"));
+      value = JSON.parse(content.toString("utf-8"));
     } catch {
       return { status: "rejected", reason: "malformed" };
     }
     return { status: "ok", value };
-  } catch {
-    return { status: "rejected", reason: "unreadable" };
+  } catch (error) {
+    return {
+      status: "rejected",
+      reason:
+        error instanceof FsSafeError && error.code === "too-large" ? "oversized" : "unreadable",
+    };
   } finally {
     await handle.close();
   }

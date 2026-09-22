@@ -19,7 +19,6 @@ vi.mock("../../channels/plugins/message-action-discovery.js", () => ({
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
-  normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
   resolveExtraActionMediaSourceParamKeys,
   resolveAttachmentMediaPolicy,
@@ -87,9 +86,11 @@ describe("message action media helpers", () => {
   });
 
   it("prefers sandbox media policy when sandbox roots are non-blank", () => {
+    const mediaReadFile = async () => Buffer.from("sandbox");
     expect(
       resolveAttachmentMediaPolicy({
         sandboxRoot: "  /tmp/workspace  ",
+        mediaAccess: { readFile: mediaReadFile },
         mediaLocalRoots: ["/tmp/a"],
       }),
     ).toEqual({
@@ -100,11 +101,14 @@ describe("message action media helpers", () => {
       resolveAttachmentMediaPolicy({
         sandboxRoot: "/tmp/workspace",
         sandboxContainerWorkdir: "/sandbox",
+        mediaAccess: { readFile: mediaReadFile },
+        mediaReadFile,
       }),
     ).toEqual({
       mode: "sandbox",
       sandboxRoot: "/tmp/workspace",
       containerWorkdir: "/sandbox",
+      mediaReadFile,
     });
     expect(
       resolveAttachmentMediaPolicy({
@@ -136,40 +140,6 @@ describe("message action media helpers", () => {
       mediaReadFile,
     });
   });
-
-  maybeIt.each([
-    { name: "Docker", containerWorkdir: "/workspace" },
-    { name: "OpenShell", containerWorkdir: "/sandbox" },
-  ])(
-    "normalizes $name media lists and dedupes resolved workspace paths",
-    async ({ containerWorkdir }) => {
-      const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-list-"));
-      try {
-        await expect(
-          normalizeSandboxMediaList({
-            values: [" data:text/plain;base64,QQ== "],
-          }),
-        ).rejects.toThrow(/data:/i);
-        await expect(
-          normalizeSandboxMediaList({
-            values: [
-              ` file://${containerWorkdir}/assets/photo.png `,
-              `${containerWorkdir}/assets/photo.png`,
-              "buffer://message-send/attachment",
-              " ",
-            ],
-            sandboxRoot: ` ${sandboxRoot} `,
-            sandboxContainerWorkdir: containerWorkdir,
-          }),
-        ).resolves.toEqual([
-          path.join(sandboxRoot, "assets", "photo.png"),
-          "buffer://message-send/attachment",
-        ]);
-      } finally {
-        await fs.rm(sandboxRoot, { recursive: true, force: true });
-      }
-    },
-  );
 
   maybeIt.each([
     { name: "Docker", containerWorkdir: "/workspace" },
@@ -824,10 +794,35 @@ describe("message action media helpers", () => {
 
   it.each(
     ["dry-run", "preserve-buffer"].flatMap((mode) => [
-      { mode, buffer: "SGVsbG8=", name: "raw base64" },
-      { mode, buffer: "data:application/octet-stream;base64,SGVsbG8=", name: "data URL" },
+      { mode, buffer: "SGVsbG8=", name: "raw base64", expectedError: undefined },
+      {
+        mode,
+        buffer: "data:application/octet-stream;base64,SGVsbG8=",
+        name: "data URL",
+        expectedError: undefined,
+      },
+      { mode, buffer: "SGVsbG8", name: "unpadded base64", expectedError: undefined },
+      { mode, buffer: " SGV s bG8= \n", name: "whitespace base64", expectedError: undefined },
+      {
+        mode,
+        buffer: "SGVsbG8h",
+        name: "one byte over the limit",
+        expectedError: "Media too large: 6 bytes (limit: 5 bytes)",
+      },
+      {
+        mode,
+        buffer: "!!!!!!!!",
+        name: "oversized malformed base64",
+        expectedError: "Media too large: 6 bytes (limit: 5 bytes)",
+      },
+      {
+        mode,
+        buffer: " \t\r\n",
+        name: "whitespace-only base64",
+        expectedError: "message.send buffer has invalid base64 data",
+      },
     ]),
-  )("keeps explicit MIME for $mode $name without staging", async ({ mode, buffer }) => {
+  )("validates $mode $name without staging", async ({ mode, buffer, expectedError }) => {
     await withTempOpenClawStateDir(async (stateDir) => {
       const args: Record<string, unknown> = {
         buffer,
@@ -835,8 +830,8 @@ describe("message action media helpers", () => {
         mimeType: "text/plain",
       };
 
-      await hydrateAttachmentParamsForAction({
-        cfg,
+      const hydration = hydrateAttachmentParamsForAction({
+        cfg: { agents: { defaults: { mediaMaxMb: 5 / (1024 * 1024) } } },
         channel: "imessage",
         args,
         action: "send",
@@ -845,12 +840,18 @@ describe("message action media helpers", () => {
         mediaPolicy: { mode: "host" },
       });
 
-      expect(args.media).toBe("buffer://message-send/attachment");
-      expect(args.mediaUrl).toBe("buffer://message-send/attachment");
-      expect(args.mediaUrls).toEqual(["buffer://message-send/attachment"]);
-      expect(args.buffer).toBe(mode === "preserve-buffer" ? buffer : undefined);
-      expect(args.contentType).toBe("text/plain");
-      expect(args.filename).toBe("preview.txt");
+      if (expectedError) {
+        await expect(hydration).rejects.toThrow(expectedError);
+        expect(args).toEqual({ buffer, filename: "preview.txt", mimeType: "text/plain" });
+      } else {
+        await hydration;
+        expect(args.media).toBe("buffer://message-send/attachment");
+        expect(args.mediaUrl).toBe("buffer://message-send/attachment");
+        expect(args.mediaUrls).toEqual(["buffer://message-send/attachment"]);
+        expect(args.buffer).toBe(mode === "preserve-buffer" ? buffer : undefined);
+        expect(args.contentType).toBe("text/plain");
+        expect(args.filename).toBe("preview.txt");
+      }
       await expect(fs.readdir(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
     });
   });

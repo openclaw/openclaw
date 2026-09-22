@@ -12,9 +12,13 @@ const withProgress = vi.hoisted(() =>
 );
 const loadConfig = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
+const readDaemonRuntimePinForInstall = vi.hoisted(() => vi.fn());
+vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall }));
+
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
 const serviceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
+const serviceReadCommand = vi.hoisted(() => vi.fn());
 const serviceInstall = vi.hoisted(() => vi.fn(async () => {}));
 const serviceUninstall = vi.hoisted(() => vi.fn(async () => {}));
 const serviceRestart = vi.hoisted(() =>
@@ -59,6 +63,7 @@ vi.mock("../daemon/service.js", async () => {
     ...actual,
     resolveGatewayService: vi.fn(() => ({
       isLoaded: serviceIsLoaded,
+      readCommand: serviceReadCommand,
       install: serviceInstall,
       uninstall: serviceUninstall,
       restart: serviceRestart,
@@ -73,8 +78,10 @@ vi.mock("./systemd-linger.js", () => ({
 describe("maybeInstallDaemon", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    readDaemonRuntimePinForInstall.mockReturnValue({ revision: "empty", stored: false });
     progressSetLabel.mockReset();
     serviceIsLoaded.mockResolvedValue(false);
+    serviceReadCommand.mockResolvedValue(null);
     serviceInstall.mockResolvedValue(undefined);
     serviceUninstall.mockReset();
     select.mockReset();
@@ -82,8 +89,6 @@ describe("maybeInstallDaemon", () => {
     serviceRestart.mockResolvedValue({ outcome: "completed" });
     loadConfig.mockReturnValue({});
     resolveGatewayInstallToken.mockResolvedValue({
-      token: undefined,
-      tokenRefConfigured: true,
       warnings: [],
     });
     buildGatewayInstallPlan.mockResolvedValue({
@@ -117,8 +122,6 @@ describe("maybeInstallDaemon", () => {
       select.mockResolvedValueOnce("reinstall");
     }
     resolveGatewayInstallToken.mockResolvedValue({
-      token: undefined,
-      tokenRefConfigured: true,
       unavailableReason: "gateway.auth.token SecretRef is configured but unresolved (boom).",
       warnings: [],
     });
@@ -183,6 +186,23 @@ describe("maybeInstallDaemon", () => {
   it("hands the existing service to the replacement installer", async () => {
     serviceIsLoaded.mockResolvedValue(true);
     select.mockResolvedValueOnce("reinstall");
+    const managedDefinition = {
+      programArguments: [
+        "/usr/bin/node",
+        "--max-old-space-size=24576",
+        "--require=/tmp/service-preload.js",
+        "/usr/local/bin/openclaw",
+        "gateway",
+      ],
+      environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
+    };
+    const existingCommand = {
+      programArguments: ["/operator/drop-in-wrapper", "gateway"],
+      environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
+      managedDefinition,
+      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+    };
+    serviceReadCommand.mockResolvedValue(existingCommand);
 
     const outcome = await maybeInstallDaemon({
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -190,6 +210,12 @@ describe("maybeInstallDaemon", () => {
     });
 
     expect(outcome).toBe("succeeded");
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingCommand,
+      }),
+    );
+    expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
     expect(serviceInstall).toHaveBeenCalledOnce();
     expect(serviceUninstall).not.toHaveBeenCalled();
     expect(serviceRestart).not.toHaveBeenCalled();
@@ -249,5 +275,51 @@ describe("maybeInstallDaemon", () => {
     expect(serviceRestart).toHaveBeenCalledTimes(1);
     expect(serviceInstall).not.toHaveBeenCalled();
     expect(progressSetLabel).toHaveBeenLastCalledWith("Gateway service restart scheduled.");
+  });
+  it.each([undefined, "node", "bun"] as const)(
+    "carries installed pin intent through setup (explicit=%s)",
+    async (daemonRuntime) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const pin = { runtime: "bun", path: "/opt/pinned/bun" };
+      const expected = { revision: "installed-pin", stored: true, pin };
+      const existingCommand = {
+        programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
+        environment: { OPENCLAW_WRAPPER: "/opt/wrapper" },
+      };
+      serviceReadCommand.mockResolvedValue(existingCommand);
+      readDaemonRuntimePinForInstall.mockReturnValue(expected);
+      serviceIsLoaded.mockResolvedValue(true);
+      select.mockResolvedValueOnce("reinstall");
+      await maybeInstallDaemon({ runtime, port: 18789, daemonRuntime });
+      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: daemonRuntime ?? "bun",
+          pinnedRuntimePath: daemonRuntime ? undefined : pin.path,
+          existingCommand,
+          env: expect.objectContaining({ OPENCLAW_WRAPPER: "/opt/wrapper" }),
+        }),
+      );
+      expect(serviceInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePinUpdate: { expected, pin: daemonRuntime ? undefined : pin },
+        }),
+      );
+      expect(select).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["restart", "skip"])("does not inspect runtime pins for %s", async (action) => {
+    serviceIsLoaded.mockResolvedValue(true);
+    select.mockResolvedValueOnce(action);
+    readDaemonRuntimePinForInstall.mockImplementation(() => {
+      throw new Error("unreadable pin");
+    });
+    await maybeInstallDaemon({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      port: 18789,
+    });
+    expect(readDaemonRuntimePinForInstall).not.toHaveBeenCalled();
+    expect(serviceReadCommand).not.toHaveBeenCalled();
+    expect(serviceInstall).not.toHaveBeenCalled();
   });
 });

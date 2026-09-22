@@ -84,7 +84,7 @@ const collectGoogleChatGroupPolicyWarnings =
 const collectGoogleChatOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectGoogleChatGroupPolicyWarnings,
   checkId: "channels.googlechat.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Google Chat security warning",
 });
 

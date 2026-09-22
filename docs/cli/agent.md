@@ -8,9 +8,9 @@ title: "Agent"
 
 # `openclaw agent`
 
-Run one agent turn through the Gateway. The explicit `--local` flag is the only embedded execution path.
+Run one agent turn through the Gateway. The explicit `--local` flag and `agent exec` are the embedded execution paths.
 
-Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`.
+Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`. Explicitly blank or whitespace-only selector values are rejected before local or Gateway dispatch, even when another selector supplies a valid target. Omit an unused selector instead of passing an empty value.
 
 A completed turn exits `0`. Error, timeout, and cancellation outcomes exit `1`, after any text or JSON result is written. A received `SIGINT` or `SIGTERM` instead preserves the signal-specific exit status described below.
 
@@ -26,9 +26,11 @@ openclaw agent exec --message-file task.md --cwd ./repo
 cat task.md | openclaw agent exec --message-file - --json
 ```
 
-By default, the command creates and later removes a temporary state directory, and it runs against your ordinary OpenClaw config, so configured providers, credentials, and `agentRuntime` harness selection apply exactly as they do elsewhere. `--cwd` defaults to the process working directory and is passed as both the agent workspace and tool working directory.
+By default, the command creates a temporary state directory and removes it after confirmed cleanup, including accepted database work and the run's database resources. It runs against your ordinary OpenClaw config, so configured providers, credentials, and `agentRuntime` harness selection apply exactly as they do elsewhere. `--cwd` defaults to the process working directory and is passed as both the agent workspace and tool working directory.
 
 Config is layered in three parts, entirely in memory: exec composes the run config and publishes it as this process's runtime config rather than writing a copy to disk. Exec defaults apply only where your config leaves a setting unset: workspace bootstrap files are skipped, the agent sandbox is off, the `coding` tool profile is selected, filesystem tools are restricted to `--cwd`, and exec runs under the full execution policy a headless turn needs. Anything your config sets wins over those defaults, so a configured sandbox, shell env, or tool profile is never downgraded, and exec host routing stays with the sandbox when your config enables one. The invocation itself always wins last: the run is scoped to `--cwd` and never bootstraps.
+
+When your tool policy enables `browser`, local browser control works without a Gateway. Explicit Gateway or node routing and sandbox restrictions still apply; see [Node browser proxy](/tools/browser/remote#node-browser-proxy-zero-config-default).
 
 Use `--state-dir <dir>` to retain sessions and other run state. The directory must already exist and is never created or deleted by the command. A retained state directory requires exclusive ownership: exec refuses to start while a Gateway or another embedded writer owns it, then holds the state lock for the complete run. Omit `--state-dir` for isolated temporary state, or stop the Gateway first with `openclaw gateway stop`.
 
@@ -38,11 +40,13 @@ For reproducible runs, pin the config instead of inheriting it. `--config <path>
 
 Stored credentials are used by default, so a folder-scoped run reaches the same logins as the rest of the CLI. Pass `--auth-env-only` to restrict the run to provider keys already present in the process environment. That mode loads no config at all, and pairing it with `--config` is rejected rather than silently ignored, because a config supplies provider credentials through several surfaces at once: [inline keys and secret headers](/reference/secretref-credential-surface), an `env` block, and login-shell import. It also skips OpenClaw auth profiles and external Codex, Claude, or other CLI credential stores. Provider auth variables remain available to model authentication but are omitted from agent-launched host commands.
 
+On a clean installation without the Codex plugin, OpenAI API-key runs use the built-in OpenClaw runtime. The implicit Codex preference does not require installing a native harness before `--auth-env-only` can run. An explicitly configured Codex runtime or an existing Codex session pin still requires that harness.
+
 Select a primary and ordered fallback chain with repeatable flags:
 
 ```bash
 openclaw agent exec "Implement the change" \
-  --model openai/gpt-5.6-sol \
+  --model openai/gpt-6-astra \
   --fallback anthropic/claude-sonnet-4-6 \
   --fallback google/gemini-3.1-pro-preview
 ```
@@ -63,6 +67,12 @@ openclaw agent exec "Inspect this repository" \
 
 The timeout defaults to 600 seconds for `agent exec`; this does not change the existing embedded `agent --local` default. A successful run exits `0`, any model or result error exits `1`, and a timeout exits `2`. Failure includes `meta.error`, aborted runs, exhausted model fallbacks, an error stop reason, and any error payload.
 
+If cleanup fails after a run error or timeout, the original result and exit code are preserved and the cleanup failure is reported on stderr. A cleanup failure after a successful run exits `1`.
+
+Uncertain runtime cleanup preserves temporary state for inspection and keeps any
+acquired state lock until this process exits. Inspect the reported cleanup failure
+before retrying a run against retained state.
+
 Plain output writes only the final assistant text to stdout. Diagnostics use stderr. `--json` reserves stdout for this stable envelope:
 
 ```json
@@ -77,7 +87,7 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
   "assistantTurns": 2,
   "bridgeCalls": { "search": 1, "describe": 0, "call": 3 },
   "toolSummary": { "calls": 2, "tools": ["read", "write"], "totalToolTimeMs": 48 },
-  "model": "gpt-5.6-sol",
+  "model": "gpt-6-astra",
   "provider": "openai",
   "sessionId": "019..."
 }
@@ -87,7 +97,7 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
 
 Run-stat fields are additive and may be absent:
 
-- `costUsd`: estimated USD cost of the run's accumulated usage, including cache read/write pricing; omitted when the model has no cost data.
+- `costUsd`: sum of recorded per-call USD costs, preserving request pricing tiers and retry-model prices, including cache reads/writes. When per-call costs are incomplete, only flat-price estimates are available; tiered estimates are omitted rather than pricing combined usage as one request. Omitted when cost is unavailable.
 - `codeModeEngaged`: `true` only when [code mode](/tools/code-mode) actually owned the model tool surface for the run. `tools.codeMode.enabled=true` alone does not guarantee engagement, and harnesses that own their native tool surface always read `false` because OpenClaw code mode never owns their tools.
 - `assistantTurns`: completed assistant/provider round trips in the run; omitted when none completed.
 - `bridgeCalls`: inner tool-search/code-mode bridge call counts (`search`/`describe`/`call`). These are invisible to the provider; outer tool calls stay in `meta.toolSummary.calls` of the full run metadata.
@@ -105,9 +115,116 @@ pnpm qa:code-mode-models -- --model ollama/qwen3.5:9b
 
 Repeat `--model` to compare models, or use `--mode`, `--task`, and `--repetitions` to narrow the default direct/automatic/forced Code Mode matrix. Each cell runs an isolated `agent exec` task and records model/provider identity, timing, result status, failure class, outer tool calls, Code Mode bridge calls, and verified output/effects.
 
+The default remains two tasks (`read` and `dependent-read-write`), three modes, and three repetitions: 18 cells per model. Extended tasks are opt-in, so the default model-call budget does not grow:
+
+| Task                         | Workload and correctness oracle                                                                                                                                                                          |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read`                       | Read the verification code and return it exactly.                                                                                                                                                        |
+| `dependent-read-write`       | Read, write, and read back the code; verify the final answer and output file.                                                                                                                            |
+| `large-result-reduction`     | Filter 512 orders from a bounded JSONL file larger than 64 KiB using a separate rules file, then compute count and integer total. Requires handling read pagination rather than echoing the large input. |
+| `parallel-independent-reads` | Read three independent files, requesting parallel calls where supported, and compose their values in specified order rather than completion order.                                                       |
+| `dependent-chain`            | Follow two file-path references from `start.json` to a payload, awaiting each dependency before selecting the next path.                                                                                 |
+
+All extended tasks require an exact final answer and matching `result.txt`. Inputs are deterministic and identical across models/modes for a given repetition. The prompts request file tools and readback, but the oracle verifies outcomes and aggregate tool execution, not a full call trace: it cannot prove pagination strategy, actual concurrency, dependency ordering, or readback. Those require separate runtime/trajectory proof.
+
+Preview a six-cell direct/Code Mode comparison without building or calling any model:
+
+```bash
+pnpm qa:code-mode-models -- --model ollama/qwen3.5:9b \
+  --mode direct --mode code --repetitions 1 \
+  --task large-result-reduction --task parallel-independent-reads \
+  --task dependent-chain --dry-run
+```
+
+Remove `--dry-run` only for an explicitly intended model run; provider charges may apply. A dry run writes the plan and empty canonical evidence, not passing task results. Offline harness coverage runs with `pnpm test extensions/qa-lab/src/code-mode-model-matrix.test.ts` and uses a synthetic CLI with no provider calls; it is not live Code Mode performance evidence.
+
 The output directory contains canonical QA Lab `qa-evidence.json`. `summary.json` and `results.jsonl` are supporting aggregate and per-cell artifacts; `manifest.json` records the requested matrix and source identity.
 
+Each summary group retains pass rate, first-pass/eventual success, failure categories, and `p50WallMs`. Its additive `metrics` object summarizes assistant turns, outer tool calls, bridge search/describe/tool calls, and reported USD cost as `{ samples, total, p50 }`. Only present envelope values count as samples; missing telemetry is not zero (`total` and `p50` are null with no samples). Observed zeros remain zeros. Medians use the upper middle sample for even counts, matching the existing wall-time summary. All repetitions, including failed ones with telemetry, contribute.
+
+For cells that return an agent envelope, `elapsedMs` measures the agent process and effect verification after fixture preparation. Harness-error cells instead time the attempted cell, including any setup before the exception. Neither includes the matrix build, and neither is guest-only execution time. The harness does not report unobservable phase timings, overlap, reduction ratios, or inferred speedups. Compare correctness before timing/counts, inspect missing-sample counts, and retain raw per-cell `usage`/`costUsd`/`bridgeCalls` when supplied.
+
 This is evaluation-only evidence, not a CI or release gate. Results do not change model capabilities, runtime routing, fallback, or repair policy.
+
+#### Gateway tasks and follow-up interviews
+
+The same matrix can exercise a disposable built Gateway and then interview the
+agent in a new run of the same conversation. These tasks are opt-in, require
+`--mode code`, and currently use explicit OpenAI models with `OPENAI_API_KEY`.
+The default matrix above is unchanged.
+
+| Task                      | Independent behavior check                                                                                                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `invoices-auto-retention` | Return an oversized unfamiliar export, then calculate from its automatically retained reference in a later cell, with one fetch and bounded model-visible data. The prompt does not ask the agent to save it. |
+| `inventory-join`          | Solve a natural reorder-summary request across nested, heterogeneous inventory and supplier data, including missing quantities and unavailable prices.                                                        |
+| `automation-contracts`    | Use checked TypeScript for a disabled job's create/read/update/history/delete flow, then verify that pre-existing jobs remain unchanged.                                                                      |
+| `process-contracts`       | Start one supplied finite helper, use the real process tools through checked TypeScript, and verify its output and successful exit.                                                                           |
+| `partial-failure`         | A synthetic tool records an effect before returning malformed declared output. Verify one dispatch, useful validation details, and a subsequent read of actual state.                                         |
+| `checked-cell-cache`      | Complete three separate checked cells. This records live outcomes, not inferred compiler-cache hits.                                                                                                          |
+
+Build clean baseline and candidate checkouts first. Use the same harness,
+models, prompts, fixtures, thinking setting, timeout, and repetitions for both:
+
+```bash
+pnpm qa:code-mode-models -- --model openai/gpt-5.6-luna --mode code \
+  --task invoices-auto-retention --task inventory-join --repetitions 1 \
+  --thinking low --runtime-dir ../baseline \
+  --output-dir artifacts/code-mode/baseline --allow-failures
+
+pnpm qa:code-mode-models -- --model openai/gpt-5.6-luna --mode code \
+  --task invoices-auto-retention --task inventory-join --repetitions 1 \
+  --thinking low --runtime-dir ../candidate \
+  --output-dir artifacts/code-mode/candidate \
+  --baseline-results artifacts/code-mode/baseline/results.jsonl --allow-failures
+```
+
+`--runtime-dir` uses existing build artifacts without rebuilding. It requires a
+clean committed checkout and both build stamps matching that commit and recording
+clean build inputs. On a revision with provenance-capable stamp writers, run
+`pnpm build` in the clean checkout to refresh stale or older stamps. Historical
+revisions without those writers are unsupported as frozen runtimes; rebuilding
+them alone cannot add this provenance. The matrix
+records source and artifact hashes and refuses a comparison when paired cells
+or their workload fingerprints differ. Add `--model` for another model and
+repeat task selectors to include more scenarios. Failed trials remain in the
+results; `--allow-failures` changes only the command's exit status.
+
+Each Gateway owns temporary home, state, workspace, configuration, and a free
+loopback port. The process receives only its selected provider key and required
+host paths. Synthetic plugin tools implement the fixture exports and mutation
+receipt; automation and process operations use the real built-ins. Operator
+Gateways, stored operator credentials, real channels, and real devices are not used.
+Each scenario exposes only its required tools. A Gateway catalog preflight
+checks fixture availability before any paid model call; missing capabilities
+are harness failures, rather than failed model tasks.
+
+Per-cell artifacts include actual task/interview transcripts, tool-effect
+receipts, checks, and sanitized diagnostics. Task receipts are captured before
+the interview; separate task and interview receipt files preserve that boundary
+alongside the complete ledger. The process helper's exact written source bytes
+are part of its workload fingerprint. Checked-cell tasks validate each cell's
+returned value, including completion through `wait`, and require that completion
+before the next cell starts. Preview-completeness checks use the observed metadata
+for probed references; missing or conflicting metadata remains unknown.
+Keep transcripts local unless their
+publication is explicitly requested. Interview claims about sample coverage,
+freshness, lifetime, limits, and retry safety must be reviewed against these
+records: structured answers alone do not establish understanding. A prior
+result reference is tested in the interview's new admitted run when one was
+actually observed; it must not become durable conversation state.
+
+Gateway rows separate startup, task, and interview timing. Their ordinary
+`assistantTurns`, `usage`, and `costUsd` describe the task; interview measurements
+are separate. Missing cost or usage remains unavailable. Summary and comparison
+output also separate observed task-behavior checks from interview-consistency
+checks; neither replaces manual assessment of the interview. The original
+overall pass flags and comparison deltas still require complete success.
+`taskBehavior.deltas` reports task-only differences when both paired task-behavior
+checks pass and the requested model identities are verified, even if an interview has inconsistent flags. Missing traces or
+check results remain unavailable, and all original failures are retained.
+These are observations, not statistical
+speed guarantees. Compiler cache microbenchmarks need their own controlled
+measurements because model latency and worker-pool routing obscure cache hits.
 
 ### `agent exec` options
 
@@ -136,7 +253,7 @@ This is evaluation-only evidence, not a CI or release gate. Results do not chang
 - `--session-id <id>`: explicit session id
 - `--agent <id>`: agent id; overrides routing bindings
 - `--model <id>`: model override for this run (`provider/model` or model id)
-- `--thinking <level>`: agent thinking level (`off`, `minimal`, `low`, `medium`, `high`, plus provider-supported custom levels such as `xhigh`, `adaptive`, or `max`)
+- `--thinking <level>`: agent thinking level (`off`, `minimal`, `low`, `medium`, `high`, plus provider/runtime-supported levels such as `xhigh`, `adaptive`, `max`, or `ultra`)
 - `--verbose <on|off>`: persist verbose level for the session
 - `--channel <channel>`: delivery channel; omit to use the main session channel
 - `--reply-to <target>`: delivery target override
@@ -146,6 +263,15 @@ This is evaluation-only evidence, not a CI or release gate. Results do not chang
 - `--deliver`: send the reply back to the selected channel/target
 - `--timeout <seconds>`: override this command's agent-turn deadline (default 600, or `agents.defaults.timeoutSeconds`); `0` disables the overall deadline. The 600-second fallback belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours.
 - `--json`: output JSON
+
+Gateway commands using OpenClaw's managed agent loop return their completed reply before optional memory
+flushing and compaction. That work has its own session owner and uses the command's
+remaining time. A new turn in the same session cancels and settles it before
+starting inference. One-shot `--local` commands skip optional post-turn work;
+required checkpointing and compaction still happen before inference in that loop. Generic CLI
+backends retain their existing host compaction before the command returns; native
+backends retain their own compaction policy. Cancellation,
+restart, and session ownership changes continue to fence active writers.
 
 ## Examples
 
@@ -172,9 +298,23 @@ openclaw agent --agent ops --message "Run locally" --local
 - With `--agent`, `--channel` and `--to` together, session routing follows the channel's canonical recipient and `session.dmScope`. Channels with a stable outbound-only recipient identity use a provider-owned session isolated from the agent's main session. `--reply-channel` and `--reply-account` affect delivery only.
 - `--session-key` selects an explicit session key. Agent-prefixed keys must use `agent:<agent-id>:<session-key>`, and `--agent` must match the key's agent id when both are given. Bare non-sentinel keys scope to `--agent` when supplied, or to the configured default agent otherwise; for example `--agent ops --session-key incident-42` routes to `agent:ops:incident-42`. The literal keys `global` and `unknown` stay unscoped only when no `--agent` is supplied.
 - `--json` reserves stdout for the JSON response; Gateway, plugin, and `--local` diagnostics go to stderr so scripts can parse stdout directly.
-- After transient handshake retries are exhausted, a Gateway timeout or closed connection fails the command; the CLI never silently reruns the turn embedded. Transport loss is ambiguous — the Gateway may have accepted and may still finish the turn — so the stderr hint says to check `openclaw gateway status` and the session transcript before retrying or rerunning with `--local`, to avoid executing the turn twice.
-- `SIGTERM`/`SIGINT` interrupt a waiting Gateway-backed request; if the Gateway already accepted the run, the CLI also sends `chat.abort` for that run id before exiting. `--local` runs receive the same signal but do not send `chat.abort`. A launcher child that terminates from the first forwarded `SIGINT` or `SIGTERM` exits with status 130 or 143, respectively. If the internal run-dedup key already has an active run for this session, the response reports `status: "in_flight"` and the non-JSON CLI prints a stderr diagnostic instead of an empty reply. For external cron/systemd wrappers, keep a hard-kill backstop such as `timeout -k 60 600 openclaw agent ...` so the supervisor can reap the process if shutdown cannot drain.
+- After transient handshake retries are exhausted, a Gateway timeout or closed connection fails the command; the CLI never silently reruns the turn embedded. Transport loss is ambiguous — the Gateway may have accepted and may still finish the turn — so the stderr hint says to check `openclaw gateway status` and the session transcript before retrying or rerunning with `--local`, to avoid executing the turn twice. When the Gateway accepted the run before the transport error, the hint names the accepted run ID, and `--json` failures keep the canonical `ok: false` envelope with `runId` and `origin: "gateway"` fields alongside `error.type`/`error.message`.
+- `SIGTERM`/`SIGINT` interrupt a waiting Gateway-backed request; if the Gateway already accepted the run, the CLI also sends `chat.abort` for that run id before exiting. `--local` runs receive the same signal but do not send `chat.abort`. On Unix, startup wrappers preserve the runtime child's actual termination signal, including `SIGKILL` after shutdown escalation; shells report `SIGINT` and `SIGTERM` as statuses 130 and 143. Explicit numeric returns stay numeric, including a handled shutdown returning `0`. Windows retains its numeric termination behavior. If the internal run-dedup key already has an active run for this session, the response reports `status: "in_flight"` and the non-JSON CLI prints a stderr diagnostic instead of an empty reply. For external cron/systemd wrappers, keep a hard-kill backstop such as `timeout -k 60 600 openclaw agent ...` so the supervisor can reap the process if shutdown cannot drain.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), never resolved secret plaintext. Marker writes come from the active source config snapshot, not from resolved runtime secret values.
+
+## JSON failures
+
+Failures keep the [CLI error envelope](/cli#json-failures): `ok: false` and
+`error.type: "cli_error"`. When the Gateway returned a run ID, the envelope also
+includes top-level `runId` and `origin: "gateway"`. This includes cached final
+errors without a fresh acceptance response, and a timeout or lost connection
+after acceptance.
+
+`origin` identifies the run's Gateway ownership; it does not prove the run failed
+or stopped. After transport loss, check the session transcript before retrying.
+Omitted provenance means the CLI observed no Gateway run identity, not that no
+run happened. Local errors and rejections without a Gateway run ID omit these
+fields. A locally generated idempotency key alone is not Gateway provenance.
 
 ## JSON delivery status
 

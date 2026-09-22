@@ -4,11 +4,99 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
+import { migrateLegacySessionCreator } from "./creator-namespace-migration.js";
+import { ensurePendingInputConsumptionColumn } from "./openclaw-agent-pending-inputs-schema.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 type MigratedConversationEntry = Record<string, unknown>;
+
+export function dropLegacySessionTranscriptSearchSchema(db: DatabaseSync): void {
+  // The pre-landing sessions_search branch tracked JSONL file watermarks and
+  // stored session_key inside the FTS table. Both are derived caches; drop
+  // them so reconcile rebuilds the row-native index shape.
+  db.exec("DROP TABLE IF EXISTS session_transcript_files;");
+  const columns = db.prepare("PRAGMA table_info(session_transcript_fts)").all();
+  if (columns.some((row) => row.name === "session_key")) {
+    db.exec(`
+      DROP TABLE IF EXISTS session_transcript_fts;
+      DROP TABLE IF EXISTS session_transcript_index_state;
+    `);
+  }
+}
+
+export function dropLegacyRuntimeJournalSchemas(db: DatabaseSync): void {
+  const acpParentStreamColumns = readSqliteTableColumns(db, "acp_parent_stream_events");
+  if (acpParentStreamColumns && !acpParentStreamColumns.has("session_id")) {
+    // The reverted f91de52 journal keyed events only by run_id. It is derived runtime
+    // state, so discard that incompatible shape and let the canonical schema recreate it.
+    db.exec(`
+      DROP INDEX IF EXISTS idx_agent_acp_parent_stream_events_created;
+      DROP TABLE acp_parent_stream_events;
+    `);
+  }
+
+  const trajectoryColumns = readSqliteTableColumns(db, "trajectory_runtime_events");
+  if (trajectoryColumns?.has("event_id")) {
+    // The reverted f91de52 journal used event_id instead of the canonical session/seq key.
+    // Trajectory runtime events are derived, so rebuild rather than preserving stale rows.
+    db.exec(`
+      DROP INDEX IF EXISTS idx_agent_trajectory_runtime_events_session;
+      DROP INDEX IF EXISTS idx_agent_trajectory_runtime_events_run;
+      DROP TABLE trajectory_runtime_events;
+    `);
+  }
+}
+
+/** Backfill one generation token without copying or rewriting transcript rows. */
+export function migrateSessionTranscriptGenerations(
+  db: DatabaseSync,
+  previousVersion: number,
+): void {
+  // Remove after 2026-10-01: drop the generation backfill once the minimum supported agent schema is 13.
+  if (previousVersion >= 13) {
+    return;
+  }
+  db.prepare(
+    `INSERT OR IGNORE INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
+     SELECT session_id, lower(hex(randomblob(16))), ?
+     FROM transcript_events
+     GROUP BY session_id`,
+  ).run(Date.now());
+}
+
+export function migrateSessionTranscriptActiveProjection(
+  db: DatabaseSync,
+  previousVersion: number,
+): void {
+  if (previousVersion >= 10) {
+    return;
+  }
+  const columns = readSqliteTableColumns(db, "session_transcript_index_state");
+  if (columns && !columns.has("active_event_count")) {
+    db.exec(
+      "ALTER TABLE session_transcript_index_state ADD COLUMN active_event_count INTEGER NOT NULL DEFAULT 0;",
+    );
+  }
+  if (columns && !columns.has("active_message_count")) {
+    db.exec(
+      "ALTER TABLE session_transcript_index_state ADD COLUMN active_message_count INTEGER NOT NULL DEFAULT 0;",
+    );
+  }
+  // This table is derived state. Gateway startup rebuilds it after all legacy
+  // imports finish, keeping schema-open work cheap and history reads bounded.
+  db.exec(`
+    DELETE FROM session_transcript_active_events;
+    UPDATE session_transcript_index_state
+    SET needs_rebuild = 1,
+        active_event_count = 0,
+        active_message_count = 0,
+        updated_at = ${Date.now()};
+  `);
+}
 
 function parseConversationEntry(value: unknown): MigratedConversationEntry | undefined {
   return typeof value === "string" ? safeParseJsonRecord(value) : undefined;
@@ -272,6 +360,12 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
 
 /** Installs same-version session projections on first updated-binary open. */
 export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
+  ensurePendingInputConsumptionColumn(db);
+  if (hasPendingSessionTranscriptContextEligibilityColumn(db)) {
+    // NULL records an older writer's unclassified projection; the transcript
+    // reconcile owner fills it without parsing payloads during schema open.
+    db.exec("ALTER TABLE session_transcript_active_events ADD COLUMN context_eligible INTEGER;");
+  }
   const columns = readSqliteTableColumns(db, "session_nodes");
   if (columns && !columns.has("project_id")) {
     db.exec("ALTER TABLE session_nodes ADD COLUMN project_id TEXT;");
@@ -301,6 +395,16 @@ export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
 export function hasPendingSessionConversationRouteContextColumn(db: DatabaseSync): boolean {
   const columns = readSqliteTableColumns(db, "session_conversations");
   return Boolean(columns && !columns.has("route_context_json"));
+}
+
+export function hasPendingSessionProjectColumn(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "session_nodes");
+  return Boolean(columns && !columns.has("project_id"));
+}
+
+export function hasPendingSessionTranscriptContextEligibilityColumn(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "session_transcript_active_events");
+  return Boolean(columns && !columns.has("context_eligible"));
 }
 
 /** Adds the v11 exact delivery target before the conversation backfill writes canonical rows. */
@@ -387,5 +491,28 @@ export function migrateSessionEntryStatusProjection(
     if (typeof row.session_key === "string") {
       update.run(readStatus(row.entry_json), row.session_key);
     }
+  }
+}
+
+export function migrateSessionCreatorNamespaces(db: DatabaseSync, previousVersion: number): void {
+  if (previousVersion >= 19 || !tableExists(db, "session_nodes")) {
+    return;
+  }
+  const update = db.prepare(
+    "UPDATE session_nodes SET entry_json = ?, created_actor_type = ?, created_actor_id = ? WHERE session_key = ?",
+  );
+  const rows = db.prepare(`SELECT session_key, entry_json FROM session_nodes
+    WHERE json_valid(entry_json) AND (json_extract(entry_json, '$.createdActor.type') = 'human'
+      OR (json_type(entry_json, '$.createdActor') IS NULL AND json_type(entry_json, '$.createdBy') = 'object'))`);
+  // SAFETY: The query selects the two declared, non-null TEXT columns without projection casts.
+  for (const row of rows.all() as Array<{ session_key: string; entry_json: string }>) {
+    // SAFETY: SQL admits valid JSON with a human actor or legacy actor object; all other fields are retained verbatim.
+    const entry = migrateLegacySessionCreator(JSON.parse(row.entry_json) as SessionEntry);
+    update.run(
+      JSON.stringify(entry),
+      entry.createdActor?.type ?? null,
+      entry.createdActor?.id ?? null,
+      row.session_key,
+    );
   }
 }

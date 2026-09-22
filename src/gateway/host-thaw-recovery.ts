@@ -3,10 +3,21 @@ import { TICK_INTERVAL_MS } from "./server-constants.js";
 // A real host freeze loses at least 45s beyond the expected maintenance cadence;
 // shorter gaps are ordinary event-loop load and must not churn channel sockets.
 const HOST_THAW_MIN_FROZEN_MS = 45_000;
+// Allow active turns to settle over 20 normal ticks without retaining stale recovery work.
+const HOST_THAW_RESTART_WINDOW_MS = 10 * 60_000;
+
+export type HostThawChannelRestartOutcome =
+  | { status: "completed" }
+  | {
+      status: "retry";
+      reason: "active-work" | "admission-closed" | "channel-restart-incomplete";
+    };
 
 type HostThawDeps = {
   nowMs: () => number;
-  restartChannels: () => Promise<void>;
+  restartChannelsIfIdle: (
+    mode: "new-thaw" | "deferred-retry",
+  ) => Promise<HostThawChannelRestartOutcome>;
   refreshHealth: () => Promise<void>;
   refreshPresence: () => void;
   resetEventLoopHealth: () => void;
@@ -16,7 +27,11 @@ type HostThawDeps = {
 
 export function createHostThawRecovery(deps: HostThawDeps): { tick: () => Promise<void> } {
   let lastTickAtMs = deps.nowMs();
+  let lastCpuUsage = process.cpuUsage();
   let pendingFrozenMs: number | undefined;
+  let pendingChannelRestart:
+    | { deadlineAtMs: number; loggedDeferral: boolean; reason?: string }
+    | undefined;
   let activeRecovery: Promise<void> | undefined;
 
   const runStep = async (label: string, step: () => void | Promise<void>) => {
@@ -27,22 +42,69 @@ export function createHostThawRecovery(deps: HostThawDeps): { tick: () => Promis
     }
   };
 
+  const expireChannelRestart = () => {
+    if (pendingChannelRestart && deps.nowMs() >= pendingChannelRestart.deadlineAtMs) {
+      deps.logger.info(
+        `host thaw channel restart abandoned after 10 minutes: ${pendingChannelRestart.reason ?? "gateway admission remained closed"}`,
+      );
+      pendingChannelRestart = undefined;
+    }
+  };
+
+  const restartChannels = async (mode: "new-thaw" | "deferred-retry") => {
+    expireChannelRestart();
+    const pending = pendingChannelRestart;
+    if (!pending) {
+      return;
+    }
+    try {
+      const outcome = await deps.restartChannelsIfIdle(mode);
+      if (outcome.status === "retry") {
+        const detail =
+          outcome.reason === "active-work"
+            ? "gateway still has active work"
+            : outcome.reason === "admission-closed"
+              ? "gateway admission is closed"
+              : "one or more channel accounts remain pending";
+        pending.reason = outcome.reason === "active-work" ? "gateway stayed busy" : detail;
+        if (!pending.loggedDeferral) {
+          pending.loggedDeferral = true;
+          deps.logger.info(`host thaw channel restart deferred: ${detail}`);
+        }
+      } else if (pendingChannelRestart === pending) {
+        pendingChannelRestart = undefined;
+      }
+    } catch (error) {
+      pending.reason = "channel restart kept failing";
+      deps.logger.error(`host thaw channel restart failed: ${String(error)}`);
+    }
+  };
+
   const recover = async (frozenMs: number) => {
     deps.logger.info(
-      `host thaw detected: process was frozen ~${Math.round(frozenMs)}ms; restarting channels and refreshing health`,
+      `host timing gap detected: process was frozen ~${Math.round(frozenMs)}ms; restarting channels when idle and refreshing health`,
     );
-    const recoverySteps: ReadonlyArray<readonly [string, () => void | Promise<void>]> = [
-      ["event-loop reset", deps.resetEventLoopHealth],
-      ["channel restart", deps.restartChannels],
-      ["health refresh", deps.refreshHealth],
-      ["presence refresh", deps.refreshPresence],
-    ];
-    for (const [label, step] of recoverySteps) {
+    const deferForAdmission = () => {
       if (deps.isAdmissionClosed()) {
-        // Every recovery step is idempotent, so a partially completed thaw is
-        // deliberately replayed from the start after admission reopens.
         pendingFrozenMs = Math.max(pendingFrozenMs ?? 0, frozenMs);
         deps.logger.info("host thaw recovery deferred: gateway suspension began mid-recovery");
+        return true;
+      }
+      return false;
+    };
+    if (deferForAdmission()) {
+      return;
+    }
+    await runStep("event-loop reset", deps.resetEventLoopHealth);
+    if (deferForAdmission()) {
+      return;
+    }
+    await restartChannels("new-thaw");
+    for (const [label, step] of [
+      ["health refresh", deps.refreshHealth],
+      ["presence refresh", deps.refreshPresence],
+    ] as const) {
+      if (deferForAdmission()) {
         return;
       }
       await runStep(label, step);
@@ -52,19 +114,43 @@ export function createHostThawRecovery(deps: HostThawDeps): { tick: () => Promis
   return {
     tick: async () => {
       const nowMs = deps.nowMs();
+      const cpuUsage = process.cpuUsage();
       const gapMs = nowMs - lastTickAtMs;
+      const cpuMs =
+        (cpuUsage.user - lastCpuUsage.user + cpuUsage.system - lastCpuUsage.system) / 1_000;
       lastTickAtMs = nowMs;
+      lastCpuUsage = cpuUsage;
       if (gapMs >= TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS) {
-        pendingFrozenMs = Math.max(pendingFrozenMs ?? 0, gapMs - TICK_INTERVAL_MS);
+        const cpuCoreRatio = cpuMs / gapMs;
+        if (cpuCoreRatio >= 0.5) {
+          // Keep load evidence intact; ordinary maintenance owns health and presence.
+          deps.logger.info(
+            `host timing gap attributed to event-loop load: gap ${Math.round(gapMs)}ms, CPU ratio ${cpuCoreRatio.toFixed(2)}; skipping thaw recovery`,
+          );
+        } else {
+          pendingFrozenMs = Math.max(pendingFrozenMs ?? 0, gapMs - TICK_INTERVAL_MS);
+          pendingChannelRestart = {
+            deadlineAtMs: nowMs + HOST_THAW_RESTART_WINDOW_MS,
+            loggedDeferral: false,
+          };
+        }
+      }
+      if (!activeRecovery) {
+        expireChannelRestart();
       }
       // Suspension/restart owns the closed period. Recovery must wait rather than
       // waking channels while the controller deliberately keeps the gateway quiet.
-      if (pendingFrozenMs === undefined || deps.isAdmissionClosed() || activeRecovery) {
+      if (
+        (pendingFrozenMs === undefined && !pendingChannelRestart) ||
+        deps.isAdmissionClosed() ||
+        activeRecovery
+      ) {
         return;
       }
       const frozenMs = pendingFrozenMs;
       pendingFrozenMs = undefined;
-      activeRecovery = recover(frozenMs);
+      activeRecovery =
+        frozenMs === undefined ? restartChannels("deferred-retry") : recover(frozenMs);
       try {
         await activeRecovery;
       } finally {

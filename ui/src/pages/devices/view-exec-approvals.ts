@@ -1,5 +1,6 @@
 // Control UI view renders nodes exec approvals screen content.
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
 import "../../components/agent-select-registration.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -19,7 +20,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
   type NativeExecApprovalsSnapshot,
-} from "../../lib/nodes/index.ts";
+} from "../../lib/nodes/page-operations.ts";
 import {
   resolveConfigAgents as resolveSharedConfigAgents,
   resolveNodeTargets,
@@ -225,27 +226,31 @@ export function renderExecApprovals(state: ExecApprovalsState) {
     </button>
   `;
   const rows = html`
-    ${!state.canAdmin
-      ? renderSettingsRow({ title: t("devices.readOnly.adminRequired") })
-      : html`
-          ${renderExecApprovalsTarget(state)}
-          ${!ready
-            ? renderSettingsRow({
-                title: t("devices.execApprovals.loadHint"),
-                control: html`
-                  <button
-                    class="btn"
-                    ?disabled=${state.loading || !targetReady}
-                    @click=${state.onLoad}
-                  >
-                    ${state.loading ? t("common.loading") : t("common.loadApprovals")}
-                  </button>
-                `,
-              })
-            : state.nativePolicy
-              ? renderNativeExecApprovals(state.nativePolicy)
-              : html`${renderExecApprovalsScope(state)} ${renderExecApprovalsPolicy(state)}`}
-        `}
+    ${
+      !state.canAdmin
+        ? renderSettingsRow({ title: t("devices.readOnly.adminRequired") })
+        : html`
+            ${renderExecApprovalsTarget(state)}
+            ${
+              !ready
+                ? renderSettingsRow({
+                    title: t("devices.execApprovals.loadHint"),
+                    control: html`
+                      <button
+                        class="btn"
+                        ?disabled=${state.loading || !targetReady}
+                        @click=${state.onLoad}
+                      >
+                        ${state.loading ? t("common.loading") : t("common.loadApprovals")}
+                      </button>
+                    `,
+                  })
+                : state.nativePolicy
+                  ? renderNativeExecApprovals(state.nativePolicy)
+                  : html`${renderExecApprovalsScope(state)} ${renderExecApprovalsPolicy(state)}`
+            }
+          `
+    }
   `;
   return html`
     ${renderSettingsSection(
@@ -259,12 +264,14 @@ export function renderExecApprovals(state: ExecApprovalsState) {
       },
       rows,
     )}
-    ${state.canAdmin &&
-    ready &&
-    !state.nativePolicy &&
-    state.selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE
-      ? renderExecApprovalsAllowlist(state)
-      : nothing}
+    ${
+      state.canAdmin &&
+      ready &&
+      !state.nativePolicy &&
+      state.selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE
+        ? renderExecApprovalsAllowlist(state)
+        : nothing
+    }
   `;
 }
 
@@ -312,6 +319,7 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
         <select
           class="settings-select"
           aria-label=${t("devices.execApprovals.host")}
+          .value=${live(state.target)}
           ?disabled=${state.disabled}
           @change=${(event: Event) => {
             const target = event.target as HTMLSelectElement;
@@ -333,34 +341,37 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
         </select>
       `,
     })}
-    ${state.target === "node"
-      ? renderSettingsRow({
-          title: t("devices.execApprovals.node"),
-          description: hasNodes ? undefined : t("devices.execApprovals.noNodes"),
-          control: html`
-            <select
-              class="settings-select"
-              aria-label=${t("devices.execApprovals.node")}
-              ?disabled=${state.disabled || !hasNodes}
-              @change=${(event: Event) => {
-                const target = event.target as HTMLSelectElement;
-                const value = target.value.trim();
-                state.onSelectTarget("node", value ? value : null);
-              }}
-            >
-              <option value="" ?selected=${nodeValue === ""}>
-                ${t("devices.execApprovals.selectNode")}
-              </option>
-              ${state.targetNodes.map(
-                (node) =>
-                  html`<option value=${node.id} ?selected=${nodeValue === node.id}>
-                    ${node.label}
-                  </option>`,
-              )}
-            </select>
-          `,
-        })
-      : nothing}
+    ${
+      state.target === "node"
+        ? renderSettingsRow({
+            title: t("devices.execApprovals.node"),
+            description: hasNodes ? undefined : t("devices.execApprovals.noNodes"),
+            control: html`
+              <select
+                class="settings-select"
+                aria-label=${t("devices.execApprovals.node")}
+                .value=${live(nodeValue)}
+                ?disabled=${state.disabled || !hasNodes}
+                @change=${(event: Event) => {
+                  const target = event.target as HTMLSelectElement;
+                  const value = target.value.trim();
+                  state.onSelectTarget("node", value ? value : null);
+                }}
+              >
+                <option value="" ?selected=${nodeValue === ""}>
+                  ${t("devices.execApprovals.selectNode")}
+                </option>
+                ${state.targetNodes.map(
+                  (node) =>
+                    html`<option value=${node.id} ?selected=${nodeValue === node.id}>
+                      ${node.label}
+                    </option>`,
+                )}
+              </select>
+            `,
+          })
+        : nothing
+    }
   `;
 }
 
@@ -410,6 +421,7 @@ function renderPolicySelect(
     <select
       class="settings-select"
       aria-label=${options.ariaLabel}
+      .value=${live(options.currentValue)}
       ?disabled=${state.disabled}
       @change=${(event: Event) => {
         const target = event.target as HTMLSelectElement;
@@ -421,11 +433,13 @@ function renderPolicySelect(
         }
       }}
     >
-      ${!options.isDefaults
-        ? html`<option value="__default__" ?selected=${options.currentValue === "__default__"}>
-            ${t("devices.execApprovals.useDefaultValue", { value: options.defaultValue })}
-          </option>`
-        : nothing}
+      ${
+        !options.isDefaults
+          ? html`<option value="__default__" ?selected=${options.currentValue === "__default__"}>
+              ${t("devices.execApprovals.useDefaultValue", { value: options.defaultValue })}
+            </option>`
+          : nothing
+      }
       ${options.values.map(
         (option) =>
           html`<option value=${option.value} ?selected=${options.currentValue === option.value}>
@@ -512,15 +526,17 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
               value: autoEffective ? t("devices.execApprovals.on") : t("devices.execApprovals.off"),
             }),
       control: html`
-        ${!isDefaults && !autoIsDefault
-          ? html`<button
-              class="btn btn--sm"
-              ?disabled=${state.disabled}
-              @click=${() => state.onRemove([...basePath, "autoAllowSkills"])}
-            >
-              ${t("devices.execApprovals.useDefault")}
-            </button>`
-          : nothing}
+        ${
+          !isDefaults && !autoIsDefault
+            ? html`<button
+                class="btn btn--sm"
+                ?disabled=${state.disabled}
+                @click=${() => state.onRemove([...basePath, "autoAllowSkills"])}
+              >
+                ${t("devices.execApprovals.useDefault")}
+              </button>`
+            : nothing
+        }
         ${renderSettingsToggle({
           checked: autoEffective,
           disabled: state.disabled,

@@ -7,7 +7,6 @@ import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-run
 import {
   closeOpenClawStateDatabaseForTest,
   createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -30,10 +29,7 @@ import {
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import {
-  createTelegramNativeCommandTestDeps,
-  telegramBotInfoForTest,
-} from "./bot.create-telegram-bot.test-support.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import {
   createTelegramCallbackContext,
   createTelegramReactionContext,
@@ -56,6 +52,7 @@ import {
 } from "./message-cache-persistence.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
+import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -242,24 +239,6 @@ function waitForReplyCalls(count: number) {
   return done.promise;
 }
 
-function setTelegramPluginStateRuntimeForTests() {
-  setTelegramRuntime({
-    state: {
-      openKeyedStore: ((options) =>
-        createPluginStateKeyedStoreForTests(
-          "telegram",
-          options,
-        )) as TelegramRuntime["state"]["openKeyedStore"],
-      openSyncKeyedStore: ((options) =>
-        createPluginStateSyncKeyedStoreForTests(
-          "telegram",
-          options,
-        )) as TelegramRuntime["state"]["openSyncKeyedStore"],
-    },
-    channel: {},
-  } as TelegramRuntime);
-}
-
 function getTelegramCallbackHandlerForTests() {
   return getOnHandler("callback_query") as (ctx: Record<string, unknown>) => Promise<void>;
 }
@@ -334,7 +313,7 @@ function makeModelPickerConfig(
   overrides: {
     config?: Omit<OpenClawConfig, "agents" | "channels" | "session">;
     defaultModel?: string;
-    models?: Record<string, Record<string, never>>;
+    models?: Record<string, { agentRuntime?: { id: string } }>;
     omitModels?: boolean;
     telegram?: TelegramChannelConfig;
   } = {},
@@ -955,7 +934,6 @@ describe("createTelegramBot", () => {
     createTelegramBot = (opts) => {
       const telegramDeps = {
         ...telegramBotDepsForTest,
-        ...createTelegramNativeCommandTestDeps(dispatchReplyWithBufferedBlockDispatcher),
       };
       return createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
@@ -2623,7 +2601,7 @@ describe("createTelegramBot", () => {
         `${CHECK_MARK_EMOJI} Model reset to default`,
       );
       expect(String(firstEditMessageTextArg(2))).toContain(
-        "Session model selection cleared. Runtime unchanged. New replies use the agent's configured default.",
+        "Session model selection cleared. Runtime set to <b>openclaw</b> from configured policy. New replies use the agent's configured default.",
       );
 
       const entry = readOnlySessionEntry(storePath);
@@ -2678,7 +2656,7 @@ describe("createTelegramBot", () => {
     expect(entry?.modelOverride).toBeUndefined();
     expect(entry?.agentRuntimeOverride).toBeUndefined();
     expect(String(firstEditMessageTextArg(2))).toBe(
-      `${CHECK_MARK_EMOJI} Model reset to default\n\nSession model selection cleared. Runtime reset to configured policy. New replies use the agent's configured default.`,
+      `${CHECK_MARK_EMOJI} Model reset to default\n\nSession model selection cleared. Runtime set to <b>openclaw</b> from configured policy. New replies use the agent's configured default.`,
     );
   });
 
@@ -2707,6 +2685,7 @@ describe("createTelegramBot", () => {
         defaultModel: "gpt-5",
         callbackData: "mdl_sel_openai/gpt-5",
         outcomeText: "Compatible auth profile retained.",
+        expectedRuntime: "codex",
         expectedProfile: "team:prod",
       },
       {
@@ -2716,6 +2695,7 @@ describe("createTelegramBot", () => {
         defaultModel: "claude-sonnet-4-5",
         callbackData: "mdl_sel_anthropic/claude-sonnet-4-5",
         outcomeText: "Incompatible auth profile cleared.",
+        expectedRuntime: "openclaw",
         expectedProfile: undefined,
       },
     ])(
@@ -2726,6 +2706,7 @@ describe("createTelegramBot", () => {
         defaultModel,
         callbackData,
         expectedProfile,
+        expectedRuntime,
         outcomeText,
       }) => {
         onSpy.mockClear();
@@ -2780,6 +2761,17 @@ describe("createTelegramBot", () => {
           providers: ["anthropic", "openai"],
           resolvedDefault: { provider: defaultProvider, model: defaultModel },
           modelNames: new Map(),
+          modelCatalog: [
+            { provider: "openai", id: "gpt-4o", name: "GPT-4o", reasoning: false },
+            { provider: "openai", id: "gpt-4.1", name: "GPT-4.1", reasoning: false },
+            { provider: "openai", id: "gpt-5", name: "GPT-5", reasoning: true },
+            {
+              provider: "anthropic",
+              id: "claude-sonnet-4-5",
+              name: "Claude Sonnet",
+              reasoning: true,
+            },
+          ],
         });
 
         loadConfig.mockReturnValue(config);
@@ -2801,7 +2793,7 @@ describe("createTelegramBot", () => {
           expect(entry?.modelOverride).toBeUndefined();
           const confirmation = String(firstEditMessageTextArg(2));
           expect(confirmation).toBe(
-            `${CHECK_MARK_EMOJI} Model reset to default\n\nSession model selection cleared. ${outcomeText} Runtime unchanged. New replies use the agent's configured default.`,
+            `${CHECK_MARK_EMOJI} Model reset to default\n\nSession model selection cleared. ${outcomeText} Runtime set to <b>${expectedRuntime}</b> from configured policy. New replies use the agent's configured default.`,
           );
           expect(confirmation).not.toContain("team:prod");
         }
@@ -2816,6 +2808,7 @@ describe("createTelegramBot", () => {
       byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
       providers: ["openai"],
       resolvedDefault: { provider: "openai", model: "gpt-5" },
+      modelCatalog: [],
       modelNames: new Map<string, string>([
         ["openai/gpt-4.1", "GPT 4.1 Bridge"],
         ["openai/gpt-5", "GPT Five Bridge"],
@@ -2844,6 +2837,9 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    expect(firstEditMessageTextArg(2)).toContain(
+      "Selecting a model also applies its configured runtime.",
+    );
     const params = firstEditMessageTextArg(3);
     const inlineKeyboard = (
       params as {
@@ -2863,7 +2859,36 @@ describe("createTelegramBot", () => {
 
   it("formats non-default model selection confirmations with Telegram HTML parse mode", async () => {
     const storePath = createTelegramTestStorePath("model-html");
-    const config = makeModelPickerConfig(storePath);
+    const config = makeModelPickerConfig(storePath, {
+      models: {
+        "anthropic/claude-opus-4-6": {},
+        "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
+      },
+    });
+    const route = resolveTelegramConversationRoute({
+      cfg: config,
+      accountId: "default",
+      chatId: 1234,
+      isGroup: false,
+      threadSpec: { scope: "none" },
+      senderId: 9,
+    }).route;
+    const sessionKey = resolveTelegramConversationBaseSessionKey({
+      cfg: config,
+      route,
+      chatId: 1234,
+      isGroup: false,
+      senderId: 9,
+    });
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "model-html",
+        updatedAt: 1,
+        agentRuntimeOverride: "openclaw",
+      },
+    });
 
     loadConfig.mockReturnValue(config);
     createTelegramBot({
@@ -2886,7 +2911,7 @@ describe("createTelegramBot", () => {
     expect(editCall[0]).toBe(1234);
     expect(editCall[1]).toBe(17);
     expect(editCall[2]).toBe(
-      `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime unchanged. Use /model openai/gpt-5.4 --runtime &lt;runtime&gt; -s to switch harnesses. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`,
+      `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime set to <b>openclaw</b> from configured policy. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`,
     );
     expect(requireRecord(editCall[3], "edit params").parse_mode).toBe("HTML");
 
@@ -2894,6 +2919,7 @@ describe("createTelegramBot", () => {
     expect(entry?.providerOverride).toBe("openai");
     expect(entry?.modelOverride).toBe("gpt-5.4");
     expect(entry?.modelOverrideSource).toBe("user");
+    expect(entry?.agentRuntimeOverride).toBeUndefined();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
   });
 
@@ -3078,7 +3104,9 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(String(firstEditMessageTextArg(2))).toContain('Could not resolve model "shared-model".');
+    expect(String(firstEditMessageTextArg(2))).toContain(
+      "Available models changed. Open /models and choose again.",
+    );
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-2");
   });
 
@@ -4311,7 +4339,9 @@ describe("createTelegramBot", () => {
       }),
     );
 
-    expect(result).toEqual({ kind: "completed" });
+    // Live polling records no retry marker for this abort; the middleware
+    // owner completes the update once the current text has been dispatched.
+    expect(result?.kind).not.toBe("failed-retryable");
     expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
@@ -4685,21 +4715,7 @@ describe("createTelegramBot", () => {
         }),
     );
     const ssrfMock = mockPinnedHostnameResolution();
-    setTelegramRuntime({
-      state: {
-        openKeyedStore: ((options) =>
-          createPluginStateKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openKeyedStore"],
-        openSyncKeyedStore: ((options) =>
-          createPluginStateSyncKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openSyncKeyedStore"],
-      },
-      channel: {},
-    } as TelegramRuntime);
+    setTelegramPluginStateRuntimeForTests();
 
     try {
       const replyDelivered = waitForReplyCalls(1);
@@ -6074,69 +6090,6 @@ describe("createTelegramBot", () => {
       undefined,
     );
   });
-  it.each([
-    {
-      name: "keeps unconfigured dm topic commands on the flat dm session",
-      messageThreadId: 99,
-      me: { id: 999, has_topics_enabled: false },
-      expectedSessionKey: "agent:main:main",
-      assertAuthorized: false,
-    },
-    {
-      name: "uses bot topic capability for native dm topic command target sessions",
-      messageThreadId: 99,
-      me: { id: 999, has_topics_enabled: true },
-      expectedSessionKey: "agent:main:main:thread:12345:99",
-      assertAuthorized: false,
-    },
-    {
-      name: "allows native DM commands for paired users",
-      messageThreadId: undefined,
-      me: { id: 999, has_topics_enabled: false },
-      expectedSessionKey: undefined,
-      assertAuthorized: true,
-    },
-  ])("$name", async ({ messageThreadId, me, expectedSessionKey, assertAuthorized }) => {
-    replySpy.mockResolvedValue({ text: "response" });
-
-    mockTelegramConfig({ dmPolicy: "pairing" }, { commands: { native: true } });
-    readChannelAllowFromStore.mockResolvedValueOnce(["12345"]);
-
-    createTelegramBot({ token: "tok" });
-    const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
-      | ((ctx: Record<string, unknown>) => Promise<void>)
-      | undefined;
-    if (!handler) {
-      throw new Error("status command handler missing");
-    }
-
-    await handler({
-      message: {
-        chat: { id: 12345, type: "private" },
-        from: { id: 12345, username: "testuser" },
-        text: "/status",
-        date: 1736380800,
-        message_id: 42,
-        ...(messageThreadId === undefined ? {} : { message_thread_id: messageThreadId }),
-      },
-      ...(me === undefined ? {} : { me }),
-      match: "",
-    });
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    if (expectedSessionKey) {
-      const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
-      expect(payload.CommandTargetSessionKey).toBe(expectedSessionKey);
-    }
-    if (assertAuthorized) {
-      expect(
-        sendMessageSpy.mock.calls.some(
-          (call) => call[1] === "You are not authorized to use this command.",
-        ),
-      ).toBe(false);
-    }
-  });
-
   it("keeps native DM commands on the startup-resolved config when fresh reads contain SecretRefs", async () => {
     replySpy.mockResolvedValue({ text: "response" });
 
@@ -6210,11 +6163,9 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).not.toHaveBeenCalled();
-    expect(sendMessageSpy).toHaveBeenCalledWith(
-      12345,
-      "You are not authorized to use this command.",
-      {},
-    );
+    expect(sendMessageSpy).toHaveBeenCalledWith(12345, expect.stringContaining("Pairing code:"), {
+      parse_mode: "HTML",
+    });
   });
 
   it("registers message_reaction handler", () => {

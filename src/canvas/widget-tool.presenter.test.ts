@@ -9,7 +9,7 @@ import { buildWidgetDocument } from "./wrap.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("show_widget current-channel presentation", () => {
-  it("presents once without materializing an inline view", async () => {
+  it.each([false, true])("prefers the channel presenter (inline=%s)", async (inlineClient) => {
     const stateDir = tempDirs.make("openclaw-widget-presenter-");
     const present = vi.fn(async () => ({
       ok: true as const,
@@ -42,12 +42,14 @@ describe("show_widget current-channel presentation", () => {
     const tool = createShowWidgetTool({
       stateDir,
       sessionId: "current-channel",
-      inlineClientAvailable: false,
+      inlineClientAvailable: inlineClient,
       presenters: [presenter],
       presenterContext: context,
     });
 
     expect(tool.requiredClientCaps).toBeUndefined();
+    expect(tool.description).toContain("current channel presenter");
+    expect(tool.description).not.toContain("Keep one-off visualizations inline");
     expect(
       (tool.parameters as { properties?: { kind?: { enum?: string[] } } }).properties?.kind?.enum,
     ).toEqual(["html"]);

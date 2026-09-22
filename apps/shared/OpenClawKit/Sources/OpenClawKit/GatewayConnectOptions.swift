@@ -3,6 +3,7 @@ import OpenClawProtocol
 public enum OpenClawGatewayClientCapability {
     public static let agentKind = "agent-kind"
     public static let inlineWidgets = "inline-widgets"
+    public static let modelSelectionPolicy = "model-selection-policy"
     public static let usageRefreshing = "usage-refreshing"
 }
 
@@ -24,10 +25,10 @@ public struct GatewayConnectOptions: Sendable {
     /// role/scoped sessions such as operator UI clients.
     public var includeDeviceIdentity: Bool
     /// Set false for an endpoint handoff whose explicit credentials (including none) must be
-    /// tried without reusing a device token issued by a different gateway.
+    /// tried without loading a previously stored device token.
     public var allowStoredDeviceAuth: Bool
-    /// Stable gateway owner for device tokens. Nil preserves legacy unscoped storage for clients
-    /// that have not adopted endpoint ownership yet.
+    /// Stable Gateway owner for device tokens. Nil preserves legacy unscoped storage only when
+    /// `allowStoredDeviceAuth` is true; false plus nil disables both lookup and persistence.
     public var deviceAuthGatewayID: String?
 
     public init(
@@ -65,6 +66,22 @@ public struct GatewayConnectOptions: Sendable {
     }
 }
 
+public struct GatewayNodeSessionCredentials: Sendable, Equatable {
+    public let token: String?
+    public let bootstrapToken: String?
+    public let password: String?
+
+    public init(
+        token: String? = nil,
+        bootstrapToken: String? = nil,
+        password: String? = nil)
+    {
+        self.token = token
+        self.bootstrapToken = bootstrapToken
+        self.password = password
+    }
+}
+
 public enum GatewayAuthSource: String, Sendable {
     case deviceToken = "device-token"
     case sharedToken = "shared-token"
@@ -74,13 +91,19 @@ public enum GatewayAuthSource: String, Sendable {
 }
 
 /// Opaque binding for the exact credentials selected by one live Gateway socket.
-/// The credential itself never leaves `GatewayChannelActor`.
+/// The binding exposes no credential; HTTP adapters use the channel's separate route-checked access.
 public struct GatewayAuthBinding: Equatable, Sendable {
     public let source: GatewayAuthSource
     public let credentialFingerprint: String?
 }
 
 extension GatewayConnectOptions {
+    var allowsDeviceAuthPersistence: Bool {
+        // Legacy callers must rotate credentials in the same unscoped namespace they read.
+        // Fresh pairing instead supplies an owner; explicit ownerless handoffs set false/nil.
+        self.allowStoredDeviceAuth || self.deviceAuthGatewayID != nil
+    }
+
     /// Additive connect-frame fields, sent only when this node declares them.
     /// Lives here so `GatewayChannel.sendConnect` stays within its body budget.
     func applyOptionalConnectParams(to params: inout [String: OpenClawProtocol.AnyCodable]) {

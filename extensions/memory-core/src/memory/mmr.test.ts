@@ -4,10 +4,16 @@ import { applyMMRToHybridResults, DEFAULT_MMR_CONFIG } from "./mmr.js";
 import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
 
 describe("memory MMR", () => {
-  it("tokenizes mixed ASCII and CJK text", () => {
-    expect(tokenize("Hello 今天讨论 hello")).toEqual(
-      new Set(["hello", "今", "天", "讨", "论", "今天", "天讨", "讨论"]),
-    );
+  it.each([
+    {
+      text: "Hello 今天讨论 hello",
+      expected: ["hello", "今天", "天讨", "讨论", "今", "天", "讨", "论"],
+    },
+    { text: " Hello WORLD_42 hello! ", expected: ["hello", "world_42"] },
+    { text: "Привет 🙂 العربية", expected: [] },
+    { text: "中文🙂今天", expected: ["中文", "今天", "中", "文", "今", "天"] },
+  ])("tokenizes $text in stable term order", ({ text, expected }) => {
+    expect([...tokenize(text)]).toEqual(expected);
   });
 
   it("compares token sets and falls back to literal equality for empty token sets", () => {
@@ -37,6 +43,25 @@ describe("memory MMR", () => {
       ],
       expected: ["/arabic.md", "/cyrillic.md", "/ascii.md", "/tail.md"],
     },
+    {
+      name: "diversifies normalized-equal non-tokenized snippets",
+      results: [
+        ["/primary.md", 1, "Привет мир"],
+        ["/duplicate.md", 0.98, "  ПРИВЕТ МИР  "],
+        ["/diverse.md", 0.94, "Доброе утро"],
+        ["/tail.md", 0.4, "إعداد الشبكة الرئيسي"],
+      ],
+      expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
+    },
+    {
+      name: "keeps input order as the tie breaker for equal relevance and diversity",
+      results: [
+        ["/first.md", 1, "alpha"],
+        ["/second.md", 1, "beta"],
+        ["/third.md", 1, "gamma"],
+      ],
+      expected: ["/first.md", "/second.md", "/third.md"],
+    },
   ])("$name", ({ results, expected }) => {
     const candidates = results.map(([path, score, snippet]) => ({
       path: String(path),
@@ -53,6 +78,9 @@ describe("memory MMR", () => {
     expect(reranked.map((result) => result.score)).toEqual(
       expected.map((path) => scores.get(path)),
     );
+    for (const result of reranked) {
+      expect(result).toBe(candidates.find((candidate) => candidate.path === result.path));
+    }
   });
 
   it("keeps input order when disabled", () => {
@@ -63,6 +91,22 @@ describe("memory MMR", () => {
 
     expect(applyMMRToHybridResults(results, { enabled: false })).toEqual(results);
     expect(DEFAULT_MMR_CONFIG).toEqual({ enabled: false, lambda: 0.7 });
+  });
+
+  it("preserves repeated result objects and locations without mutating inputs", () => {
+    const primary = Object.freeze({ path: "/same.md", startLine: 1, score: 1, snippet: "alpha" });
+    const duplicate = Object.freeze({ ...primary, score: 0.98 });
+    const diverse = Object.freeze({ ...primary, score: 0.94, snippet: "beta" });
+    const tail = Object.freeze({ ...primary, score: 0.4, snippet: "gamma" });
+    const results = [primary, duplicate, diverse, primary, tail];
+    Object.freeze(results);
+
+    const reranked = applyMMRToHybridResults(results, { enabled: true, lambda: 0.7 });
+
+    expect(reranked).toHaveLength(results.length);
+    for (const [index, expected] of [primary, diverse, primary, duplicate, tail].entries()) {
+      expect(reranked[index]).toBe(expected);
+    }
   });
 
   it("preserves the reference MMR ranking while caching running similarities", () => {

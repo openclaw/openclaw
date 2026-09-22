@@ -142,4 +142,59 @@ describe("resolveHeartbeatAgents", () => {
       expect(isHeartbeatEnabledForAgent(cfg, agentId)).toBe(expectedAgentIds.includes(agentId));
     }
   });
+
+  it.each([
+    ["entries", "explicit"],
+    ["entries", "defaults"],
+    ["list", "explicit"],
+    ["list", "defaults"],
+  ] as const)("enrolls a %s %s fleet with linear reads and fresh config", (form, enrollment) => {
+    const size = 64;
+    const rows = Array.from({ length: size }, (_, index) => ({
+      id: `agent-${index}`,
+      ...(enrollment === "explicit" ? { heartbeat: { every: "45m" } } : {}),
+    }));
+    const entries = Object.fromEntries(rows.map(({ id, ...entry }) => [id, entry]));
+    let reads = 0;
+    const observe = <T extends object>(roster: T): T =>
+      new Proxy(roster, {
+        get(target, key, receiver) {
+          if (typeof key === "string" && (key.startsWith("agent-") || /^\d+$/.test(key))) {
+            reads += 1;
+          }
+          return Reflect.get(target, key, receiver);
+        },
+      });
+    const defaults = { heartbeat: { every: "30m", target: "owner" as const } };
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults,
+        ...(form === "entries" ? { entries: observe(entries) } : { list: observe(rows) }),
+      },
+    };
+    const expected = rows.map(({ id }) => ({
+      agentId: id,
+      heartbeat: { every: enrollment === "explicit" ? "45m" : "30m", target: "owner" },
+    }));
+
+    expect(resolveHeartbeatAgents(cfg)).toEqual(expected);
+    // Bound actual entry reads, allowing several passes while rejecting a scan per agent.
+    expect(reads).toBeLessThanOrEqual(size * 4);
+
+    defaults.heartbeat.every = "20m";
+    if (form === "entries") {
+      delete entries[`agent-${size - 1}`];
+    } else {
+      rows.pop();
+    }
+    reads = 0;
+    expect(resolveHeartbeatAgents(cfg)).toEqual(
+      expected.slice(0, -1).map(({ agentId }) => ({
+        agentId,
+        heartbeat: { every: enrollment === "explicit" ? "45m" : "20m", target: "owner" },
+      })),
+    );
+    expect(reads).toBeLessThanOrEqual(size * 4);
+  });
 });

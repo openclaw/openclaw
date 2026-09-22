@@ -126,38 +126,128 @@ describe("groupCatalogSessionsByProject", () => {
 });
 
 describe("groupCatalogSessionsByPerson", () => {
+  it("keeps creator namespaces separate and combines canonical profile aliases", () => {
+    const result = groupCatalogSessionsByPerson([
+      {
+        ...session("channel"),
+        createdActor: {
+          type: "human",
+          id: "current",
+          label: "Channel",
+          identity: { type: "legacy", actorType: "human", source: null, id: "current" },
+        },
+      },
+      {
+        ...session("agent"),
+        createdActor: {
+          type: "agent",
+          id: "current",
+          label: "Agent",
+          identity: { type: "agent", id: "current" },
+        },
+      },
+      {
+        ...session("old-profile"),
+        createdActor: {
+          type: "human",
+          id: "former",
+          label: "Person",
+          identity: { type: "profile", id: "current" },
+        },
+      },
+      {
+        ...session("profile"),
+        createdActor: {
+          type: "human",
+          id: "current",
+          label: "Person",
+          identity: { type: "profile", id: "current" },
+        },
+      },
+    ]);
+    expect(result.groups.map((group) => group.sessions.map((item) => item.threadId))).toEqual([
+      ["agent"],
+      ["channel"],
+      ["old-profile", "profile"],
+    ]);
+  });
+
   it("groups attributed sessions by creator, sorted by label, and keeps session order", () => {
     const result = groupCatalogSessionsByPerson([
-      { ...session("z-1"), createdActor: { type: "human", id: "profile-zoe", label: "Zoe" } },
-      { ...session("a-1"), createdActor: { type: "human", id: "profile-ada", label: "Ada" } },
-      { ...session("z-2"), createdActor: { type: "human", id: "profile-zoe", label: "Zoe" } },
+      {
+        ...session("z-1"),
+        createdActor: {
+          type: "human",
+          id: "profile-zoe",
+          identity: { type: "profile", id: "profile-zoe" },
+          label: "Zoe",
+        },
+      },
+      {
+        ...session("a-1"),
+        createdActor: {
+          type: "human",
+          id: "profile-ada",
+          identity: { type: "profile", id: "profile-ada" },
+          label: "Ada",
+        },
+      },
+      {
+        ...session("z-2"),
+        createdActor: {
+          type: "human",
+          id: "profile-zoe",
+          identity: { type: "profile", id: "profile-zoe" },
+          label: "Zoe",
+        },
+      },
     ]);
 
     expect(result.groups.map((group) => group.key)).toEqual([
-      "person:profile-ada",
-      "person:profile-zoe",
+      "person:profile:profile-ada",
+      "person:profile:profile-zoe",
     ]);
     expect(result.groups.map((group) => group.label)).toEqual(["Ada", "Zoe"]);
     expect(result.groups[1]?.sessions.map((item) => item.threadId)).toEqual(["z-1", "z-2"]);
     expect(result.groups[0]?.title).toBe("Created by Ada");
   });
 
-  it("falls back to the actor id when the label is missing or blank", () => {
+  it.each([
+    ["profile", "profile-ada", "profile-ada"],
+    ["profile", "gateway-owner", "Shared owner"],
+    ["agent", "gateway-owner", "gateway-owner"],
+  ] as const)("labels a blank %s actor %s", (type, id, expected) => {
     const result = groupCatalogSessionsByPerson([
-      { ...session("one"), createdActor: { type: "human", id: "profile-ada", label: "  " } },
+      {
+        ...session("one"),
+        createdActor: {
+          type: "human",
+          id,
+          identity: { type, id },
+          label: "  ",
+        },
+      },
     ]);
 
     expect(result.groups[0]).toMatchObject({
-      key: "person:profile-ada",
-      legacySectionKey: "person:profile-ada",
-      label: "profile-ada",
+      key: `person:${type}:${id}`,
+      legacySectionKey: `person:${id}`,
+      label: expected,
     });
   });
 
   it("leaves unattributed sessions in the flat ungrouped tail", () => {
     const result = groupCatalogSessionsByPerson([
       session("native"),
-      { ...session("adopted"), createdActor: { type: "human", id: "profile-ada", label: "Ada" } },
+      {
+        ...session("adopted"),
+        createdActor: {
+          type: "human",
+          id: "profile-ada",
+          identity: { type: "profile", id: "profile-ada" },
+          label: "Ada",
+        },
+      },
     ]);
 
     expect(result.groups).toHaveLength(1);

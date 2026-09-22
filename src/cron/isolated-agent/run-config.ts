@@ -27,6 +27,8 @@ function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentCon
     model: overrideModel,
     sandbox: _agentSandboxOverride,
     memory: _agentMemoryOverride,
+    models: _agentModelsOverride,
+    params: _agentParamsOverride,
     ...agentOverrideRest
   } = agentConfigOverride ?? {};
   return {
@@ -52,17 +54,17 @@ function mergeCronAgentModelOverride(params: {
   return nextDefaults;
 }
 
-/** Selects the active runtime snapshot before deriving isolated cron agent defaults. */
-export function resolveCronAgentConfig(params: {
+/** Derives isolated cron agent defaults from one immutable config snapshot. */
+export function resolveCronAgentConfigFromSnapshot(params: {
   config: OpenClawConfig;
   agentConfigOverride?: ResolvedAgentConfig;
 }) {
-  const runtimeConfig = resolveCronActiveRuntimeConfig(params.config);
+  const runtimeConfig = params.config;
   const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
     params.agentConfigOverride,
   );
-  // Keep nested configs owned by agent-aware resolvers out of this flattened snapshot.
-  // Copying partial sandbox or memory objects into defaults destroys their global fields.
+  // Agent-aware resolvers merge these scopes themselves. Flattening partial maps
+  // erases inherited sandbox, memory, model-runtime and request-parameter settings.
   const agentDefaults = mergeCronAgentModelOverride({
     defaults: Object.assign({}, runtimeConfig.agents?.defaults, definedOverrides),
     overrideModel,
@@ -75,4 +77,15 @@ export function resolveCronAgentConfig(params: {
       agents: Object.assign({}, runtimeConfig.agents, { defaults: agentDefaults }),
     } satisfies OpenClawConfig,
   };
+}
+
+/** Selects the active runtime snapshot before deriving isolated cron agent defaults. */
+export function resolveCronAgentConfig(params: {
+  config: OpenClawConfig;
+  agentConfigOverride?: ResolvedAgentConfig;
+}) {
+  return resolveCronAgentConfigFromSnapshot({
+    ...params,
+    config: resolveCronActiveRuntimeConfig(params.config),
+  });
 }

@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
+import { openRootFileSync, readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import { resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
 import {
   CLAWHUB_SKILLS_SH_TRUST_STATE,
@@ -8,7 +9,6 @@ import {
   type ClawHubSkillsShTrustState,
 } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeTrackedSkillSlug, resolveWorkspaceSkillInstallDir } from "./archive-install.js";
 import {
   normalizeDownloadedArtifactLock,
@@ -257,34 +257,28 @@ function readLocalSkillCardSync(
   includeContent = false,
 ): LocalSkillCardRead | undefined {
   const cardPath = path.join(skillDir, LOCAL_SKILL_CARD_FILENAME);
-  let lstat: fsSync.Stats;
-  try {
-    lstat = fsSync.lstatSync(cardPath);
-  } catch {
-    return undefined;
-  }
-  if (!lstat.isFile() || lstat.size > LOCAL_SKILL_CARD_MAX_BYTES) {
-    return undefined;
-  }
   let fd: number | undefined;
   try {
-    const rootRealPath = fsSync.realpathSync.native(skillDir);
-    const cardRealPath = fsSync.realpathSync.native(cardPath);
-    if (!isPathInside(rootRealPath, cardRealPath)) {
+    const opened = openRootFileSync({
+      absolutePath: cardPath,
+      rootPath: skillDir,
+      boundaryLabel: "skill directory",
+      maxBytes: LOCAL_SKILL_CARD_MAX_BYTES,
+      rejectHardlinks: false,
+    });
+    if (!opened.ok) {
       return undefined;
     }
-    fd = fsSync.openSync(cardPath, fsSync.constants.O_RDONLY | (fsSync.constants.O_NOFOLLOW ?? 0));
-    const fdStat = fsSync.fstatSync(fd);
-    if (!fdStat.isFile() || fdStat.size > LOCAL_SKILL_CARD_MAX_BYTES) {
-      return undefined;
-    }
+    fd = opened.fd;
     const result: LocalSkillCardRead = {
       present: true,
       path: cardPath,
-      sizeBytes: fdStat.size,
+      sizeBytes: opened.stat.size,
     };
     if (includeContent) {
-      result.content = fsSync.readFileSync(fd, "utf8");
+      result.content = readFileDescriptorBoundedSync(fd, LOCAL_SKILL_CARD_MAX_BYTES).toString(
+        "utf8",
+      );
     }
     return result;
   } catch {
@@ -320,7 +314,7 @@ export async function searchSkillsFromClawHub(params: {
   baseUrl?: string;
 }): Promise<ClawHubSkillSearchResult[]> {
   return await searchClawHubSkills({
-    query: params.query?.trim() || "*",
+    query: params.query?.trim() ?? "",
     limit: params.limit,
     baseUrl: params.baseUrl,
   });

@@ -11,6 +11,7 @@ import type {
   ConnectTimingState,
   GatewayProtocolClientOptions,
   GatewayProtocolCloseContext,
+  GatewayProtocolConnectAuthority,
   GatewayProtocolSocket,
   GatewayProtocolTiming,
 } from "./protocol-client-contract.js";
@@ -30,6 +31,7 @@ export {
 
 export type {
   GatewayProtocolCloseContext,
+  GatewayProtocolConnectAuthority,
   GatewayProtocolSocket,
   GatewayProtocolSocketHandlers,
   GatewayProtocolTiming,
@@ -45,9 +47,11 @@ export class GatewayProtocolClient<TPlan> {
   private readonly listeners = new GatewayEventListeners<EventFrame>();
   private stopped = true;
   private generation = 0;
+  private connectionAbort: AbortController | null = null;
   private lastSeq: number | null = null;
   private connectNonce: string | null = null;
   private connectChallengeTs: number | null | undefined;
+  private serverCapabilities: string[] = [];
   private connectSent = false;
   private connectRequestSent = false;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -105,6 +109,7 @@ export class GatewayProtocolClient<TPlan> {
 
   stop(): void {
     this.stopped = true;
+    this.connectionAbort?.abort();
     this.clearHandshakeTimer();
     this.reconnectSignal = null;
     this.reconnectSupervisor.reset();
@@ -141,6 +146,7 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   closeSocket(code?: number, reason?: string): void {
+    this.connectionAbort?.abort();
     this.socket?.close(code, reason);
   }
 
@@ -188,6 +194,7 @@ export class GatewayProtocolClient<TPlan> {
     this.lastSeq = null; // Outer event sequences belong to one WebSocket generation.
     this.connectNonce = null;
     this.connectChallengeTs = undefined;
+    this.serverCapabilities = [];
     this.connectSent = this.connectRequestSent = false;
     this.socketOpened = false;
     this.helloReceived = false;
@@ -224,6 +231,7 @@ export class GatewayProtocolClient<TPlan> {
       return;
     }
     this.generation = generation;
+    this.connectionAbort = new AbortController();
     this.socket = socket;
     const now = this.nowMs();
     this.connectTiming = {
@@ -290,7 +298,9 @@ export class GatewayProtocolClient<TPlan> {
       planOrPromise = this.opts.buildConnectPlan({
         nonce: this.connectNonce,
         challengeTs: this.connectChallengeTs,
+        serverCapabilities: this.serverCapabilities,
         generation,
+        ...this.connectAuthority(socket, generation),
       });
     } catch (error) {
       this.handleConnectPlanError(socket, generation, error);
@@ -310,7 +320,7 @@ export class GatewayProtocolClient<TPlan> {
     generation: number,
     error: unknown,
   ): void {
-    if (!this.isActive(socket, generation)) {
+    if (!this.isConnectCurrent(socket, generation)) {
       return;
     }
     const normalized = error instanceof Error ? error : new Error(String(error));
@@ -326,10 +336,11 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   private sendConnectPlan(socket: GatewayProtocolSocket, generation: number, plan: TPlan): void {
-    if (!this.isActive(socket, generation) || !socket.isOpen()) {
+    if (!this.isConnectCurrent(socket, generation)) {
       return;
     }
     const context = {
+      ...this.connectAuthority(socket, generation),
       generation,
       nonce: this.connectNonce,
       challengeTs: this.connectChallengeTs,
@@ -340,7 +351,9 @@ export class GatewayProtocolClient<TPlan> {
     this.connectRequestSent = true;
     void this.request<HelloOk>("connect", this.opts.buildConnectParams(plan))
       .then((hello) => {
-        if (!this.isActive(socket, generation)) {
+        // Closing transports remain current until their close callback runs;
+        // a late response must not publish readiness or reset reconnect backoff.
+        if (!this.isConnectCurrent(socket, generation)) {
           return;
         }
         this.helloReceived = true;
@@ -348,8 +361,17 @@ export class GatewayProtocolClient<TPlan> {
         this.connectFailure = undefined;
         this.reconnectSupervisor.reset();
         this.recordTiming("hello", generation, plan);
-        this.opts.onConnectHello?.(hello, context);
-        this.invoke("hello", () => this.opts.onHello?.(hello));
+        const publishHello = () => {
+          if (!this.isConnectCurrent(socket, generation)) {
+            return;
+          }
+          this.invoke("hello", () => this.opts.onHello?.(hello));
+        };
+        const accepted = this.opts.onConnectHello?.(hello, context);
+        if (accepted instanceof Promise) {
+          return accepted.then(publishHello);
+        }
+        return publishHello();
       })
       .catch((error: unknown) => {
         if (!this.isActive(socket, generation)) {
@@ -359,18 +381,37 @@ export class GatewayProtocolClient<TPlan> {
           error instanceof GatewayProtocolRequestError
             ? error
             : new GatewayProtocolRequestError({ message: String(error) });
+        // Close can arrive while adapter cleanup is pending; retain the received error now.
+        this.connectFailure = { error: requestError };
         const outcome = this.opts.onConnectFailure?.(requestError, context) ?? {
           closeCode: 1008,
           closeReason: "connect failed",
         };
-        this.connectFailure = {
-          error: requestError,
-          reconnectDelayMs: outcome.reconnectDelayMs,
+        const applyFailure = (decision: Awaited<typeof outcome>) => {
+          if (!this.isActive(socket, generation)) {
+            return;
+          }
+          this.connectFailure = {
+            error: requestError,
+            reconnectDelayMs: decision.reconnectDelayMs,
+          };
+          if (decision.stop) {
+            this.stopped = true;
+          }
+          this.connectionAbort?.abort();
+          socket.close(decision.closeCode, decision.closeReason);
         };
-        if (outcome.stop) {
-          this.stopped = true;
+        if (outcome instanceof Promise) {
+          return outcome.then(applyFailure);
         }
-        socket.close(outcome.closeCode, outcome.closeReason);
+        return applyFailure(outcome);
+      })
+      .catch((error: unknown) => {
+        if (!this.isConnectCurrent(socket, generation)) {
+          return;
+        }
+        this.opts.onConnectError?.(error instanceof Error ? error : new Error(String(error)));
+        this.closeSocket(1008, "connect failed");
       });
   }
 
@@ -388,7 +429,9 @@ export class GatewayProtocolClient<TPlan> {
     if (isGatewayEventFrame(parsed)) {
       this.opts.onActivity?.();
       if (parsed.event === "connect.challenge") {
-        const payload = parsed.payload as { nonce?: unknown; ts?: unknown } | undefined;
+        const payload = parsed.payload as
+          | { nonce?: unknown; ts?: unknown; capabilities?: unknown }
+          | undefined;
         const nonce = typeof payload?.nonce === "string" ? payload.nonce.trim() : "";
         if (!nonce) {
           if (this.opts.handshake.mode === "require-challenge") {
@@ -399,6 +442,9 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.connectNonce = nonce;
+        this.serverCapabilities = Array.isArray(payload?.capabilities)
+          ? payload.capabilities.filter((value): value is string => typeof value === "string")
+          : [];
         const challengeTs = payload?.ts;
         this.connectChallengeTs =
           typeof challengeTs === "number" && Number.isSafeInteger(challengeTs) && challengeTs >= 0
@@ -457,6 +503,7 @@ export class GatewayProtocolClient<TPlan> {
       return;
     }
     this.socket = null;
+    this.connectionAbort?.abort();
     this.clearHandshakeTimer();
     const context: GatewayProtocolCloseContext = {
       ...this.closeContext(),
@@ -474,7 +521,21 @@ export class GatewayProtocolClient<TPlan> {
     this.invoke("close", () => this.opts.onClose?.(context, decision));
     // A close callback can reconnect synchronously and already own the next socket or retry.
     if (decision.retry && !this.stopped && !this.socket && !this.reconnectSignal) {
-      this.scheduleReconnect(decision.reconnectDelayMs ?? context.connectFailure?.reconnectDelayMs);
+      const error = context.connectFailure?.error;
+      // Apply server timing only after adapter policy admits retry; a hint
+      // must never turn terminal authentication failures into reconnects.
+      const retryAfterMs =
+        error instanceof GatewayProtocolRequestError &&
+        error.retryable &&
+        error.retryAfterMs !== undefined &&
+        Number.isFinite(error.retryAfterMs) &&
+        error.retryAfterMs > 0
+          ? error.retryAfterMs
+          : undefined;
+      this.scheduleReconnect(
+        decision.reconnectDelayMs ?? context.connectFailure?.reconnectDelayMs,
+        retryAfterMs,
+      );
     }
   }
 
@@ -486,10 +547,9 @@ export class GatewayProtocolClient<TPlan> {
     this.opts.onConnectError?.(error);
   }
 
-  private scheduleReconnect(overrideMs?: number): void {
+  private scheduleReconnect(overrideMs?: number, minimumMs = 0): void {
     if (overrideMs !== undefined) {
-      // Retry-After is a floor for this wait, not a failed attempt. Preserve
-      // the exponential sequence for the next transport failure.
+      // Adapter-owned startup timing does not consume a transport attempt.
       this.reconnectSupervisor.nextDelayOverrideMs = overrideMs;
     }
     const retry = this.reconnectSupervisor.next();
@@ -498,7 +558,10 @@ export class GatewayProtocolClient<TPlan> {
     }
     this.reconnectSignal = retry.signal;
     // Ignore cancelled sleeps only; reconnect start failures stay observable.
-    void sleepWithAbort(retry.delayMs, retry.signal).then(
+    // Wire Retry-After is a floor: repeated short hints must still advance
+    // normal backoff, while adapter-owned startup overrides stay independent.
+    const delayMs = overrideMs ?? Math.max(retry.delayMs, minimumMs);
+    void sleepWithAbort(delayMs, retry.signal).then(
       () => {
         if (this.reconnectSignal !== retry.signal) {
           return;
@@ -522,6 +585,31 @@ export class GatewayProtocolClient<TPlan> {
       helloReceived: this.helloReceived,
       connectRequestSent: this.connectRequestSent,
       connectFailure: this.connectFailure,
+    };
+  }
+
+  private isConnectCurrent(socket: GatewayProtocolSocket, generation: number): boolean {
+    return (
+      this.isActive(socket, generation) && socket.isOpen() && !this.connectionAbort?.signal.aborted
+    );
+  }
+
+  private connectAuthority(
+    socket: GatewayProtocolSocket,
+    generation: number,
+  ): GatewayProtocolConnectAuthority {
+    const signal = this.connectionAbort?.signal;
+    if (!signal) {
+      throw new Error("gateway connection authority is unavailable");
+    }
+    return {
+      signal,
+      assertCurrent: () => {
+        signal.throwIfAborted();
+        if (!this.isConnectCurrent(socket, generation)) {
+          throw new Error("gateway connection retired");
+        }
+      },
     };
   }
 

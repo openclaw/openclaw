@@ -1,0 +1,183 @@
+import crypto from "node:crypto";
+import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
+import {
+  type EligibleNodeMessages,
+  resolveEligibleNodeFromList,
+} from "../../shared/node-resolve.js";
+import { isEligibleComputerNode } from "../computer-use-node-capabilities.js";
+import {
+  bindGatewayComputerCleanup,
+  loadGatewayComputerStatus,
+  type GatewayComputerStatus,
+} from "./computer-tool-gateway.js";
+import type { ComputerHost, ComputerToolTransport } from "./computer-tool-shared.js";
+import { COMPUTER_ACT_COMMAND, SCREEN_SNAPSHOT_COMMAND } from "./computer-tool-shared.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  callGatewayTool,
+  shouldUseInProcessGatewayTool,
+  type GatewayCallOptions,
+} from "./gateway.js";
+import { listNodes, type NodeListNode } from "./nodes-utils.js";
+
+export type ComputerBinding = {
+  host: ComputerHost;
+  gatewayOpts: GatewayCallOptions;
+  capabilities?: ComputerUseCapabilityDescriptor;
+  invoke: (
+    request: Omit<Parameters<ComputerToolTransport["invoke"]>[0], "nodeId">,
+  ) => Promise<unknown>;
+};
+
+export const NOT_COMPUTER_CAPABLE_HINT =
+  "enable Computer Control in the OpenClaw app and approve the pairing update";
+const COMPUTER_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
+  ineligibleExact: (query, eligibleIds) =>
+    `node "${query}" is not computer-capable (needs a connected node advertising ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT}; ` +
+    `eligible node ids: ${eligibleIds})`,
+  nameResolveFailed: (reason, eligibleIds) =>
+    `${reason} (eligible computer-capable node ids: ${eligibleIds})`,
+  noneEligible: () =>
+    `no connected computer-capable node (a node must advertise ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT})`,
+  multipleEligible: (eligible) =>
+    `multiple computer-capable nodes connected; pass node explicitly: ${eligible
+      .map((node) => node.nodeId)
+      .join(", ")}`,
+};
+
+async function resolveComputerNode(
+  gatewayOpts: GatewayCallOptions,
+  query?: string,
+  signal?: AbortSignal,
+): Promise<NodeListNode> {
+  const nodes = await listNodes(gatewayOpts, signal);
+  return resolveEligibleNodeFromList(nodes, query, isEligibleComputerNode, COMPUTER_NODE_MESSAGES);
+}
+
+async function invokeNodeCommand(params: {
+  gatewayOpts: GatewayCallOptions;
+  nodeId: string;
+  command: string;
+  commandParams: Record<string, unknown>;
+  timeoutMs?: number;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+}): Promise<unknown> {
+  const raw = await callGatewayTool<{ payload: unknown }>(
+    "node.invoke",
+    params.gatewayOpts,
+    {
+      nodeId: params.nodeId,
+      command: params.command,
+      params: params.commandParams,
+      timeoutMs: params.timeoutMs,
+      idempotencyKey: params.idempotencyKey ?? crypto.randomUUID(),
+    },
+    { signal: params.signal },
+  );
+  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : raw;
+}
+
+export async function resolveComputerBinding(params: {
+  executionId: string;
+  sessionTransport?: ComputerToolTransport;
+  gatewayStatus?: GatewayComputerStatus;
+  target?: "gateway" | "node";
+  node?: string;
+  gatewayOpts: GatewayCallOptions;
+  signal?: AbortSignal;
+}): Promise<ComputerBinding> {
+  const sessionTransport = params.sessionTransport;
+  if (sessionTransport) {
+    const node = await sessionTransport.resolveNode(params.node, params.signal);
+    return {
+      host: { host: "node", nodeId: node.nodeId },
+      gatewayOpts: {},
+      capabilities: sessionTransport.computerUse ?? node.computerUse,
+      invoke: (request) => sessionTransport.invoke({ ...request, nodeId: node.nodeId }),
+    };
+  }
+  const gatewayOverride =
+    params.gatewayOpts.gatewayUrl !== undefined || params.gatewayOpts.gatewayToken !== undefined;
+  // Published remote Gateways select paired nodes without the newer computer RPCs.
+  if (
+    params.target !== "node" &&
+    params.node === undefined &&
+    (params.target === "gateway" || !gatewayOverride)
+  ) {
+    const assertHostedCaller = () => {
+      if (
+        !shouldUseInProcessGatewayTool(params.gatewayOpts) ||
+        !getGatewayToolCallerIdentity()?.operationalRunInstance
+      ) {
+        throw new Error(
+          "Gateway computer control requires an agent run hosted by that Gateway. " +
+            "Use a paired node, or use computer.invoke over one persistent operator RPC connection.",
+        );
+      }
+    };
+    if (params.target === "gateway") {
+      assertHostedCaller();
+    }
+    const prepared = !gatewayOverride ? params.gatewayStatus : undefined;
+    const usePrepared =
+      prepared?.available === true ||
+      (prepared?.configured === false && params.target !== "gateway");
+    const gateway =
+      (usePrepared ? prepared : undefined) ??
+      (await loadGatewayComputerStatus(params.gatewayOpts, params.signal));
+    if (gateway.available) {
+      assertHostedCaller();
+      const close = await bindGatewayComputerCleanup({
+        options: params.gatewayOpts,
+        generation: gateway.computerUse.provider.generation,
+        executionId: params.executionId,
+      });
+      return {
+        host: { host: "gateway" },
+        gatewayOpts: params.gatewayOpts,
+        capabilities: gateway.computerUse,
+        invoke: async (request) => {
+          if (
+            close &&
+            request.command === COMPUTER_ACT_COMMAND &&
+            request.commandParams.action === "__close_execution"
+          ) {
+            return await close(
+              typeof request.commandParams.reason === "string"
+                ? request.commandParams.reason
+                : "completed",
+            );
+          }
+          const raw = await callGatewayTool<{ payload: unknown }>(
+            "computer.invoke",
+            params.gatewayOpts,
+            {
+              generation: gateway.computerUse.provider.generation,
+              command: request.command,
+              params: request.commandParams,
+              timeoutMs: request.timeoutMs,
+              idempotencyKey: request.idempotencyKey ?? crypto.randomUUID(),
+            },
+            { signal: request.signal },
+          );
+          return raw.payload;
+        },
+      };
+    }
+    if (gateway.configured || params.target === "gateway") {
+      throw new Error(
+        (gateway.configured ? gateway.error : undefined) ??
+          "Gateway computer is unavailable; enable its computer provider and desktop session",
+      );
+    }
+  }
+  const node = await resolveComputerNode(params.gatewayOpts, params.node, params.signal);
+  return {
+    host: { host: "node", nodeId: node.nodeId },
+    gatewayOpts: params.gatewayOpts,
+    capabilities: node.computerUse,
+    invoke: (request) =>
+      invokeNodeCommand({ ...request, nodeId: node.nodeId, gatewayOpts: params.gatewayOpts }),
+  };
+}

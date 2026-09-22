@@ -2,14 +2,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
 import {
   analyzeArgvCommand,
   createExecApprovalPolicySnapshot,
   ensureExecApprovalsSnapshot,
   mergeExecApprovalsSocketDefaults,
+  minSecurity,
+  maxAsk,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
   redactExecApprovals,
@@ -40,11 +46,12 @@ import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_DEVICE_APPS_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_WORKER_DESKTOP_COMPUTER_COMMAND,
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
+import { invokeNodeWorkerComputerCommand, type NodeWorkerComputer } from "./computer-command.js";
 import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
 import {
   handleClaudeCliNodeInvoke,
@@ -53,6 +60,7 @@ import {
 import { invokeDeviceApps } from "./invoke-device-apps.js";
 import { invokeNodeFileCommand } from "./invoke-file-commands.js";
 import { boundMcpToolResultPayload } from "./invoke-mcp-result.js";
+import { runCommand } from "./invoke-run-command.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -62,7 +70,6 @@ import type {
   ExecEventPayload,
   ExecFinishedEventParams,
   NodeInvokeRequestPayload,
-  RunResult,
   SkillBinsProvider,
   SystemRunParams,
 } from "./invoke-types.js";
@@ -75,8 +82,6 @@ import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
-const OUTPUT_CAP = 200_000;
-
 const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
 
 const OUTPUT_EVENT_TAIL = 20_000;
@@ -88,6 +93,7 @@ type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
   workerBundleInstaller?: NodeWorkerBundleInstallerControl;
   workerSupervisor?: NodeWorkerSupervisorControl;
   workerWorkspace?: NodeWorkerWorkspaceRuntime;
+  workerComputer?: NodeWorkerComputer;
 };
 
 const execHostEnforced =
@@ -112,6 +118,8 @@ type SystemExecApprovalsSetParams = {
 };
 
 type SystemRunPrepareParams = {
+  security?: ExecSecurity;
+  ask?: ExecAsk;
   command?: unknown;
   rawCommand?: unknown;
   cwd?: unknown;
@@ -247,7 +255,7 @@ type ExecApprovalsSnapshot = {
 export type { NodeInvokeRequestPayload, SkillBinsProvider } from "./invoke-types.js";
 
 function resolveExecSecurity(value?: string): ExecSecurity {
-  return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
+  return value === "deny" || value === "allowlist" || value === "full" ? value : DEFAULT_SECURITY;
 }
 
 function isCmdExeInvocation(argv: string[]): boolean {
@@ -260,7 +268,7 @@ function isCmdExeInvocation(argv: string[]): boolean {
 }
 
 function resolveExecAsk(value?: string): ExecAsk {
-  return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
+  return value === "off" || value === "on-miss" || value === "always" ? value : DEFAULT_ASK;
 }
 
 /** Builds a sanitized execution environment with controlled PATH and approved overrides. */
@@ -294,82 +302,6 @@ function requireExecApprovalsBaseHash(
   }
   if (baseHash !== snapshot.hash) {
     throw new Error("INVALID_REQUEST: exec approvals changed; reload and retry");
-  }
-}
-
-// libuv reports a failed pre-exec `chdir(cwd)` as `spawn <argv0> ENOENT`, which
-// blames the shell/command instead of the missing working directory (#85202).
-// When the spawn cwd is set but is not a usable directory, name the real cause.
-// Diagnostic only: the run still fails closed — the cwd is never dropped to fall
-// back to the node's default directory.
-function clarifyNodeExecCwdSpawnError(
-  error: NodeJS.ErrnoException,
-  cwd: string | undefined,
-): string {
-  const message = error.message;
-  if (!cwd || (error.code !== "ENOENT" && error.code !== "ENOTDIR")) {
-    return message;
-  }
-  let reason: "does not exist" | "is not a directory";
-  try {
-    const stats = fs.statSync(cwd);
-    // An existing directory means the cwd is fine and the ENOENT is about the
-    // executable itself; leave the original message untouched.
-    if (stats.isDirectory()) {
-      return message;
-    }
-    reason = "is not a directory";
-  } catch (statError) {
-    const statCode = (statError as NodeJS.ErrnoException).code;
-    if (statCode !== "ENOENT" && statCode !== "ENOTDIR") {
-      return message;
-    }
-    reason =
-      statCode === "ENOTDIR" || error.code === "ENOTDIR" ? "is not a directory" : "does not exist";
-  }
-  return `node exec working directory ${reason} on the node host: ${cwd} (os reported: ${message})`;
-}
-
-async function runCommand(
-  argv: string[],
-  cwd: string | undefined,
-  env: Record<string, string> | undefined,
-  timeoutMs: number | undefined,
-  signal?: AbortSignal,
-): Promise<RunResult> {
-  try {
-    const result = await runCommandWithTimeout(argv, {
-      baseEnv: env,
-      cwd,
-      killProcessTree: true,
-      maxCombinedOutputBytes: OUTPUT_CAP,
-      maxOutputBytes: OUTPUT_CAP,
-      outputCapture: "head",
-      input: Buffer.alloc(0),
-      signal,
-      timeoutMs: timeoutMs && timeoutMs > 0 ? timeoutMs : undefined,
-    });
-    const timedOut = result.termination === "timeout";
-    const exitCode = result.code ?? undefined;
-    return {
-      exitCode,
-      timedOut,
-      success: exitCode === 0 && !timedOut,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      error: null,
-      truncated: Boolean(result.stdoutTruncatedBytes || result.stderrTruncatedBytes),
-    };
-  } catch (err) {
-    return {
-      exitCode: undefined,
-      timedOut: false,
-      success: false,
-      stdout: "",
-      stderr: "",
-      error: clarifyNodeExecCwdSpawnError(err as NodeJS.ErrnoException, cwd),
-      truncated: false,
-    };
   }
 }
 
@@ -463,12 +395,14 @@ async function sendExecFinishedEvent(
 async function runViaMacAppExecHost(params: {
   approvals: ExecApprovalsResolved;
   request: ExecHostRequest;
+  signal?: AbortSignal;
 }): Promise<ExecHostResponse | null> {
   const { approvals, request } = params;
   return await requestExecHostViaSocket({
     socketPath: approvals.socketPath,
     token: approvals.token,
     request,
+    signal: params.signal,
   });
 }
 
@@ -604,6 +538,18 @@ async function dispatchInvoke(
   runtime: NodeHostPrivateInvokeRuntime = {},
 ) {
   const command = frame.command ?? "";
+  if (
+    (command === NODE_WORKER_DESKTOP_COMPUTER_COMMAND && !runtime.workerComputer) ||
+    (runtime.workerComputer && (command === "screen.snapshot" || command === "computer.act"))
+  ) {
+    await sendErrorResult(
+      client,
+      frame,
+      "UNAVAILABLE",
+      "computer command is unavailable on this node transport",
+    );
+    return;
+  }
   const workerSupervisorResult = await invokeNodeWorkerSupervisorCommand({
     command,
     paramsJSON: frame.paramsJSON,
@@ -834,7 +780,15 @@ async function dispatchInvoke(
         : context;
     let pluginResult: string | null;
     try {
-      pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
+      pluginResult =
+        command === NODE_WORKER_DESKTOP_COMPUTER_COMMAND
+          ? await invokeNodeWorkerComputerCommand({
+              paramsJSON: frame.paramsJSON,
+              computer: runtime.workerComputer!,
+              invoke: (innerCommand, paramsJSON) =>
+                invokePlugin(innerCommand, paramsJSON, undefined, invokeContext),
+            })
+          : await invokePlugin(command, frame.paramsJSON, io, invokeContext);
     } finally {
       pluginInvocationActive = false;
     }
@@ -856,7 +810,25 @@ async function dispatchInvoke(
         decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
         frame.nodeId,
       );
-      const prepared = buildSystemRunApprovalPlan(params);
+      const { getRuntimeConfig } = await import("../config/config.js");
+      const execPolicy = await resolveEffectiveSystemRunExecPolicy({
+        cfg: getRuntimeConfig(),
+        agentId: normalizeOptionalString(params.agentId),
+        defaultSecurity: resolveExecSecurity(undefined),
+        defaultAsk: resolveExecAsk(undefined),
+        requireSocket: preferMacAppExecHost,
+      });
+      // Omitted caller policy retains the approval-preparation contract. A caller can
+      // narrow local policy, but cannot turn a restrictive node into an ordinary launch.
+      const bindApproval =
+        params.security === undefined ||
+        params.ask === undefined ||
+        minSecurity(execPolicy.security, resolveExecSecurity(params.security)) !== "full" ||
+        maxAsk(execPolicy.ask, resolveExecAsk(params.ask)) !== "off" ||
+        params.strictInlineEval === true ||
+        execPolicy.agentExec?.strictInlineEval === true ||
+        execPolicy.globalExec?.strictInlineEval === true;
+      const prepared = buildSystemRunApprovalPlan(params, bindApproval);
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
         return;
@@ -869,14 +841,6 @@ async function dispatchInvoke(
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepareEnv.message);
         return;
       }
-      const { getRuntimeConfig } = await import("../config/config.js");
-      const execPolicy = await resolveEffectiveSystemRunExecPolicy({
-        cfg: getRuntimeConfig(),
-        agentId: prepared.plan.agentId ?? undefined,
-        defaultSecurity: resolveExecSecurity(undefined),
-        defaultAsk: resolveExecAsk(undefined),
-        requireSocket: preferMacAppExecHost,
-      });
       const plan = {
         ...prepared.plan,
         policySnapshot: createExecApprovalPolicySnapshot({
@@ -890,13 +854,15 @@ async function dispatchInvoke(
           security: execPolicy.security,
           ask: execPolicy.ask,
         },
-        allowAlwaysCoverage: await buildSystemRunAllowAlwaysCoverage({
-          argv: prepared.plan.argv,
-          rawCommand: typeof params.rawCommand === "string" ? params.rawCommand : null,
-          cwd: prepared.plan.cwd,
-          env: prepareEnv.env,
-          strictInlineEval: params.strictInlineEval === true,
-        }),
+        allowAlwaysCoverage: bindApproval
+          ? await buildSystemRunAllowAlwaysCoverage({
+              argv: prepared.plan.argv,
+              rawCommand: typeof params.rawCommand === "string" ? params.rawCommand : null,
+              cwd: prepared.plan.cwd,
+              env: prepareEnv.env,
+              strictInlineEval: params.strictInlineEval === true,
+            })
+          : { complete: false, patterns: [] },
       });
     } catch (err) {
       await sendInvalidRequestResult(client, frame, err);
@@ -943,21 +909,8 @@ async function dispatchInvoke(
     sendInvokeResult: async (result) => {
       await sendInvokeResult(client, frame, result);
     },
-    sendExecFinishedEvent: async ({
-      sessionKey,
-      runId,
-      commandText,
-      result,
-      suppressNotifyOnExit,
-    }) => {
-      await sendExecFinishedEvent({
-        client,
-        sessionKey,
-        runId,
-        commandText,
-        result,
-        suppressNotifyOnExit,
-      });
+    sendExecFinishedEvent: async (event) => {
+      await sendExecFinishedEvent({ ...event, client });
     },
     preferMacAppExecHost,
   });
@@ -1036,12 +989,7 @@ function decodeParams<T>(raw?: string | null): T {
 async function sendInvokeResult(
   client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
-  result: {
-    ok: boolean;
-    payload?: unknown;
-    payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
-  },
+  result: Parameters<typeof buildNodeInvokeResultParams>[1],
 ) {
   try {
     await client.request("node.invoke.result", buildNodeInvokeResultParams(frame, result));
@@ -1066,14 +1014,7 @@ function buildNodeInvokeResultParams(
   payloadJSON?: string;
   error?: { code?: string; message?: string };
 } {
-  const params: {
-    id: string;
-    nodeId: string;
-    ok: boolean;
-    payload?: unknown;
-    payloadJSON?: string;
-    error?: { code?: string; message?: string };
-  } = {
+  const params: ReturnType<typeof buildNodeInvokeResultParams> = {
     id: frame.id,
     nodeId: frame.nodeId,
     ok: result.ok,
@@ -1096,15 +1037,5 @@ async function sendNodeEvent(client: NodeHostClient, event: string, payload: unk
   } catch {
     // ignore: node events are best-effort
   }
-}
-
-const testing = {
-  clarifyNodeExecCwdSpawnError,
-  runCommand,
-} as const;
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.nodeHostInvokeTestApi")] =
-    testing;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,10 +7,14 @@ import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import {
   countActiveRunsForSessionFromRuns,
+  listSwarmRunsForGroupFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
 } from "./subagent-registry-queries.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
+import {
+  getSubagentRunsSnapshotForRead,
+  getSubagentRunsSnapshotForRunIds,
+} from "./subagent-registry-state.js";
 import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
 
 export function createSubagentRegistryPublicApi(config: {
@@ -27,13 +31,21 @@ export function createSubagentRegistryPublicApi(config: {
   const findRunById = (records: Map<string, SubagentRunRecord>, runId: string) =>
     records.get(runId) ?? [...records.values()].find((entry) => entry.swarmRunId === runId);
 
-  function leasePendingAgentSteeringItems(params: {
+  async function leasePendingAgentSteeringItems(params: {
     requesterSessionKey: string;
     leaseId: string;
     now?: number;
   }) {
     restoreOnce();
-    const leased = leasePendingAgentSteeringItemsFromSubagentRuns({ ...params, runs });
+    const leased = await leasePendingAgentSteeringItemsFromSubagentRuns({
+      ...params,
+      runs,
+      readResult: async (entry) => {
+        const { readSubagentRunAnnounceResult } =
+          await import("../announce/subagent-announce-output.js");
+        return readSubagentRunAnnounceResult(entry);
+      },
+    });
     if (leased) {
       persist(...leased.runIds);
     }
@@ -80,7 +92,9 @@ export function createSubagentRegistryPublicApi(config: {
     entries: Map<string, SubagentRunRecord>;
   } {
     const byId = new Map<string, SubagentRunRecord>();
-    for (const entry of readRuns().values()) {
+    // Waiters need only their targets; retained results must not expand every wake's maps.
+    const selected = getSubagentRunsSnapshotForRunIds(runs, runIds);
+    for (const entry of selected.values()) {
       byId.set(entry.runId, entry);
       if (entry.swarmRunId) {
         byId.set(entry.swarmRunId, entry);
@@ -139,15 +153,11 @@ export function createSubagentRegistryPublicApi(config: {
     requesterSessionKey?: string,
     requesterAgentId?: string,
   ): SubagentRunRecord[] {
-    const key = groupId.trim();
-    const requesterKey = requesterSessionKey?.trim();
-    return [...readRuns().values()].filter(
-      (entry) =>
-        entry.collect === true &&
-        entry.groupId === key &&
-        (!requesterKey ||
-          (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
-        (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
+    return listSwarmRunsForGroupFromRuns(
+      readRuns(),
+      groupId,
+      requesterSessionKey,
+      requesterAgentId,
     );
   }
 

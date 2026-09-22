@@ -1,18 +1,48 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel-normalize.js";
+import type { CronAuthenticatedChannelRequester } from "./cron-creator-authority-grant.types.js";
 
 const DEFAULT_TTL_MS = 15 * 60_000;
 const MAX_TTL_MS = 24 * 60 * 60_000;
 const MAX_ACTIVE_CAPABILITIES = 4096;
 const RUN_LIFETIME_EXPIRES_AT_MS = Number.MAX_SAFE_INTEGER;
 const CAPABILITY_COMPLETION_GRACE_MS = 60_000;
+
+/** Host-only scheduled grant; never serialized or passed to channel plugins. */
+type ScheduledMessageActionAuthority = {
+  policy: ScheduledToolPolicyContext;
+  assertCurrent: () => void;
+  channelRequester?: CronAuthenticatedChannelRequester;
+};
+
+/** Private handoff from authenticated dashboard admission to the exact reply run. */
+export type DashboardMessageReadAdmission = Readonly<{
+  agentId: string;
+  runId: string;
+  sessionKey: string;
+  sessionId?: string;
+  assertCurrent: () => void;
+}>;
+
+export type MessageActionAuthorization = {
+  requesterAccountId?: string;
+  requesterSenderId?: string;
+  toolContext?: InternalChannelThreadingToolContext;
+  /** @internal Redeemed from the process-local turn capability. */
+  scheduled?: ScheduledMessageActionAuthority;
+  /** @internal Redeemed only by the host; never serialized or passed to plugins. */
+  assertDashboardReadCurrent?: () => void;
+};
 
 type MessageActionRequesterIdentity = {
   requesterAccountId?: string;
@@ -60,9 +90,31 @@ type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
   agentId: string;
   runId: string;
   sessionKey: string;
+  scheduled?: ScheduledMessageActionAuthority;
+  assertDashboardReadCurrent?: () => void;
 };
 
 const capabilitiesByToken = new Map<string, MessageActionTurnCapability>();
+const invocationConfig = new AsyncLocalStorage<{
+  token: string;
+  resolve: () => OpenClawConfig;
+}>();
+
+/** Bound local requests retain one admitted invocation's resolved configuration. */
+export function withMessageActionInvocationConfig<T>(
+  token: string | undefined,
+  resolve: (() => OpenClawConfig) | undefined,
+  run: () => T,
+): T {
+  return token && resolve ? invocationConfig.run({ token, resolve }, run) : run();
+}
+
+export function readMessageActionInvocationConfig(
+  token: string | undefined,
+): OpenClawConfig | undefined {
+  const invocation = invocationConfig.getStore();
+  return token && invocation?.token === token ? invocation.resolve() : undefined;
+}
 
 export function isTrustedMessageActionTurnIngress(provider: string | null | undefined): boolean {
   const normalized = normalizeMessageChannel(provider);
@@ -121,8 +173,8 @@ function sweepExpiredMessageActionTurnCapabilities(nowMs: number = Date.now()): 
 }
 
 /**
- * Mint an opaque current-turn capability from trusted channel ingress.
- * Public Gateway agent requests never receive this token.
+ * Mint an opaque capability from admitted channel/dashboard input or a live cron occurrence.
+ * Unattested Gateway agent requests never receive this token.
  */
 export function mintMessageActionTurnCapability(params: {
   agentId: string;
@@ -136,6 +188,8 @@ export function mintMessageActionTurnCapability(params: {
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
   toolContext?: InternalChannelThreadingToolContext;
+  scheduled?: ScheduledMessageActionAuthority;
+  assertDashboardReadCurrent?: () => void;
   expiresWithRun?: boolean;
   ttlMs?: number;
   nowMs?: number;
@@ -152,7 +206,7 @@ export function mintMessageActionTurnCapability(params: {
   // growing process memory without creating a second persistent state path.
   pruneMapToMaxSize(capabilitiesByToken, MAX_ACTIVE_CAPABILITIES - 1);
   const token = randomBytes(32).toString("base64url");
-  capabilitiesByToken.set(token, {
+  const capability: MessageActionTurnCapability = {
     agentId,
     runId,
     sessionKey,
@@ -167,18 +221,47 @@ export function mintMessageActionTurnCapability(params: {
     requesterSenderUsername: normalizeOptionalString(params.requesterSenderUsername),
     requesterSenderE164: normalizeOptionalString(params.requesterSenderE164),
     toolContext: copyToolContext(params.toolContext),
-  });
+  };
+  const scheduled = params.scheduled;
+  if (scheduled) {
+    capability.scheduled = {
+      policy: structuredClone(scheduled.policy),
+      ...(scheduled.channelRequester
+        ? { channelRequester: structuredClone(scheduled.channelRequester) }
+        : {}),
+      assertCurrent: () => {
+        if (capabilitiesByToken.get(token) !== capability || Date.now() >= capability.expiresAtMs) {
+          throw new Error("message action turn capability is no longer active");
+        }
+        scheduled.assertCurrent();
+      },
+    };
+  }
+  const assertDashboardReadCurrent = params.assertDashboardReadCurrent;
+  if (assertDashboardReadCurrent) {
+    capability.assertDashboardReadCurrent = () => {
+      if (capabilitiesByToken.get(token) !== capability || Date.now() >= capability.expiresAtMs) {
+        throw new Error("message action turn capability is no longer active");
+      }
+      assertDashboardReadCurrent();
+    };
+  }
+  capabilitiesByToken.set(token, capability);
   return token;
 }
 
-export function resolveMessageActionTurnCapability(params: {
+type MessageActionTurnCapabilityLookup = {
   token?: string;
   agentId: string;
   runId?: string;
   sessionKey: string;
   sessionId?: string;
   nowMs?: number;
-}): AgentRuntimeMessageActionContext | undefined {
+};
+
+function resolveStoredMessageActionTurnCapability(
+  params: MessageActionTurnCapabilityLookup,
+): MessageActionTurnCapability | undefined {
   const token = params.token?.trim();
   if (!token) {
     return undefined;
@@ -200,6 +283,23 @@ export function resolveMessageActionTurnCapability(params: {
   ) {
     return undefined;
   }
+  return capability;
+}
+
+/** Serializable context deliberately excludes host-only grants and their closures. */
+export function resolveMessageActionTurnCapability(
+  params: MessageActionTurnCapabilityLookup,
+): AgentRuntimeMessageActionContext | undefined {
+  const capability = resolveStoredMessageActionTurnCapability(params);
+  if (!capability) {
+    return undefined;
+  }
+  return copyMessageActionTurnContext(capability);
+}
+
+function copyMessageActionTurnContext(
+  capability: MessageActionTurnCapability,
+): AgentRuntimeMessageActionContext {
   return {
     expiresAtMs: capability.expiresAtMs,
     sessionId: capability.sessionId,
@@ -211,6 +311,20 @@ export function resolveMessageActionTurnCapability(params: {
     requesterSenderE164: capability.requesterSenderE164,
     toolContext: copyToolContext(capability.toolContext),
   };
+}
+
+/** Redeems private authority only in the host that owns the opaque capability. */
+export function resolveMessageActionTurnAuthorization(
+  params: MessageActionTurnCapabilityLookup,
+): (AgentRuntimeMessageActionContext & MessageActionAuthorization) | undefined {
+  const capability = resolveStoredMessageActionTurnCapability(params);
+  return capability
+    ? {
+        ...copyMessageActionTurnContext(capability),
+        scheduled: capability.scheduled,
+        assertDashboardReadCurrent: capability.assertDashboardReadCurrent,
+      }
+    : undefined;
 }
 
 export function revokeMessageActionTurnCapability(token: string | undefined): boolean {

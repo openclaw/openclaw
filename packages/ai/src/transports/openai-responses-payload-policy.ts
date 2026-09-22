@@ -10,7 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { supportsOpenAIReasoningEffort } from "../providers/openai-reasoning-effort.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
-import { parsePositiveInteger } from "./transport-utils.js";
+import { parsePositiveInteger } from "./positive-integer.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;
@@ -24,88 +24,44 @@ type OpenAIResponsesPayloadModel = {
 
 type OpenAIResponsesPayloadPolicyOptions = {
   extraParams?: Record<string, unknown>;
-  storeMode?: "provider-policy" | "disable" | "preserve";
+  storeMode?: "provider-policy" | "transport-default" | "disable" | "preserve";
   enablePromptCacheStripping?: boolean;
   enableServerCompaction?: boolean;
 };
 
 type OpenAIResponsesEndpointClass =
   | "default"
-  | "anthropic-public"
-  | "cerebras-native"
-  | "chutes-native"
-  | "deepseek-native"
-  | "github-copilot-native"
-  | "groq-native"
-  | "mistral-public"
-  | "moonshot-native"
-  | "modelstudio-native"
   | "openai-public"
   | "openai"
-  | "opencode-native"
   | "azure-openai"
-  | "openrouter"
   | "xai-native"
-  | "zai-native"
-  | "google-generative-ai"
-  | "google-vertex"
-  | "local"
-  | "custom"
-  | "invalid";
+  | "custom";
 
 type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number | undefined;
+  defaultManagedReasoningEffort: "none" | undefined;
+  explicitContinuationOptIn: boolean;
   explicitStore: boolean | undefined;
   shouldStripDisabledReasoningPayload: boolean;
   shouldStripInputStatus: boolean;
   shouldStripPromptCache: boolean;
   shouldStripStore: boolean;
   useServerCompaction: boolean;
+  usesInstructionsField: boolean;
 };
 
 type OpenAIResponsesPayloadCapabilities = {
   allowsOpenAIServiceTier: boolean;
   allowsResponsesStore: boolean;
+  explicitContinuationOptIn: boolean;
   shouldStripResponsesPromptCache: boolean;
   supportsResponsesStoreField: boolean;
   usesKnownNativeOpenAIRoute: boolean;
+  usesVerifiedInstructionsEndpoint: boolean;
 };
 
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
-const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
-  "https://coding-intl.dashscope.aliyuncs.com/v1",
-  "https://coding.dashscope.aliyuncs.com/v1",
-  "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-]);
-const MOONSHOT_NATIVE_BASE_URLS = new Set([
-  "https://api.moonshot.ai/v1",
-  "https://api.moonshot.cn/v1",
-]);
-
-function normalizeComparableBaseUrl(value: unknown): string | undefined {
-  const trimmed = readStringValue(value)?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const parsedValue = /^[a-z0-9.[\]-]+(?::\d+)?(?:[/?#].*)?$/i.test(trimmed)
-    ? `https://${trimmed}`
-    : trimmed;
-  try {
-    const url = new URL(parsedValue);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return undefined;
-    }
-    url.hash = "";
-    url.search = "";
-    return url.toString().replace(/\/+$/, "").toLowerCase();
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveUrlHostname(value: unknown): string | undefined {
   const trimmed = readStringValue(value)?.trim();
   if (!trimmed) {
@@ -122,63 +78,22 @@ function resolveUrlHostname(value: unknown): string | undefined {
   }
 }
 
-function hostMatchesSuffix(host: string, suffix: string): boolean {
-  return suffix.startsWith(".") || suffix.startsWith("-")
-    ? host.endsWith(suffix)
-    : host === suffix || host.endsWith(`.${suffix}`);
-}
-
-function isLocalEndpointHost(host: string): boolean {
-  return (
-    LOCAL_ENDPOINT_HOSTS.has(host) ||
-    host.endsWith(".localhost") ||
-    host.endsWith(".local") ||
-    host.endsWith(".internal")
-  );
-}
-
-function resolveBundledOpenAIResponsesEndpointClass(
-  baseUrl: unknown,
-): OpenAIResponsesEndpointClass {
+function resolveOpenAIResponsesEndpointClass(baseUrl: unknown): OpenAIResponsesEndpointClass {
   const trimmed = readStringValue(baseUrl)?.trim();
   if (!trimmed) {
     return "default";
   }
   const host = resolveUrlHostname(trimmed);
   if (!host) {
-    return "invalid";
+    return "custom";
   }
-  const comparableBaseUrl = normalizeComparableBaseUrl(trimmed);
-
   switch (host) {
-    case "api.anthropic.com":
-      return "anthropic-public";
-    case "api.cerebras.ai":
-      return "cerebras-native";
-    case "llm.chutes.ai":
-      return "chutes-native";
-    case "api.deepseek.com":
-      return "deepseek-native";
-    case "api.groq.com":
-      return "groq-native";
-    case "api.mistral.ai":
-      return "mistral-public";
     case "api.openai.com":
       return "openai-public";
     case "chatgpt.com":
       return "openai";
-    case "generativelanguage.googleapis.com":
-      return "google-generative-ai";
-    case "aiplatform.googleapis.com":
-      return "google-vertex";
     case "api.x.ai":
       return "xai-native";
-    case "api.z.ai":
-      return "zai-native";
-  }
-
-  if (hostMatchesSuffix(host, ".githubcopilot.com")) {
-    return "github-copilot-native";
   }
   if (
     [
@@ -186,27 +101,9 @@ function resolveBundledOpenAIResponsesEndpointClass(
       ".cognitiveservices.azure.com",
       ".services.ai.azure.com",
       ".api.cognitive.microsoft.com",
-    ].some((suffix) => hostMatchesSuffix(host, suffix))
+    ].some((suffix) => host.endsWith(suffix))
   ) {
     return "azure-openai";
-  }
-  if (hostMatchesSuffix(host, "openrouter.ai")) {
-    return "openrouter";
-  }
-  if (hostMatchesSuffix(host, "opencode.ai")) {
-    return "opencode-native";
-  }
-  if (hostMatchesSuffix(host, "-aiplatform.googleapis.com")) {
-    return "google-vertex";
-  }
-  if (comparableBaseUrl && MOONSHOT_NATIVE_BASE_URLS.has(comparableBaseUrl)) {
-    return "moonshot-native";
-  }
-  if (comparableBaseUrl && MODELSTUDIO_NATIVE_BASE_URLS.has(comparableBaseUrl)) {
-    return "modelstudio-native";
-  }
-  if (isLocalEndpointHost(host)) {
-    return "local";
   }
   return "custom";
 }
@@ -217,7 +114,11 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
 
 function readCompatPayloadBoolean(
   compat: unknown,
-  key: "supportsPromptCacheKey" | "supportsStore",
+  key:
+    | "supportsInstructions"
+    | "supportsPromptCacheKey"
+    | "supportsResponsesContinuation"
+    | "supportsStore",
 ): boolean | undefined {
   if (!compat || typeof compat !== "object") {
     return undefined;
@@ -232,7 +133,7 @@ function resolveOpenAIResponsesPayloadCapabilities(
   const provider = normalizeOptionalLowercaseString(model.provider);
   const api = normalizeOptionalLowercaseString(model.api);
   const isOpenAIProvider = provider === "openai";
-  const endpointClass = resolveBundledOpenAIResponsesEndpointClass(model.baseUrl);
+  const endpointClass = resolveOpenAIResponsesEndpointClass(model.baseUrl);
   const isResponsesApi = isOpenAIResponsesApi(api);
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
@@ -242,6 +143,15 @@ function resolveOpenAIResponsesPayloadCapabilities(
   const usesKnownNativeOpenAIRoute =
     endpointClass === "default" ? provider === "openai" : usesKnownNativeOpenAIEndpoint;
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
+  // Only native OpenAI and xAI's main route have verified instructions support.
+  // Azure remains distinct from native OpenAI for this capability; other routes
+  // require compat.supportsInstructions to opt in after contract verification.
+  const usesVerifiedNativeOpenAIRoute =
+    endpointClass === "default"
+      ? provider === "openai"
+      : endpointClass === "openai-public" || endpointClass === "openai";
+  const usesVerifiedInstructionsEndpoint =
+    usesVerifiedNativeOpenAIRoute || endpointClass === "xai-native";
   const promptCacheKeySupport = readCompatPayloadBoolean(model.compat, "supportsPromptCacheKey");
   const shouldStripResponsesPromptCache =
     promptCacheKeySupport === true
@@ -251,6 +161,14 @@ function resolveOpenAIResponsesPayloadCapabilities(
         : isResponsesApi && usesExplicitProxyLikeEndpoint;
   const supportsResponsesStoreField =
     readCompatPayloadBoolean(model.compat, "supportsStore") !== false && isResponsesApi;
+  // Explicit model capability enables stored HTTP continuation on compatible routes.
+  // Azure and ChatGPT transport contracts stay excluded by API/provider identity.
+  const explicitContinuationOptIn =
+    (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
+    supportsResponsesStoreField &&
+    provider !== "azure-openai" &&
+    provider !== "azure-openai-responses" &&
+    readCompatPayloadBoolean(model.compat, "supportsResponsesContinuation") === true;
 
   return {
     allowsOpenAIServiceTier:
@@ -270,9 +188,11 @@ function resolveOpenAIResponsesPayloadCapabilities(
       provider !== undefined &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,
+    explicitContinuationOptIn,
     shouldStripResponsesPromptCache,
     supportsResponsesStoreField,
     usesKnownNativeOpenAIRoute,
+    usesVerifiedInstructionsEndpoint,
   };
 }
 
@@ -312,20 +232,27 @@ export function resolveOpenAIResponsesServerCompactionPlan(
   };
 }
 
-/** Resolve the manual Responses compact-endpoint gate for one route. */
+/** Resolve the Responses compact-endpoint gate for one route and compaction purpose. */
 export function resolveOpenAIResponsesCompactEndpointPlan(
   model: OpenAIResponsesPayloadModel,
   extraParams?: Record<string, unknown>,
+  purpose: "manual" | "budget" = "manual",
 ): { enabled: boolean } {
   const configured = extraParams?.responsesCompactEndpoint;
   const provider = typeof model.provider === "string" ? normalizeProviderId(model.provider) : "";
+  const api = normalizeOptionalLowercaseString(model.api);
+  const endpointClass = resolveOpenAIResponsesEndpointClass(model.baseUrl);
+  const enabledByDefault =
+    ((provider === "xai" || provider === "x-ai") && endpointClass === "xai-native") ||
+    (purpose === "budget" &&
+      provider === "openai" &&
+      api === "openai-responses" &&
+      endpointClass === "openai-public");
   return {
     enabled:
-      isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api)) &&
-      (configured === true ||
-        (configured !== false &&
-          (provider === "xai" || provider === "x-ai") &&
-          resolveBundledOpenAIResponsesEndpointClass(model.baseUrl) === "xai-native")),
+      isOpenAIResponsesApi(api) &&
+      configured !== false &&
+      (configured === true || enabledByDefault),
   };
 }
 
@@ -367,20 +294,28 @@ export function resolveOpenAIResponsesPayloadPolicy(
 ): OpenAIResponsesPayloadPolicy {
   const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
   const storeMode = options.storeMode ?? "provider-policy";
+  // Public policy callers retain a strict no-store choice through disable.
+  // Transport defaults stay stateless unless the model explicitly opts in.
+  // Native provider wrappers enable storage separately through provider-policy.
   const explicitStore =
     storeMode === "preserve"
       ? undefined
-      : storeMode === "disable"
+      : storeMode === "disable" ||
+          (storeMode === "transport-default" && !capabilities.explicitContinuationOptIn)
         ? capabilities.supportsResponsesStoreField
           ? false
           : undefined
-        : capabilities.allowsResponsesStore
+        : capabilities.allowsResponsesStore || capabilities.explicitContinuationOptIn
           ? true
           : undefined;
   const isResponsesApi = isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api));
   const shouldStripDisabledReasoningPayload =
     isResponsesApi &&
-    (!capabilities.usesKnownNativeOpenAIRoute || !supportsOpenAIReasoningEffort(model, "none"));
+    // Custom endpoints need an explicit capability; model-name hints describe native routes.
+    !supportsOpenAIReasoningEffort(
+      capabilities.usesKnownNativeOpenAIRoute ? model : { compat: model.compat },
+      "none",
+    );
   // Strict OpenAI-compatible Responses endpoints reject output-only fields
   // such as `status` on replayed input items. Strip them for non-native routes.
   const shouldStripInputStatus = isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute;
@@ -388,10 +323,23 @@ export function resolveOpenAIResponsesPayloadPolicy(
     model,
     options.extraParams,
   );
+  // Verified native OpenAI/xAI routes default instructions on; compat overrides.
+  // Other endpoints could silently drop this field and the system prompt.
+  // Stored-continuation support does not prove instructions support.
+  const instructionsCompat = readCompatPayloadBoolean(model.compat, "supportsInstructions");
+  const usesInstructionsField = instructionsCompat ?? capabilities.usesVerifiedInstructionsEndpoint;
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
     compactThreshold: serverCompactionPlan.threshold,
+    // Managed proxies inherit their provider default; explicit none is a separate capability.
+    defaultManagedReasoningEffort:
+      capabilities.usesKnownNativeOpenAIRoute &&
+      !shouldStripDisabledReasoningPayload &&
+      model.provider !== "github-copilot"
+        ? "none"
+        : undefined,
+    explicitContinuationOptIn: capabilities.explicitContinuationOptIn,
     explicitStore,
     shouldStripDisabledReasoningPayload,
     shouldStripInputStatus,
@@ -402,6 +350,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
       readCompatPayloadBoolean(model.compat, "supportsStore") === false &&
       isResponsesApi,
     useServerCompaction: options.enableServerCompaction === true && serverCompactionPlan.enabled,
+    usesInstructionsField,
   };
 }
 

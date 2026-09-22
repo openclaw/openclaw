@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createSandbox,
+  expectOnlyCanonicalPathCommands,
   createSandboxFsBridge,
   createSeededSandboxFsBridge,
   getScriptsFromCalls,
@@ -56,7 +57,7 @@ describe("sandbox fs bridge shell compatibility", () => {
       await bridge.rename({ from: "a.txt", to: "c.txt" });
       await bridge.stat({ filePath: "c.txt" });
 
-      expect(mockedExecDockerRaw).toHaveBeenCalledTimes(19);
+      expect(mockedExecDockerRaw).toHaveBeenCalledTimes(21);
 
       const scripts = getScriptsFromCalls();
       const executables = mockedExecDockerRaw.mock.calls.map(([args]) => args[3] ?? "");
@@ -96,7 +97,7 @@ describe("sandbox fs bridge shell compatibility", () => {
       await expect(bridge.readFile({ filePath: inboundPath })).resolves.toEqual(
         Buffer.from("voice"),
       );
-      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+      expectOnlyCanonicalPathCommands();
     });
   });
 
@@ -116,7 +117,7 @@ describe("sandbox fs bridge shell compatibility", () => {
       await expect(bridge.readFile({ filePath: "--leading.txt" })).resolves.toEqual(
         Buffer.from("dash"),
       );
-      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+      expectOnlyCanonicalPathCommands();
     });
   });
 
@@ -141,7 +142,7 @@ describe("sandbox fs bridge shell compatibility", () => {
       await expect(bridge.readFile({ filePath: "/workspace-two/README.md" })).resolves.toEqual(
         Buffer.from("bind-read"),
       );
-      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+      expectOnlyCanonicalPathCommands();
     });
   });
 

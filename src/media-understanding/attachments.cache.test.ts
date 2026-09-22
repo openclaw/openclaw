@@ -5,6 +5,7 @@ import JSZip from "jszip";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { MediaAttachmentCache } from "./attachments.js";
+import { resolveMediaAttachmentLocalRoots } from "./runner.attachments.js";
 
 const { buildRandomTempFilePathMock, readRemoteMediaBufferMock } = vi.hoisted(() => ({
   buildRandomTempFilePathMock: vi.fn(),
@@ -36,28 +37,98 @@ const PNG_1X1 = Buffer.from(
 const AMBIGUOUS_WEBM = Buffer.from("1a45dfa3874282847765626d", "hex");
 
 describe("media understanding attachment cache", () => {
+  it("keeps session-scoped attachment roots authoritative through the cache getBuffer path", async () => {
+    await withTestDir({ prefix: "openclaw-media-cache-session-scoped-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "session-a");
+      const siblingDir = path.join(stateDir, "sandboxes", "session-b");
+      const sharedWorkspaceDir = path.join(stateDir, "workspace");
+      for (const dir of [sessionWorkspaceDir, siblingDir, sharedWorkspaceDir]) {
+        await fs.mkdir(dir, { recursive: true });
+      }
+      const ownFile = path.join(sessionWorkspaceDir, "own.txt");
+      const siblingFile = path.join(siblingDir, "sibling.txt");
+      const hostWorkspaceFile = path.join(sharedWorkspaceDir, "host-secret.txt");
+      await fs.writeFile(ownFile, "OWN-SANDBOX-CONTENT");
+      await fs.writeFile(siblingFile, "SIBLING-SANDBOX-CONTENT");
+      await fs.writeFile(hostWorkspaceFile, "SHARED-HOST-WORKSPACE-CONTENT");
+
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      try {
+        const roots = resolveMediaAttachmentLocalRoots({
+          cfg: {} as never,
+          ctx: {} as never,
+          workspaceDir: sessionWorkspaceDir,
+        });
+        // Production construction (apply.ts / file-context.ts): the scoped root set is
+        // authoritative — merging sessionless defaults back in would restore the shared
+        // workspace/sandbox parents for sandboxed sessions.
+        const cache = new MediaAttachmentCache(
+          [
+            { index: 0, path: ownFile },
+            { index: 1, path: siblingFile },
+            { index: 2, path: hostWorkspaceFile },
+          ],
+          { localPathRoots: roots, includeDefaultLocalPathRoots: false },
+        );
+
+        const own = await cache.getBuffer({
+          attachmentIndex: 0,
+          maxBytes: 1024,
+          timeoutMs: 1000,
+        });
+        expect(own.buffer.toString()).toBe("OWN-SANDBOX-CONTENT");
+        await expect(
+          cache.getBuffer({ attachmentIndex: 1, maxBytes: 1024, timeoutMs: 1000 }),
+        ).rejects.toThrow(/outside allowed roots/i);
+        await expect(
+          cache.getBuffer({ attachmentIndex: 2, maxBytes: 1024, timeoutMs: 1000 }),
+        ).rejects.toThrow(/outside allowed roots/i);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     buildRandomTempFilePathMock.mockReset();
     readRemoteMediaBufferMock.mockReset();
   });
 
-  it("prefers local attachment bytes over conflicting declared MIME", async () => {
+  it.each([
+    {
+      name: "prefers local attachment bytes over conflicting declared MIME",
+      fileName: "photo.jpg",
+      buffer: PNG_1X1,
+      declaredMime: "application/pdf",
+      expected: { mime: "image/png", class: "image" },
+    },
+    {
+      name: "infers long UTF-8 text from a generically typed local attachment",
+      fileName: "notes",
+      buffer: Buffer.from("验证".repeat(700), "utf8"),
+      declaredMime: "application/octet-stream",
+      expected: { mime: "text/plain", class: "text" },
+    },
+  ])("$name", async (testCase) => {
     await withTestDir({ prefix: "openclaw-media-cache-mime-local-" }, async (base) => {
-      const attachmentPath = path.join(base, "photo.jpg");
-      await fs.writeFile(attachmentPath, PNG_1X1);
+      const attachmentPath = path.join(base, testCase.fileName);
+      await fs.writeFile(attachmentPath, testCase.buffer);
       const cache = new MediaAttachmentCache(
-        [{ index: 0, path: attachmentPath, mime: "application/pdf" }],
+        [{ index: 0, path: attachmentPath, mime: testCase.declaredMime }],
         { localPathRoots: [base] },
       );
 
       const result = await cache.getBuffer({
         attachmentIndex: 0,
-        maxBytes: 1024,
+        maxBytes: testCase.buffer.byteLength,
         timeoutMs: 1000,
       });
 
-      expect(result.mime).toBe("image/png");
+      expect(result.mime).toBe(testCase.expected.mime);
+      expect(result.classification).toEqual(testCase.expected);
+      expect(result.buffer).toEqual(testCase.buffer);
     });
   });
 
@@ -79,50 +150,71 @@ describe("media understanding attachment cache", () => {
     expect(result.mime).toBe("image/png");
   });
 
-  it("bounds bytes consumed when a local file grows after stat", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-growth-" }, async (base) => {
-      const attachmentPath = path.join(base, "growing.png");
-      await fs.writeFile(attachmentPath, PNG_1X1);
-      const maxBytes = PNG_1X1.length;
-      const open = fs.open.bind(fs);
-      let consumed = 0;
-      let grew = false;
-      const growBeforeRead = async () => {
-        if (!grew) {
-          grew = true;
-          await fs.appendFile(attachmentPath, Buffer.alloc(4096));
-        }
-      };
-      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        const handle = await open(...args);
-        const read = handle.read.bind(handle);
-        vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
-          await growBeforeRead();
-          const result = await read(...readArgs);
-          consumed += result.bytesRead;
-          return result;
+  it.each(["unchanged", "growing", "read-failure"] as const)(
+    "closes one bounded local read when the file is %s",
+    async (behavior) => {
+      await withTestDir({ prefix: "openclaw-media-cache-growth-" }, async (base) => {
+        const attachmentPath = path.join(base, "growing.png");
+        await fs.writeFile(attachmentPath, PNG_1X1);
+        const maxBytes = PNG_1X1.length;
+        const open = fs.open.bind(fs);
+        let consumed = 0;
+        let opens = 0;
+        let closes = 0;
+        let grew = false;
+        const readError = new Error("synthetic read failure");
+        const growBeforeRead = async () => {
+          if (behavior === "read-failure") {
+            throw readError;
+          }
+          if (behavior === "growing" && !grew) {
+            grew = true;
+            await fs.appendFile(attachmentPath, Buffer.alloc(4096));
+          }
+        };
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await open(...args);
+          opens += 1;
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementation(async () => {
+            closes += 1;
+            await close();
+          });
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
+            await growBeforeRead();
+            const result = await read(...readArgs);
+            consumed += result.bytesRead;
+            return result;
+          });
+          const readFile = handle.readFile.bind(handle);
+          vi.spyOn(handle, "readFile").mockImplementation(async (...readArgs) => {
+            await growBeforeRead();
+            const result = await readFile(...readArgs);
+            consumed += result.length;
+            return result;
+          });
+          return handle;
         });
-        const readFile = handle.readFile.bind(handle);
-        vi.spyOn(handle, "readFile").mockImplementation(async (...readArgs) => {
-          await growBeforeRead();
-          const result = await readFile(...readArgs);
-          consumed += result.length;
-          return result;
+        const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
+          localPathRoots: [base],
+          includeDefaultLocalPathRoots: false,
         });
-        return handle;
-      });
-      const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
-        localPathRoots: [base],
-        includeDefaultLocalPathRoots: false,
-      });
 
-      await expect(
-        cache.getBuffer({ attachmentIndex: 0, maxBytes, timeoutMs: 1000 }),
-      ).rejects.toMatchObject({ reason: "maxBytes" });
-      expect(consumed).toBeGreaterThan(0);
-      expect(consumed).toBeLessThanOrEqual(maxBytes + 1);
-    });
-  });
+        const result = cache.getBuffer({ attachmentIndex: 0, maxBytes, timeoutMs: 1000 });
+        if (behavior === "unchanged") {
+          await expect(result).resolves.toMatchObject({ buffer: PNG_1X1 });
+        } else if (behavior === "growing") {
+          await expect(result).rejects.toMatchObject({ reason: "maxBytes" });
+        } else {
+          await expect(result).rejects.toBe(readError);
+        }
+        expect(opens).toBe(1);
+        expect(closes).toBe(opens);
+        expect(consumed).toBe(behavior === "read-failure" ? 0 : maxBytes + Number(grew));
+      });
+    },
+  );
 
   it.each(["local", "staged"] as const)(
     "enforces a zero-byte path limit for %s files",

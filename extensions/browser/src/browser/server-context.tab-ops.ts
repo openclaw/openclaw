@@ -48,6 +48,7 @@ import type {
   BrowserTab,
   ProfileRuntimeState,
 } from "./server-context.types.js";
+import { findRetainedBrowserDashboardTab, readBrowserDashboardTabs } from "./session-tab-store.js";
 import {
   assignTabAlias,
   assignTabAliases,
@@ -65,7 +66,12 @@ type ProfileTabOps = {
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (
     url: string,
-    opts?: { label?: string; signal?: AbortSignal; timeoutMs?: number },
+    opts?: {
+      label?: string;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      requireDurableOwnership?: boolean;
+    },
   ) => Promise<BrowserOpenResult>;
   labelTab: (
     targetId: string,
@@ -130,10 +136,15 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       if (typeof listPagesViaPlaywright === "function") {
         const ssrfPolicy = getCdpControlPolicy();
         const resolved = state().resolved;
-        const timeoutMs = Math.max(
-          resolved.remoteCdpTimeoutMs,
-          resolved.remoteCdpHandshakeTimeoutMs,
-        );
+        // Enumeration budget must reflect the work of listing all tabs, not the
+        // CDP handshake. Prefer a caller-supplied deadline, fall back to the
+        // action-level timeout, and keep it no smaller than the handshake so a
+        // healthy but slow enumeration is not mistaken for a dead connection.
+        const enumerationBudgetMs =
+          typeof options?.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
+            ? options.timeoutMs
+            : resolved.actionTimeoutMs;
+        const timeoutMs = Math.max(enumerationBudgetMs, resolved.remoteCdpHandshakeTimeoutMs);
         await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
         const pages = await listPagesViaPlaywright({
           cdpUrl: profile.cdpUrl,
@@ -142,6 +153,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           ...(capabilities.requiresCompleteTargetEnumeration
             ? { requireCompleteTargetList: true }
             : {}),
+          ...(options?.signal ? { signal: options.signal } : {}),
         });
         return pages.filter(isSelectableCdpBrowserTarget).map((p) => ({
           targetId: p.targetId,
@@ -210,10 +222,18 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       return;
     }
 
-    const candidates = pageTabs.filter((tab) => tab.targetId !== keepTargetId);
+    const retained = readBrowserDashboardTabs();
+    const candidates = pageTabs.filter(
+      (tab) =>
+        tab.targetId !== keepTargetId &&
+        !findRetainedBrowserDashboardTab(tab.targetId, profile.name, retained),
+    );
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
     for (const tab of candidates.slice(0, excessCount)) {
       options?.signal?.throwIfAborted();
+      if (findRetainedBrowserDashboardTab(tab.targetId, profile.name)) {
+        continue;
+      }
       await fetchOk(
         appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
         undefined,
@@ -249,25 +269,31 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
 
   const withTabOwnership = async (
     tab: BrowserTab,
-    options?: BrowserOperationOptions,
+    options?: BrowserOperationOptions & { requireDurableOwnership?: boolean },
   ): Promise<BrowserOpenResult> => {
     const cdpTimeouts = getRemoteCdpActionTimeouts();
-    return {
-      ...tab,
-      ownership: await resolveCdpTabOwnership({
-        profileName: profile.name,
-        cdpUrl: profile.cdpUrl,
-        nativeTargetId: tab.targetId,
-        signal: options?.signal,
-        timeoutMs: cdpTimeouts?.httpTimeoutMs,
-        ssrfPolicy: getCdpControlPolicy(),
-      }),
-    };
+    const ownership = await resolveCdpTabOwnership({
+      profileName: profile.name,
+      cdpUrl: profile.cdpUrl,
+      nativeTargetId: tab.targetId,
+      signal: options?.signal,
+      timeoutMs: cdpTimeouts?.httpTimeoutMs,
+      ssrfPolicy: getCdpControlPolicy(),
+    });
+    if (options?.requireDurableOwnership && ownership.status !== "durable") {
+      throw new Error("Browser could not verify durable ownership for the new dashboard tab");
+    }
+    return { ...tab, ownership };
   };
 
   const openTab = async (
     url: string,
-    opts?: { label?: string; signal?: AbortSignal; timeoutMs?: number },
+    opts?: {
+      label?: string;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      requireDurableOwnership?: boolean;
+    },
   ): Promise<BrowserOpenResult> => {
     opts?.signal?.throwIfAborted();
     const normalizedLabel = opts?.label === undefined ? undefined : normalizeTabLabel(opts.label);
@@ -302,6 +328,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             cdpUrl: profile.cdpUrl,
             url,
             cdpPolicy,
+            ...(opts?.signal ? { signal: opts.signal } : {}),
             ...ssrfPolicyOpts,
           });
           createdTargetId = page.targetId;

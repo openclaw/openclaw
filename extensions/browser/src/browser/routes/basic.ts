@@ -74,10 +74,31 @@ async function withBasicProfileRoute(params: {
     return;
   }
   try {
-    await params.run(profileCtx);
+    await withBasicRequestAdmission(params.req, () => params.run(profileCtx), profileCtx.profile);
   } catch (err) {
     return handleBrowserRouteError(params.res, err);
   }
+}
+
+async function withBasicRequestAdmission<T>(
+  req: BrowserRequest,
+  run: () => Promise<T>,
+  profile?: ProfileContext["profile"],
+): Promise<T> {
+  const assertRequesterCurrent = () => {
+    req.signal?.throwIfAborted();
+    req.requester?.signal.throwIfAborted();
+    if (req.requester?.isCurrent() === false) {
+      throw new BrowserError(
+        "The Gateway connection that requested the browser operation has ended.",
+        401,
+      );
+    }
+  };
+  assertRequesterCurrent();
+  await req.assertCurrent?.(profile);
+  assertRequesterCurrent();
+  return await run();
 }
 
 function registerBasicProfilePost(
@@ -101,13 +122,15 @@ function registerBasicProfilePost(
 }
 
 async function withProfilesServiceMutation(params: {
+  req: BrowserRequest;
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   run: (service: ReturnType<typeof createBrowserProfilesService>) => Promise<unknown>;
 }) {
   try {
-    const service = createBrowserProfilesService(params.ctx);
-    const result = await params.run(service);
+    const result = await withBasicRequestAdmission(params.req, () =>
+      params.run(createBrowserProfilesService(params.ctx)),
+    );
     params.res.json(result);
   } catch (err) {
     return handleBrowserRouteError(params.res, err);
@@ -378,6 +401,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       const status = await runProfileRouteOperation({
         profileCtx,
         signal: req.signal,
+        assertCurrent: req.assertCurrent,
         run: async (signal) => await buildBrowserStatus(ctx, profileCtx, signal),
       });
       res.json(status);
@@ -395,15 +419,18 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       const report = await runProfileRouteOperation({
         profileCtx,
         signal: req.signal,
+        assertCurrent: req.assertCurrent,
         run: async (signal) => {
           const status = await buildBrowserStatus(ctx, profileCtx, signal);
+          const relay = ctx.state().extensionRelays?.get(profileCtx.profile.name);
+          const identity =
+            relay?.ownership === "borrowed"
+              ? (await relay.client.status()).identity
+              : relay?.bridge.identity;
           const doctorReport = buildBrowserDoctorReport({
             status,
             extensionVersion:
-              status.transport === "extension"
-                ? ctx.state().extensionRelays?.get(profileCtx.profile.name)?.bridge.identity
-                    ?.extensionVersion
-                : undefined,
+              status.transport === "extension" ? identity?.extensionVersion : undefined,
           });
           if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
             doctorReport.checks.push(await runBrowserLiveProbe(profileCtx, signal));
@@ -467,6 +494,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }
 
     await withProfilesServiceMutation({
+      req,
       res,
       ctx,
       run: async (service) =>
@@ -495,22 +523,22 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     } catch (err) {
       return jsonError(res, 400, err instanceof Error ? err.message : "invalid domains");
     }
-    try {
-      const service = createBrowserProfilesService(ctx);
-      const result = await service.importSystemProfile(
-        {
-          browser: toStringOrEmpty(body.browser) || undefined,
-          systemProfile: toStringOrEmpty(body.systemProfile) || undefined,
-          into: toStringOrEmpty(body.into) || undefined,
-          domains,
-          makeDefault: toBoolean(body.makeDefault) ?? false,
-        },
-        { signal: req.signal },
-      );
-      res.json(result);
-    } catch (err) {
-      return handleBrowserRouteError(res, err);
-    }
+    await withProfilesServiceMutation({
+      req,
+      res,
+      ctx,
+      run: async (service) =>
+        await service.importSystemProfile(
+          {
+            browser: toStringOrEmpty(body.browser) || undefined,
+            systemProfile: toStringOrEmpty(body.systemProfile) || undefined,
+            into: toStringOrEmpty(body.into) || undefined,
+            domains,
+            makeDefault: toBoolean(body.makeDefault) ?? false,
+          },
+          { signal: req.signal },
+        ),
+    });
   });
 
   // Delete a profile
@@ -521,6 +549,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }
 
     await withProfilesServiceMutation({
+      req,
       res,
       ctx,
       run: async (service) => await service.deleteProfile(name),

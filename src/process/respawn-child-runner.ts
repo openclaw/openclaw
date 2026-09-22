@@ -20,7 +20,7 @@ export function runRespawnChildWithSignalBridge(params: {
   detachForProcessTree?: boolean;
   stdioIsTerminal?: boolean;
   runtime: RespawnChildRuntime;
-  onError: (error: unknown) => void;
+  onError: (error: unknown) => void | Promise<void>;
 }): ChildProcess {
   const { command, args, env, runtime, onError } = params;
   const stdioIsTerminal = params.stdioIsTerminal ?? (process.stdin.isTTY || process.stdout.isTTY);
@@ -106,6 +106,10 @@ export function runRespawnChildWithSignalBridge(params: {
     }
     clearSignalTimers();
     if (signal) {
+      if (process.platform !== "win32") {
+        process.kill(process.pid, signal);
+        return;
+      }
       const forwardedSignalExitCode =
         !hardKillBackstopStarted && signal === firstForwardedSignal
           ? signal === "SIGINT"
@@ -125,8 +129,14 @@ export function runRespawnChildWithSignalBridge(params: {
       return;
     }
     clearSignalTimers();
-    onError(error);
-    runtime.exit(1);
+    const reporting = onError(error);
+    const exit = () => runtime.exit(1);
+    // A failed spawn retains async diagnostics until settled, including formatter failure.
+    if (reporting) {
+      void reporting.then(exit, exit);
+    } else {
+      exit();
+    }
   });
 
   return child;

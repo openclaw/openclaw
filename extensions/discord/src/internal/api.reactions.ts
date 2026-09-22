@@ -1,5 +1,6 @@
 // Discord plugin module implements api.reactions behavior.
 import { Routes } from "discord-api-types/v10";
+import { normalizeDiscordMessageId } from "./api.messages.js";
 import type { RequestQuery } from "./rest-scheduler.js";
 import type { RequestClient } from "./rest.js";
 
@@ -9,7 +10,9 @@ export async function createOwnMessageReaction(
   messageId: string,
   encodedEmoji: string,
 ): Promise<void> {
-  await rest.put(Routes.channelMessageOwnReaction(channelId, messageId, encodedEmoji));
+  await rest.put(
+    Routes.channelMessageOwnReaction(channelId, normalizeDiscordMessageId(messageId), encodedEmoji),
+  );
 }
 
 export async function deleteOwnMessageReaction(
@@ -18,7 +21,9 @@ export async function deleteOwnMessageReaction(
   messageId: string,
   encodedEmoji: string,
 ): Promise<void> {
-  await rest.delete(Routes.channelMessageOwnReaction(channelId, messageId, encodedEmoji));
+  await rest.delete(
+    Routes.channelMessageOwnReaction(channelId, normalizeDiscordMessageId(messageId), encodedEmoji),
+  );
 }
 
 export async function listMessageReactionUsers(
@@ -29,7 +34,7 @@ export async function listMessageReactionUsers(
   query?: RequestQuery,
 ): Promise<Array<{ id: string; username?: string; discriminator?: string }>> {
   return (await rest.get(
-    Routes.channelMessageReaction(channelId, messageId, encodedEmoji),
+    Routes.channelMessageReaction(channelId, normalizeDiscordMessageId(messageId), encodedEmoji),
     query,
   )) as Array<{
     id: string;

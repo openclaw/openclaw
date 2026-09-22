@@ -3,8 +3,8 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
+  readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   ZAI_CN_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
@@ -107,21 +107,27 @@ async function probeZaiChatCompletions(params: {
     let errorCode: string | undefined;
     let errorMessage: string | undefined;
     try {
-      const bytes = await readResponseWithLimit(res, ZAI_DETECT_ERROR_BODY_MAX_BYTES, {
+      // Delegate to the canonical provider JSON reader: it applies the same
+      // bounded read plus a fatal UTF-8 decode, so a body that is not valid
+      // UTF-8 throws into the catch below instead of being U+FFFD-substituted
+      // and then read as a genuine endpoint-classification signal.
+      const json = await readProviderJsonResponse<{
+        error?: { code?: unknown; message?: unknown };
+        code?: unknown;
+        msg?: unknown;
+        message?: unknown;
+      }>(res, "Z.AI endpoint probe", {
+        maxBytes: ZAI_DETECT_ERROR_BODY_MAX_BYTES,
         // Resolve immediately before body consumption so headers and every
         // body shape share one operation budget, including slow-drip streams.
         timeoutMs: resolveTimeoutMs,
+        // The probe's deadline owns the budget, including caller timeouts over 30s.
+        chunkTimeoutMs: 0,
         onTimeout: ({ timeoutMs }) =>
           new Error(`Z.AI probe error body timed out after ${timeoutMs}ms`),
         onOverflow: ({ maxBytes }) =>
           new Error(`Z.AI probe error body exceeded size limit (${maxBytes} bytes)`),
       });
-      const json = JSON.parse(new TextDecoder().decode(bytes)) as {
-        error?: { code?: unknown; message?: unknown };
-        code?: unknown;
-        msg?: unknown;
-        message?: unknown;
-      };
       const code = json?.error?.code ?? json?.code;
       const msg = json?.error?.message ?? json?.msg ?? json?.message;
       if (typeof code === "string") {

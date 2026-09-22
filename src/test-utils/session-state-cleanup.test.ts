@@ -13,40 +13,19 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  cleanupSessionStateForTest,
-  resetSessionStateCleanupRuntimeForTests,
-  setSessionStateCleanupRuntimeForTests,
-} from "./session-state-cleanup.js";
-
-const drainFileLockStateMock = vi.hoisted(() => vi.fn(async () => undefined));
-const drainSessionStoreWriterQueuesMock = vi.hoisted(() => vi.fn(async () => undefined));
-
-async function flushMicrotasks(rounds = 3): Promise<void> {
-  for (let index = 0; index < rounds; index += 1) {
-    await Promise.resolve();
-  }
-}
+import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 describe("cleanupSessionStateForTest", () => {
   beforeEach(() => {
     vi.useRealTimers();
     clearSessionStoreCacheForTest();
     resetFileLockStateForTest();
-    drainFileLockStateMock.mockClear();
-    drainSessionStoreWriterQueuesMock.mockClear();
-    setSessionStateCleanupRuntimeForTests({
-      drainFileLockStateForTest: drainFileLockStateMock,
-      drainSessionStoreWriterQueuesForTest: drainSessionStoreWriterQueuesMock,
-    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
     clearSessionStoreCacheForTest();
     resetFileLockStateForTest();
-    resetSessionStateCleanupRuntimeForTests();
-    vi.restoreAllMocks();
   });
 
   it("waits for in-flight session store writer queues before clearing test state", async () => {
@@ -54,14 +33,7 @@ describe("cleanupSessionStateForTest", () => {
     const storePath = path.join(fixtureRoot, "openclaw-sessions.json");
     const started = createDeferred();
     const release = createDeferred();
-    const drainRequested = createDeferred();
-    let finishDrain: () => void = () => undefined;
-    drainSessionStoreWriterQueuesMock.mockImplementationOnce(async () => {
-      drainRequested.resolve();
-      await new Promise<void>((resolve) => {
-        finishDrain = resolve;
-      });
-    });
+    let cleanupPromise: Promise<void> | undefined;
     let running: Promise<void> | undefined;
     try {
       running = runExclusiveSessionStoreWrite(storePath, async () => {
@@ -72,26 +44,23 @@ describe("cleanupSessionStateForTest", () => {
       await started.promise;
 
       let settled = false;
-      const cleanupPromise = cleanupSessionStateForTest().then(() => {
+      cleanupPromise = cleanupSessionStateForTest().then(() => {
         settled = true;
       });
 
-      await drainRequested.promise;
-      await flushMicrotasks();
+      // An empty drain settles before this event-loop checkpoint.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(settled).toBe(false);
-      expect(drainSessionStoreWriterQueuesMock).toHaveBeenCalledTimes(1);
-      expect(drainFileLockStateMock).not.toHaveBeenCalled();
 
       release.resolve();
       await running;
-      finishDrain();
       await cleanupPromise;
-
-      expect(drainFileLockStateMock).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();
-      finishDrain();
       await running?.catch(() => undefined);
+      await cleanupPromise;
       await cleanupSessionStateForTest();
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
@@ -107,7 +76,6 @@ describe("cleanupSessionStateForTest", () => {
     const release = createDeferred();
     let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
     let cleanupPromise: Promise<void> | undefined;
-    setSessionStateCleanupRuntimeForTests({ drainSessionStoreWriterQueuesForTest: null });
 
     const running = runExclusiveSqliteSessionWrite(
       { agentId: "main", env, path: databasePath },
@@ -116,6 +84,7 @@ describe("cleanupSessionStateForTest", () => {
         await release.promise;
         database = openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
       },
+      "session.transcript.batch",
     );
     try {
       await started.promise;

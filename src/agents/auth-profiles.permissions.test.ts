@@ -1,7 +1,12 @@
 // Auth-profile saves must not report a failed transaction after rows became durable.
+import fs from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "./auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 const chmodFailHook = vi.hoisted(() => ({
@@ -21,15 +26,14 @@ vi.mock("node:fs", async (importOriginal) => {
 
 const {
   readPersistedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
   writePersistedAuthProfileStoreRaw,
 } = await import("./auth-profiles/sqlite.js");
-const {
-  captureAuthProfileStorePersistenceSnapshot,
-  getRuntimeAuthProfileStoreSnapshot,
-  saveAuthProfileStore,
-  saveAuthProfileStoreIfPersistenceSnapshotMatches,
-} = await import("./auth-profiles/store.js");
+const { captureAuthProfileStorePersistenceSnapshot, getRuntimeAuthProfileStoreSnapshot } =
+  await import("./auth-profiles/store.js");
+const { saveAuthProfileStore, saveAuthProfileStoreIfPersistenceSnapshotMatches } =
+  await import("./auth-profiles/store-runtime.js");
 const { clearRuntimeAuthProfileStoreSnapshots, replaceRuntimeAuthProfileStoreSnapshots } =
   await import("./auth-profiles/runtime-snapshots.js");
 const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
@@ -49,31 +53,20 @@ describe("auth-profile database permission repair", () => {
     const stateDir = tempDirs.make("openclaw-auth-chmod-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const agentDir = join(stateDir, "agents", "main", "agent");
-    const initial: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "fake-initial",
-        },
-      },
-    };
-    const next: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "fake-next",
-        },
-      },
-    };
+    const initial: AuthProfileStore = createAuthProfileStoreFixture({
+      "openai:default": createApiKeyCredential("openai", "fake-initial"),
+    });
+    const next: AuthProfileStore = createAuthProfileStoreFixture({
+      "openai:default": createApiKeyCredential("openai", "fake-next"),
+    });
     writePersistedAuthProfileStoreRaw(initial, agentDir);
     const snapshot = captureAuthProfileStorePersistenceSnapshot(agentDir);
     const permissionError = Object.assign(new Error("EACCES: chmod failed"), {
       code: "EACCES",
     });
+    if (process.platform !== "win32") {
+      fs.chmodSync(resolveAuthProfileDatabasePath(agentDir), 0o644);
+    }
     chmodFailHook.error = permissionError;
 
     expect(() =>
@@ -96,23 +89,20 @@ describe("auth-profile database permission repair", () => {
     const stateDir = tempDirs.make("openclaw-auth-overload-chmod-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const agentDir = join(stateDir, "agents", "main", "agent");
-    const initial: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:default": { type: "api_key", provider: "openai", key: "fake-initial" },
-      },
-    };
-    const next: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:default": { type: "api_key", provider: "openai", key: "fake-next" },
-      },
-    };
+    const initial: AuthProfileStore = createAuthProfileStoreFixture({
+      "openai:default": { type: "api_key", provider: "openai", key: "fake-initial" },
+    });
+    const next: AuthProfileStore = createAuthProfileStoreFixture({
+      "openai:default": { type: "api_key", provider: "openai", key: "fake-next" },
+    });
     writePersistedAuthProfileStoreRaw(initial, agentDir);
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: initial }]);
     const permissionError = Object.assign(new Error("EACCES: chmod failed"), {
       code: "EACCES",
     });
+    if (process.platform !== "win32") {
+      fs.chmodSync(resolveAuthProfileDatabasePath(agentDir), 0o644);
+    }
     chmodFailHook.error = permissionError;
 
     expect(() =>

@@ -43,6 +43,7 @@ export interface ModelChangeEntry extends SessionEntryBase {
 
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
   type: "compaction";
+  __openclaw?: { runId?: string; itemId?: string };
   summary: string;
   firstKeptEntryId: string;
   tokensBefore: number;
@@ -113,6 +114,8 @@ export type FileEntry = SessionHeader | SessionEntry;
 
 export type AppendPersistenceOptions = {
   appendIntent?: "active-branch";
+  /** Synchronous fresh SQLite message assertion; never serialized into an entry. */
+  beforeFreshMessageCommit?: () => void;
   config?: OpenClawConfig;
   idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
   invalidateSerializedPrefixCache?: boolean;

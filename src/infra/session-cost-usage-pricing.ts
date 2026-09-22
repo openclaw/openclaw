@@ -1,10 +1,12 @@
+import { calculateUsageCost } from "@openclaw/llm-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareModelPricingContext } from "../model-catalog/pricing.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import { resolveModelCostConfig } from "../utils/usage-format.js";
 import type {
   CostBreakdown,
   CostUsageTotals,
@@ -14,7 +16,7 @@ import type {
 const normalizeUsageCostTotalOrigin = (value: unknown): CostBreakdown["totalOrigin"] =>
   value === "provider-billed" ? value : undefined;
 
-export const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
+const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {
     return undefined;
   }
@@ -39,7 +41,7 @@ export const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown
   };
 };
 
-export const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
+const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
   const message = entry.message as Record<string, unknown> | undefined;
   const messageTimestamp = asFiniteNumber(message?.timestamp);
   if (messageTimestamp !== undefined) {
@@ -189,17 +191,6 @@ const shouldPreserveRecordedZeroCost = (costBreakdown: CostBreakdown | undefined
       costBreakdown.cacheWrite,
     ].some((value) => value !== undefined && value !== 0));
 
-export const shouldRecomputeRecordedZeroCost = (params: {
-  cost: ReturnType<typeof resolveModelCostConfig>;
-  costBreakdown: CostBreakdown | undefined;
-  costTotal: number | undefined;
-  usage: NormalizedUsage;
-}): boolean =>
-  params.costTotal === 0 &&
-  !shouldPreserveRecordedZeroCost(params.costBreakdown) &&
-  isModelPricingKnown(params.cost) &&
-  computeUsageTokenTotals(params.usage).totalTokens > 0;
-
 export type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
@@ -226,40 +217,57 @@ export function createUsageCostResolver(params?: {
   };
 }
 
+type UsageCostEstimateEntry = ParsedTranscriptEntry & { usage: NormalizedUsage };
+
+function needsUsageCostEstimate(
+  entry: ParsedTranscriptEntry | null,
+): entry is UsageCostEstimateEntry {
+  // Recorded estimates include request-time service tiers the current catalog cannot recover.
+  return (
+    Boolean(entry?.usage) &&
+    !(
+      (entry?.costTotal ?? 0) > 0 ||
+      entry?.costBreakdown?.totalOrigin === "provider-billed" ||
+      shouldPreserveRecordedZeroCost(entry?.costBreakdown)
+    )
+  );
+}
+
+function estimateUsageCostEntry(
+  entry: UsageCostEstimateEntry,
+  resolveCost: UsageCostResolver,
+): ParsedTranscriptEntry {
+  const cost = resolveCost({ provider: entry.provider, model: entry.model });
+  const { totalTokens } = computeUsageTokenTotals(entry.usage);
+  if (!isModelPricingKnown(cost) && totalTokens > 0) {
+    entry.costTotal = undefined;
+    entry.costBreakdown = undefined;
+  } else if (entry.costTotal === undefined || totalTokens > 0) {
+    const estimated = cost ? calculateUsageCost(entry.usage, cost) : undefined;
+    entry.costBreakdown = estimated && Number.isFinite(estimated.total) ? estimated : undefined;
+    entry.costTotal = entry.costBreakdown?.total;
+  }
+  return entry;
+}
+
 export function parseUsageCostTranscriptEntry(
   parsed: Record<string, unknown>,
   resolveCost: UsageCostResolver,
 ): ParsedTranscriptEntry | null {
   const entry = parseTranscriptEntry(parsed);
-  if (!entry?.usage) {
+  return needsUsageCostEstimate(entry) ? estimateUsageCostEntry(entry, resolveCost) : entry;
+}
+
+/** Diagnostic readers prepare only when a record actually needs an estimate. */
+export async function parseUsageCostTranscriptEntryAsync(
+  parsed: Record<string, unknown>,
+  resolveCost: UsageCostResolver,
+  config?: OpenClawConfig,
+): Promise<ParsedTranscriptEntry | null> {
+  const entry = parseTranscriptEntry(parsed);
+  if (!needsUsageCostEstimate(entry)) {
     return entry;
   }
-  const cost = resolveCost({ provider: entry.provider, model: entry.model });
-  const usageTotals = computeUsageTokenTotals(entry.usage);
-  const pricingKnown = isModelPricingKnown(cost);
-  const preserveRecordedZeroCost = shouldPreserveRecordedZeroCost(entry.costBreakdown);
-  if (cost?.tieredPricing && cost.tieredPricing.length > 0 && !preserveRecordedZeroCost) {
-    entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
-    entry.costBreakdown = undefined;
-  } else if (
-    !pricingKnown &&
-    !preserveRecordedZeroCost &&
-    (entry.costTotal === undefined || entry.costTotal === 0) &&
-    usageTotals.totalTokens > 0
-  ) {
-    entry.costTotal = undefined;
-    entry.costBreakdown = undefined;
-  } else if (
-    entry.costTotal === undefined ||
-    shouldRecomputeRecordedZeroCost({
-      usage: entry.usage,
-      cost,
-      costBreakdown: entry.costBreakdown,
-      costTotal: entry.costTotal,
-    })
-  ) {
-    entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
-    entry.costBreakdown = undefined;
-  }
-  return entry;
+  await prepareModelPricingContext(config);
+  return estimateUsageCostEntry(entry, resolveCost);
 }

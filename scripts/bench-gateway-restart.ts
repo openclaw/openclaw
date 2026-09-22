@@ -10,7 +10,6 @@ import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
 import {
   getFreePort,
-  parseProcessRssKb,
   readProcessRssMb,
   readProcessTreeCpuMs,
   requestProbeStatus,
@@ -37,6 +36,7 @@ import {
   resolveEntry as resolveGatewayBenchEntry,
   resolveOutputPath,
   summarizeNumbers,
+  summarizeTraceStats,
   type SummaryStats,
   validateCliArgs as validateGatewayBenchCliArgs,
   waitForInitialProbe,
@@ -401,23 +401,7 @@ function summarizeResourceSlope(
 
 function summarizeCase(benchCase: GatewayBenchCase, samples: GatewayRestartSample[]): CaseResult {
   const iterations = samples.flatMap((sample) => sample.iterations);
-  const restartTraceKeys = new Set<string>();
-  for (const iteration of iterations) {
-    for (const key of Object.keys(iteration.restartTrace)) {
-      restartTraceKeys.add(key);
-    }
-  }
-  const restartTrace: Record<string, SummaryStats> = {};
-  for (const key of [...restartTraceKeys].toSorted()) {
-    const stats = summarizeNumbers(
-      iterations
-        .map((iteration) => iteration.restartTrace[key])
-        .filter((value): value is number => typeof value === "number"),
-    );
-    if (stats) {
-      restartTrace[key] = stats;
-    }
-  }
+  const restartTrace = summarizeTraceStats(iterations, (iteration) => iteration.restartTrace);
   const failedIterations = iterations.filter((iteration) => iteration.failureCode !== null);
   const sampleOnlyFailures = samples.filter(
     (sample) =>
@@ -1294,28 +1278,21 @@ async function main() {
 }
 
 export const testing = {
-  collectOutputLines,
-  collectTraceLine,
   countLsofFileDescriptors,
   createRestartIteration,
   ensureSupportedRestartPlatform,
   finalizeRestartIteration,
-  flushOutputLineBuffers,
   collectBenchmarkEvidenceFailures,
   hasInitialReadyLogs,
   hasBenchmarkFailures,
   hasInvalidBenchmarkEvidence,
-  parseNonNegativeInt,
   parseOptions,
-  parsePositiveInt,
-  parseProcessRssKb,
   resolveRestartDeadlineFailure,
   resolveEntry,
   resolvePhaseDeadlineAt,
   resolveSampleExitFailure,
   sanitizedEnv,
   shouldFailBenchmark,
-  stopChild,
   summarizeCase,
   waitForRestartProbe,
   writeConfig,

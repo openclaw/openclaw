@@ -1,5 +1,6 @@
 // Browser tests cover register.batch plugin behavior.
 import { Command } from "commander";
+import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
@@ -51,8 +52,7 @@ const SAMPLE_ACTIONS = [
 
 describe("browser action input batch command", () => {
   beforeEach(() => {
-    mocks.callBrowserRequest.mockClear();
-    mocks.readActionsPayload.mockClear();
+    vi.clearAllMocks();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
@@ -130,6 +130,65 @@ describe("browser action input batch command", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(getBrowserCliRuntimeCapture().defaultRuntime.writeJson).toHaveBeenCalledWith(result);
+  });
+
+  it.each(["navigation", "closed"])("reports actions skipped after %s", async (reason) => {
+    const result = {
+      ok: true,
+      results: [{ ok: true }],
+      aborted: { reason, afterAction: 1, skipped: 1, url: "https://example.com/next" },
+    };
+    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
+    mocks.callBrowserRequest.mockResolvedValueOnce(result);
+    await createActionInputProgram().parseAsync(
+      ["browser", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS)],
+      { from: "user" },
+    );
+    const capture = getBrowserCliRuntimeCapture();
+    const text = capture.runtimeLogs.join("\n");
+    expect(text).toContain("stopped after action 1");
+    expect(text).toContain("1 action(s) skipped");
+    expect(text).not.toContain("batch ran 2");
+    expect(capture.defaultRuntime.exit).not.toHaveBeenCalled();
+
+    capture.resetRuntimeCapture();
+    vi.clearAllMocks();
+    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
+    mocks.callBrowserRequest.mockResolvedValueOnce(result);
+    await createActionInputProgram().parseAsync(
+      ["browser", "--json", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS)],
+      { from: "user" },
+    );
+    expect(capture.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
+    expect(capture.runtimeLogs).toEqual([JSON.stringify(result, null, 2)]);
+  });
+
+  it("retains the child error and interruption when an action fails during navigation", async () => {
+    const result = {
+      ok: true,
+      results: [{ ok: false, error: "Synthetic failure" }],
+      aborted: {
+        reason: "navigation",
+        afterAction: 1,
+        skipped: 1,
+        url: "https://example.com/next",
+      },
+    };
+    mocks.readActionsPayload.mockResolvedValueOnce(JSON.stringify(SAMPLE_ACTIONS));
+    mocks.callBrowserRequest.mockResolvedValueOnce(result);
+    vi.mocked(cliCoreApiModule.defaultRuntime.exit).mockImplementationOnce(
+      createNonExitingRuntime().exit,
+    );
+    await expect(
+      createActionInputProgram().parseAsync(
+        ["browser", "batch", "--actions", JSON.stringify(SAMPLE_ACTIONS)],
+        { from: "user" },
+      ),
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    const capture = getBrowserCliRuntimeCapture();
+    expect(capture.runtimeErrors).toEqual(["batch failed: action 1: Synthetic failure"]);
+    expect(capture.runtimeLogs.join("\n")).toContain("1 action(s) skipped");
+    expect(capture.runtimeLogs.join("\n")).not.toContain("batch ran");
   });
 
   it("reads actions from a file via --actions-file", async () => {

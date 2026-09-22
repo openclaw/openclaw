@@ -21,6 +21,7 @@ import {
   formatTuiErrorMessage,
   isCommandMarkedMessage,
 } from "./tui-formatters.js";
+import { extractTuiImageSources } from "./tui-images.js";
 import { readTuiSessionUserMessage } from "./tui-session-events.js";
 import {
   sessionInfoUiEquals,
@@ -36,14 +37,10 @@ import {
 import * as submit from "./tui-submit-state.js";
 import type { TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
-type SessionActionBtwPresenter = {
-  clear: () => void;
-};
-
 type SessionActionContext = {
   client: TuiBackend;
   chatLog: ChatLog;
-  btw: SessionActionBtwPresenter;
+  btw: { clear: () => void };
   tui: TUI;
   opts: TuiOptions;
   state: TuiStateAccess;
@@ -473,7 +470,9 @@ export function createSessionActions(context: SessionActionContext) {
         messages?: unknown[];
         sessionId?: string;
         sessionInfo?: SessionInfoEntry &
-          Partial<Pick<SessionEntry, "abortedLastRun" | "lastRunError" | "status">>;
+          Partial<Pick<SessionEntry, "abortedLastRun" | "lastRunError" | "status">> & {
+            activeRunIds?: unknown;
+          };
         defaults?: SessionInfoDefaults;
         thinkingLevel?: string;
         fastMode?: FastMode;
@@ -553,14 +552,19 @@ export function createSessionActions(context: SessionActionContext) {
             if (entry.pending && entry.pendingRunId) {
               chatLog.addPendingUser(entry.pendingRunId, text);
             } else if (entry.live && liveUserMessage) {
-              chatLog.addLiveUser(text, {
-                messageId: liveUserMessage.messageId,
-                ...(liveUserMessage.runId ? { runId: liveUserMessage.runId } : {}),
-              });
+              chatLog.addLiveUser(text, liveUserMessage);
             } else if (liveUserMessage) {
-              chatLog.addUser(text, { messageId: liveUserMessage.messageId });
+              chatLog.addUser(text, {
+                messageId: liveUserMessage.messageId,
+                ...(liveUserMessage.images ? { images: liveUserMessage.images } : {}),
+              });
             } else {
-              chatLog.addUser(text);
+              const images = extractTuiImageSources(message);
+              if (images.length > 0) {
+                chatLog.addUser(text, { images });
+              } else {
+                chatLog.addUser(text);
+              }
             }
           }
           continue;
@@ -570,7 +574,12 @@ export function createSessionActions(context: SessionActionContext) {
             includeThinking: state.showThinking,
           });
           if (text) {
-            chatLog.finalizeAssistant(text);
+            const images = extractTuiImageSources(message);
+            if (images.length > 0) {
+              chatLog.finalizeAssistant(text, undefined, images);
+            } else {
+              chatLog.finalizeAssistant(text);
+            }
           }
           continue;
         }
@@ -596,14 +605,10 @@ export function createSessionActions(context: SessionActionContext) {
       }
       submit.reconcilePendingSubmitHistory(
         state,
-        projection.entries.flatMap((entry) =>
-          !entry.pending &&
-          entry.identity?.role === "user" &&
-          entry.identity.runId !== null &&
-          pendingRunIds.has(entry.identity.runId)
-            ? [entry.identity.runId]
-            : [],
-        ),
+        projection.entries.flatMap((entry) => {
+          const sendId = entry.identity?.sendId;
+          return !entry.pending && sendId && pendingRunIds.has(sendId) ? [sendId] : [];
+        }),
       );
       const inFlightRunId = formatPrimitiveString(record.inFlightRun?.runId, "");
       const inFlightText = formatPrimitiveString(record.inFlightRun?.text, "");
@@ -633,7 +638,14 @@ export function createSessionActions(context: SessionActionContext) {
           : status === "killed" || sessionInfo?.abortedLastRun === true
             ? ({ state: "interrupted" } as const)
             : ({ state: "completed" } as const);
-      return { loaded: true, runOutcome };
+      const activeRunIds = sessionInfo?.activeRunIds;
+      return {
+        loaded: true,
+        runOutcome,
+        ...(Array.isArray(activeRunIds) && activeRunIds.every((id) => typeof id === "string")
+          ? { activeRunIds }
+          : {}),
+      };
     } catch (err) {
       if (isCurrentLoad() && !isAbortError(err)) {
         chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);

@@ -68,6 +68,10 @@ export function selectStaleTrackedTabs(params: {
       : tab.lastUsedAt;
 
   for (const tab of params.tabs) {
+    if (tab.kind === "durable" && tab.dashboard) {
+      // The dashboard lifetime reconciler owns these targets, including pending closes.
+      continue;
+    }
     const observedAt =
       tab.kind === "durable" ? observedNativeActivity.get(tab.storageKey) : undefined;
     const isActiveDurable =

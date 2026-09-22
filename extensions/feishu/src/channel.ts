@@ -1,4 +1,3 @@
-// Feishu plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
@@ -36,6 +35,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { resolveLegacyInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import {
   buildProbeChannelStatusSummary,
   createComputedAccountStatusAdapter,
@@ -93,6 +93,8 @@ import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationCard,
+  feishuCardWithinTableLimit,
+  FEISHU_PRESENTATION_CAPABILITIES,
   isFeishuCardWithinEnvelope,
   resolveFeishuRichReply,
 } from "./presentation-card.js";
@@ -425,7 +427,7 @@ const collectFeishuSecurityWarnings = createAllowlistProviderGroupPolicyWarningC
 const collectFeishuOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectFeishuSecurityWarnings,
   checkId: "channels.feishu.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Feishu security warning",
 });
 
@@ -1120,7 +1122,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       mentions: {
         stripPatterns: () => ['<at user_id="[^"]*">[^<]*</at>'],
       },
-      reload: { configPrefixes: ["channels.feishu"] },
+      reload: { configPrefixes: ["channels.feishu"], noopPrefixes: ["messages.inbound"] },
       doctor: feishuDoctor,
       configSchema: FeishuChannelConfigSchema,
       config: {
@@ -1146,16 +1148,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           const accounts = { ...feishuCfg?.accounts };
           delete accounts[accountId];
 
-          return {
-            ...cfg,
-            channels: {
-              ...cfg.channels,
-              feishu: {
-                ...feishuCfg,
-                accounts: Object.keys(accounts).length > 0 ? accounts : undefined,
-              },
+          return patchTopLevelChannelConfigSection({
+            cfg,
+            channel: "feishu",
+            patch: {
+              accounts: Object.keys(accounts).length > 0 ? accounts : undefined,
             },
-          };
+          });
         },
         isConfigured: (account) => account.configured,
         describeAccount: (account) =>
@@ -1175,6 +1174,15 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
       actions: {
         providerOwnedReadGates: true,
+        readAuthorityActions: [
+          "read",
+          "reactions",
+          "list-pins",
+          "member-info",
+          "channel-info",
+          "channel-list",
+          "sticker-search",
+        ],
         messageActionTargetAliases,
         describeMessageTool: describeFeishuMessageTool,
         handleAction: async (ctx) => {
@@ -1261,7 +1269,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 })
               : undefined;
             const presentationCard =
-              generatedCard && isFeishuCardWithinEnvelope(generatedCard)
+              generatedCard &&
+              feishuCardWithinTableLimit(generatedCard) &&
+              isFeishuCardWithinEnvelope(generatedCard)
                 ? generatedCard
                 : undefined;
             const presentationFellBack = Boolean(generatedCard && !presentationCard);
@@ -2019,6 +2029,17 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
     },
     threading: {
+      matchesToolContextTarget: ({ target, toolContext }) => {
+        const normalizedTarget = normalizeFeishuTarget(target);
+        if (!normalizedTarget) {
+          return false;
+        }
+        return [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+          (currentTarget) =>
+            currentTarget !== undefined &&
+            normalizeFeishuTarget(currentTarget) === normalizedTarget,
+        );
+      },
       buildToolContext: ({ context, hasRepliedRef }) => ({
         currentChannelId:
           normalizeOptionalString(context.NativeChannelId) ?? normalizeOptionalString(context.To),
@@ -2040,26 +2061,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
-      presentationCapabilities: {
-        supported: true,
-        buttons: true,
-        selects: false,
-        context: true,
-        divider: true,
-        limits: {
-          actions: {
-            maxActions: 20,
-            maxActionsPerRow: 5,
-            maxLabelLength: 40,
-            maxValueBytes: 1024,
-          },
-          text: {
-            maxLength: 4000,
-            encoding: "characters",
-            markdownDialect: "markdown",
-          },
-        },
-      },
+      presentationCapabilities: FEISHU_PRESENTATION_CAPABILITIES,
       ...createRuntimeOutboundDelegates({
         getRuntime: loadFeishuChannelRuntime,
         renderPresentation: { resolve: (runtime) => runtime.feishuOutbound.renderPresentation },

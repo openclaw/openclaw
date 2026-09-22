@@ -22,7 +22,7 @@ export {
 } from "./api-baseline-normalization.js";
 
 /** Declaration kind recorded for each public SDK export in the API baseline. */
-export type PluginSdkApiExportKind =
+type PluginSdkApiExportKind =
   | "class"
   | "const"
   | "enum"
@@ -34,7 +34,7 @@ export type PluginSdkApiExportKind =
   | "variable";
 
 /** Repo source location for a public SDK declaration or module. */
-export type PluginSdkApiSourceLink = {
+type PluginSdkApiSourceLink = {
   /** Repo-relative source file path. */
   path: string;
 };
@@ -56,7 +56,7 @@ export type PluginSdkApiExport = {
 };
 
 /** API baseline record for one public SDK module/subpath. */
-export type PluginSdkApiModule = {
+type PluginSdkApiModule = {
   /** Documentation category used to group SDK entrypoints when documented. */
   category: PluginSdkDocCategory | null;
   /** Canonical public SDK entrypoint. */
@@ -352,18 +352,15 @@ export async function renderPluginSdkApiBaseline(params?: {
     }),
   );
 
-  const declarationSections = [
-    ...new Map(
-      modules.flatMap((moduleSurface) =>
-        moduleSurface.exports.flatMap((exportSurface) =>
-          (exportSurface.closureSections ?? []).map((section) => [
-            `${section.name}\0${section.text}`,
-            section,
-          ]),
-        ),
-      ),
-    ).values(),
-  ].toSorted(
+  const sectionsByContent = new Map<string, PluginSdkApiDeclarationSection>();
+  for (const moduleSurface of modules) {
+    for (const exportSurface of moduleSurface.exports) {
+      for (const section of exportSurface.closureSections ?? []) {
+        sectionsByContent.set(`${section.name}\0${section.text}`, section);
+      }
+    }
+  }
+  const declarationSections = [...sectionsByContent.values()].toSorted(
     (left, right) => compareText(left.name, right.name) || compareText(left.text, right.text),
   );
   const sectionIds = new Map(

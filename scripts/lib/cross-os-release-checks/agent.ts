@@ -1,8 +1,51 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
-import type { AgentOutputOptions } from "./config.ts";
+import type { AgentOutputOptions, AgentTurnResult, CommandResult } from "./config.ts";
 import { CROSS_OS_AGENT_TURN_OPTIONAL, CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS } from "./config.ts";
-import { readLogTextTail } from "./logs.ts";
+import { readLogFileSize, readLogTextSince, readLogTextTail } from "./logs.ts";
+
+export async function runReleaseAgentTurn(
+  params: { label: string; logPath: string },
+  run: (args: string[], timeoutMs: number) => Promise<CommandResult>,
+  retryLabel: "agent turn" | "installed agent turn",
+): Promise<AgentTurnResult> {
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
+    try {
+      // Each attempt owns its log window; an earlier OK must not qualify a retry.
+      const logOffset = readLogFileSize(params.logPath);
+      const result = await run(
+        buildReleaseAgentTurnArgs(sessionId),
+        (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
+      );
+      const logText = readLogTextSince(params.logPath, logOffset);
+      if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
+        throw new Error("Agent output did not contain the expected OK marker.");
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath, {
+        attempt,
+        maxAttempts: 2,
+      });
+      if (skipped) {
+        return skipped;
+      }
+      if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
+        throw error;
+      }
+      appendFileSync(
+        params.logPath,
+        `\n[release-checks] retrying ${retryLabel} after retryable live failure: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      );
+    }
+  }
+  throw lastError;
+}
 
 export function maybeBuildOptionalAgentTurnSkipResult(
   error: unknown,

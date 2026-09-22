@@ -52,8 +52,21 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
   it.each([
     { name: "model set", patch: { model: "openai/gpt-5.6-luna" } },
     { name: "model reset", patch: { model: null } },
+    { name: "thinking set", patch: { thinkingLevel: "high" } },
+    { name: "thinking off", patch: { thinkingLevel: "off" } },
+    { name: "thinking reset", patch: { thinkingLevel: null } },
+    { name: "fast on", patch: { fastMode: true } },
+    { name: "fast off", patch: { fastMode: false } },
+    { name: "fast auto", patch: { fastMode: "auto" } },
+    { name: "fast reset", patch: { fastMode: null } },
+    {
+      name: "combined model and effort",
+      patch: { model: "openai/gpt-test-a", thinkingLevel: "high", fastMode: true },
+    },
     { name: "icon set", patch: { icon: "🦞" } },
     { name: "icon reset", patch: { icon: null } },
+    { name: "automatic device name", patch: { autoLabel: "OpenClaw App · Pixel" } },
+    { name: "automatic device name reset", patch: { autoLabel: null } },
     {
       name: "safe mixed patch",
       patch: { label: "Renamed", archived: true, model: "openai/gpt-5.6-luna" },
@@ -104,11 +117,12 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
   });
 
   it.each([
-    { thinkingLevel: "high" },
-    { fastMode: true },
+    { contextWindow: "extended" },
+    { toolOverrides: {} },
     { verboseLevel: "full" },
     { reasoningLevel: "high" },
-    { model: "openai/gpt-5.6-luna", thinkingLevel: "high" },
+    { thinkingLevel: "high", verboseLevel: "full" },
+    { fastMode: true, permissionMode: "full" },
     { model: null, futureField: true },
   ])("keeps privileged or unknown patch fields admin-scoped %#", (patch) => {
     expect(
@@ -136,19 +150,21 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
           archived: true,
           unread: false,
           model: "openai/gpt-5.6-luna",
+          thinkingLevel: "high",
+          fastMode: "auto",
         },
       }),
     ).toBe("operator.write");
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
         targets: [{ key: "agent:main:thread" }],
-        patch: { model: null },
+        patch: { model: null, thinkingLevel: null, fastMode: null },
       }),
     ).toBe("operator.write");
     for (const patch of [
       { statusNote: "Working" },
-      { thinkingLevel: "high" },
-      { model: "openai/gpt-5.6-luna", fastMode: true },
+      { thinkingLevel: "high", contextWindow: "extended" },
+      { model: "openai/gpt-test-a", fastMode: true, toolOverrides: {} },
       { futureField: true },
     ]) {
       expect(

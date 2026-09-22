@@ -9,6 +9,7 @@ import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-author
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams, TelegramEventBindings } from "./bot-handlers.types.js";
 import {
+  createTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
@@ -106,32 +107,45 @@ export function createTelegramEventBindings({
       const inviterLabel =
         [inviter.first_name, inviter.last_name].filter(Boolean).join(" ") || inviter.username;
 
-      await reportChannelRoomJoin({
-        cfg: currentCfg,
-        channel: "telegram",
-        accountId,
-        conversationId: String(chatId),
-        deliverTo: String(chatId),
-        route: resolveTelegramConversationRoute({
+      const participant = createTelegramSpooledReplayDeferredParticipant(`room-join:${chatId}`);
+      const hold = participant?.beginSettlementHold();
+      if (participant && !hold) {
+        return;
+      }
+      try {
+        await reportChannelRoomJoin({
           cfg: currentCfg,
+          channel: "telegram",
           accountId,
-          chatId,
-          isGroup: true,
-          threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
-        }).route,
-        inviterLabel,
-        roomAllowed,
-        resolveRoomContext: async () => {
-          const chat = await bot.api.getChat(chatId);
-          // The Bot API exposes room metadata and pins, but cannot retrieve pre-join history.
-          return {
-            title: chat.title,
-            purpose: chat.description,
-            pinned: chat.pinned_message?.text ?? chat.pinned_message?.caption,
-            historyUnavailable: true,
-          };
-        },
-      });
+          conversationId: String(chatId),
+          deliverTo: String(chatId),
+          route: resolveTelegramConversationRoute({
+            cfg: currentCfg,
+            accountId,
+            chatId,
+            isGroup: true,
+            threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
+          }).route,
+          inviterLabel,
+          roomAllowed,
+          resolveRoomContext: async () => {
+            const chat = await bot.api.getChat(chatId);
+            // The Bot API exposes room metadata and pins, but cannot retrieve pre-join history.
+            return {
+              title: chat.title,
+              purpose: chat.description,
+              pinned: chat.pinned_message?.text ?? chat.pinned_message?.caption,
+              historyUnavailable: true,
+            };
+          },
+        });
+        hold?.release("discard-pending");
+        participant?.settle({ kind: "completed" });
+      } catch (error) {
+        hold?.release("replay-pending");
+        participant?.settle({ kind: "failed-retryable", error });
+        throw error;
+      }
     });
   };
 
@@ -163,10 +177,10 @@ export function createTelegramEventBindings({
         }
         if (
           reactionMode === "own" &&
-          !telegramDeps.wasSentByBot(chatId, messageId, authorizationCfg, {
+          !(await telegramDeps.wasSentByBot(chatId, messageId, authorizationCfg, {
             accountId,
             agentId: ownerAgentId,
-          })
+          }))
         ) {
           logVerbose(
             `telegram: skipped reaction on msg ${messageId} in chat ${chatId} (own mode, not sent by bot)`,

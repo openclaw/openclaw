@@ -10,6 +10,7 @@ import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
 import { normalizeMeetUrl } from "../meet-url.js";
 import { createMeetWithBrowserProxyOnNode } from "./chrome-create.js";
 import {
+  meetAudioCaptureScript,
   meetLeaveScript,
   meetStatusScript,
   meetTranscriptScript,
@@ -129,6 +130,7 @@ export const GOOGLE_MEET_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     },
   },
   browser: {
+    buildAudioCaptureScript: meetAudioCaptureScript,
     allowsMicrophone: MeetingPlatformAdapter.isTalkBackMode,
     buildStatusJoinScript: (params) =>
       meetStatusScript({

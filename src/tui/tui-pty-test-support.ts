@@ -5,7 +5,8 @@ import type { IPty } from "@lydell/node-pty";
 import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import * as ansi from "../../packages/terminal-core/src/ansi.js";
 import { toErrorObject } from "../infra/errors.js";
-import { signalProcessTree } from "../process/kill-tree.js";
+import { signalProcessTree, signalPtySessionTree } from "../process/kill-tree.js";
+import { spawnTerminalPty, type TerminalPtyHandle } from "../process/terminal-pty.js";
 import { sleep } from "../utils/sleep.js";
 
 // Shared PTY harness utilities for fake-backend and local TUI smoke tests.
@@ -236,7 +237,7 @@ function readPtyDimensionEnv(name: string, fallback: number, env: NodeJS.Process
 }
 
 async function writePtyInput(
-  pty: IPty,
+  pty: Pick<IPty, "write">,
   data: string,
   env: NodeJS.ProcessEnv,
   opts: { delay?: boolean } = {},
@@ -265,56 +266,110 @@ function mirrorPtyOutput(data: string) {
   appendFileSync(mirrorPath, data, "utf8");
 }
 
-/** Starts a PTY process and exposes deterministic output/exit wait helpers. */
-export function startPty(
-  command: string,
-  args: string[],
-  opts: {
-    activeRuns?: PtyRun[];
-    cwd: string;
-    env: NodeJS.ProcessEnv;
-    exitTimeoutMs: number;
-    outputTimeoutMs: number;
-  },
-) {
-  let output = "";
-  let visibleOutput = "";
-  let exitEvent: PtyExitEvent | null = null;
-  const ansiStripper = new AnsiSequenceStripper();
+type PtySubscription = { dispose(): void };
+type TestPtyHost = Pick<IPty, "kill" | "onData" | "onExit" | "pid" | "write"> | TerminalPtyHandle;
+type PtyStartOptions = {
+  activeRuns?: PtyRun[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  exitTimeoutMs: number;
+  outputTimeoutMs: number;
+};
+
+function resolvePtyStartOptions(opts: PtyStartOptions) {
   const mergedEnv = {
     ...process.env,
     ...opts.env,
     TERM: "xterm-256color",
   };
-  const ptyEnv: Record<string, string> = {};
+  const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(mergedEnv)) {
     if (value !== undefined) {
-      ptyEnv[key] = value;
+      env[key] = value;
     }
   }
-  const cols = readPtyDimensionEnv("OPENCLAW_TUI_PTY_COLS", 100, ptyEnv);
-  const rows = readPtyDimensionEnv("OPENCLAW_TUI_PTY_ROWS", 30, ptyEnv);
+  return {
+    cols: readPtyDimensionEnv("OPENCLAW_TUI_PTY_COLS", 100, env),
+    env,
+    rows: readPtyDimensionEnv("OPENCLAW_TUI_PTY_ROWS", 30, env),
+  };
+}
+
+function asSubscription(value: PtySubscription | void): PtySubscription {
+  return value ?? { dispose() {} };
+}
+
+/** Starts a PTY process and exposes deterministic output/exit wait helpers. */
+export function startPty(command: string, args: string[], opts: PtyStartOptions) {
+  const { cols, env, rows } = resolvePtyStartOptions(opts);
   const pty = nodePty.spawn(command, args, {
     name: "xterm-256color",
     cols,
     rows,
     cwd: opts.cwd,
-    env: ptyEnv,
+    env,
   });
+  return createPtyRun(pty, opts, { cols, env, rows }, async () => {
+    await new Promise<void>((resolve) => {
+      signalProcessTree(pty.pid, "SIGKILL", { onComplete: resolve });
+    });
+  });
+}
 
-  const dataSubscription = pty.onData((data) => {
-    output += data;
-    // PTY line wrapping and ANSI chunks must not hide visible text from behavior checks.
-    const visibleChunk = ansiStripper.write(data).replace(/\s+/gu, " ");
-    visibleOutput +=
-      visibleOutput.endsWith(" ") && visibleChunk.startsWith(" ")
-        ? visibleChunk.slice(1)
-        : visibleChunk;
-    mirrorPtyOutput(data);
+/** Uses OpenClaw's runtime PTY adapter so Bun exercises the Node sidecar it ships with. */
+export async function startRuntimePty(
+  command: string,
+  args: string[],
+  opts: PtyStartOptions,
+): Promise<PtyRun> {
+  if (!process.versions.bun) {
+    return startPty(command, args, opts);
+  }
+  const { cols, env, rows } = resolvePtyStartOptions(opts);
+  const pty = await spawnTerminalPty({
+    file: command,
+    args,
+    cwd: opts.cwd,
+    env,
+    cols,
+    rows,
   });
-  const exitSubscription = pty.onExit((event) => {
-    exitEvent = event;
+  return createPtyRun(pty, opts, { cols, env, rows }, async () => {
+    // Keep harness cleanup independent of Node-sidecar IPC delivery.
+    signalPtySessionTree(pty.pid, "SIGKILL");
+    pty.kill("SIGKILL");
   });
+}
+
+function createPtyRun(
+  pty: TestPtyHost,
+  opts: PtyStartOptions,
+  resolved: { cols: number; env: Record<string, string>; rows: number },
+  forceKillTree: () => Promise<void>,
+) {
+  const { cols, env, rows } = resolved;
+  let output = "";
+  let visibleOutput = "";
+  let exitEvent: PtyExitEvent | null = null;
+  const ansiStripper = new AnsiSequenceStripper();
+
+  const dataSubscription = asSubscription(
+    pty.onData((data) => {
+      output += data;
+      // PTY line wrapping and ANSI chunks must not hide visible text from behavior checks.
+      const visibleChunk = ansiStripper.write(data).replace(/\s+/gu, " ");
+      visibleOutput +=
+        visibleOutput.endsWith(" ") && visibleChunk.startsWith(" ")
+          ? visibleChunk.slice(1)
+          : visibleChunk;
+      mirrorPtyOutput(data);
+    }),
+  );
+  const exitSubscription = asSubscription(
+    pty.onExit((event) => {
+      exitEvent = event;
+    }),
+  );
 
   const waitForExit = async (timeoutMs = opts.exitTimeoutMs) =>
     await waitFor({
@@ -359,9 +414,7 @@ export function startPty(
   const forceKillPty = async () => {
     if (!exitEvent) {
       // The PTY owns a process group; killing only its shell can leave the TUI child alive.
-      await new Promise<void>((resolve) => {
-        signalProcessTree(pty.pid, "SIGKILL", { onComplete: resolve });
-      });
+      await forceKillTree();
       // Native PTY backends do not consistently emit onExit after a forced tree kill.
       await sleep(PTY_EXIT_SETTLE_MS);
       exitEvent ??= { exitCode: 137, signal: 9 };
@@ -374,7 +427,7 @@ export function startPty(
     pid: pty.pid,
     rows,
     visibleOutput: () => visibleOutput,
-    write: async (data, writeOpts) => await writePtyInput(pty, data, ptyEnv, writeOpts),
+    write: async (data, writeOpts) => await writePtyInput(pty, data, env, writeOpts),
     waitForOutput: async (needle, timeoutMs = opts.outputTimeoutMs) =>
       await waitForVisibleOutput(needle, timeoutMs),
     waitForExit,

@@ -116,6 +116,7 @@ describe("readTuiSessionUserMessage", () => {
       content: [{ type: "image", source: { type: "url", url: "/image.png" } }],
       media: undefined,
       expected: "Attached image",
+      images: [{ source: "/image.png" }],
     },
     {
       name: "document block",
@@ -127,35 +128,42 @@ describe("readTuiSessionUserMessage", () => {
       ],
       media: undefined,
       expected: "Attached file: report.pdf",
+      images: undefined,
     },
     {
       name: "canonical persisted media",
       content: "",
       media: [{ path: "/media/inbound/image.png", contentType: "image/png" }],
       expected: "Attached image",
+      images: [{ source: "/media/inbound/image.png" }],
     },
-  ])("accepts an authoritative attachment-only $name event", ({ content, media, expected }) => {
-    expect(
-      readTuiSessionUserMessage({
-        sessionKey: "agent:main:main",
-        messageId: "attachment-user-1",
-        message: {
-          role: "user",
-          content,
-          __openclaw: {
-            id: "attachment-user-1",
-            idempotencyKey: "attachment-run-1:user",
-            seq: 1,
-            ...(media ? { media } : {}),
+  ])(
+    "accepts an authoritative attachment-only $name event",
+    ({ content, media, expected, images }) => {
+      expect(
+        readTuiSessionUserMessage({
+          sessionKey: "agent:main:main",
+          messageId: "attachment-user-1",
+          message: {
+            role: "user",
+            content,
+            __openclaw: {
+              id: "attachment-user-1",
+              idempotencyKey: "attachment-run-1:user",
+              seq: 1,
+              ...(media ? { media } : {}),
+            },
           },
-        },
-      } satisfies SessionMessageEvent),
-    ).toEqual({
-      messageId: "attachment-user-1",
-      runId: "attachment-run-1",
-      text: expected,
-    });
-  });
+        } satisfies SessionMessageEvent),
+      ).toEqual({
+        messageId: "attachment-user-1",
+        runId: "attachment-run-1",
+        sendId: "attachment-run-1",
+        text: expected,
+        ...(images ? { images } : {}),
+      });
+    },
+  );
 
   it("recovers the durable prompt identity and owning chat run", () => {
     expect(
@@ -168,7 +176,7 @@ describe("readTuiSessionUserMessage", () => {
           role: "user",
         },
       } satisfies SessionMessageEvent),
-    ).toEqual({ messageId: "user-1", runId: "run-1", text: "shared prompt" });
+    ).toEqual({ messageId: "user-1", runId: "run-1", sendId: "run-1", text: "shared prompt" });
   });
 
   it("prefers persisted identity when a Gateway envelope names a different message and run", () => {
@@ -183,13 +191,15 @@ describe("readTuiSessionUserMessage", () => {
           __openclaw: {
             id: "persisted-message",
             idempotencyKey: "persisted-run:user",
+            runId: "execution-run",
             seq: 7,
           },
         },
       } satisfies SessionMessageEvent),
     ).toEqual({
       messageId: "persisted-message",
-      runId: "persisted-run",
+      runId: "execution-run",
+      sendId: "persisted-run",
       text: "authoritative persisted prompt",
     });
   });
@@ -220,6 +230,7 @@ describe("readTuiSessionUserMessage", () => {
     ).toEqual({
       messageId: "persisted-message",
       runId: "actual:user",
+      sendId: "actual:user",
       text: "nested user suffix",
     });
   });
@@ -327,7 +338,7 @@ describe("readTuiSessionUserMessage", () => {
         messageSeq: 7,
         message: { content: "shared prompt", idempotencyKey: "run-7:user", role: "user" },
       }),
-    ).toEqual({ messageId: "seq:7", runId: "run-7", text: "shared prompt" });
+    ).toEqual({ messageId: "seq:7", runId: "run-7", sendId: "run-7", text: "shared prompt" });
   });
 
   it("recovers the owning chat run from a metadata-free gateway envelope", () => {
@@ -337,7 +348,12 @@ describe("readTuiSessionUserMessage", () => {
         messageId: "user-envelope",
         message: { content: "shared prompt", role: "user" },
       } satisfies SessionMessageEvent),
-    ).toEqual({ messageId: "user-envelope", runId: "run-envelope", text: "shared prompt" });
+    ).toEqual({
+      messageId: "user-envelope",
+      runId: "run-envelope",
+      sendId: "run-envelope",
+      text: "shared prompt",
+    });
   });
 
   it("rejects assistant and identity-free transcript messages", () => {

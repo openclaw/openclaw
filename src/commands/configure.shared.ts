@@ -49,7 +49,7 @@ export type ChannelsWizardMode = "configure" | "remove";
 export type ConfigureWizardParams = {
   command: "configure" | "update";
   sections?: WizardSection[];
-  /** Explicit setup owner from `--agent`; required on explicit multi-agent rosters. */
+  /** Optional explicit owner; omission retains interactive owner selection. */
   agentId?: string;
 };
 

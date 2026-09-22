@@ -16,9 +16,11 @@ import type { SlackAttachment, SlackFile } from "../types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
 import {
   type FetchLike,
+  captureChannelReadAuthority,
   fetchWithRuntimeDispatcher,
   saveRemoteMedia,
   slackMediaLog,
+  unlinkIfExists,
 } from "./media.runtime.js";
 import { isGovSlackClient } from "./slack-client-kind.js";
 import { logVerbose } from "./thread.runtime.js";
@@ -82,28 +84,18 @@ function createSlackMediaRequest(
   };
 }
 
-function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
-  if (typeof fetchImpl !== "function") {
-    return false;
-  }
-  const candidate = fetchImpl as typeof fetch & {
-    mock?: unknown;
-    _isMockFunction?: unknown;
-  };
-  return candidate.mock !== undefined || candidate["_isMockFunction"] === true;
-}
-
-function createSlackMediaFetch(govSlack: boolean): FetchLike {
+function createSlackMediaFetch(
+  govSlack: boolean,
+  assertReadAuthority = captureChannelReadAuthority(),
+): FetchLike {
   return async (input, init) => {
     const url = resolveRequestUrl(input);
     if (!url) {
       throw new Error("Unsupported fetch input: expected string, URL, or Request");
     }
     const parsed = assertSlackFileUrl(url, govSlack);
-    const fetchImpl =
-      "dispatcher" in (init ?? {}) && !isMockedFetch(globalThis.fetch)
-        ? fetchWithRuntimeDispatcher
-        : globalThis.fetch;
+    const fetchImpl = "dispatcher" in (init ?? {}) ? fetchWithRuntimeDispatcher : globalThis.fetch;
+    assertReadAuthority?.();
     return fetchImpl(parsed.href, { ...init, redirect: "manual" });
   };
 }
@@ -263,16 +255,19 @@ async function downloadSlackMediaFile(params: {
   abortSignal?: AbortSignal;
   govSlack: boolean;
 }): Promise<SlackMediaResult> {
+  const assertReadAuthority = captureChannelReadAuthority();
+  assertReadAuthority?.();
   const { url: slackUrl, requestInit } = createSlackMediaRequest(
     params.url,
     params.token,
     params.govSlack,
   );
-  const fetchImpl = createSlackMediaFetch(params.govSlack);
+  const fetchImpl = createSlackMediaFetch(params.govSlack, assertReadAuthority);
   const saved = await saveSlackMedia({
     options: {
       url: slackUrl,
       fetchImpl,
+      beforeRequest: assertReadAuthority,
       requestInit,
       filePathHint: params.file.name,
       fallbackContentType: resolveSlackMediaMimetype(params.file, params.file.mimetype),
@@ -293,7 +288,7 @@ async function downloadSlackMediaFile(params: {
   if (!isExpectedHtml) {
     const detectedMime = normalizeOptionalLowercaseString(saved.contentType?.split(";")[0]);
     if (detectedMime === "text/html" || (await looksLikeHtmlFile(saved.path))) {
-      await fs.rm(saved.path, { force: true }).catch(() => undefined);
+      await unlinkIfExists(saved.path);
       throw new Error("blocked: unexpected HTML content");
     }
   }

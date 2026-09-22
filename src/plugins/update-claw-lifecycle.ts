@@ -1,7 +1,6 @@
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
-import type { ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
 import { installPluginFromNpmSpec } from "./install.js";
 
 type ClawHubInstallRecord = {
@@ -29,21 +28,11 @@ export function createTrackedNpmUpdateInstaller(onRun: () => void) {
   };
 }
 
-export function resolveClawHubRiskAcknowledgementOptions(params: {
-  dryRun?: boolean;
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
-}) {
-  return {
-    ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-    ...(!params.dryRun && params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
-  };
-}
-
 export async function runPluginUpdateWithClawHubLease<T>(params: {
   pluginId: string;
   clawhubPackage?: string;
   dryRun: boolean;
+  beforePersistentEffect?: () => void;
   run: () => Promise<T>;
 }): Promise<T | { kind: "exception"; message: string; error: unknown }> {
   try {
@@ -53,6 +42,7 @@ export async function runPluginUpdateWithClawHubLease<T>(params: {
     return await withClawPackageLifecycleLease(
       { kind: "plugin", source: "clawhub", ref: params.clawhubPackage },
       async () => {
+        params.beforePersistentEffect?.();
         markClawPackageIndependentlyOwned({
           kind: "plugin",
           source: "clawhub",

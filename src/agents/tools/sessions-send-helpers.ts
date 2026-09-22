@@ -148,7 +148,7 @@ export function buildAgentToAgentAnnounceContext(params: {
       : "Round 1 reply: (not available).",
     params.latestReply ? `Latest reply: ${params.latestReply}` : "Latest reply: (not available).",
     `If you want to remain silent, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
-    "Any other reply will be posted to the target channel.",
+    "Any other reply is recorded in the target session. External delivery is attempted only if the target has a delivery route.",
     "After this reply, the agent-to-agent conversation is over.",
   ].filter(Boolean);
   return lines.join("\n");

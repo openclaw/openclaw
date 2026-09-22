@@ -2,8 +2,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { GatewayServiceEnv } from "./service-types.js";
-import { execSystemctl, isSystemdUnitActive, type SystemdUnitScope } from "./systemd-exec.js";
+import { hasErrnoCode } from "../infra/errno.js";
+import { isGatewayServiceEnv } from "./constants.js";
+import { resolveDaemonHomeDir } from "./paths.js";
+import type {
+  GatewayServiceEnv,
+  SystemdGatewayInstallation,
+  SystemdServiceReadTarget,
+} from "./service-types.js";
+import { execSystemctl, isSystemdUnitActive } from "./systemd-exec.js";
 import { resolveSystemdServiceName, resolveSystemdUnitPath } from "./systemd-service-files.js";
 import { assertNoSystemSystemdOwnership } from "./systemd-system.js";
 
@@ -12,6 +19,83 @@ const SYSTEM_SYSTEMD_UNIT_DIRS = [
   "/usr/lib/systemd/system",
   "/lib/systemd/system",
 ] as const;
+
+/** Proves service absence without interpreting failed manager commands as absence. */
+export async function isSystemdServiceAbsent(
+  env: GatewayServiceEnv,
+  opts?: { timeoutMs?: number; strictCommandAbsent?: true },
+): Promise<boolean> {
+  if (opts?.strictCommandAbsent) {
+    // The caller just proved user-unit absence without loading it. System
+    // ownership needs its own live manager and complete unit-path inspection.
+    await assertNoSystemSystemdOwnership(
+      `${resolveSystemdServiceName(env)}.service`,
+      opts.timeoutMs,
+      { requireLoaded: true },
+    );
+    return (await findInstalledSystemdGatewayScope(env)) === null;
+  }
+  if (
+    env.DBUS_SESSION_BUS_ADDRESS ||
+    env.DBUS_SYSTEM_BUS_ADDRESS ||
+    env.SYSTEMD_UNIT_PATH ||
+    env.SUDO_USER ||
+    isGatewayServiceEnv(env) ||
+    typeof process.geteuid !== "function"
+  ) {
+    return false;
+  }
+  const home = resolveDaemonHomeDir(env);
+  const runtimeDirs = new Set(
+    [`/run/user/${process.geteuid()}`, env.XDG_RUNTIME_DIR].filter((value): value is string =>
+      Boolean(value),
+    ),
+  );
+  const configHome = env.XDG_CONFIG_HOME || path.posix.join(home, ".config");
+  const dataHome = env.XDG_DATA_HOME || path.posix.join(home, ".local/share");
+  const userRoots = [
+    path.posix.join(home, ".config"),
+    configHome,
+    dataHome,
+    ...(env.XDG_CONFIG_DIRS || "/etc/xdg").split(":"),
+    ...(env.XDG_DATA_DIRS || "/usr/local/share:/usr/share").split(":"),
+    "/etc",
+    "/usr/local/lib",
+    "/usr/lib",
+    "/lib",
+  ];
+  const unitName = `${resolveSystemdServiceName(env)}.service`;
+  if (![...runtimeDirs, ...userRoots].every((dir) => path.posix.isAbsolute(dir))) {
+    return false;
+  }
+  // sd_booted() uses /run/systemd/system; user managers own runtime/systemd/private.
+  // Require the complete runtime directory absent so transient/generated units cannot hide.
+  const absentPaths = [
+    "/run/systemd",
+    ...[...runtimeDirs].map((dir) => path.posix.join(dir, "systemd")),
+    ...userRoots.flatMap((dir) =>
+      ["user", "user.control", "user.attached"].map((scope) =>
+        path.posix.join(dir, "systemd", scope, unitName),
+      ),
+    ),
+    ...["/etc", "/usr/local/lib", "/usr/lib", "/lib"].flatMap((dir) =>
+      ["system", "system.control", "system.attached"].map((scope) =>
+        path.posix.join(dir, "systemd", scope, unitName),
+      ),
+    ),
+  ];
+  for (const candidate of absentPaths) {
+    try {
+      await fs.lstat(candidate);
+      return false;
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        return false;
+      }
+    }
+  }
+  return (await findInstalledSystemdGatewayScope(env)) === null;
+}
 
 async function findSystemSystemdUnitPath(env: GatewayServiceEnv): Promise<string | null> {
   const serviceFile = `${resolveSystemdServiceName(env)}.service`;
@@ -27,17 +111,14 @@ async function findSystemSystemdUnitPath(env: GatewayServiceEnv): Promise<string
   return null;
 }
 
-type InstalledSystemdGatewayScope = {
-  scope: SystemdUnitScope;
-  unitName: string;
-  unitPath: string;
-};
-
-export async function assertNoSystemGatewayOwnership(env: GatewayServiceEnv): Promise<void> {
+export async function assertNoSystemGatewayOwnership(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<void> {
   if (env.OPENCLAW_SERVICE_KIND?.trim() === "node") {
     return;
   }
-  await assertNoSystemSystemdOwnership(`${resolveSystemdServiceName(env)}.service`);
+  await assertNoSystemSystemdOwnership(`${resolveSystemdServiceName(env)}.service`, timeoutMs);
 }
 
 async function findMarkerOwnedSystemSystemdUnit(): Promise<{
@@ -71,29 +152,9 @@ async function findMarkerOwnedSystemSystemdUnit(): Promise<{
   return null;
 }
 
-/**
- * The full installed-gateway picture across both systemd scopes.
- *
- * Modeled as a discriminated union so the "both a user-scope and a
- * system-scope unit are installed" (`dueling`) state is representable and
- * cannot be confused with the single-scope states. The old single-scope
- * detector could never surface this, which is the root cause of the
- * upgrade restart cascade in issue #79375: two supervisors bind the same
- * port and SIGTERM each other forever.
- */
-type SystemdGatewayInstallation =
-  | { kind: "none" }
-  | { kind: "user"; user: InstalledSystemdGatewayScope }
-  | { kind: "system"; system: InstalledSystemdGatewayScope }
-  | {
-      kind: "dueling";
-      user: InstalledSystemdGatewayScope;
-      system: InstalledSystemdGatewayScope;
-    };
-
 async function findUserSystemdGatewayScope(
   env: GatewayServiceEnv,
-): Promise<InstalledSystemdGatewayScope | null> {
+): Promise<SystemdServiceReadTarget | null> {
   const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
   let userPath: string | null;
   try {
@@ -114,11 +175,14 @@ async function findUserSystemdGatewayScope(
 
 async function findSystemSystemdGatewayScope(
   env: GatewayServiceEnv,
-): Promise<InstalledSystemdGatewayScope | null> {
+): Promise<SystemdServiceReadTarget | null> {
   const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
   const systemPath = await findSystemSystemdUnitPath(env);
   if (systemPath) {
     return { scope: "system", unitName: canonicalUnitName, unitPath: systemPath };
+  }
+  if (env.OPENCLAW_SERVICE_KIND?.trim() === "node") {
+    return null;
   }
   // System-scope installs may use a non-canonical unit name; fall back to a
   // marker-owned lookup before declaring no system unit exists.
@@ -168,7 +232,7 @@ export async function findSystemdGatewayInstallation(
  */
 export async function findInstalledSystemdGatewayScope(
   env: GatewayServiceEnv,
-): Promise<InstalledSystemdGatewayScope | null> {
+): Promise<SystemdServiceReadTarget | null> {
   const installation = await findSystemdGatewayInstallation(env);
   // User-first: dueling resolves to the user scope, same as a user-only install.
   if (installation.kind === "dueling" || installation.kind === "user") {
@@ -222,10 +286,10 @@ export function formatDuelingScopesWarning(
   const { user, system } = installation;
   // Deliberately no copy-paste removal command: this formatter has no ownership
   // evidence, and blindly deleting the user unit can remove the only working
-  // gateway. `doctor --fix` decides that behind the active+enabled probe.
+  // gateway. Guided Doctor decides that behind the active+enabled probe.
   return (
     `detected BOTH a user-scope (${user.unitPath}) and a system-scope (${system.unitPath}) ` +
     `gateway unit bound to port ${port}; they will SIGTERM each other in a restart loop. ` +
-    `Run \`openclaw doctor --fix\` to resolve which unit should own this gateway.`
+    `Run \`openclaw doctor\` interactively to inspect both scopes and review supported cleanup.`
   );
 }

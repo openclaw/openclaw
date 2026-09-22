@@ -3,22 +3,21 @@ import type { Command } from "commander";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
+import { resolvePluginInstallInvalidConfigPolicy } from "../../plugins/install-config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
-import { resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
 import {
   applyCliExecutionStartupPresentation,
   ensureCliExecutionBootstrap,
-  resolveCliExecutionStartupContext,
 } from "../command-execution-startup.js";
 import { inheritOptionFromParent } from "../command-options.js";
+import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
+import { resolveCliStartupPolicy } from "../command-startup-policy.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import { isModelsPlainMachineOutput } from "../models-output-mode.js";
-import {
-  resolvePluginInstallInvalidConfigPolicy,
-  resolvePluginInstallPreactionRequest,
-} from "../plugin-install-config-policy.js";
+import { resolvePluginInstallPreactionRequest } from "../plugin-install-config-policy.js";
 import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 import { isParentDefaultHelpAction } from "./parent-default-help.js";
@@ -31,11 +30,10 @@ function setProcessTitleForCommand(actionCommand: Command) {
     current = current.parent;
   }
   const name = current.name();
-  const cliName = resolveCliName();
-  if (!name || name === cliName) {
+  if (!name || name === CLI_NAME) {
     return;
   }
-  process.title = `${cliName}-${name}`;
+  process.title = `${CLI_NAME}-${name}`;
 }
 
 function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
@@ -113,6 +111,27 @@ function isGatewayRunAction(actionCommand: Command): boolean {
   );
 }
 
+async function runStateStoreGuard(commandPath: string[]): Promise<void> {
+  if (resolveCliCommandPathPolicy(commandPath).stateStoreGuard !== "run") {
+    return;
+  }
+  let outcome: import("../state-dir-gateway-check.js").CliGatewayStateDirOutcome;
+  try {
+    const { checkCliGatewayStateDir } = await import("../state-dir-gateway-check.js");
+    outcome = await checkCliGatewayStateDir({ command: `openclaw ${commandPath.join(" ")}` });
+  } catch (error) {
+    const { formatErrorMessage } = await import("../../infra/errors.js");
+    const { logDebug } = await import("../../logger.js");
+    logDebug(`state-store guard unavailable: ${formatErrorMessage(error)}`);
+    return;
+  }
+  if (outcome.kind === "warn") {
+    defaultRuntime.log(outcome.message);
+  } else if (outcome.kind === "refuse") {
+    throw new Error(outcome.message);
+  }
+}
+
 /** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
@@ -130,12 +149,19 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     ) {
       return;
     }
-    const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
+    const commandPath = getCommanderCommandPath(actionCommand);
+    const nativeUpdateCapabilityProbe =
+      commandPath.length === 2 &&
+      (commandPath[0] === "gateway" || commandPath[0] === "daemon") &&
+      ["install", "restart", "stop"].includes(commandPath[1] ?? "") &&
+      actionCommand.getOptionValue("updateExecutor") === "check";
+    const jsonOutputMode =
+      nativeUpdateCapabilityProbe || isCommandJsonOutputMode(actionCommand, argv);
     const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv, actionCommand);
     applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
-    const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
+    const startupPolicy = resolveCliStartupPolicy({
       argv,
-      commandPath: getCommanderCommandPath(actionCommand),
+      commandPath,
       jsonOutputMode,
       machineOutputMode,
       env: process.env,
@@ -153,9 +179,15 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (isGuidedConfigAction(actionCommand) || isGuidedConfigCommandPath(commandPath)) {
+    // Capability discovery precedes staged-update admission and must not migrate live state.
+    if (
+      nativeUpdateCapabilityProbe ||
+      isGuidedConfigAction(actionCommand) ||
+      isGuidedConfigCommandPath(commandPath)
+    ) {
       return;
     }
+    await runStateStoreGuard(commandPath);
     if (startupPolicy.skipConfigGuard) {
       // Config validation and plugin activation are independent startup policies.
       // A cold config read must not suppress a plugin runtime explicitly required by the command.
@@ -181,10 +213,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       const { resolveGatewayRunOptions } = await import("../gateway-cli/run-options.js");
       const resolvedOptions = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
       allowInvalid ||= resolvedOptions.allowUnconfigured === true;
-      const opts = {
-        force: resolvedOptions.force === true,
-        reset: resolvedOptions.reset === true,
-      };
+      const opts = resolvedOptions;
       const shouldBootstrap = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
       if (!shouldBootstrap) {
         return;

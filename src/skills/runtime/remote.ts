@@ -1,12 +1,12 @@
 // Remote skill runtime helpers send skill refresh and snapshot state across remotes.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodeRegistry, NodeSession } from "../../gateway/node-registry.js";
+import { sleepWithAbort } from "../../infra/backoff.js";
 import { updatePairedNodeBins } from "../../infra/device-pairing-node-facts.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import type { SkillEligibilityContext } from "../types.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 import {
@@ -254,14 +254,19 @@ function markRemoteNodeProbeSuccess(params: {
   return true;
 }
 
-function markRemoteNodeProbeFailure(params: {
-  nodeId: string;
-  owner: RemoteNodeOwner;
-  signature: string;
-  nowMs: number;
-}): boolean {
+function recordRemoteNodeProbeFailure(
+  params: {
+    nodeId: string;
+    owner: RemoteNodeOwner;
+    signature: string;
+    nowMs: number;
+  },
+  err: unknown,
+  context: RemoteBinProbeLogContext,
+  phase?: "preflight" | "probe",
+) {
   if (!isCurrentRemoteNodeOwner(params.nodeId, params.owner)) {
-    return false;
+    return;
   }
   const existing = remoteNodeProbeStates.get(params.nodeId);
   const failedProbeCount =
@@ -276,7 +281,11 @@ function markRemoteNodeProbeFailure(params: {
     nextProbeAfterMs: params.nowMs + backoffMs,
     failedProbeCount,
   });
-  return true;
+  const cleared = clearRemoteNodeBins(params.nodeId);
+  logRemoteBinProbeFailure(params.nodeId, err, context, phase);
+  if (cleared) {
+    bumpSkillsSnapshotVersion({ reason: "remote-node" });
+  }
 }
 
 function remoteConnectionKey(nodeId: string, connId: string): string {
@@ -412,7 +421,7 @@ export function removeRemoteNodeInfoForConnection(nodeId: string, connId: string
   return true;
 }
 
-export async function refreshRemoteNodeBins(params: {
+type RemoteNodeBinRefreshParams = {
   nodeId: string;
   platform?: string;
   deviceFamily?: string;
@@ -420,58 +429,68 @@ export async function refreshRemoteNodeBins(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
   readinessDelayMs?: number;
-}) {
-  const session = remoteRegistry?.get(params.nodeId);
-  if (!session?.pairingGeneration) {
-    return;
-  }
-  const owner: RemoteNodeOwner = {
-    connId: session.connId,
-    pairingGeneration: session.pairingGeneration,
-  };
-  const existing = remoteBinProbeInflight.get(params.nodeId);
-  if (existing) {
-    await existing.promise;
-    if (sameRemoteNodeOwner(existing, owner)) {
+  readinessSignal?: AbortSignal;
+};
+
+export async function refreshRemoteNodeBins(params: RemoteNodeBinRefreshParams): Promise<void> {
+  for (;;) {
+    const session = remoteRegistry?.get(params.nodeId);
+    if (!session?.pairingGeneration) {
       return;
     }
-  }
-  const inflight: RemoteBinProbeInflight = {
-    ...owner,
-    promise: Promise.resolve(),
-  };
-  const run = refreshRemoteNodeBinsUncoalesced(params).finally(() => {
-    if (remoteBinProbeInflight.get(params.nodeId) === inflight) {
-      remoteBinProbeInflight.delete(params.nodeId);
+    const owner: RemoteNodeOwner = {
+      connId: session.connId,
+      pairingGeneration: session.pairingGeneration,
+    };
+    const existing = remoteBinProbeInflight.get(params.nodeId);
+    if (existing) {
+      await existing.promise;
+      if (sameRemoteNodeOwner(existing, owner)) {
+        return;
+      }
+      // Replacement waiters resume together. Recheck the live owner and map
+      // before starting another probe so they stay coalesced.
+      continue;
     }
-  });
-  inflight.promise = run;
-  remoteBinProbeInflight.set(params.nodeId, inflight);
-  await run;
+    const inflight: RemoteBinProbeInflight = {
+      ...owner,
+      promise: Promise.resolve(),
+    };
+    const run = refreshRemoteNodeBinsUncoalesced(params).finally(() => {
+      if (remoteBinProbeInflight.get(params.nodeId) === inflight) {
+        remoteBinProbeInflight.delete(params.nodeId);
+      }
+    });
+    inflight.promise = run;
+    remoteBinProbeInflight.set(params.nodeId, inflight);
+    await run;
+    return;
+  }
 }
 
-async function refreshRemoteNodeBinsUncoalesced(params: {
-  nodeId: string;
-  platform?: string;
-  deviceFamily?: string;
-  commands?: string[];
-  cfg: OpenClawConfig;
-  timeoutMs?: number;
-  readinessDelayMs?: number;
-}) {
+async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshParams) {
   const readinessDelayMs = params.readinessDelayMs ?? 0;
   if (readinessDelayMs > 0) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, readinessDelayMs);
-    });
+    try {
+      await sleepWithAbort(readinessDelayMs, params.readinessSignal);
+    } catch (error) {
+      if (!params.readinessSignal?.aborted) {
+        throw error;
+      }
+    }
+  }
+  // Retire an idle connect probe on shutdown; started probes still finish below.
+  if (params.readinessSignal?.aborted) {
+    return;
   }
   if (!remoteRegistry) {
     return;
   }
+  const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
   // Pairing can replace the command surface while the connect-time readiness
-  // delay is pending. Probe the live session so that approval refresh is not lost.
-  const liveSession = remoteRegistry.get(params.nodeId);
-  if (!liveSession?.pairingGeneration) {
+  // delay or loader import is pending. Probe the live session after both settle.
+  const liveSession = remoteRegistry?.get(params.nodeId);
+  if (params.readinessSignal?.aborted || !liveSession?.pairingGeneration) {
     return;
   }
   const probeOwner: RemoteNodeOwner = {
@@ -490,10 +509,15 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     return;
   }
 
-  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
   const requiredBins = new Set<string>();
-  for (const workspaceDir of workspaceDirs) {
-    const entries = loadWorkspaceSkills(workspaceDir, { config: params.cfg });
+  for (const agentId of listAgentIds(params.cfg)) {
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+    // Probe prerequisites before host eligibility can hide remote-only skills.
+    const entries = loadWorkspaceSkills(workspaceDir, {
+      config: params.cfg,
+      agentId,
+      agentSkillFilter: "ignore",
+    });
     for (const bin of collectRequiredBins(entries, "darwin")) {
       requiredBins.add(bin);
     }
@@ -534,18 +558,13 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     try {
       connectivity = await remoteRegistry.checkConnectivity(params.nodeId, connectivityTimeoutMs);
     } catch (err) {
-      const recorded = markRemoteNodeProbeFailure({
-        nodeId: params.nodeId,
-        owner: probeOwner,
-        signature: probeSignature,
-        nowMs: Date.now(),
-      });
-      if (!recorded) {
-        return;
-      }
-      const cleared = clearRemoteNodeBins(params.nodeId);
-      logRemoteBinProbeFailure(
-        params.nodeId,
+      recordRemoteNodeProbeFailure(
+        {
+          nodeId: params.nodeId,
+          owner: probeOwner,
+          signature: probeSignature,
+          nowMs: Date.now(),
+        },
         err,
         {
           command: "websocket.ping",
@@ -554,9 +573,6 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
         },
         "preflight",
       );
-      if (cleared) {
-        bumpSkillsSnapshotVersion({ reason: "remote-node" });
-      }
       return;
     }
     if (!connectivity.ok) {
@@ -572,18 +588,13 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
         });
         return;
       }
-      const recorded = markRemoteNodeProbeFailure({
-        nodeId: params.nodeId,
-        owner: probeOwner,
-        signature: probeSignature,
-        nowMs: Date.now(),
-      });
-      if (!recorded) {
-        return;
-      }
-      const cleared = clearRemoteNodeBins(params.nodeId);
-      logRemoteBinProbeFailure(
-        params.nodeId,
+      recordRemoteNodeProbeFailure(
+        {
+          nodeId: params.nodeId,
+          owner: probeOwner,
+          signature: probeSignature,
+          nowMs: Date.now(),
+        },
         connectivity.error.message,
         {
           command: "websocket.ping",
@@ -592,9 +603,6 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
         },
         "preflight",
       );
-      if (cleared) {
-        bumpSkillsSnapshotVersion({ reason: "remote-node" });
-      }
       return;
     }
   }
@@ -619,20 +627,16 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
           },
     );
     if (!res.ok) {
-      const recorded = markRemoteNodeProbeFailure({
-        nodeId: params.nodeId,
-        owner: probeOwner,
-        signature: probeSignature,
-        nowMs: Date.now(),
-      });
-      if (!recorded) {
-        return;
-      }
-      const cleared = clearRemoteNodeBins(params.nodeId);
-      logRemoteBinProbeFailure(params.nodeId, res.error?.message ?? "unknown", logContext);
-      if (cleared) {
-        bumpSkillsSnapshotVersion({ reason: "remote-node" });
-      }
+      recordRemoteNodeProbeFailure(
+        {
+          nodeId: params.nodeId,
+          owner: probeOwner,
+          signature: probeSignature,
+          nowMs: Date.now(),
+        },
+        res.error?.message ?? "unknown",
+        logContext,
+      );
       return;
     }
     const bins = parseBinProbePayload(res.payloadJSON, res.payload);
@@ -666,20 +670,16 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
       bumpSkillsSnapshotVersion({ reason: "remote-node" });
     }
   } catch (err) {
-    const recorded = markRemoteNodeProbeFailure({
-      nodeId: params.nodeId,
-      owner: probeOwner,
-      signature: probeSignature,
-      nowMs: Date.now(),
-    });
-    if (!recorded) {
-      return;
-    }
-    const cleared = clearRemoteNodeBins(params.nodeId);
-    logRemoteBinProbeFailure(params.nodeId, err, logContext);
-    if (cleared) {
-      bumpSkillsSnapshotVersion({ reason: "remote-node" });
-    }
+    recordRemoteNodeProbeFailure(
+      {
+        nodeId: params.nodeId,
+        owner: probeOwner,
+        signature: probeSignature,
+        nowMs: Date.now(),
+      },
+      err,
+      logContext,
+    );
   }
 }
 

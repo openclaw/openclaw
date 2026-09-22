@@ -1,23 +1,28 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
+  readPersistedInstalledPluginIndexSync,
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -58,6 +63,74 @@ function readInstallRecordRow(stateDir: string): {
 }
 
 describe("installed plugin index install-record persistence", () => {
+  it.each([
+    { order: "records-first", validIndex: true },
+    { order: "index-first", validIndex: true },
+    { order: "records-first", validIndex: false },
+    { order: "index-first", validIndex: false },
+  ])(
+    "reads one row for independent projections: $order, validIndex=$validIndex",
+    async ({ order, validIndex }) => {
+      const stateDir = makeStateDir();
+      await withPluginLifecycleLease(
+        { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+        async () => {
+          expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toBeNull();
+          expect(readPersistedInstalledPluginIndexSync({ stateDir })).toBeNull();
+          const records = { demo: { source: "npm" as const, spec: "demo@1.0.0" } };
+          await writePersistedInstalledPluginIndex(createIndex(records), { stateDir });
+          if (!validIndex) {
+            runOpenClawStateWriteTransaction(
+              ({ db }) => {
+                db.prepare(
+                  `UPDATE config_machine_state
+                  SET value_json = json_remove(value_json, '$.index.plugins')
+                WHERE state_key = 'plugins.installedIndex'`,
+                ).run();
+              },
+              { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+            );
+          }
+          const { StatementSync } = requireNodeSqlite();
+          const iterate = vi.spyOn(StatementSync.prototype, "iterate");
+          const get = vi.spyOn(StatementSync.prototype, "get");
+          const all = vi.spyOn(StatementSync.prototype, "all");
+          const readRecords = () =>
+            expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual(records);
+          const readIndex = () => {
+            const index = readPersistedInstalledPluginIndexSync({ stateDir });
+            if (validIndex) {
+              expect(index?.installRecords).toEqual(records);
+            } else {
+              expect(index).toBeNull();
+            }
+          };
+
+          for (const read of order === "records-first"
+            ? [readRecords, readIndex]
+            : [readIndex, readRecords]) {
+            read();
+          }
+
+          expect(
+            [iterate, get, all].flatMap((spy) =>
+              spy.mock.calls.filter((params, index) => {
+                const statement = spy.mock.contexts[index];
+                return (
+                  statement instanceof StatementSync &&
+                  params.includes("plugins.installedIndex") &&
+                  /SELECT\b[\s\S]*?\bFROM\s+"?config_machine_state"?\s+WHERE\s+"?state_key"?\s*(?:=|IN\s*\()/i.test(
+                    statement.sourceSQL,
+                  )
+                );
+              }),
+            ),
+          ).toHaveLength(1);
+        },
+      );
+    },
+  );
+
   it("round-trips artifact-anchored capability acceptance in the existing install-record JSON", async () => {
     const stateDir = makeStateDir();
     const acceptedSurface = {

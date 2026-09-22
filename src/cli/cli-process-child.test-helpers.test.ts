@@ -1,5 +1,11 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
 import { describe, expect, it } from "vitest";
-import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import {
+  formatCliProcessFailure,
+  runCliProcessChild,
+  waitForCliProcessStderrMarker,
+} from "./cli-process-child.test-helpers.js";
 
 // A launcher that hands its stdio to a detached grandchild which writes only after the
 // guard has already fired, then stays alive itself so SIGKILL has a launcher to reach.
@@ -44,27 +50,130 @@ describe("formatCliProcessFailure", () => {
 });
 
 describe("runCliProcessChild", () => {
-  it("reports the child's exit code and both streams", async () => {
-    const result = await runCliProcessChild({
+  it.each([false, true])(
+    "reports the child's exit and streams with the test runtime policy (Maglev=%s)",
+    async (enableMaglev) => {
+      const result = await runCliProcessChild({
+        nodeArgs: [
+          "-e",
+          "process.stdout.write(JSON.stringify({ output: 'out', maglevDisabled: process.execArgv.includes('--no-maglev') })); process.stderr.write('err'); process.exit(3);",
+        ],
+        env: {
+          ...process.env,
+          OPENCLAW_VITEST_ENABLE_MAGLEV: enableMaglev ? "1" : undefined,
+          NODE_OPTIONS: undefined,
+        },
+      });
+
+      expect(result).toEqual({
+        code: 3,
+        signal: null,
+        stdout: JSON.stringify({
+          output: "out",
+          maglevDisabled: !process.versions.bun && !enableMaglev,
+        }),
+        stderr: "err",
+      });
+    },
+  );
+
+  it("names the live handle and keeps partial output when a child never exits", async () => {
+    const failure = await runCliProcessChild({
       nodeArgs: [
         "-e",
-        "process.stdout.write('out'); process.stderr.write('err'); process.exit(3);",
+        [
+          "process.stdout.write('partial');",
+          "globalThis.pending = new Promise(() => {});",
+          "process.on('SIGUSR2', () => process.stderr.write('x'.repeat(8_100) + '\\nlast-stderr-line\\n'));",
+          "setInterval(() => {}, 1_000);",
+        ].join("\n"),
       ],
       env: process.env,
-    });
+      timeoutMs: 500,
+    }).catch((error: unknown) => error);
 
-    expect(result).toEqual({ code: 3, signal: null, stdout: "out", stderr: "err" });
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toMatch(/500ms deadlock guard[\s\S]*partial/u);
+    if (process.platform !== "win32" && !process.versions.bun) {
+      expect(String(failure)).toContain('"Timeout":1');
+      expect(String(failure)).toContain('"activeHandles"');
+      expect(String(failure)).toMatch(/"pendingPromises":\{"tracked":[1-9]/u);
+      expect(String(failure)).toContain("last-stderr-line");
+    }
   });
 
-  it("names the deadlock guard and keeps partial output when a child never exits", async () => {
-    await expect(
-      runCliProcessChild({
-        nodeArgs: ["-e", "process.stdout.write('partial'); setInterval(() => {}, 1_000);"],
-        env: process.env,
-        timeoutMs: 500,
-      }),
-    ).rejects.toThrow(/500ms deadlock guard[\s\S]*partial/u);
-  });
+  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+    "keeps a timeout failure when the child exits during diagnostic grace",
+    async () => {
+      await expect(
+        runCliProcessChild({
+          nodeArgs: [
+            "-e",
+            "process.on('SIGUSR2', () => process.exit(0)); setInterval(() => {}, 1_000);",
+          ],
+          env: process.env,
+          timeoutMs: 500,
+        }),
+      ).rejects.toThrow(/500ms deadlock guard[\s\S]*received/u);
+    },
+  );
+
+  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+    "bounds diagnostics when the child's event loop cannot handle the signal",
+    async () => {
+      await expect(
+        runCliProcessChild({
+          nodeArgs: ["-e", "process.stdout.write('blocked'); while (true) {}"],
+          env: process.env,
+          timeoutMs: 500,
+        }),
+      ).rejects.toThrow(/500ms deadlock guard[\s\S]*no response[\s\S]*blocked/u);
+    },
+  );
+
+  it.each([false, true])(
+    "preserves an input failure and releases pipes (kill fails=%s)",
+    async (killFails) => {
+      let child: ChildProcessWithoutNullStreams | undefined;
+      let exited: Promise<unknown> | undefined;
+      let restoreKill: (() => void) | undefined;
+      try {
+        await expect(
+          runCliProcessChild({
+            nodeArgs: ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1_000);"],
+            env: process.env,
+            interact: async (runningChild) => {
+              child = runningChild;
+              exited = once(runningChild, "exit");
+              await once(runningChild.stdout, "data");
+              if (killFails) {
+                const kill = runningChild.kill.bind(runningChild);
+                restoreKill = () => {
+                  runningChild.kill = kill;
+                };
+                runningChild.kill = () => {
+                  throw new Error("cleanup kill failed");
+                };
+              }
+              throw new Error("interactive input failed");
+            },
+          }),
+        ).rejects.toThrow("interactive input failed");
+
+        expect(child?.killed).toBe(!killFails);
+        expect(child?.stdin.destroyed).toBe(true);
+        expect(child?.stdout.destroyed).toBe(true);
+        expect(child?.stderr.destroyed).toBe(true);
+        if (!killFails) {
+          await exited;
+        }
+      } finally {
+        restoreKill?.();
+        child?.kill("SIGKILL");
+        await exited;
+      }
+    },
+  );
 
   it("stops reading a detached grandchild's pipes once the guard fires", async () => {
     // The CLI's own respawn topology: stdio handed to a detached grandchild in its own
@@ -87,5 +196,59 @@ describe("runCliProcessChild", () => {
 
     expect(chunks).toHaveLength(afterGuard);
     expect(chunks.at(-1) ?? "").not.toContain("after-guard");
+  });
+});
+
+describe("waitForCliProcessStderrMarker", () => {
+  it("reports missing markers and captured stderr when the child exits", async () => {
+    await expect(
+      runCliProcessChild({
+        nodeArgs: ["-e", "process.stderr.write('failed before ready'); process.exitCode = 1;"],
+        env: process.env,
+        timeoutMs: 2_000,
+        interact: async (child) => {
+          child.stdin.end();
+          await waitForCliProcessStderrMarker(child, "phase entered");
+        },
+      }),
+    ).rejects.toThrow(/stderr ended before marker "phase entered"[\s\S]*failed before ready/u);
+  });
+
+  it("matches split markers, removes its listeners, and retains trailing stderr", async () => {
+    const result = await runCliProcessChild({
+      nodeArgs: [
+        "-e",
+        [
+          "process.stderr.write('phase ');",
+          "process.stdin.once('data', () => {",
+          "  process.stderr.write('entered');",
+          "  process.stdin.once('end', () => process.stderr.write(' after marker'));",
+          "});",
+        ].join("\n"),
+      ],
+      env: process.env,
+      interact: async (child) => {
+        const events = ["data", "end", "close", "error"] as const;
+        const listeners = events.map((event) => child.stderr.listeners(event));
+        const childErrorListeners = child.listeners("error");
+        const marker = waitForCliProcessStderrMarker(child, "phase entered");
+        await once(child.stderr, "data");
+        child.stdin.write("continue\n");
+        await marker;
+        for (const [index, event] of events.entries()) {
+          expect(child.stderr.listeners(event)).toEqual(listeners[index]);
+        }
+        expect(child.listeners("error")).toEqual(childErrorListeners);
+        expect(child.stderr.destroyed).toBe(false);
+        child.stdin.end();
+      },
+    });
+
+    expect(result).toEqual({
+      code: 0,
+      signal: null,
+      stdout: "",
+      stderr: "phase entered after marker",
+    });
   });
 });

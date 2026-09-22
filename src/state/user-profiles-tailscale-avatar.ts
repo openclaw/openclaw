@@ -1,5 +1,4 @@
-import { fileTypeFromBuffer } from "file-type";
-import { readRemoteMediaBuffer, type FetchLike } from "../media/fetch.js";
+import type { FetchLike } from "../media/fetch.js";
 
 export const MAX_USER_PROFILE_AVATAR_BYTES = 512 * 1024;
 export const USER_PROFILE_AVATAR_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
@@ -25,9 +24,15 @@ export async function fetchTailscaleAvatar(
 ): Promise<{ bytes: Buffer; mime: UserProfileAvatarMime } | null> {
   try {
     const timeoutMs = options.timeoutMs ?? TAILSCALE_AVATAR_FETCH_TIMEOUT_MS;
+    const fetchImpl = options.fetchImpl;
+    // Profile readers need the MIME constants without the remote-media runtime.
+    const [{ readRemoteMediaBuffer }, { fileTypeFromBuffer }] = await Promise.all([
+      import("../media/fetch.js"),
+      import("file-type"),
+    ]);
     const loaded = await readRemoteMediaBuffer({
       url,
-      fetchImpl: options.fetchImpl,
+      fetchImpl,
       maxBytes: MAX_USER_PROFILE_AVATAR_BYTES,
       maxRedirects: TAILSCALE_AVATAR_MAX_REDIRECTS,
       timeoutMs,

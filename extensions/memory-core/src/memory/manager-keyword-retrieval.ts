@@ -1,6 +1,9 @@
 // Memory Core plugin module owns keyword retrieval and ranking.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import {
+  createSubsystemLogger,
+  resolveUserPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   readCuratedProjectMemoryCandidates,
@@ -11,16 +14,13 @@ import {
   type MemorySearchResult,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { bm25RankToScore, buildFtsQuery, scoreExactPathTieForTemporalDecay } from "./hybrid.js";
+import { buildFtsQuery, scoreExactPathTieForTemporalDecay } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
+import { runMemoryKeywordSearch } from "./manager-cpu-worker-runtime.js";
 import { MemoryProviderLifecycle } from "./manager-provider-lifecycle.js";
-import {
-  resolveExactPathSpecificity,
-  searchKeyword,
-  searchPathKeyword,
-  type ExactPathSpecificity,
-} from "./manager-search.js";
-import { applyProjectRanking } from "./project-ranking.js";
+import { resolveExactPathSpecificity, type ExactPathSpecificity } from "./manager-search.js";
+import { loadMemorySourceFileState } from "./manager-source-state.js";
+import { applyProjectRanking, projectScoreMultiplier } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
@@ -115,27 +115,21 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
   ): Promise<MemorySearchResult[]> {
     return await this.withManagerOperation(async () => {
       if (this.memorySourceProvenanceRepairPending) {
-        const repairPending = () =>
+        this.memorySourceProvenanceRepairPending =
           this.db
             .prepare(
               `SELECT 1 FROM memory_index_sources
                WHERE source = 'memory' AND hash = '' LIMIT 1`,
             )
             .get() !== undefined;
-        try {
-          // Provenance schema adoption invalidates legacy source hashes. Finish that
-          // owner-classified reindex before the first automatic candidate read.
-          if (repairPending()) {
-            await this.syncAdmitted(
-              { reason: "search" },
-              { allowEmbeddingBootstrapFallback: true },
-            );
-          }
-        } catch (err) {
-          log.warn(`memory sync failed (automatic candidates): ${formatErrorMessage(err)}`);
-        }
-        this.memorySourceProvenanceRepairPending = repairPending();
         if (this.memorySourceProvenanceRepairPending) {
+          // Automatic recall runs before the model. Keep repair admitted for teardown
+          // without holding the reply; unclassified sources stay excluded.
+          void this.withManagerOperation(() =>
+            this.syncAdmitted({ reason: "search" }, { allowEmbeddingBootstrapFallback: true }),
+          ).catch((err: unknown) => {
+            log.warn(`memory sync failed (automatic candidates): ${formatErrorMessage(err)}`);
+          });
           return [];
         }
       }
@@ -174,17 +168,6 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     });
   }
 
-  private rankKeywordOnlyResults(
-    results: KeywordSearchHit[],
-    preferExactBody = true,
-  ): KeywordSearchHit[] {
-    return results
-      .toSorted((left, right) => compareKeywordSearchHits(left, right, preferExactBody))
-      .map((entry) =>
-        entry.exactPathSpecificity > 0 ? Object.assign(entry, { score: 1 }) : entry,
-      );
-  }
-
   protected async finalizeKeywordOnlyResults(params: {
     results: KeywordSearchHit[];
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
@@ -206,13 +189,35 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       results: decayInputs,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
+      sessionSourceMtimes: this.loadSessionSourceMtimes(params.results),
     });
-    const ranked = applyProjectRanking(
-      this.rankKeywordOnlyResults(applyImportanceMultiplier(decayed), !appliesTemporalDecay),
-      params.activeProjectKeys,
-    );
+    // Preserve specificity and adjusted body relevance before normalizing exact public scores.
+    const ranked = applyProjectRanking(applyImportanceMultiplier(decayed), params.activeProjectKeys)
+      .toSorted((left, right) => compareKeywordSearchHits(left, right, !appliesTemporalDecay))
+      .map((entry) =>
+        entry.exactPathSpecificity > 0
+          ? Object.assign(entry, {
+              score: projectScoreMultiplier(entry.projectKey, params.activeProjectKeys),
+            })
+          : entry,
+      );
     return this.toMemorySearchResults(
       this.selectScoredResults(ranked, params.maxResults, params.minScore, 0),
+    );
+  }
+
+  protected loadSessionSourceMtimes(
+    results: ReadonlyArray<Pick<MemorySearchResult, "path" | "source">>,
+  ): ReadonlyMap<string, number | undefined> | undefined {
+    const paths = results.filter((entry) => entry.source === "sessions").map((entry) => entry.path);
+    if (paths.length === 0) {
+      return undefined;
+    }
+    return new Map(
+      loadMemorySourceFileState({ db: this.db, source: "sessions", paths }).map((row) => [
+        row.path,
+        row.mtime,
+      ]),
     );
   }
 
@@ -224,19 +229,23 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       this.db,
       results.map((entry) => entry.id),
     );
-    return results.map((entry) => {
-      const row = metadataById.get(entry.id);
-      return {
-        ...entry,
-        ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
-        ...(typeof row?.triggers === "string" && row.triggers.trim()
-          ? { triggers: row.triggers.trim() }
-          : {}),
-        ...(typeof row?.project_key === "string" && row.project_key.trim()
-          ? { projectKey: row.project_key.trim() }
-          : {}),
-      };
-    });
+    // The left-joined metadata reader omits only missing chunks. A forget may
+    // delete one while the worker is reading its earlier snapshot.
+    return results
+      .filter((entry) => metadataById.has(entry.id))
+      .map((entry) => {
+        const row = metadataById.get(entry.id);
+        return Object.assign(entry, {
+          ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
+          ...(typeof row?.triggers === "string" && row.triggers.trim()
+            ? { triggers: row.triggers.trim() }
+            : {}),
+          ...(typeof row?.project_key === "string" && row.project_key.trim()
+            ? { projectKey: row.project_key.trim() }
+            : {}),
+          ...(row?.provenance ? { provenance: row.provenance } : {}),
+        });
+      });
   }
 
   private async searchKeyword(
@@ -244,6 +253,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     limit: number,
     options?: {
       boostFallbackRanking?: boolean;
+      signal?: AbortSignal;
       exactPathQuery?: string;
       rankingQuery?: string;
     },
@@ -252,40 +262,41 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
-    const bodySearch = searchKeyword({
-      db: this.db,
-      ftsTable: FTS_TABLE,
-      query,
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-      limit,
-      snippetMaxChars: SNIPPET_MAX_CHARS,
-      sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
-      buildFtsQuery,
-      bm25RankToScore,
-      boostFallbackRanking: options?.boostFallbackRanking,
-      rankingQuery: options?.rankingQuery,
-    }).catch((err: unknown) => {
-      log.warn(`memory search: body keyword query failed: ${formatErrorMessage(err)}`);
-      return [];
-    });
     const exactPathQuery = options?.exactPathQuery ?? query;
-    const pathSearch = searchPathKeyword({
-      db: this.db,
-      pathFtsTable: PATH_FTS_TABLE,
-      query,
-      exactPathQuery,
-      exactPathLimit: EXACT_PATH_CANDIDATE_LIMIT,
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-      limit,
-      snippetMaxChars: SNIPPET_MAX_CHARS,
-      sourceFilter: this.buildSourceFilter(PATH_FTS_TABLE, sourceFilterList),
-      buildFtsQuery,
-      bm25RankToScore,
-    }).catch((err: unknown) => {
-      log.warn(`memory search: path keyword query failed: ${formatErrorMessage(err)}`);
-      return [];
-    });
-    const [bodyResults, pathResults] = await Promise.all([bodySearch, pathSearch]);
+    const result = await runMemoryKeywordSearch(
+      { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
+      {
+        body: {
+          ftsTable: FTS_TABLE,
+          query,
+          ftsTokenizer: this.settings.store.fts.tokenizer,
+          limit,
+          snippetMaxChars: SNIPPET_MAX_CHARS,
+          sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
+          boostFallbackRanking: options?.boostFallbackRanking,
+          rankingQuery: options?.rankingQuery,
+        },
+        path: {
+          pathFtsTable: PATH_FTS_TABLE,
+          query,
+          exactPathQuery,
+          exactPathLimit: EXACT_PATH_CANDIDATE_LIMIT,
+          ftsTokenizer: this.settings.store.fts.tokenizer,
+          limit,
+          snippetMaxChars: SNIPPET_MAX_CHARS,
+          sourceFilter: this.buildSourceFilter(PATH_FTS_TABLE, sourceFilterList),
+        },
+      },
+      options?.signal,
+    );
+    if (result.body.error) {
+      log.warn(`memory search: body keyword query failed: ${result.body.error}`);
+    }
+    if (result.path.error) {
+      log.warn(`memory search: path keyword query failed: ${result.path.error}`);
+    }
+    const bodyResults = result.body.rows;
+    const pathResults = result.path.rows;
     const merged = this.mergeKeywordSearchHits(
       [
         bodyResults.map((entry) =>
@@ -298,53 +309,62 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       ],
       exactPathQuery,
     );
-    return this.attachRecallMetadata(this.limitKeywordSearchHits(merged, limit));
+    return this.limitKeywordSearchHits(merged, limit);
   }
 
   protected async searchKeywordWithFallback(
     query: string,
     limit: number,
-    options: { boostFallbackRanking?: boolean } | undefined,
+    options: { boostFallbackRanking?: boolean; signal?: AbortSignal } | undefined,
     sourceFilterList: MemorySource[],
   ): Promise<KeywordSearchHit[]> {
-    const fullQueryResults = await this.searchKeyword(
-      query,
-      limit,
-      options,
-      sourceFilterList,
-    ).catch(() => []);
+    const fullQueryResults = await this.searchKeyword(query, limit, options, sourceFilterList);
+    options?.signal?.throwIfAborted();
     const nonExactResults = fullQueryResults.filter((result) => result.exactPathSpecificity === 0);
     if (nonExactResults.length >= limit) {
-      return fullQueryResults;
+      return this.attachRecallMetadata(fullQueryResults);
     }
 
     // Supplement thin candidate pools for conversational queries, but cap the
     // extra FTS probes so long prompts cannot fan out into unbounded sqlite work.
     const fallbackTerms = this.resolveKeywordFallbackTerms(query);
     if (fallbackTerms.length === 0) {
-      return fullQueryResults;
+      return this.attachRecallMetadata(fullQueryResults);
     }
     const strictFtsQuery = buildFtsQuery(query)?.toLowerCase();
     const keywordFtsQuery = buildFtsQuery(fallbackTerms.join(" "))?.toLowerCase();
     if (fullQueryResults.length > 0 && strictFtsQuery === keywordFtsQuery) {
       // Expansion did not normalize this already-matching keyword query; OR
       // probes can only weaken its strict relevance before importance ranking.
-      return fullQueryResults;
+      return this.attachRecallMetadata(fullQueryResults);
     }
 
-    const resultSets = await Promise.all(
+    const settled = await Promise.allSettled(
       fallbackTerms.map((term) =>
         this.searchKeyword(
           term,
           limit,
           { ...options, exactPathQuery: query, rankingQuery: query },
           sourceFilterList,
-        ).catch(() => []),
+        ),
       ),
     );
-    return this.limitKeywordSearchHits(
-      this.mergeKeywordSearchHits([fullQueryResults, ...resultSets], query),
-      limit,
+    options?.signal?.throwIfAborted();
+    // Keep the generation leased until every admitted probe has closed its reader,
+    // including siblings of a failed or cancelled worker request.
+    const resultSets = settled.map((result) => {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      return result.value;
+    });
+    // Enrich only the retained candidates after all probes deduplicate. Provenance
+    // and recall annotations share one read under the search generation lease.
+    return this.attachRecallMetadata(
+      this.limitKeywordSearchHits(
+        this.mergeKeywordSearchHits([fullQueryResults, ...resultSets], query),
+        limit,
+      ),
     );
   }
 

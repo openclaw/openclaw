@@ -1,4 +1,3 @@
-// Media Core module implements mime behavior.
 import path from "node:path";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 import { extnameFromAnyPath } from "./file-name.js";
@@ -162,6 +161,9 @@ const MIME_SYNONYMS: Record<string, string> = {
   "text/yaml": "application/yaml",
   "application/x-yaml": "application/yaml",
   "application/xml": "text/xml",
+  // Preserve shipped filename/header spellings for byte-detected container aliases.
+  "video/vnd.avi": "video/x-msvideo",
+  "video/matroska": "video/x-matroska",
 };
 
 /** Normalizes MIME strings by dropping parameters, lowercasing, and folding registered synonyms. */
@@ -173,7 +175,9 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!cleaned) {
     return undefined;
   }
-  return MIME_SYNONYMS[cleaned] ?? cleaned;
+  // Object.hasOwn: a remote "__proto__"/"constructor" header would otherwise
+  // resolve to inherited Object.prototype members and break the string contract.
+  return Object.hasOwn(MIME_SYNONYMS, cleaned) ? MIME_SYNONYMS[cleaned] : cleaned;
 }
 
 /** Returns the bounded buffer prefix used for dependency MIME sniffing. */
@@ -272,8 +276,10 @@ export async function detectMime(opts: {
   // file-type defaults these containers to video without parsing their tracks.
   // Preserve a concrete audio hint only for those documented ambiguous results.
   const audioContainerHint =
-    mimeHints.find((mime) => AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[mime] === inferred) ??
-    (extMime && AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[extMime] === inferred ? extMime : undefined);
+    inferred &&
+    [...mimeHints, extMime].find(
+      (mime) => mime && AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[mime] === inferred,
+    );
   if (audioContainerHint) {
     return audioContainerHint;
   }
@@ -286,7 +292,9 @@ export function extensionForMime(mime?: string | null): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return EXT_BY_MIME[normalized];
+  // Same prototype-key hazard as normalizeMimeType: a "__proto__" lookup would
+  // return Object.prototype where callers expect string | undefined.
+  return Object.hasOwn(EXT_BY_MIME, normalized) ? EXT_BY_MIME[normalized] : undefined;
 }
 
 /** Returns true when content type or filename identifies GIF media. */

@@ -1,6 +1,13 @@
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import { ownerKey, resolveConfiguredOwner } from "./prepared-model-runtime.owner.js";
+import {
+  normalizeOptionalDir,
+  normalizePreparedModelRuntimeInput,
+  ownerKey,
+  prepareModelRuntimeOwner,
+  resolveConfiguredOwner,
+} from "./prepared-model-runtime.owner.js";
 import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeReplacementGateId,
@@ -10,12 +17,14 @@ import type {
 export type PreparedModelRuntimeAuthMutation = {
   agentDir?: string;
   affectsInheritedStores: boolean;
+  profileSetChanged: boolean;
 };
 
 type PreparedModelRuntimeAuthTransaction = {
   adoptedBy?: PreparedModelRuntimeReplacementGateId;
   ownerGates: Map<PreparedModelRuntimeOwner, Deferred<PreparedModelRuntimeSnapshot>>;
   publicationQueued: boolean;
+  profileSetChanged: boolean;
 };
 
 function partitionAuthMutationOwners(
@@ -48,6 +57,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
 
   enqueue(
     invalidatedOwners: readonly PreparedModelRuntimeOwner[],
+    profileSetChanged = false,
   ): PreparedModelRuntimeAuthTransaction {
     this.#events.push([...invalidatedOwners]);
     const transaction =
@@ -55,7 +65,9 @@ export class PreparedModelRuntimeAuthPublicationOwner {
       (this.#transaction = {
         ownerGates: new Map(),
         publicationQueued: false,
+        profileSetChanged: false,
       });
+    transaction.profileSetChanged ||= profileSetChanged;
     for (const owner of invalidatedOwners) {
       let gate = transaction.ownerGates.get(owner);
       if (!gate) {
@@ -212,6 +224,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
         owner: PreparedModelRuntimeOwner;
         input: PreparedModelRuntimeOwner["input"];
       }>,
+      includeCredentialProviders: boolean,
     ) => Promise<void>;
     publishOwners: (owners: readonly PreparedModelRuntimeOwner[]) => void;
     commit?: () => void;
@@ -225,7 +238,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
         );
         try {
           if (entries.length > 0) {
-            await params.publish(entries);
+            await params.publish(entries, this.#transaction?.profileSetChanged === true);
           }
           const transaction = this.#transaction;
           if (transaction) {
@@ -286,4 +299,62 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     }
     return rejected;
   }
+}
+
+export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  normalizedEvent: PreparedModelRuntimeAuthMutation,
+): {
+  invalidatedOwners: PreparedModelRuntimeOwner[];
+  invalidatedConfiguredAgentIds: Set<string>;
+} {
+  const staleError = new Error("prepared model runtime owner is stale after auth mutation");
+  const invalidatedOwners: PreparedModelRuntimeOwner[] = [];
+  const invalidatedConfiguredAgentIds = new Set<string>();
+  for (const owner of owners.values()) {
+    if (
+      // An initial active build will read current credentials; failed owners still need recovery.
+      (!owner.snapshot &&
+        owner.buildCompletion &&
+        !owner.authCaptureStarted &&
+        !owner.refreshError &&
+        owner.input.inheritedAuthDir ===
+          normalizeOptionalDir(
+            resolveLegacyInheritedAuthDir(owner.input.config, owner.input.env),
+          )) ||
+      (!normalizedEvent.affectsInheritedStores &&
+        owner.input.agentDir !== normalizedEvent.agentDir &&
+        owner.input.inheritedAuthDir !== normalizedEvent.agentDir)
+    ) {
+      continue;
+    }
+    invalidatedOwners.push(owner);
+    owner.generation += 1;
+    owner.needsRefresh = true;
+    owner.refreshError = staleError;
+    if (normalizedEvent.profileSetChanged) {
+      owner.catalogStale = true;
+    }
+    if (owner.provenance === "configured" && owner.input.agentId) {
+      invalidatedConfiguredAgentIds.add(owner.input.agentId);
+    }
+  }
+  // Rebind before queueing: readers must find the pending owner while an older build settles.
+  for (const owner of invalidatedOwners) {
+    if (owner.provenance !== "configured") {
+      continue;
+    }
+    const inheritedAuthDir = normalizeOptionalDir(
+      resolveLegacyInheritedAuthDir(owner.input.config, owner.input.env),
+    );
+    if (owner.input.inheritedAuthDir === inheritedAuthDir) {
+      continue;
+    }
+    const previousKey = ownerKey(owner.input);
+    const input = normalizePreparedModelRuntimeInput({ ...owner.input, inheritedAuthDir });
+    prepareModelRuntimeOwner(input, "configured", owner.catalogMode, owner);
+    owners.delete(previousKey);
+    owners.set(ownerKey(input), owner);
+  }
+  return { invalidatedOwners, invalidatedConfiguredAgentIds };
 }

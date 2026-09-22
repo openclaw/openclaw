@@ -1,7 +1,10 @@
 // Update status helpers for `openclaw status`.
 // Wraps registry/git update checks and formats compact update rows/hints.
 
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   normalizeUpdateChannel,
@@ -12,15 +15,16 @@ import {
   checkUpdateStatus,
   compareSemverStrings,
   type UpdateCheckResult,
+  type UpdateInstallIdentity,
 } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
 
 /** Chooses a registry tag only after the status check has identified the install. */
-export function resolveStatusRegistryUpdateChannel(params: {
-  configChannel?: UpdateChannel | null;
-  installKind: UpdateCheckResult["installKind"];
-  git?: UpdateCheckResult["git"];
-}): UpdateChannel {
+export function resolveStatusRegistryUpdateChannel(
+  params: UpdateInstallIdentity & {
+    configChannel?: UpdateChannel | null;
+  },
+): UpdateChannel {
   return resolveEffectiveUpdateChannel({
     configChannel: params.configChannel,
     currentVersion: VERSION,
@@ -42,18 +46,45 @@ export async function getUpdateCheckResult(params: {
     argv1: process.argv[1],
     cwd: process.cwd(),
   });
-  return await checkUpdateStatus({
+  let gitProbeTimeoutMs: number | undefined;
+  const update = await checkUpdateStatus({
     root,
     timeoutMs: params.timeoutMs,
     fetchGit: params.fetchGit,
     includeRegistry: params.includeRegistry,
+    onGitProbeTimeout: (timeoutMs) => {
+      gitProbeTimeoutMs ??= timeoutMs;
+    },
     resolveRegistryChannel: ({ installKind, git }) =>
       resolveStatusRegistryUpdateChannel({
         configChannel,
         installKind,
         git,
       }),
-  });
+  }).catch((error: unknown): UpdateCheckResult => ({
+    root,
+    installKind: "unknown",
+    packageManager: "unknown",
+    error: { status: "failed", message: sanitizeTerminalText(formatErrorMessage(error)) },
+  }));
+  if (gitProbeTimeoutMs !== undefined) {
+    update.error = {
+      status: "unknown",
+      timeoutMs: gitProbeTimeoutMs,
+      message: `git probe did not finish within ${gitProbeTimeoutMs / 1000} s (slow host)`,
+    };
+  } else if (update.git?.error) {
+    update.error = { status: "failed", message: sanitizeTerminalText(update.git.error) };
+  }
+  if (update.installKind === "git" && update.git && !params.fetchGit) {
+    const stale = await import("../infra/update-run-ledger.js")
+      .then(({ getLatestUpdateFetchFailure }) => getLatestUpdateFetchFailure())
+      .catch(() => undefined);
+    if (stale) {
+      update.git = { ...update.git, stale, countsCached: true };
+    }
+  }
+  return update;
 }
 
 type UpdateAvailability = {
@@ -68,9 +99,9 @@ type UpdateAvailability = {
 export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
   const latestVersion = update.registry?.latestVersion ?? null;
   const registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
-  const hasRegistryUpdate = registryCmp != null && registryCmp < 0;
+  const hasRegistryUpdate = !update.error && registryCmp != null && registryCmp < 0;
   const gitBehind =
-    update.installKind === "git" && typeof update.git?.behind === "number"
+    !update.error && update.installKind === "git" && typeof update.git?.behind === "number"
       ? update.git.behind
       : null;
   const hasGitUpdate = gitBehind != null && gitBehind > 0;
@@ -93,7 +124,9 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
 
   const details: string[] = [];
   if (availability.hasGitUpdate && availability.gitBehind != null) {
-    details.push(`git behind ${availability.gitBehind}`);
+    details.push(
+      `git behind ${availability.gitBehind}${update.git?.countsCached ? " (cached)" : ""}`,
+    );
   }
   if (availability.hasRegistryUpdate && availability.latestVersion) {
     details.push(`npm ${availability.latestVersion}`);
@@ -104,6 +137,9 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
 
 /** Formats a compact one-line update summary for overview rows. */
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
+  if (update.error) {
+    return `Update: update status ${update.error.status}: ${update.error.message}; run ${formatCliCommand("openclaw update status")}`;
+  }
   const parts: string[] = [];
 
   const appendRegistryUpdateSummary = () => {
@@ -164,7 +200,15 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.git.dirty === true) {
       parts.push("dirty");
     }
-    if (update.git.behind != null && update.git.ahead != null) {
+    if (update.git.stale) {
+      const { failedAtMs, detail } = update.git.stale;
+      parts.push(
+        `update check stale: last update fetch failed ${formatTimeAgo(Math.max(0, Date.now() - failedAtMs))} (${detail})`,
+      );
+      if (update.git.behind != null && update.git.ahead != null) {
+        parts.push(`cached: ahead ${update.git.ahead}, behind ${update.git.behind}`);
+      }
+    } else if (update.git.behind != null && update.git.ahead != null) {
       if (update.git.behind === 0 && update.git.ahead === 0) {
         parts.push("up to date");
       } else if (update.git.behind > 0 && update.git.ahead === 0) {
@@ -177,6 +221,11 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     }
     if (update.git.fetchOk === false) {
       parts.push("fetch failed");
+    }
+    // A checkout that pulled but never rebuilt keeps executing the previous dist,
+    // so report the built commit rather than letting HEAD imply what is running.
+    if (update.git.builtSha && update.git.sha && update.git.builtSha !== update.git.sha) {
+      parts.push(`stale build (running ${update.git.builtSha.slice(0, 8)}, run pnpm build)`);
     }
     appendRegistryUpdateSummary();
   } else {

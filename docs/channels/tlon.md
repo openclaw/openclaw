@@ -55,8 +55,12 @@ Or edit config directly:
 }
 ```
 
-Restart the gateway after editing config directly. Then DM the bot or @ mention it in a group
-channel.
+The login code is your ship's web login code: run `+code` in the ship's dojo to print the current
+one. It rotates, so re-read it whenever authentication starts failing.
+
+Config changes follow [hot reload](/gateway/configuration/hot-reload). Check
+`openclaw channels status --probe`, starting the Gateway if it is offline. Then
+DM the bot or @ mention it in a group channel.
 
 ## Inbound durability
 
@@ -257,6 +261,15 @@ direct Urbit operations, available automatically once the plugin is installed:
 
 ## Capabilities
 
+`channels.tlon.mediaMaxMb` limits each inbound image download and outbound image
+load in MiB. Named accounts can override it with `accounts.<id>.mediaMaxMb`;
+otherwise the channel root and then `agents.defaults.mediaMaxMb` apply. The
+existing 6 MiB ceiling applies to image downloads and uploads. With a configured cap, a failed
+size check or download fails the send instead of embedding an unchecked URL.
+Upload failures after a successful bounded download can still use the original URL.
+Without a configured cap, the existing link fallback remains available even when
+the image cannot be downloaded within that ceiling.
+
 | Feature         | Status                                        |
 | --------------- | --------------------------------------------- |
 | Direct messages | Supported                                     |
@@ -323,7 +336,7 @@ Full configuration: [Configuration](/gateway/configuration)
 ## Related
 
 - [Channels Overview](/channels) — all supported channels
-- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Pairing](/channels/pairing) — DM authentication for channels that declare it; Tlon is not one of them and uses the `dmAllowlist` plus `ownerShip` approval flow above instead
 - [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Channel routing](/channels/channel-routing) — session routing for messages
 - [Security](/gateway/security) — access model and hardening

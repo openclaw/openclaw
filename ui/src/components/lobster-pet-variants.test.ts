@@ -65,7 +65,6 @@ describe("lobster pet variants", () => {
   it("stays within the variant catalog for many seeds", () => {
     const palettes = new Set<string>();
     const personalities = new Set<string>();
-    const builds = new Set<string>();
     const clawSizes = new Set<string>();
     const tailFans = new Set<boolean>();
     const crusherSides = new Set<string | null>();
@@ -76,7 +75,6 @@ describe("lobster pet variants", () => {
       const look = createLobsterPetLook(seed, neutralDate);
       palettes.add(look.palette.id);
       personalities.add(look.personality);
-      builds.add(look.build);
       clawSizes.add(look.clawSize);
       tailFans.add(look.tailFan);
       crusherSides.add(look.crusherSide);
@@ -86,7 +84,6 @@ describe("lobster pet variants", () => {
       expect([1.7, 2, 2.5]).toContain(look.scale);
       expect(["none", "crown", "sprout", "patch"]).toContain(look.accessory);
       expect(["perky", "droopy"]).toContain(look.antennae);
-      expect(["round", "squat", "slender"]).toContain(look.build);
       expect(["dainty", "regular", "mighty"]).toContain(look.clawSize);
       expect([null, "left", "right"]).toContain(look.crusherSide);
       expect([null, "#ffd166", "#ff8ac2", "#b79bff"]).toContain(look.glint);
@@ -96,7 +93,6 @@ describe("lobster pet variants", () => {
     }
     expect(palettes.size).toBeGreaterThan(2);
     expect(personalities.size).toBeGreaterThan(2);
-    expect(builds.size).toBe(3);
     expect(clawSizes.size).toBe(3);
     expect(tailFans.size).toBe(2);
     expect(crusherSides).toContain(null);

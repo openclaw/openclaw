@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 import { createStatusScanResultFixture } from "./status.test-support.ts";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   writeRuntimeJson: vi.fn(),
@@ -22,11 +23,7 @@ describe("runStatusJsonCommand", () => {
   });
 
   it("shares the fast-json scan and output flow", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as never;
+    const runtime = createTestRuntime();
     const scan = createStatusScanResultFixture({
       cfg: { gateway: {} },
       sourceConfig: { gateway: {} },
@@ -82,11 +79,7 @@ describe("runStatusJsonCommand", () => {
   });
 
   it("rejects --agent when usage is not requested", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as never;
+    const runtime = createTestRuntime();
     const scanStatusJsonFast = vi.fn();
 
     await expect(

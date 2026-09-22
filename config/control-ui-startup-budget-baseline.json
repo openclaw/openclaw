@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 344044,
-  "reason": "mobile drawer modal ownership and breakpoint-gated swipe loader; measured 344044 B with desktop request and modal regression coverage",
-  "updatedAt": "2026-08-27"
+  "startupJsGzipBytes": 362706,
+  "reason": "Maintainer-approved correction in #149291 for the existing startup bundle: exact base 7b6094ec7b7d and CI merge b524940307fc emitted byte-identical Control UI output at 362706 B with Vite 8.2.2/Pako 3.0.1 on Node 24.21.0. CI run 35173887678 also measured 362706 B. The 512 B growth and 64 B build variance allowances remain unchanged.",
+  "updatedAt": "2026-09-17"
 }

@@ -19,11 +19,17 @@ export type WorkerTurnEnvironmentService = Pick<
   | "startTunnel"
   | "stopTunnel"
 > &
-  Partial<Pick<WorkerEnvironmentService, "resolveSshIdentity" | "supportsNodePortal">>;
+  Partial<
+    Pick<WorkerEnvironmentService, "resolveSshIdentity" | "supportsNodePortal" | "prepareComputer">
+  >;
 
 export type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 
 export class WorkerTurnExecutionError extends Error {}
+
+export class WorkerWorkspaceReconciliationError extends Error {
+  override name = "WorkerWorkspaceReconciliationError";
+}
 
 // Journal-terminal launches get a short cleanup grace before failure is surfaced.
 // This never limits a live launch or a turn still holding its claim.

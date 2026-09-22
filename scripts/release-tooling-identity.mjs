@@ -11,6 +11,7 @@ const DIRECT_WORKFLOW_REF_PATTERN =
   /^(?:main|release\/[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33|tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z)$/u;
 const RELEASE_PUBLISH_PARENT_STATE_POLICIES = new Set([
   "active",
+  "active-or-failure",
   "active-or-success",
   "manual-recovery",
 ]);
@@ -208,7 +209,9 @@ export function validateReleaseToolingIdentity({
 
 export function validateReleasePublishParentRun({
   identity,
+  releasePublishFullRef,
   releasePublishParentStatePolicy,
+  releasePublishRef,
   releasePublishRunAttempt,
   releasePublishRunId,
   repository,
@@ -226,11 +229,22 @@ export function validateReleasePublishParentRun({
   if (!RELEASE_PUBLISH_PARENT_STATE_POLICIES.has(parentStatePolicy)) {
     fail(`release publish parent state policy ${parentStatePolicy} is not supported.`);
   }
+  const parentRef = requiredString(releasePublishRef, "release publish ref");
+  const parentFullRef = requiredString(releasePublishFullRef, "release publish full ref");
+  const parentProtectedMatch = RELEASE_PUBLISH_REF_PATTERN.exec(parentRef);
+  const parentDirectRoute =
+    parentFullRef === `refs/heads/${parentRef}` && DIRECT_WORKFLOW_REF_PATTERN.test(parentRef);
+  const parentProtectedRoute =
+    parentFullRef === `refs/tags/${parentRef}` &&
+    parentProtectedMatch?.[1] === identity.sha.slice(0, 12);
+  if (!parentDirectRoute && !parentProtectedRoute) {
+    fail("release publish parent ref is not a trusted direct or exact protected-tag route.");
+  }
   const normalizedRepository = requireRepository(repository);
   const [workflowPath, workflowFullRef] = String(run?.path ?? "").split("@", 2);
   const expected = {
     event: "workflow_dispatch",
-    headBranch: identity.ref,
+    headBranch: parentRef,
     headSha: identity.sha,
     repository: normalizedRepository,
     runAttempt: Number(runAttempt),
@@ -251,7 +265,7 @@ export function validateReleasePublishParentRun({
       fail(`release publish parent run ${key} does not match the trusted tooling identity.`);
     }
   }
-  if (workflowFullRef && workflowFullRef !== identity.fullRef) {
+  if (workflowFullRef && workflowFullRef !== parentFullRef) {
     fail("release publish parent run workflow full ref does not match trusted tooling.");
   }
   const active = run?.status === "in_progress" && !run?.conclusion;
@@ -259,6 +273,7 @@ export function validateReleasePublishParentRun({
   const completedFailure = run?.status === "completed" && run?.conclusion === "failure";
   if (
     !active &&
+    !(parentStatePolicy === "active-or-failure" && completedFailure) &&
     !(parentStatePolicy === "active-or-success" && completedSuccess) &&
     !(parentStatePolicy === "manual-recovery" && (completedSuccess || completedFailure))
   ) {
@@ -276,7 +291,7 @@ function parseJson(raw, label) {
   }
 }
 
-function runReleaseToolingGh(args) {
+export function runReleaseToolingGh(args) {
   return execFileSync("gh", args, {
     encoding: "utf8",
     killSignal: "SIGKILL",
@@ -286,9 +301,90 @@ function runReleaseToolingGh(args) {
   });
 }
 
+export function verifyReleaseWorkflowRun({
+  repository,
+  workflowFullRef,
+  workflowRef,
+  workflowSha,
+  runId,
+  runAttempt,
+  workflowPath,
+  workflowEvent,
+  runStatePolicy,
+  runGh = runReleaseToolingGh,
+}) {
+  const normalizedRepository = requireRepository(repository);
+  const ref = requiredString(workflowRef, "release workflow ref");
+  const fullRef = requiredString(workflowFullRef, "release workflow full ref");
+  const sha = requiredSha(workflowSha, "release workflow SHA");
+  const id = requiredString(runId, "release workflow run id");
+  const attempt = requiredString(runAttempt, "release workflow run attempt");
+  const path = requiredString(workflowPath, "release workflow path");
+  const event = requiredString(workflowEvent, "release workflow event");
+  if (
+    !/^[1-9][0-9]*$/u.test(id) ||
+    !/^[1-9][0-9]*$/u.test(attempt) ||
+    !Number.isSafeInteger(Number(id)) ||
+    !Number.isSafeInteger(Number(attempt))
+  ) {
+    fail("release workflow run id and attempt must be positive safe integers.");
+  }
+  if (
+    (fullRef !== `refs/heads/${ref}` && fullRef !== `refs/tags/${ref}`) ||
+    !/^\.github\/workflows\/[^/@]+\.ya?ml$/u.test(path)
+  ) {
+    fail("release workflow path and full ref must name the exact executing workflow.");
+  }
+  if (runStatePolicy !== "active" && runStatePolicy !== "success") {
+    fail("release workflow run state policy must be active or success.");
+  }
+  const run = parseJson(
+    runGh(["api", `repos/${normalizedRepository}/actions/runs/${id}`, "--method", "GET"]),
+    "release workflow run",
+  );
+  if (!isRecord(run)) {
+    fail("release workflow run must be a JSON object.");
+  }
+  const observedPath = typeof run.path === "string" ? run.path : "";
+  const refSeparator = observedPath.indexOf("@");
+  const expected = {
+    repository: normalizedRepository,
+    runId: Number(id),
+    runAttempt: Number(attempt),
+    headSha: sha,
+    headBranch: ref,
+    workflowPath: path,
+    event,
+    status: runStatePolicy === "active" ? "in_progress" : "completed",
+    conclusion: runStatePolicy === "active" ? null : "success",
+  };
+  const actual = {
+    repository: isRecord(run.repository) ? run.repository.full_name : undefined,
+    runId: run.id,
+    runAttempt: run.run_attempt,
+    headSha: run.head_sha,
+    headBranch: run.head_branch,
+    workflowPath: refSeparator === -1 ? observedPath : observedPath.slice(0, refSeparator),
+    event: run.event,
+    status: run.status,
+    conclusion: run.conclusion,
+  };
+  for (const key of Object.keys(expected)) {
+    if (actual[key] !== expected[key]) {
+      fail(`release workflow run ${key} does not match the authorized workflow identity.`);
+    }
+  }
+  if (refSeparator !== -1 && observedPath.slice(refSeparator + 1) !== fullRef) {
+    fail("release workflow run full ref does not match the authorized workflow identity.");
+  }
+  return run;
+}
+
 export function verifyReleaseToolingIdentity({
   allowPrevalidatedRef = false,
+  releasePublishFullRef,
   releasePublishParentStatePolicy,
+  releasePublishRef,
   releasePublishRunAttempt,
   releasePublishRunId,
   repository,
@@ -329,7 +425,9 @@ export function verifyReleaseToolingIdentity({
     });
     validateParentRunIfRequested({
       identity: validated,
+      releasePublishFullRef,
       releasePublishParentStatePolicy,
+      releasePublishRef,
       releasePublishRunAttempt,
       releasePublishRunId,
       repository: normalizedRepository,
@@ -347,6 +445,9 @@ export function verifyReleaseToolingIdentity({
           `repos/${normalizedRepository}/compare/${identity.sha}...main`,
           "--method",
           "GET",
+          // Full comparison patches can exceed the subprocess buffer; only ancestry status is used.
+          "--jq",
+          "{status}",
         ]),
         "main release tooling comparison",
       );
@@ -362,7 +463,9 @@ export function verifyReleaseToolingIdentity({
     });
     validateParentRunIfRequested({
       identity: validated,
+      releasePublishFullRef,
       releasePublishParentStatePolicy,
+      releasePublishRef,
       releasePublishRunAttempt,
       releasePublishRunId,
       repository: normalizedRepository,
@@ -396,7 +499,9 @@ export function verifyReleaseToolingIdentity({
   });
   validateParentRunIfRequested({
     identity: validated,
+    releasePublishFullRef,
     releasePublishParentStatePolicy,
+    releasePublishRef,
     releasePublishRunAttempt,
     releasePublishRunId,
     repository: normalizedRepository,
@@ -407,17 +512,33 @@ export function verifyReleaseToolingIdentity({
 
 function validateParentRunIfRequested({
   identity,
+  releasePublishFullRef,
   releasePublishParentStatePolicy,
+  releasePublishRef,
   releasePublishRunAttempt,
   releasePublishRunId,
   repository,
   runGh,
 }) {
-  if (!releasePublishRunId && !releasePublishRunAttempt && !releasePublishParentStatePolicy) {
+  if (
+    !releasePublishRunId &&
+    !releasePublishRunAttempt &&
+    !releasePublishParentStatePolicy &&
+    !releasePublishRef &&
+    !releasePublishFullRef
+  ) {
     return;
   }
-  if (!releasePublishRunId || !releasePublishRunAttempt || !releasePublishParentStatePolicy) {
-    fail("release publish run id, attempt, and parent state policy must be provided together.");
+  if (
+    !releasePublishRunId ||
+    !releasePublishRunAttempt ||
+    !releasePublishParentStatePolicy ||
+    !releasePublishRef ||
+    !releasePublishFullRef
+  ) {
+    fail(
+      "release publish run id, attempt, ref, full ref, and parent state policy must be provided together.",
+    );
   }
   let run;
   try {
@@ -430,7 +551,9 @@ function validateParentRunIfRequested({
   }
   validateReleasePublishParentRun({
     identity,
+    releasePublishFullRef,
     releasePublishParentStatePolicy,
+    releasePublishRef,
     releasePublishRunAttempt,
     releasePublishRunId,
     repository,
@@ -444,6 +567,8 @@ function parseArgs(argv) {
     command: "",
     releasePublishRunAttempt: "",
     releasePublishRunId: "",
+    releasePublishRef: "",
+    releasePublishFullRef: "",
     releasePublishParentStatePolicy: "",
     repository: "",
     requestedIdentityJson: "",
@@ -451,7 +576,12 @@ function parseArgs(argv) {
     workflowFullRef: "",
     workflowRef: "",
     workflowSha: "",
+    writerRunId: "",
+    writerRunAttempt: "",
+    writerWorkflowPath: "",
+    writerWorkflowEvent: "",
   };
+  let writerRequested = false;
   options.command = argv.shift() ?? "";
   if (options.command !== "verify" && options.command !== "resolve") {
     fail("usage: release-tooling-identity.mjs <verify|resolve> [options]");
@@ -463,10 +593,17 @@ function parseArgs(argv) {
       continue;
     }
     const value = argv[(index += 1)] ?? "";
+    if (arg.startsWith("--writer-")) {
+      writerRequested = true;
+    }
     if (arg === "--release-publish-run-id") {
       options.releasePublishRunId = value;
     } else if (arg === "--release-publish-run-attempt") {
       options.releasePublishRunAttempt = value;
+    } else if (arg === "--release-publish-ref") {
+      options.releasePublishRef = value;
+    } else if (arg === "--release-publish-full-ref") {
+      options.releasePublishFullRef = value;
     } else if (arg === "--release-publish-parent-state-policy") {
       options.releasePublishParentStatePolicy = value;
     } else if (arg === "--repository") {
@@ -481,9 +618,28 @@ function parseArgs(argv) {
       options.workflowRef = value;
     } else if (arg === "--workflow-sha") {
       options.workflowSha = value;
+    } else if (arg === "--writer-run-id") {
+      options.writerRunId = value;
+    } else if (arg === "--writer-run-attempt") {
+      options.writerRunAttempt = value;
+    } else if (arg === "--writer-workflow-path") {
+      options.writerWorkflowPath = value;
+    } else if (arg === "--writer-workflow-event") {
+      options.writerWorkflowEvent = value;
     } else {
       fail(`unknown release tooling identity argument: ${arg}`);
     }
+  }
+  if (
+    writerRequested &&
+    [
+      options.writerRunId,
+      options.writerRunAttempt,
+      options.writerWorkflowPath,
+      options.writerWorkflowEvent,
+    ].some((value) => !value)
+  ) {
+    fail("writer run id, attempt, workflow path, and workflow event must be provided together.");
   }
   return options;
 }
@@ -496,7 +652,9 @@ function main(argv = process.argv.slice(2)) {
     const protectedMatch = RELEASE_PUBLISH_REF_PATTERN.exec(identity.ref);
     verifyReleaseToolingIdentity({
       allowPrevalidatedRef: identity.ref !== "main" && !protectedMatch,
+      releasePublishFullRef: options.releasePublishFullRef,
       releasePublishParentStatePolicy: options.releasePublishParentStatePolicy,
+      releasePublishRef: options.releasePublishRef,
       releasePublishRunAttempt: options.releasePublishRunAttempt,
       releasePublishRunId: options.releasePublishRunId,
       repository: options.repository,
@@ -506,6 +664,19 @@ function main(argv = process.argv.slice(2)) {
     });
   } else {
     identity = verifyReleaseToolingIdentity(options);
+  }
+  if (options.writerRunId) {
+    verifyReleaseWorkflowRun({
+      repository: options.repository,
+      workflowFullRef: options.workflowFullRef,
+      workflowRef: options.workflowRef,
+      workflowSha: options.workflowSha,
+      runId: options.writerRunId,
+      runAttempt: options.writerRunAttempt,
+      workflowPath: options.writerWorkflowPath,
+      workflowEvent: options.writerWorkflowEvent,
+      runStatePolicy: "active",
+    });
   }
   process.stdout.write(`${JSON.stringify(identity)}\n`);
 }

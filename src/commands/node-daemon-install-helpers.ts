@@ -1,5 +1,5 @@
 /** Managed node-host install plan builder. */
-import { resolveNodeProgramArguments } from "../daemon/program-args.js";
+import { OPENCLAW_WRAPPER_ENV_KEY, resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
 import {
@@ -41,16 +41,23 @@ export async function buildNodeInstallPlan(params: {
   nodeId?: string;
   displayName?: string;
   installedAppsSharing?: boolean;
+  commands?: string[];
+  allCommands?: boolean;
   runtime: GatewayDaemonRuntime;
   devMode?: boolean;
   runtimePath?: string;
+  pinnedRuntimePath?: string;
+  wrapperPath?: string;
   warn?: DaemonInstallWarnFn;
 }): Promise<NodeInstallPlan> {
+  const wrapperPath = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
   const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
     devMode: params.devMode,
     runtimePath: params.runtimePath,
+    pinnedRuntimePath: params.pinnedRuntimePath,
+    wrapperPath,
   });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     host: params.host,
@@ -61,9 +68,12 @@ export async function buildNodeInstallPlan(params: {
     nodeId: params.nodeId,
     displayName: params.displayName,
     installedAppsSharing: params.installedAppsSharing,
+    commands: params.commands,
+    allCommands: params.allCommands,
     dev: devMode,
     runtime: params.runtime,
     runtimePath,
+    wrapperPath,
   });
 
   await emitDaemonInstallRuntimeWarning({
@@ -76,6 +86,7 @@ export async function buildNodeInstallPlan(params: {
 
   const environment = buildNodeServiceEnvironment({
     env: params.env,
+    runtime: params.runtime,
     // Match the Gateway install path so supervised services keep the chosen
     // runtime toolchain on PATH for sibling binaries when needed.
     extraPathDirs: resolveDaemonRuntimeBinDir(runtimePath),

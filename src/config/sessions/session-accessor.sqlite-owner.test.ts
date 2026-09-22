@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
+import {
+  FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS,
+  SESSION_OWNER_COLUMN_DEFINITIONS,
+} from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -27,7 +30,7 @@ describe("SQLite session owner assignment", () => {
       await upsertSessionEntryCore(scope, {
         sessionId: "session-owned",
         updatedAt: 1,
-        createdActor: { type: "human", id: "profile-creator" },
+        createdActor: { type: "human", source: "profile", id: "profile-creator" },
       });
       const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       for (const { columnName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
@@ -36,7 +39,7 @@ describe("SQLite session owner assignment", () => {
       closeOpenClawAgentDatabasesForTest();
 
       expect(loadSessionEntry(scope)).toMatchObject({
-        createdActor: { type: "human", id: "profile-creator" },
+        createdActor: { type: "human", source: "profile", id: "profile-creator" },
       });
       expect(loadSessionEntry(scope)?.owner).toBeUndefined();
 
@@ -87,7 +90,8 @@ describe("SQLite session owner assignment", () => {
         dflt_value: unknown;
         type: string;
       }>;
-      for (const definition of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+      expect(columns.some((column) => column.name === "legacy_acp_migration_json")).toBe(false);
+      for (const definition of SESSION_OWNER_COLUMN_DEFINITIONS) {
         expect(columns.find((column) => column.name === definition.columnName)).toMatchObject({
           type: definition.dataType,
           notnull: 0,

@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    @Entry var openClawChatDesktopLayout = false
+}
+
 #if os(macOS)
 import AppKit
 #else
@@ -15,6 +19,31 @@ extension NSAppearance {
 #endif
 
 enum OpenClawChatTheme {
+    static func desktopCanvas(in colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark
+            ? Color(.sRGB, red: 36 / 255.0, green: 38 / 255.0, blue: 41 / 255.0)
+            : Color(.sRGB, red: 246 / 255.0, green: 246 / 255.0, blue: 244 / 255.0)
+    }
+
+    static func desktopText(in colorScheme: ColorScheme, contrast: ColorSchemeContrast) -> Color {
+        if contrast == .increased {
+            return colorScheme == .dark
+                ? Color(.sRGB, red: 238 / 255.0, green: 239 / 255.0, blue: 241 / 255.0)
+                : Color(.sRGB, red: 32 / 255.0, green: 33 / 255.0, blue: 36 / 255.0)
+        }
+        return colorScheme == .dark
+            ? Color(.sRGB, red: 200 / 255.0, green: 203 / 255.0, blue: 208 / 255.0)
+            : Color(.sRGB, red: 54 / 255.0, green: 56 / 255.0, blue: 60 / 255.0)
+    }
+
+    static func desktopUserBubble(in colorScheme: ColorScheme, accent: Color?) -> Color {
+        let base = colorScheme == .dark
+            ? Color(.sRGB, red: 31 / 255.0, green: 33 / 255.0, blue: 37 / 255.0)
+            : Color(.sRGB, red: 233 / 255.0, green: 235 / 255.0, blue: 238 / 255.0)
+        // Bound the accent contribution so even its lightest/darkest extremes retain reading contrast.
+        return base.mix(with: accent ?? self.userBubble, by: 0.1, in: .device)
+    }
+
     #if !os(macOS)
     private enum IOSPalette {
         static let lightCanvasTop = UIColor(red: 246 / 255.0, green: 247 / 255.0, blue: 249 / 255.0, alpha: 1)
@@ -225,7 +254,7 @@ enum OpenClawChatTheme {
 
     static var composerBorder: Color {
         #if os(macOS)
-        Color.white.opacity(0.12)
+        Color(nsColor: .separatorColor).opacity(0.6)
         #else
         self.adaptiveColor(light: .separator, dark: UIColor.white.withAlphaComponent(0.14))
         #endif

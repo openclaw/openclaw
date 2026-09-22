@@ -9,11 +9,12 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { listConfiguredBindings } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { pickFirstExistingAgentId } from "../../routing/resolve-route.js";
 import { resolveChannelConfiguredBindingProvider } from "./binding-provider.js";
 import type { CompiledConfiguredBinding, ConfiguredBindingChannel } from "./binding-types.js";
 import { resolveConfiguredBindingConsumer } from "./configured-binding-consumers.js";
-import { getLoadedChannelPlugin } from "./index.js";
+import { getLoadedChannelPluginEntryById } from "./registry-loaded.js";
 import type { ChannelConfiguredBindingProvider } from "./types.adapters.js";
 
 export type CompiledConfiguredBindingRegistry = {
@@ -28,7 +29,11 @@ function resolveConfiguredBindingAdapter(channel: string): {
   if (!normalized) {
     return null;
   }
-  const plugin = getLoadedChannelPlugin(normalized as ConfiguredBindingChannel);
+  // Candidate validation and admitted routing compile against their exact owner.
+  const plugin = getLoadedChannelPluginEntryById(
+    normalized,
+    getPluginRegistryForContext() ?? undefined,
+  )?.plugin;
   const provider = resolveChannelConfiguredBindingProvider(plugin);
   if (
     !plugin ||

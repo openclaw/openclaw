@@ -1,11 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { TelegramBotInfo } from "./bot-info.js";
 
-type DispatchReplyWithBufferedBlockDispatcher =
-  typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
-type DispatchChannelInboundTurn =
-  typeof import("openclaw/plugin-sdk/channel-inbound").dispatchChannelInboundTurn;
-
 export const telegramBotInfoForTest = {
   id: 9_876_543_210,
   is_bot: true,
@@ -27,6 +22,33 @@ export type TelegramMentionPolicyForTest = {
   allowIn?: string[];
   denyIn?: string[];
 };
+
+export function createChannelPostContext(params: {
+  messageId: number;
+  date: number;
+  title?: string;
+  caption?: string;
+  text?: string;
+  mediaGroupId?: string;
+  photoFileId?: string;
+  getFileResult?: Record<string, unknown>;
+}) {
+  const photoFileId = params.photoFileId;
+  return {
+    channelPost: {
+      chat: { id: -100777111222, type: "channel", title: params.title ?? "Wake Channel" },
+      message_id: params.messageId,
+      date: params.date,
+      ...(params.caption ? { caption: params.caption } : {}),
+      ...(params.text ? { text: params.text } : {}),
+      ...(params.mediaGroupId ? { media_group_id: params.mediaGroupId } : {}),
+      ...(photoFileId ? { photo: [{ file_id: photoFileId }] } : {}),
+    },
+    me: { username: "openclaw_bot" },
+    getFile: async () =>
+      params.getFileResult ?? (photoFileId ? { file_path: `photos/${photoFileId}.jpg` } : {}),
+  };
+}
 
 export type TelegramIngestGroupForTest = {
   requireMention: boolean;
@@ -64,38 +86,4 @@ export async function waitForTelegramMockCalls(
     }
     await delay(25);
   }
-}
-
-export function createTelegramNativeCommandTestDeps(
-  dispatchReply: DispatchReplyWithBufferedBlockDispatcher,
-): { dispatchChannelInboundTurn: DispatchChannelInboundTurn } {
-  return {
-    dispatchChannelInboundTurn: async (plan) => {
-      const delivery = plan.delivery;
-      const dispatchResult = await dispatchReply({
-        ctx: plan.ctxPayload,
-        cfg: plan.cfg,
-        dispatcherOptions: {
-          ...plan.dispatcherOptions,
-          deliver:
-            "deliverWithProviderMessageSending" in delivery
-              ? (payload, info) =>
-                  delivery.deliverWithProviderMessageSending(payload, {
-                    ...info,
-                    onPlatformSendDispatch: info.onPlatformSendDispatch ?? (async () => undefined),
-                  })
-              : delivery.deliver,
-          onError: delivery.onError,
-        },
-        replyOptions: plan.replyOptions,
-      });
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: plan.ctxPayload,
-        routeSessionKey: plan.route.sessionKey,
-        dispatchResult,
-      };
-    },
-  };
 }

@@ -5,6 +5,7 @@ import type { PreparedCliRunContext } from "./types.js";
 export function buildCliLiveSessionFingerprint(params: {
   context: PreparedCliRunContext;
   argv: readonly string[];
+  argv0?: string;
   env: Readonly<Record<string, string>>;
 }): string {
   const context = params.context;
@@ -18,13 +19,19 @@ export function buildCliLiveSessionFingerprint(params: {
           promptHash: sha256Hex(skillSnapshot.prompt),
           skillFilter: skillSnapshot.skillFilter,
           skills: skillSnapshot.skills,
+          librarySelections: skillSnapshot.librarySelections,
           resolvedSkills: (skillSnapshot.resolvedSkills ?? []).map((skill) => ({
             name: skill.name,
             description: skill.description,
+            contentHash: skill.contentHash,
             filePath: skill.filePath,
             sourceInfo: skill.sourceInfo,
           })),
-          version: skillSnapshot.version,
+          // Shipped Plugin SDK callers may omit prepared content identities; retain their version
+          // contract. Loaded snapshots use content identity, not watcher invalidation epochs.
+          version: skillSnapshot.resolvedSkills?.every((skill) => Boolean(skill.contentHash))
+            ? undefined
+            : skillSnapshot.version,
         }),
       )
     : undefined;
@@ -69,11 +76,12 @@ export function buildCliLiveSessionFingerprint(params: {
   return sha256Hex(
     JSON.stringify({
       argv,
+      argv0: params.argv0,
       workspaceDirHash: sha256Hex(context.workspaceDir),
       cwdHash: context.cwdHash ?? sha256Hex(context.cwd ?? context.workspaceDir),
       provider: context.params.provider,
       model: context.normalizedModel,
-      // Official SDK sessions cannot update prompts in place: any changed byte requires restart.
+      // A warm process fixes its prompt at initialization; changed bytes require restart.
       systemPromptHash: sha256Hex(context.systemPrompt),
       authProfileIdHash: context.effectiveAuthProfileId
         ? sha256Hex(context.effectiveAuthProfileId)

@@ -1,0 +1,128 @@
+.gateway-vitals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.gateway-vital {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  padding: 8px 10px 0;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  /* currentColor drives every chart part; degraded flips one token below. */
+  color: var(--accent-2);
+}
+
+.gateway-vital[data-degraded] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+}
+
+.sparkline-tile__label {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+.gateway-vital--disk .sparkline-tile__head {
+  display: grid;
+  gap: 2px;
+}
+
+.gateway-vital--disk .sparkline-tile__label {
+  letter-spacing: normal;
+  white-space: normal;
+  text-transform: none;
+  overflow-wrap: anywhere;
+}
+
+.sparkline-tile__sub {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.sparkline-tile__value {
+  margin: 3px 0 2px;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.sparkline-tile__age {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.sparkline-tile__chart {
+  position: relative;
+  margin: auto -10px 0;
+}
+
+.sparkline-tile__chart svg {
+  display: block;
+  width: 100%;
+  height: 40px;
+}
+
+.sparkline-tile__chart polyline {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, currentColor 45%, transparent));
+}
+
+.sparkline-tile__hairline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, currentColor 40%, transparent);
+  pointer-events: none;
+}
+
+.sparkline-tile__dot {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.sparkline-tile__dot--now {
+  box-shadow: 0 0 6px 1px color-mix(in srgb, currentColor 60%, transparent);
+  animation: sparkline-tile-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sparkline-tile__dot--now {
+    animation: none;
+  }
+}
+
+@keyframes sparkline-tile-pulse {
+  50% {
+    box-shadow: 0 0 2px 0 color-mix(in srgb, currentColor 30%, transparent);
+  }
+}
+
+@media (max-width: 560px) {
+  .gateway-vitals {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

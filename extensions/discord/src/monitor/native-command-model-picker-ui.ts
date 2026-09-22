@@ -32,10 +32,7 @@ import {
   resolveDiscordModelPickerPageForModel,
   type DiscordModelPickerCommandContext,
 } from "./model-picker.state.js";
-import {
-  renderDiscordModelPickerModelsView,
-  toDiscordModelPickerMessagePayload,
-} from "./model-picker.view.js";
+import { renderDiscordModelPickerModelsView } from "./model-picker.view.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import type { SafeDiscordInteractionCall } from "./native-command-ui.types.js";
 import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
@@ -135,7 +132,7 @@ async function resolveDiscordModelPickerRouteState(params: {
       channel: interaction.channel,
       client: interaction.client,
       hasGuild: Boolean(interaction.guild),
-      channelIdFallback: "unknown",
+      channelIdFallback: interaction.rawData.channel_id ?? "unknown",
     });
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
@@ -304,7 +301,12 @@ export async function replyWithDiscordModelPickerProviders(params: {
     accountId: params.accountId,
     threadBindings: params.threadBindings,
   });
-  const data = await loadDiscordModelPickerData(params.cfg, route.agentId);
+  const sessionEntry = getSessionEntry({
+    storePath: resolveStorePath(params.cfg.session?.store, { agentId: route.agentId }),
+    sessionKey: route.sessionKey,
+    readConsistency: "latest",
+  });
+  const data = await loadDiscordModelPickerData(params.cfg, route.agentId, { sessionEntry });
   const currentModel = resolveDiscordModelPickerCurrentModel({
     cfg: params.cfg,
     route,
@@ -354,7 +356,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
     quickModels,
   });
   const payload = {
-    ...toDiscordModelPickerMessagePayload(rendered),
+    ...rendered,
     ephemeral: true,
   };
 

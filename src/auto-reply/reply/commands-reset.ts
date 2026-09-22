@@ -5,13 +5,20 @@ import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/bind
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { isResetAuthorizedForContext } from "../command-auth.js";
 import { applyCommandTextToContext } from "./command-context-rewrite.js";
+import { commandReply } from "./command-gates.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
-import { isResetAuthorizedForContext } from "./reset-authorization.js";
+
+type ResetCommandParams = Omit<
+  HandleCommandsParams,
+  "resolvedThinkLevel" | "resolvedReasoningLevel"
+>;
 
 type InternalResetCommandOptions = NonNullable<HandleCommandsParams["opts"]> & {
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
@@ -23,7 +30,7 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
   ctx.AcpDispatchTailAfterReset = true;
 }
 
-function isResetAuthorized(params: HandleCommandsParams): boolean {
+function isResetAuthorized(params: ResetCommandParams): boolean {
   return isResetAuthorizedForContext({
     ctx: params.ctx,
     cfg: params.cfg,
@@ -33,17 +40,26 @@ function isResetAuthorized(params: HandleCommandsParams): boolean {
 
 /** Handles reset/new commands or returns null when another command handler should continue. */
 export async function maybeHandleResetCommand(
-  params: HandleCommandsParams,
+  params: ResetCommandParams,
 ): Promise<CommandHandlerResult | null> {
+  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/i);
+  if (!resetMatch) {
+    return null;
+  }
+  if (!isResetAuthorized(params)) {
+    logVerbose(
+      `Ignoring /${resetMatch[1]} from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    // Internal ingress can forward replies externally; keep those denials silent too.
+    return isInternalMessageChannel(params.ctx.Provider || params.ctx.Surface) &&
+      isInternalMessageChannel(params.command.channel)
+      ? commandReply(
+          "⚠️ You are not authorized to reset this session. Gateway resets require operator.admin and command access. Ask your administrator to reset it, or send your message without the command.",
+        )
+      : { shouldContinue: false };
+  }
   const softReset = parseSoftResetCommand(params.command.commandBodyNormalized);
   if (softReset.matched) {
-    if (!isResetAuthorized(params)) {
-      logVerbose(
-        `Ignoring /reset soft from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-      );
-      return { shouldContinue: false };
-    }
-
     const boundAcpSessionKey = resolveBoundAcpThreadSessionKey(params);
     const boundAcpKey =
       boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
@@ -92,6 +108,7 @@ export async function maybeHandleResetCommand(
               lastInteractionAt: now,
             };
           },
+          { consumePendingReset: true },
         );
       }
     }
@@ -106,23 +123,14 @@ export async function maybeHandleResetCommand(
       storePath: params.storePath,
       sessionEntry: targetSessionEntry,
       previousSessionEntry,
+      previousSessionMemory: params.previousSessionMemory,
+      previousSessionResetMessages: params.previousSessionResetMessages,
       onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
       workspaceDir: params.workspaceDir,
     });
     params.command.softResetTriggered = true;
     params.command.softResetTail = softReset.tail;
     return null;
-  }
-
-  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/i);
-  if (!resetMatch) {
-    return null;
-  }
-  if (!isResetAuthorized(params)) {
-    logVerbose(
-      `Ignoring /reset from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
   }
 
   const commandAction: ResetCommandAction =
@@ -161,12 +169,15 @@ export async function maybeHandleResetCommand(
       }
       return {
         shouldContinue: false,
-        reply: { text: "✅ ACP session reset in place." },
+        reply: { text: "✅ ACP session reset in place.", isStatusNotice: true },
       };
     }
     return {
       shouldContinue: false,
-      reply: { text: "⚠️ ACP session reset failed. Check /acp status and try again." },
+      reply: {
+        text: "⚠️ ACP session reset failed. Check /acp status and try again.",
+        isStatusNotice: true,
+      },
     };
   }
 
@@ -182,6 +193,8 @@ export async function maybeHandleResetCommand(
     storePath: params.storePath,
     sessionEntry: targetSessionEntry,
     previousSessionEntry: params.previousSessionEntry,
+    previousSessionMemory: params.previousSessionMemory,
+    previousSessionResetMessages: params.previousSessionResetMessages,
     onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
     workspaceDir: params.workspaceDir,
   });
@@ -193,6 +206,7 @@ export async function maybeHandleResetCommand(
         : {
             reply: {
               text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+              isStatusNotice: true,
             },
           }),
     };

@@ -14,6 +14,7 @@ export const NODE_WORKER_BUNDLE_RETENTION_VERSION = 1;
 export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
 export const NODE_WORKER_PORTAL_STREAM_VERSION = 1;
 export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
+export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
 export const NODE_WORKER_CAPACITY_MAX = 1_024;
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
@@ -39,6 +40,7 @@ export type NodeWorkerHostDeclaration =
       bundleStatus?: typeof NODE_WORKER_BUNDLE_STATUS_VERSION;
       portalStream?: typeof NODE_WORKER_PORTAL_STREAM_VERSION;
       environmentSession?: typeof NODE_WORKER_ENVIRONMENT_SESSION_VERSION;
+      preparedWorkspace?: typeof NODE_WORKER_PREPARED_WORKSPACE_VERSION;
     };
 
 export type NodeRunnerInventoryDeclaration =
@@ -87,7 +89,7 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
   if (
     !capacity ||
     keys.length < 2 ||
-    keys.length > 7 ||
+    keys.length > 8 ||
     !keys.includes("enabled") ||
     !keys.includes("capacity") ||
     keys.some(
@@ -98,7 +100,8 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
         key !== "bundleRetention" &&
         key !== "bundleStatus" &&
         key !== "portalStream" &&
-        key !== "environmentSession",
+        key !== "environmentSession" &&
+        key !== "preparedWorkspace",
     ) ||
     (value.bundlePrewarm !== undefined && value.bundlePrewarm !== WORKER_BUNDLE_PREWARM_VERSION) ||
     (value.bundleRetention !== undefined &&
@@ -109,6 +112,8 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
       value.portalStream !== NODE_WORKER_PORTAL_STREAM_VERSION) ||
     (value.environmentSession !== undefined &&
       value.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION) ||
+    (value.preparedWorkspace !== undefined &&
+      value.preparedWorkspace !== NODE_WORKER_PREPARED_WORKSPACE_VERSION) ||
     (value.bundleStatus !== undefined && value.bundleRetention === undefined)
   ) {
     return null;
@@ -130,6 +135,9 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
       : {}),
     ...(value.environmentSession === NODE_WORKER_ENVIRONMENT_SESSION_VERSION
       ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
+      : {}),
+    ...(value.preparedWorkspace === NODE_WORKER_PREPARED_WORKSPACE_VERSION
+      ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
       : {}),
   };
 }

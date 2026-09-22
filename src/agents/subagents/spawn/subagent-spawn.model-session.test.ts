@@ -11,6 +11,7 @@ import {
 } from "./subagent-spawn.test-helpers.js";
 
 const callGatewayMock = vi.fn();
+const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 
 let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
@@ -21,6 +22,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
       getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
+      loadSessionStoreMock,
       updateSessionStoreMock,
       workspaceDir: os.tmpdir(),
     }));
@@ -29,6 +31,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
+    loadSessionStoreMock.mockReset().mockReturnValue({});
     updateSessionStoreMock.mockReset();
     setupAcceptedSubagentGatewayMock(callGatewayMock);
 
@@ -84,7 +87,6 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     expect(result.modelApplied).toBe(true);
     expect(result.resolvedModel).toBe("openai/gpt-5.4");
     expect(result.resolvedProvider).toBe("openai");
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(2);
     expectPersistedRuntimeModel({
       persistedStore,
       sessionKey: /^agent:main:subagent:/,
@@ -96,6 +98,96 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     expect(operations.indexOf("gateway:agent")).toBeGreaterThan(
       operations.lastIndexOf("store:update"),
     );
+  });
+
+  it("persists an explicit auth profile separately from the child model id", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "test",
+        model: "openai/gpt-5.6-luna@openai:test-profile",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "guildchat",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.resolvedModel).toBe("openai/gpt-5.6-luna");
+    expectPersistedRuntimeModel({
+      persistedStore,
+      sessionKey: /^agent:main:subagent:/,
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      overrideSource: "user",
+    });
+    const [, persistedEntry] = Object.entries(persistedStore ?? {})[0] ?? [];
+    expect(persistedEntry?.authProfileOverride).toBe("openai:test-profile");
+    expect(persistedEntry?.authProfileOverrideSource).toBe("user");
+  });
+
+  it.each([
+    { source: "active", model: "custom/model" },
+    { source: "persisted", model: "custom/model" },
+    { source: "persisted", model: "middle" },
+  ])("preserves the $source resolved model $model in child state", async ({ source, model }) => {
+    const [{ createPluginMetadataSnapshotFixture }, { withPluginRuntimeGenerationScope }] =
+      await Promise.all([
+        import("../../../plugins/plugin-metadata.test-support.js"),
+        import("../../../plugins/runtime/generation-scope.js"),
+      ]);
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "model-identity-fixture",
+          providers: ["custom"],
+          modelIdNormalization: { providers: { custom: { aliases: { middle: "final" } } } },
+        },
+      ],
+    });
+    loadSessionStoreMock.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "model-identity-parent",
+        providerOverride: "custom",
+        modelOverride: model,
+        modelOverrideRouteResolution: "resolved",
+      },
+    });
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
+      spawnSubagentDirect(
+        { task: "preserve the selected model" },
+        {
+          agentSessionKey: "agent:main:main",
+          ...(source === "active" ? { requesterModel: { provider: "custom", model } } : {}),
+        },
+      ),
+    );
+
+    expect(result.status).toBe("accepted");
+    expectPersistedRuntimeModel({
+      persistedStore,
+      sessionKey: /^agent:main:subagent:/,
+      provider: "custom",
+      model,
+      overrideSource: "auto",
+    });
+    const [, entry] = Object.entries(persistedStore ?? {})[0] ?? [];
+    expect(entry?.modelOverrideRouteResolution).toBe("resolved");
+    expect(result.resolvedModel).toBe(`custom/${model}`);
   });
 
   it("persists self-origin metadata for auto-selected subagent models", async () => {
@@ -141,5 +233,54 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     expect(persistedEntry?.modelOverrideSource).toBe("auto");
     expect(persistedEntry?.modelOverrideFallbackOriginProvider).toBe("openai");
     expect(persistedEntry?.modelOverrideFallbackOriginModel).toBe("gpt-5.4");
+  });
+
+  it("persists an inherited auth profile separately from the child model id", async () => {
+    const dedicatedUpdateSessionStoreMock = vi.fn();
+    const {
+      resetSubagentRegistryForTests: resetForProfileTest,
+      spawnSubagentDirect: spawnWithProfile,
+    } = await loadSubagentSpawnModuleForTest({
+      callGatewayMock,
+      getRuntimeConfig: () =>
+        createSubagentSpawnTestConfig(os.tmpdir(), {
+          agents: {
+            defaults: {
+              workspace: os.tmpdir(),
+              model: { primary: "openai/gpt-5.6-luna@openai:test-profile" },
+            },
+          },
+        }),
+      updateSessionStoreMock: dedicatedUpdateSessionStoreMock,
+      workspaceDir: os.tmpdir(),
+    });
+    resetForProfileTest();
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(dedicatedUpdateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnWithProfile(
+      { task: "test" },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "guildchat",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.resolvedModel).toBe("openai/gpt-5.6-luna");
+    expectPersistedRuntimeModel({
+      persistedStore,
+      sessionKey: /^agent:main:subagent:/,
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      overrideSource: "auto",
+    });
+    const [, persistedEntry] = Object.entries(persistedStore ?? {})[0] ?? [];
+    expect(persistedEntry?.authProfileOverride).toBe("openai:test-profile");
+    expect(persistedEntry?.authProfileOverrideSource).toBe("user");
   });
 });

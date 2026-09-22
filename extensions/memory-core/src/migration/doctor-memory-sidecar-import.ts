@@ -22,7 +22,6 @@ export type LegacyMemorySidecarSource = {
   agentDatabasePath: string;
 };
 
-export const LEGACY_MEMORY_SIDECAR_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const LEGACY_MEMORY_SIDECAR_SCHEMA = "legacy_memory_sidecar";
 const LEGACY_MEMORY_VECTOR_TABLE = "chunks_vec";
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";

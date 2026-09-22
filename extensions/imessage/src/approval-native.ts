@@ -1,7 +1,6 @@
 // Imessage plugin module implements approval native behavior.
 import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { shouldSuppressLocalNativeExecApprovalPrompt } from "openclaw/plugin-sdk/approval-native-runtime";
 import { addApprovalReactionHintToText } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import {
@@ -88,7 +87,8 @@ const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
   },
   createNativeRuntime: (routing) =>
     createLazyChannelApprovalNativeRuntimeAdapter({
-      eventKinds: ["exec", "plugin"],
+      capabilityBoundary: true,
+      eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId, context }) =>
         Boolean(context) &&
         routing.canAnyApprovalPotentiallyRouteToChannel({
@@ -100,8 +100,7 @@ const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
         Boolean(context) &&
         routing.shouldHandleApprovalRequest({ cfg, accountId, approvalKind, request }),
       load: async () =>
-        (await import("./approval-handler.runtime.js"))
-          .imessageApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
+        (await import("./approval-handler.runtime.js")).imessageApprovalNativeRuntime,
     }),
 });
 const imessageApprovalRouting = imessageApproval.routing;

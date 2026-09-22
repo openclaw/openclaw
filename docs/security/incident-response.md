@@ -55,3 +55,6 @@ After shipping the fix:
 
 - [Security policy](https://github.com/openclaw/openclaw/blob/main/SECURITY.md) — report scope and trust model.
 - [Threat model](/security/THREAT-MODEL-ATLAS)
+- [Contributing to the threat model](/security/CONTRIBUTING-THREAT-MODEL) — how to add a threat to the living threat model; not the path for reporting a live vulnerability.
+- [Formal verification](/security/formal-verification) — machine-checked models of authorization, session isolation, and tool gating.
+- [Operator incident response](/gateway/security/operator-incident-response) — contain, rotate, audit, and collect evidence after a suspected compromise of your own Gateway.

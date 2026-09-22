@@ -1,12 +1,15 @@
 import { consume } from "@lit/context";
 import { Task, TaskStatus } from "@lit/task";
-import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
+import type {
+  CallToolResult,
+  ListToolsRequest,
+  ListToolsResult,
+} from "@modelcontextprotocol/client";
 import {
-  type CallToolResult,
-  type ListToolsRequest,
-  ListToolsRequestSchema,
-  type ListToolsResult,
-} from "@modelcontextprotocol/sdk/types.js";
+  AppBridge,
+  McpUiHostContextSchema,
+  PostMessageTransport,
+} from "@modelcontextprotocol/ext-apps/app-bridge";
 import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
@@ -77,7 +80,8 @@ function hostContext(element: Element | undefined, height: number): HostContext 
   const rect = element?.getBoundingClientRect();
   const touch = navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches;
   const themeMode = document.documentElement.dataset.themeMode;
-  return {
+  // The SDK schema preserves optional style values while normalizing its complete key map.
+  return McpUiHostContextSchema.parse({
     theme:
       themeMode === "light" || themeMode === "dark"
         ? themeMode
@@ -102,7 +106,7 @@ function hostContext(element: Element | undefined, height: number): HostContext 
     // these say what it actually resolves to. Republished by the same theme
     // subscription that re-sends this context.
     styles: { variables: collectMcpAppStyleVariables() },
-  };
+  });
 }
 
 class OpenClawAppBridge extends AppBridge {
@@ -115,7 +119,7 @@ class OpenClawAppBridge extends AppBridge {
   }
 
   setListToolsHandler(handler: (params: ListToolsRequest["params"]) => Promise<ListToolsResult>) {
-    this.replaceRequestHandler(ListToolsRequestSchema, (request) => handler(request.params));
+    this.replaceRequestHandler("tools/list", (request) => handler(request.params));
   }
 }
 

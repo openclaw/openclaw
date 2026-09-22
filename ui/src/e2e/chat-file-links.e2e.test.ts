@@ -1,8 +1,11 @@
 // Real-browser proof for opening workspace files from chat links and the workspace browser.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -17,14 +20,16 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-file-links");
+let artifactDir: string;
+beforeEach(() => {
+  artifactDir = createControlUiE2eArtifactDir("chat-file-links");
+});
 
 let browser: Browser;
 let server: ControlUiE2eServer;
 
 describeControlUiE2e("Control UI chat file links", () => {
   beforeAll(async () => {
-    fs.mkdirSync(artifactDir, { recursive: true });
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
@@ -34,58 +39,315 @@ describeControlUiE2e("Control UI chat file links", () => {
     await server?.close();
   });
 
-  it("shows the Review panel before a clicked file finishes loading", async () => {
+  it.each(["file", "task", "close", "list"] as const)(
+    "shows a file tab before completion and honors the %s intent",
+    async (intent) => {
+      const context = await browser.newContext({
+        recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+        viewport: { height: 900, width: 1280 },
+      });
+      const page = await context.newPage();
+      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+      try {
+        const file = {
+          root: "/workspace",
+          sessionKey: "agent:main:main",
+          file: {
+            content: "export const loaded = true;\n",
+            kind: "read",
+            missing: false,
+            name: "slow.ts",
+            path: "src/slow.ts",
+            workspacePath: "src/slow.ts",
+          },
+        };
+        const task = {
+          id: "review-intent-task",
+          taskId: "review-intent-task",
+          kind: "subagent",
+          runtime: "subagent",
+          status: "running",
+          title: "Inspect current task",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          childSessionKey: "agent:main:subagent:review-intent",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          startedAt: Date.now(),
+          lastActivity: "Inspect the current task",
+        };
+        const gateway = await installMockGateway(page, {
+          deferredMethods: [
+            "sessions.files.get",
+            ...(intent === "list" ? ["sessions.files.list"] : []),
+          ],
+          historyMessages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Review `src/slow.ts`." }],
+              timestamp: 1,
+            },
+          ],
+          methodResponses: {
+            "sessions.files.get": file,
+            "sessions.files.list": {
+              sessionKey: file.sessionKey,
+              root: file.root,
+              files: [],
+              browser: { path: "", entries: [] },
+            },
+            "tasks.list": { tasks: intent === "task" ? [task] : [] },
+            "tasks.history": {
+              cases: [
+                {
+                  match: { taskId: task.id },
+                  response: {
+                    messages: [
+                      {
+                        role: "assistant",
+                        messageId: "review-intent-result",
+                        content: [{ type: "text", text: "Current task result." }],
+                        timestamp: Date.now(),
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        });
+        const response = await page.goto(`${server.baseUrl}chat`);
+        expect(response?.status()).toBe(200);
+        const indexSha256 = createHash("sha256")
+          .update(await response!.body())
+          .digest("hex");
+        if (intent === "task") {
+          await page.locator('button[data-subagent-task-id="review-intent-task"]').waitFor();
+        } else if (intent === "list") {
+          await openChatSidePanelType(page, "Files");
+          await gateway.waitForRequest("sessions.files.list");
+        }
+
+        await page.locator('a.markdown-file-link[data-file-path="src/slow.ts"]').click();
+        await gateway.waitForRequest("sessions.files.get");
+
+        await page.locator('[data-region-header="side"]').waitFor({ state: "visible" });
+        expect(await page.locator(".sidebar-file-view").count()).toBe(0);
+        await page.screenshot({ path: path.join(artifactDir, "latency-panel-before-file.png") });
+
+        const fileTab = page.locator(".side-panel__header wa-tab").filter({ hasText: "slow.ts" });
+        expect(await fileTab.count()).toBe(1);
+        if (intent === "task") {
+          await page.locator('button[data-subagent-task-id="review-intent-task"]').click();
+        } else if (intent === "close") {
+          await page.getByRole("button", { name: "Close tab: slow.ts", exact: true }).click();
+          await fileTab.waitFor({ state: "detached" });
+        } else if (intent === "list") {
+          await gateway.resolveDeferred("sessions.files.list");
+          await gateway.waitForRequest("artifacts.list");
+        }
+
+        await gateway.resolveDeferred("sessions.files.get");
+        await page.evaluate(
+          "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+        );
+        const fileView = page.locator(".sidebar-file-view:visible");
+        const taskView = page.locator("[data-task-detail-panel]:visible");
+        // Capture either settled outcome before the strict assertion, including a failing baseline.
+        if ((await fileView.count()) > 0) {
+          await expect
+            .poll(() => fileView.locator(".cm-content").textContent())
+            .toContain("export const loaded = true;");
+        } else if (intent === "task" && (await taskView.count()) > 0) {
+          await taskView.getByText("Current task result.", { exact: true }).waitFor();
+        }
+        fs.writeFileSync(
+          path.join(artifactDir, "intent-requests.json"),
+          JSON.stringify(
+            {
+              intent,
+              bundle: {
+                indexSha256,
+                assets: await page.evaluate(
+                  "performance.getEntriesByType('resource').map(entry => new URL(entry.name).pathname).filter(path => path.includes('/assets/'))",
+                ),
+              },
+              files: await gateway.getRequests("sessions.files.get"),
+              lists: await gateway.getRequests("sessions.files.list"),
+              taskHistory: (await gateway.getRequests("tasks.history")).filter(
+                (request) => asNullableRecord(request.params)?.taskId === task.id,
+              ),
+            },
+            null,
+            2,
+          ),
+        );
+        await page.screenshot({ path: path.join(artifactDir, `intent-${intent}-settled.png`) });
+        if (intent === "task") {
+          expect(await taskView.count()).toBe(1);
+          expect(await taskView.textContent()).toContain("Inspect current task");
+          expect(await taskView.textContent()).toContain("Current task result.");
+          expect(await fileView.count()).toBe(0);
+          expect(await page.locator(".sidebar-file-view").count()).toBe(1);
+          await fileTab.click();
+          await fileView.waitFor({ state: "visible" });
+          await expect
+            .poll(() => fileView.locator(".cm-content").textContent())
+            .toContain("export const loaded = true;");
+          expect(await gateway.getRequests("sessions.files.get")).toHaveLength(1);
+        } else if (intent === "close") {
+          expect(await fileTab.count()).toBe(0);
+          expect(await page.locator(".sidebar-file-view").count()).toBe(0);
+        } else {
+          expect(await fileView.count()).toBe(1);
+          expect(await fileView.locator(".cm-content").textContent()).toContain(
+            "export const loaded = true;",
+          );
+        }
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
+  it("keeps root-distinct file labels and targets through click and keyboard", async () => {
+    const files = [
+      {
+        requestPath: "/workspace/src/file.ts",
+        workspacePath: "src/file.ts",
+        marker: "export const absoluteTarget = true;",
+      },
+      {
+        requestPath: "workspace/src/file.ts",
+        workspacePath: "workspace/src/file.ts",
+        marker: "export const relativeTarget = true;",
+      },
+    ];
     const context = await browser.newContext({
       recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
       viewport: { height: 900, width: 1280 },
     });
-    const page = await context.newPage();
-    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     try {
-      const file = {
-        root: "/workspace",
-        sessionKey: "main",
-        file: {
-          content: "export const loaded = true;\n",
-          kind: "read",
-          missing: false,
-          name: "slow.ts",
-          path: "src/slow.ts",
-          workspacePath: "src/slow.ts",
-        },
-      };
+      const page = await context.newPage();
+      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.files.get"],
+        workspace: "/workspace",
         historyMessages: [
           {
             role: "assistant",
-            content: [{ type: "text", text: "Review `src/slow.ts`." }],
+            content: [
+              {
+                type: "text",
+                text: "Compare /workspace/src/file.ts:7 and `workspace/src/file.ts:7`; see docs/README.md.",
+              },
+            ],
             timestamp: 1,
           },
         ],
-        methodResponses: { "sessions.files.get": file },
+        methodResponses: {
+          "sessions.files.get": {
+            cases: files.map((file) => ({
+              match: { path: file.requestPath },
+              response: {
+                root: "/workspace",
+                sessionKey: "agent:main:main",
+                file: {
+                  content: `// 1\n// 2\n// 3\n// 4\n// 5\n// 6\n${file.marker}\n`,
+                  contentEncoding: "utf8",
+                  kind: "read",
+                  missing: false,
+                  name: "file.ts",
+                  path: file.workspacePath,
+                  previewKind: "text",
+                  workspacePath: file.workspacePath,
+                },
+              },
+            })),
+          },
+        },
       });
-      await page.goto(`${server.baseUrl}chat`);
-
-      await page.locator('a.markdown-file-link[data-file-path="src/slow.ts"]').click();
-      await gateway.waitForRequest("sessions.files.get");
-
-      await page.locator(".side-panel").waitFor({ state: "visible" });
-      expect(await page.locator(".sidebar-file-view").count()).toBe(0);
-      await page.screenshot({ path: path.join(artifactDir, "latency-panel-before-file.png") });
-
-      await gateway.resolveDeferred("sessions.files.get");
-      await page.locator(".sidebar-file-view").waitFor({ state: "visible" });
-      await expect
-        .poll(() => page.locator(".cm-content").textContent())
-        .toContain("export const loaded = true;");
-      await page.screenshot({ path: path.join(artifactDir, "latency-file-loaded.png") });
+      const response = await page.goto(`${server.baseUrl}chat`);
+      const links = page.locator(".chat-thread a.markdown-file-link");
+      await links.nth(2).waitFor({ state: "visible" });
+      const labels = await links.evaluateAll((anchors) =>
+        anchors.map((anchor) => ({
+          path: anchor.getAttribute("data-file-path"),
+          line: anchor.getAttribute("data-file-line"),
+          text: anchor.textContent,
+        })),
+      );
+      // Keep the wrong-label baseline visible even when the final assertion fails.
+      await page.screenshot({ path: path.join(artifactDir, "root-identity-links.png") });
+      const opened = [];
+      for (const [index, file] of files.entries()) {
+        const before = (await gateway.getRequests("sessions.files.get")).length;
+        const target = page.locator(`.chat-thread a[data-file-path="${file.requestPath}"]`);
+        if (index === 0) {
+          await target.click();
+        } else {
+          await target.focus();
+          await page.keyboard.press("Enter");
+        }
+        await gateway.waitForRequest("sessions.files.get", { after: before });
+        const fileView = page.locator(".sidebar-file-view");
+        await fileView.waitFor({ state: "visible" });
+        await expect
+          .poll(() => fileView.locator(".cm-content").textContent())
+          .toContain(file.marker);
+        await expect
+          .poll(() => fileView.locator(".file-view__line--target").getAttribute("data-line"))
+          .toBe("7");
+        opened.push({
+          path: await fileView.locator(".sidebar-file-view__path").textContent(),
+          content: await fileView.locator(".cm-content").textContent(),
+          line: await fileView.locator(".file-view__line--target").getAttribute("data-line"),
+        });
+        await page.screenshot({
+          path: path.join(artifactDir, `root-identity-file-${index + 1}.png`),
+        });
+        await page.getByRole("button", { name: "Close tab: file.ts", exact: true }).click();
+        await fileView.waitFor({ state: "detached" });
+      }
+      const requests = await gateway.getRequests("sessions.files.get");
+      fs.writeFileSync(
+        path.join(artifactDir, "root-identity.json"),
+        JSON.stringify(
+          {
+            labels,
+            requests,
+            opened,
+            indexSha256: response
+              ? createHash("sha256")
+                  .update(await response.body())
+                  .digest("hex")
+              : null,
+          },
+          null,
+          2,
+        ),
+      );
+      expect(response?.status()).toBe(200);
+      expect(labels.map(({ path: targetPath, line }) => ({ path: targetPath, line }))).toEqual([
+        { path: "/workspace/src/file.ts", line: "7" },
+        { path: "workspace/src/file.ts", line: "7" },
+        { path: "docs/README.md", line: null },
+      ]);
+      expect(requests.map((request) => request.params)).toEqual([
+        { agentId: "main", path: "/workspace/src/file.ts", sessionKey: "agent:main:main" },
+        { agentId: "main", path: "workspace/src/file.ts", sessionKey: "agent:main:main" },
+      ]);
+      expect(labels.map((label) => label.text)).toEqual([
+        "/workspace/src/file.ts:7",
+        "workspace/src/file.ts:7",
+        "README.md",
+      ]);
     } finally {
       await context.close();
     }
   });
 
-  it("opens the selected file from chat and the workspace root", async () => {
+  it("reveals the selected file from chat in the workspace root after filtering", async () => {
     const context = await browser.newContext({
       recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
       viewport: { height: 900, width: 1280 },
@@ -136,8 +398,15 @@ describeControlUiE2e("Control UI chat file links", () => {
           },
           "sessions.files.list": {
             root: "/workspace",
-            sessionKey: "main",
-            files: [],
+            sessionKey: "agent:main:main",
+            files: [
+              {
+                kind: "read",
+                name: "README.md",
+                path: "README.md",
+                workspacePath: "packages/app/README.md",
+              },
+            ],
             browser: {
               entries: [
                 {
@@ -154,6 +423,8 @@ describeControlUiE2e("Control UI chat file links", () => {
       });
 
       await page.goto(`${server.baseUrl}chat`);
+      await openChatSidePanelType(page, "Files");
+      await page.getByRole("button", { name: "1 read", exact: true }).click();
       const chatLink = page.locator('a.markdown-file-link[data-file-path="README.md"]');
       await chatLink.waitFor({ state: "visible" });
       await page.screenshot({ path: path.join(artifactDir, "01-chat-file-link.png") });
@@ -161,6 +432,7 @@ describeControlUiE2e("Control UI chat file links", () => {
 
       const fileView = page.locator(".sidebar-file-view");
       await fileView.waitFor({ state: "visible" });
+      const originalEditor = await fileView.locator(".cm-editor").elementHandle();
       expect(await fileView.locator(".file-view__line--target").getAttribute("data-line")).toBe(
         "2",
       );
@@ -171,15 +443,28 @@ describeControlUiE2e("Control UI chat file links", () => {
 
       await fileView.getByRole("button", { name: "Show in Files" }).click();
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list"))[0]?.params)
+        .poll(async () => (await gateway.getRequests("sessions.files.list")).at(-1)?.params)
         .toMatchObject({ path: "packages/app" });
+      await expect
+        .poll(() =>
+          page.getByRole("button", { name: "All", exact: true }).getAttribute("aria-pressed"),
+        )
+        .toBe("true");
       const browserRow = page
-        .locator(".chat-workspace-rail__browser .chat-workspace-rail__file")
+        .locator(".chat-workspace-rail__list--browser .chat-workspace-rail__file")
         .filter({ hasText: "README.md" });
       await browserRow.locator(".chat-workspace-rail__file-open").click();
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.get"))[1]?.params)
-        .toMatchObject({ path: "/workspace/packages/app/README.md" });
+      await fileView.waitFor({ state: "visible" });
+      expect(
+        await page.locator(".side-panel__header wa-tab").filter({ hasText: "README.md" }).count(),
+      ).toBe(1);
+      const reads = await gateway.getRequests("sessions.files.get");
+      expect(reads).toHaveLength(2);
+      expect(reads[1]?.params).toMatchObject({ path: "/workspace/packages/app/README.md" });
+      expect(await originalEditor!.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await fileView.locator(".file-view__line--target").getAttribute("data-line")).toBe(
+        "2",
+      );
       await page.screenshot({ path: path.join(artifactDir, "03-workspace-file-preview.png") });
     } finally {
       await context.close();
@@ -193,7 +478,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     const responses = {
       "/workspace/notes.txt": {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           content: "Exact-head workspace preview proof.\n",
           contentEncoding: "utf8",
@@ -210,7 +495,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       },
       "/workspace/openclaw.png": {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           content: pngBase64,
           contentEncoding: "base64",
@@ -226,7 +511,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       },
       "/workspace/unsupported-binary.bmp": {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           kind: "read",
           mimeType: "image/bmp",
@@ -264,18 +549,18 @@ describeControlUiE2e("Control UI chat file links", () => {
             },
             files: [],
             root: "/workspace",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
           },
         },
       });
       const openPreview = async (filePath: string) => {
         const fileRow = page
-          .locator(".chat-workspace-rail__browser .chat-workspace-rail__file")
+          .locator(".chat-workspace-rail__list--browser .chat-workspace-rail__file")
           .filter({ hasText: filePath });
         await fileRow.locator(".chat-workspace-rail__file-open").click();
       };
-      const closePreview = async () => {
-        await page.getByRole("button", { name: "Close Review" }).click();
+      const closePreview = async (filePath: string) => {
+        await page.getByRole("button", { name: `Close tab: ${filePath}`, exact: true }).click();
         await page.locator("openclaw-chat-detail-panel").waitFor({ state: "detached" });
       };
 
@@ -289,7 +574,7 @@ describeControlUiE2e("Control UI chat file links", () => {
         "Exact-head workspace preview proof.",
       );
       await page.screenshot({ path: path.join(artifactDir, "04-text-preview.png") });
-      await closePreview();
+      await closePreview("notes.txt");
 
       await openPreview("openclaw.png");
       const image = page.locator('.chat-tool-card__preview[data-kind="image"] img');
@@ -304,7 +589,7 @@ describeControlUiE2e("Control UI chat file links", () => {
         )
         .toBe(true);
       await page.screenshot({ path: path.join(artifactDir, "05-png-preview.png") });
-      await closePreview();
+      await closePreview("openclaw.png");
 
       await openPreview("unsupported-binary.bmp");
       const fallback = page.locator(".sidebar-markdown-shell");
@@ -318,12 +603,12 @@ describeControlUiE2e("Control UI chat file links", () => {
       expect(
         (await gateway.getRequests("sessions.files.get")).map((request) => request.params),
       ).toEqual([
-        { agentId: "main", path: "/workspace/notes.txt", sessionKey: "main" },
-        { agentId: "main", path: "/workspace/openclaw.png", sessionKey: "main" },
+        { agentId: "main", path: "/workspace/notes.txt", sessionKey: "agent:main:main" },
+        { agentId: "main", path: "/workspace/openclaw.png", sessionKey: "agent:main:main" },
         {
           agentId: "main",
           path: "/workspace/unsupported-binary.bmp",
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         },
       ]);
     } finally {

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -449,15 +450,6 @@ describe("clearable pref removal from the server", () => {
 });
 
 describe("pushServerUiPrefs", () => {
-  const deferred = () => {
-    let resolve!: (value: unknown) => void;
-    let reject!: (reason?: unknown) => void;
-    const promise = new Promise<unknown>((resolvePromise, rejectPromise) => {
-      resolve = resolvePromise;
-      reject = rejectPromise;
-    });
-    return { promise, reject, resolve };
-  };
   const pendingKey = (scope: string) => `openclaw.control.serverPrefs.pending.v1:${scope}`;
   const lastSeenKey = (scope: string) => `openclaw.control.serverPrefs.v1:${scope}`;
   const readPending = (scope: string) =>
@@ -466,7 +458,7 @@ describe("pushServerUiPrefs", () => {
 
   it("does not publish a server theme change shadowed by pending local intent", async () => {
     const scope = "ws://gw";
-    const requestGate = deferred();
+    const requestGate = createDeferred<unknown>();
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
       () => requestGate.promise,
     );
@@ -538,6 +530,7 @@ describe("pushServerUiPrefs", () => {
 
   it("retains rejected appearance edits as device-local state with local-only reset", async () => {
     const scope = "ws://gw";
+    patchSettings({ gatewayUrl: scope });
     const config = configWithPrefs({
       theme: "claw",
       locale: "de",
@@ -665,7 +658,7 @@ describe("pushServerUiPrefs", () => {
 
   it("merges this tab's edit with sibling persisted pending keys", () => {
     const scope = "ws://gw";
-    const flight = deferred();
+    const flight = createDeferred<unknown>();
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
       () => flight.promise,
     );
@@ -680,7 +673,7 @@ describe("pushServerUiPrefs", () => {
 
   it("settles only this tab's acknowledged keys from sibling persisted pending", async () => {
     const scope = "ws://gw";
-    const flight = deferred();
+    const flight = createDeferred<unknown>();
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
       () => flight.promise,
     );
@@ -711,7 +704,7 @@ describe("pushServerUiPrefs", () => {
 
   it("overwrites only a same-key sibling value when this tab persists later", () => {
     const scope = "ws://gw";
-    const flight = deferred();
+    const flight = createDeferred<unknown>();
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
       () => flight.promise,
     );
@@ -829,8 +822,8 @@ describe("pushServerUiPrefs", () => {
   });
 
   it("ignores a superseded request rejection while its replacement is pending", async () => {
-    const first = deferred();
-    const second = deferred();
+    const first = createDeferred<unknown>();
+    const second = createDeferred<unknown>();
     let calls = 0;
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(() => {
       calls += 1;

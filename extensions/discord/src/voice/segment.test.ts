@@ -1,3 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createDiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
@@ -6,19 +9,181 @@ defineDiscordVoiceTests(
     it,
     vi,
     agentCommandMock,
+    controlRealtimeVoiceAgentRunMock,
     createAudioPlayerMock,
     createClientWithMember,
     createManager,
+    createRuntime,
     entersStateMock,
     getSessionEntry,
-    getVoiceReceive,
+    getLastAudioPlayer,
+    receiveRecordedSpeech,
     lastTtsStreamArgs,
     loggerWarnMock,
     makeVoiceConfig,
-    processVoiceSegment,
+    managerModule,
+    receiveVoiceUtterance,
     textToSpeechMock,
     textToSpeechStreamMock,
   }) => {
+    async function createBatchFixture() {
+      const discordConfig = makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["333"] });
+      let cfg: OpenClawConfig = { channels: { discord: discordConfig } };
+      const client = createClientWithMember("333", "Guest", "4321");
+      const manager = new managerModule.DiscordVoiceManager({
+        cfg,
+        discordConfig,
+        client: client as never,
+        accountId: "default",
+        runtime: createRuntime(),
+        readPolicy: createDiscordLivePolicyReader({
+          cfg,
+          accountId: "default",
+          token: "synthetic-token",
+          readConfig: () => cfg,
+          resolvedAllowlist: { guildEntries: undefined, allowFrom: ["333"] },
+        }),
+      });
+      expect(await manager.join({ guildId: "g1", channelId: "1001" })).toMatchObject({ ok: true });
+      textToSpeechStreamMock.mockResolvedValue({
+        success: true,
+        audioStream: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1, 2, 3]));
+            controller.close();
+          },
+        }),
+        release: vi.fn(async () => {}),
+      });
+      return {
+        manager,
+        entry: getSessionEntry(manager),
+        player: getLastAudioPlayer(),
+        revokePolicy() {
+          cfg = { channels: { discord: { ...discordConfig, groupPolicy: "disabled" } } };
+        },
+      };
+    }
+
+    it.each([
+      { transition: "none", result: "miss", fallback: true },
+      { transition: "none", result: "error", fallback: true },
+      { transition: "none", result: "abort", fallback: false },
+      { transition: "none", result: "guarded", fallback: false },
+      { transition: "stop", result: "guarded", fallback: false },
+      { transition: "policy", result: "guarded", fallback: false },
+      { transition: "stop", result: "miss", fallback: false },
+      { transition: "policy", result: "miss", fallback: false },
+    ] as const)(
+      "keeps batch control $result dispatch within its $transition conversation",
+      async ({ transition, result, fallback: shouldFallback }) => {
+        const fixture = await createBatchFixture();
+        const voiceIngress = await import("./ingress.js");
+        const resume = createDeferred<void>();
+        const controlEffect = vi.fn();
+        const fallback = vi.spyOn(voiceIngress, "runDiscordVoiceAgentTurn");
+        controlRealtimeVoiceAgentRunMock.mockImplementationOnce(async (params) => {
+          await resume.promise;
+          if (result === "error") {
+            throw new Error("Control runtime unavailable");
+          }
+          if (result === "abort") {
+            throw new DOMException("Control was cancelled", "AbortError");
+          }
+          if (result === "guarded") {
+            params.getToolAuthorityOverlay?.();
+            controlEffect();
+          }
+          return {
+            ok: result === "guarded",
+            active: result === "guarded",
+            mode: "steer",
+            sessionKey: params.sessionKey,
+            queued: result === "guarded",
+            message: "Control completed",
+            speak: true,
+            show: true,
+            suppress: false,
+          };
+        });
+        agentCommandMock.mockResolvedValue({ payloads: [{ text: "Fallback answer" }] });
+        const processing = receiveRecordedSpeech(
+          fixture.manager,
+          "stop using the slow path",
+          fixture.entry,
+          "333",
+        ).then(
+          () => ({ ok: true }),
+          (error: unknown) => ({ error }),
+        );
+        try {
+          await vi.waitFor(() => expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledOnce());
+          if (transition === "stop") {
+            await fixture.manager.leave({ guildId: "g1" });
+          } else if (transition === "policy") {
+            fixture.revokePolicy();
+          }
+          resume.resolve();
+          expect(await processing).toEqual({ ok: true });
+          await fixture.entry.playbackQueue;
+          expect({
+            control: controlEffect.mock.calls.length,
+            fallback: fallback.mock.calls.length,
+            agent: agentCommandMock.mock.calls.length,
+            synthesis: textToSpeechStreamMock.mock.calls.length,
+            playback: fixture.player.play.mock.calls.length,
+          }).toEqual({
+            control: transition === "none" && result === "guarded" ? 1 : 0,
+            fallback: shouldFallback ? 1 : 0,
+            agent: shouldFallback ? 1 : 0,
+            synthesis: transition === "none" && result !== "abort" ? 1 : 0,
+            playback: transition === "none" && result !== "abort" ? 1 : 0,
+          });
+        } finally {
+          resume.resolve();
+          await processing;
+          fallback.mockRestore();
+          await fixture.manager.destroy();
+        }
+      },
+    );
+
+    it.each(["none", "stop", "policy"] as const)(
+      "starts batch reply synthesis only in a live conversation (transition=%s)",
+      async (transition) => {
+        const fixture = await createBatchFixture();
+        const answer = createDeferred<{ payloads: Array<{ text: string }> }>();
+        agentCommandMock.mockReturnValueOnce(answer.promise);
+        const processing = receiveRecordedSpeech(
+          fixture.manager,
+          "Read the agenda",
+          fixture.entry,
+          "333",
+        ).then(
+          () => ({ ok: true }),
+          (error: unknown) => ({ error }),
+        );
+        try {
+          await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledOnce());
+          if (transition === "stop") {
+            await fixture.manager.leave({ guildId: "g1" });
+          } else if (transition === "policy") {
+            fixture.revokePolicy();
+          }
+          answer.resolve({ payloads: [{ text: "Completed shared work" }] });
+          expect(await processing).toEqual({ ok: true });
+          await fixture.entry.playbackQueue;
+          expect(agentCommandMock).toHaveBeenCalledOnce();
+          expect(textToSpeechStreamMock).toHaveBeenCalledTimes(transition === "none" ? 1 : 0);
+          expect(fixture.player.play).toHaveBeenCalledTimes(transition === "none" ? 1 : 0);
+        } finally {
+          answer.resolve({ payloads: [] });
+          await processing;
+          await fixture.manager.destroy();
+        }
+      },
+    );
+
     it("keeps streaming TTS audio alive until Discord finishes playback without a duration deadline", async () => {
       const release = vi.fn(async () => undefined);
       let finishPlayback!: () => void;
@@ -50,11 +215,11 @@ defineDiscordVoiceTests(
 
       const client = createClientWithMember("u-guest", "Guest", "4321");
       const manager = createManager(
-        { groupPolicy: "open", allowFrom: ["discord:u-guest"] },
+        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-guest"] }),
         client,
         {},
       );
-      await processVoiceSegment(manager, "u-guest");
+      await receiveVoiceUtterance(manager, "u-guest");
 
       expect(lastTtsStreamArgs().channel).toBe("discord");
       expect(lastTtsStreamArgs().disableFallback).toBe(true);
@@ -100,11 +265,11 @@ defineDiscordVoiceTests(
       });
       const client = createClientWithMember("u-guest", "Guest", "4321");
       const manager = createManager(
-        { groupPolicy: "open", allowFrom: ["discord:u-guest"] },
+        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-guest"] }),
         client,
       );
 
-      await processVoiceSegment(manager, "u-guest");
+      await receiveVoiceUtterance(manager, "u-guest");
 
       await vi.waitFor(() =>
         expect(loggerWarnMock).toHaveBeenCalledWith(
@@ -143,6 +308,7 @@ defineDiscordVoiceTests(
         );
         await manager.join({ guildId: "g1", channelId: "1001" });
         const entry = getSessionEntry(manager);
+        const player = getLastAudioPlayer();
         entersStateMock.mockImplementation(async (_target, state, signal) => {
           if (state === (buffering ? "playing" : "idle")) {
             await new Promise<void>((_resolve, reject) => {
@@ -156,18 +322,13 @@ defineDiscordVoiceTests(
             });
           }
         });
-        entry.player.stop.mockImplementation(() => {
-          const idleHandler = entry.player.on.mock.calls.find(([event]) => event === "idle")?.[1];
+        player.stop.mockImplementation(() => {
+          const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1];
           idleHandler?.();
           return true;
         });
 
-        await getVoiceReceive(manager).processSegment({
-          entry,
-          wavPath: "/tmp/test.wav",
-          userId: "u-guest",
-          durationSeconds: 1.2,
-        });
+        await receiveRecordedSpeech(manager, undefined, entry, "u-guest");
         await vi.waitFor(() =>
           expect(entersStateMock).toHaveBeenCalledWith(
             entry.player,
@@ -180,7 +341,7 @@ defineDiscordVoiceTests(
         expect((await manager.leave({ guildId: "g1" })).ok).toBe(true);
         await entry.playbackQueue;
 
-        expect(entry.player.stop).toHaveBeenCalledOnce();
+        expect(player.stop).toHaveBeenCalledOnce();
         expect(release).toHaveBeenCalledOnce();
         expect(loggerWarnMock).not.toHaveBeenCalledWith(
           expect.stringContaining("discord voice: playback failed"),

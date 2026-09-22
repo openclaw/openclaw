@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import {
   parseStrictNonNegativeInteger,
+  resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -22,7 +23,7 @@ import {
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
-import WebSocket from "ws";
+import { WebSocket } from "./ws-runtime.js";
 
 type ContainerRpcOptions = {
   baseUrl: string;
@@ -176,7 +177,7 @@ async function readSignalRestText(
     onTimeout: signalRestRequestTimeoutError,
     onOverflow: ({ maxBytes }) => new Error(`Signal REST: text response exceeds ${maxBytes} bytes`),
   });
-  return new TextDecoder().decode(bytes);
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
 async function readSignalRestErrorText(
@@ -476,7 +477,10 @@ export async function streamContainerEvents(params: {
     };
 
     try {
-      ws = new WebSocket(wsUrl, { maxPayload: WS_MAX_PAYLOAD, handshakeTimeout: WS_HANDSHAKE_MS });
+      ws = new WebSocket(wsUrl, {
+        maxPayload: WS_MAX_PAYLOAD,
+        handshakeTimeout: resolvePositiveTimerTimeoutMs(params.timeoutMs, WS_HANDSHAKE_MS),
+      });
     } catch (err) {
       logError(`[signal-ws] failed to create WebSocket: ${coerceErrorMessage(err)}`);
       reject(toErrorObject(err, "Non-Error rejection"));

@@ -9,6 +9,7 @@ import {
 import {
   createConfigResolutionFacts,
   getAuthoredConfigSecretRef,
+  getResolvedConfigEnvSecretRef,
   setConfigResolutionFacts,
 } from "./resolution-facts.js";
 
@@ -180,11 +181,11 @@ describe("resolveConfigEnvVars", () => {
           configPath: 'plugins.entries.fixture.config.headers["0"]',
         },
         {
-          name: "existing non-plugin root record paths stay unchanged",
+          name: "dotted non-plugin record key is one quoted segment",
           config: { "root.key": "${MISSING}" },
           env: {},
           varName: "MISSING",
-          configPath: "root.key",
+          configPath: '["root.key"]',
         },
         {
           name: "plugin config array indices remain canonical",
@@ -336,8 +337,9 @@ describe("resolveConfigEnvVars", () => {
   });
 
   describe("graceful missing env var handling (onMissing)", () => {
-    it("keeps authored SecretRef provenance distinct across dotted plugin and header keys", () => {
+    it("keeps pending and resolved SecretRef provenance distinct across config paths", () => {
       const pendingEnvSecretRefs = new Map<string, string>();
+      const resolvedEnvSecretRefs = new Map<string, string>();
       const config = resolveConfigEnvVars(
         {
           plugins: {
@@ -362,13 +364,18 @@ describe("resolveConfigEnvVars", () => {
               },
             },
           },
+          resolved: "${RESOLVED_SECRET}",
         },
-        {},
+        { RESOLVED_SECRET: "resolved-value" },
         {
           onPendingEnvSecretRef: (id, configPath) => pendingEnvSecretRefs.set(configPath, id),
+          onResolvedEnvSecretRef: (id, configPath) => resolvedEnvSecretRefs.set(configPath, id),
         },
       );
-      setConfigResolutionFacts(config, createConfigResolutionFacts([], pendingEnvSecretRefs));
+      setConfigResolutionFacts(
+        config,
+        createConfigResolutionFacts([], pendingEnvSecretRefs, undefined, resolvedEnvSecretRefs),
+      );
 
       expect([...pendingEnvSecretRefs]).toEqual([
         ['plugins.entries["foo.config.bar"].config.token', "ATTACKER"],
@@ -376,8 +383,9 @@ describe("resolveConfigEnvVars", () => {
         ['plugins.entries.foo.config.headers["X.Trace"]', "DOTTED_HEADER"],
         ["plugins.entries.foo.config.headers.X.Trace", "NESTED_HEADER"],
         ["models.providers.alpha:beta.apiKey", "CORE_PROVIDER"],
-        ["models.providers.alpha:beta.headers.X.Trace", "CORE_HEADER"],
+        ['models.providers.alpha:beta.headers["X.Trace"]', "CORE_HEADER"],
       ]);
+      expect([...resolvedEnvSecretRefs]).toEqual([["resolved", "RESOLVED_SECRET"]]);
       for (const [configPath, id] of pendingEnvSecretRefs) {
         expect(getAuthoredConfigSecretRef(config, configPath), configPath).toEqual({
           source: "env",
@@ -385,13 +393,19 @@ describe("resolveConfigEnvVars", () => {
           id,
         });
       }
+      expect(getAuthoredConfigSecretRef(config, "resolved")).toBeNull();
+      expect(getResolvedConfigEnvSecretRef(config, "resolved")).toEqual({
+        source: "env",
+        provider: "default",
+        id: "RESOLVED_SECRET",
+      });
     });
 
     it("collects warnings and preserves placeholder when onMissing is set", () => {
       const warnings: EnvSubstitutionWarning[] = [];
       const result = resolveConfigEnvVars(
         { key: "${MISSING_VAR}", present: "${PRESENT}" },
-        { PRESENT: "ok" } as NodeJS.ProcessEnv,
+        { PRESENT: "ok" },
         { onMissing: (w) => warnings.push(w) },
       );
       expect(result).toEqual({ key: "${MISSING_VAR}", present: "ok" });
@@ -408,7 +422,7 @@ describe("resolveConfigEnvVars", () => {
           },
           gateway: { token: "${GW_TOKEN}" },
         },
-        { GW_TOKEN: "secret" } as NodeJS.ProcessEnv,
+        { GW_TOKEN: "secret" },
         { onMissing: (w) => warnings.push(w) },
       );
       expect(result).toEqual({
@@ -424,9 +438,7 @@ describe("resolveConfigEnvVars", () => {
     });
 
     it("still throws when onMissing is not set", () => {
-      expect(() => resolveConfigEnvVars({ key: "${MISSING}" }, {} as NodeJS.ProcessEnv)).toThrow(
-        MissingEnvVarError,
-      );
+      expect(() => resolveConfigEnvVars({ key: "${MISSING}" }, {})).toThrow(MissingEnvVarError);
     });
   });
 

@@ -1,9 +1,5 @@
-/**
- * Model-facing thread goal tools.
- *
- * Provides create/get/update goal operations scoped to the current session store.
- */
 import { Type } from "typebox";
+import { SessionGoalTransitionError } from "../../config/sessions/goals-transitions.js";
 import {
   createSessionGoal,
   getSessionGoal,
@@ -40,9 +36,8 @@ const CreateGoalToolSchema = Type.Object({
     description: "Concrete objective; explicit request only.",
   }),
   token_budget: Type.Optional(
-    Type.Integer({
-      minimum: 1,
-      description: "Optional positive token budget.",
+    Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
+      description: "Positive token budget. Omit or pass null unless explicitly requested.",
     }),
   ),
 });
@@ -74,13 +69,13 @@ function resolveGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
   };
 }
 
-/** Creates the read-only tool that returns the current thread goal snapshot. */
 export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
   return {
     label: "Get Goal",
     name: "get_goal",
     displaySummary: "Get the current thread goal",
-    description: "Get thread goal, status, token usage.",
+    description:
+      "Get the current session goal, including its full objective, status, token usage, and optional budget.",
     parameters: Type.Object({}),
     execute: async () => {
       const snapshot = await getSessionGoal({
@@ -92,14 +87,13 @@ export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
   };
 }
 
-/** Creates the tool that starts a new thread goal when explicitly requested. */
 export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
   return {
     label: "Create Goal",
     name: "create_goal",
     displaySummary: "Create a thread goal",
     description:
-      "Create goal only explicit user/system request. Optional token_budget caps goal token usage. Existing goal => fail; user-facing controls clear it.",
+      "Create a goal only when explicitly requested by the user or system instructions. Set a positive token_budget only when a budget is explicitly requested; otherwise omit it or pass null. Fails if a goal already exists; the user must clear it before starting another.",
     parameters: CreateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -119,41 +113,51 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
   };
 }
 
-/** Creates the tool that marks the current thread goal complete or blocked. */
 export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
   return {
     label: "Update Goal",
     name: "update_goal",
     displaySummary: "Complete or block a thread goal",
     description:
-      "Update the session goal status (complete | blocked) with an optional note. complete only achieved. blocked only same blocker 3+ consecutive goal turns; never ordinary difficulty/polish. Updating a goal does not reply to the user; provide the requested final response afterward.",
+      "Mark the session goal complete only when the full objective is verified and no required work remains. Mark it blocked only when the same blocker has recurred for at least three consecutive goal turns and no meaningful progress is possible without user input or an external change. After the user resumes a blocked goal, count those turns from the resume. Difficulty, incomplete work, or a nearly exhausted budget do not justify completion or blocking. Updating a goal does not reply to the user; provide the requested final response afterward.",
     parameters: UpdateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const status = readToolStringParam(params, "status", { required: true });
-      if (
-        !MODEL_UPDATABLE_SESSION_GOAL_STATUSES.includes(
-          status as (typeof MODEL_UPDATABLE_SESSION_GOAL_STATUSES)[number],
-        )
-      ) {
+      const requestedStatus = readToolStringParam(params, "status", { required: true });
+      const status = MODEL_UPDATABLE_SESSION_GOAL_STATUSES.find(
+        (candidate) => candidate === requestedStatus,
+      );
+      if (status === undefined) {
         throw new ToolInputError(
           `status must be one of ${MODEL_UPDATABLE_SESSION_GOAL_STATUSES.join(", ")}`,
         );
       }
       const note = readToolStringParam(params, "note");
       const scope = resolveGoalSessionScope(options);
-      const goal = await updateSessionGoalStatus({
-        ...scope,
-        actor: { type: "agent", id: scope.sessionKey },
-        status: status as (typeof MODEL_UPDATABLE_SESSION_GOAL_STATUSES)[number],
-        ...(note ? { note } : {}),
-      });
-      return jsonResult({
-        status: "updated",
-        goal,
-        nextAction:
-          "Goal status was updated, but no reply was sent to the user. Continue this turn and provide the requested visible final response.",
-      });
+      try {
+        const goal = await updateSessionGoalStatus({
+          ...scope,
+          actor: { type: "agent", id: scope.sessionKey },
+          status,
+          ...(note ? { note } : {}),
+        });
+        return jsonResult({
+          status: "updated",
+          goal,
+          nextAction:
+            "Goal status was updated, but no reply was sent to the user. Continue this turn and provide the requested visible final response.",
+        });
+      } catch (err) {
+        if (err instanceof SessionGoalTransitionError) {
+          return jsonResult({
+            status: "error",
+            error: err.message,
+            nextAction:
+              "Do not retry update_goal. No active goal requires a status change — continue this turn and provide your response to the user.",
+          });
+        }
+        throw err;
+      }
     },
   };
 }

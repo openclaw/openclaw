@@ -1,7 +1,6 @@
 /**
  * Normalizes and delivers agent command results to outbound channels.
  */
-import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -13,6 +12,7 @@ import {
   type NormalizeReplyOutcome,
   type NormalizeReplySkipReason,
 } from "../../auto-reply/reply/normalize-reply.js";
+import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import { formatBtwTextForExternalDelivery } from "../../auto-reply/reply/reply-payloads-base.js";
 import {
@@ -41,7 +41,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
+import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import {
   createOutboundPayloadPlan,
   formatOutboundPayloadLog,
@@ -54,38 +54,18 @@ import type { OutboundSessionContext } from "../../infra/outbound/session-contex
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { isNestedAgentLane } from "../lanes.js";
-import { isAgentRunRestartAbortReason } from "../run-termination.js";
+import {
+  createAgentCommandDeliveryGuard,
+  createRestartOnlyAbortSignal,
+} from "./delivery-authority.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatchCore>>;
-
-function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
-  signal?: AbortSignal;
-  dispose: () => void;
-} {
-  if (!source) {
-    return { dispose: () => {} };
-  }
-  const controller = new AbortController();
-  const onAbort = () => {
-    if (isAgentRunRestartAbortReason(source.reason)) {
-      controller.abort(source.reason);
-    }
-  };
-  if (source.aborted) {
-    onAbort();
-  } else {
-    source.addEventListener("abort", onAbort, { once: true });
-  }
-  return {
-    signal: controller.signal,
-    dispose: () => source.removeEventListener("abort", onAbort),
-  };
-}
 
 /** Aggregate delivery status for an agent command result. */
 type AgentCommandDeliveryStatus = {
@@ -113,6 +93,7 @@ type AgentCommandDeliveryResult = {
   messagingToolSentTargets?: MessagingToolSend[];
   didSendDeterministicApprovalPrompt?: true;
   acceptedSessionSpawns?: NonNullable<RunResult["acceptedSessionSpawns"]>;
+  requesterContinuationSettled?: true;
   successfulCronAdds?: number;
   deliverySucceeded?: boolean;
   deliveryStatus?: AgentCommandDeliveryStatus;
@@ -140,7 +121,7 @@ type DeliverAgentCommandResultParams = {
   outboundSession: OutboundSessionContext | undefined;
   sessionEntry: SessionEntry | undefined;
   result: RunResult;
-  payloads: RunResult["payloads"];
+  payloads: ReplyPayload[] | undefined;
   /** Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
   assertDeliveryCurrent?: () => void;
@@ -197,10 +178,6 @@ function logNestedOutput(
   }
 }
 
-function hasNonEmptyStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.some(hasNonEmptyString);
-}
-
 function hasNonEmptyArray<T>(value: T[] | undefined): value is T[] {
   return Array.isArray(value) && value.length > 0;
 }
@@ -235,6 +212,9 @@ function buildDeliveryResult(params: {
       : {}),
     ...(hasNonEmptyArray(params.result.acceptedSessionSpawns)
       ? { acceptedSessionSpawns: params.result.acceptedSessionSpawns }
+      : {}),
+    ...(params.result.requesterContinuationSettled === true
+      ? { requesterContinuationSettled: true as const }
       : {}),
     ...(hasSuccessfulCronAdds ? { successfulCronAdds } : {}),
     ...(params.deliverySucceeded !== undefined
@@ -483,7 +463,7 @@ function normalizeAgentCommandReplyPayloads(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
   outboundSession: OutboundSessionContext | undefined;
-  payloads: RunResult["payloads"];
+  payloads: ReplyPayload[] | undefined;
   result: RunResult;
   deliveryChannel?: string;
   plugin?: ChannelPlugin;
@@ -500,7 +480,7 @@ function normalizeAgentCommandReplyPayloads(params: {
       ? (normalizeChannelId(params.deliveryChannel) ?? params.deliveryChannel)
       : undefined;
   if (!channel) {
-    return { kind: "deliver", payload: payloads as ReplyPayload[] };
+    return { kind: "deliver", payload: payloads };
   }
   const applyChannelTransforms = params.applyChannelTransforms ?? true;
   const deliveryPlugin = applyChannelTransforms ? params.plugin : undefined;
@@ -548,7 +528,7 @@ function normalizeAgentCommandReplyPayloads(params: {
   const normalizedPayloads: ReplyPayload[] = [];
   let suppressionReason: NormalizeReplySkipReason | undefined;
   for (const payload of payloads) {
-    const outcome = normalizeReplyPayloadOutcome(payload as ReplyPayload, {
+    const outcome = normalizeReplyPayloadOutcome(payload, {
       responsePrefix,
       applyChannelTransforms,
       responsePrefixContext,
@@ -893,11 +873,10 @@ export async function deliverAgentCommandResult(
     if (!opts.json) {
       return;
     }
+    const meta = result.meta;
     writeRuntimeJson(runtime, {
-      ...buildOutboundResultEnvelope({
-        payloads: normalizedPayloads,
-        meta: result.meta,
-      }),
+      payloads: [...normalizedPayloads],
+      ...(meta ? { meta } : {}),
       ...(status ? { deliveryStatus: status } : {}),
     });
   };
@@ -962,6 +941,9 @@ export async function deliverAgentCommandResult(
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget && !deliveryStatus) {
       params.assertDeliveryCurrent?.();
+      const assertPlatformSendCurrent = createAgentCommandDeliveryGuard(params);
+      // The outbound projection contains transport data, not private payload metadata.
+      const pendingFinalCompletion = resolvePendingFinalDeliveryCompletion(payloads);
       const restartAbort = createRestartOnlyAbortSignal(opts.abortSignal);
       let send: DurableSendResult;
       try {
@@ -971,7 +953,14 @@ export async function deliverAgentCommandResult(
           to: deliveryTarget,
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
+          ...(pendingFinalCompletion
+            ? {
+                deliveryCompletion: pendingFinalCompletion,
+                deliveryIntentId: pendingFinalCompletion.deliveryId,
+              }
+            : {}),
           session: outboundSession,
+          identity: resolveAgentOutboundIdentity(cfg, deliveryAgentId),
           replyPayloadSendingHook: {
             kind: "final",
             channel: deliveryChannel,
@@ -991,6 +980,8 @@ export async function deliverAgentCommandResult(
           durability: bestEffortDeliver ? "best_effort" : "required",
           signal: restartAbort.signal,
           onDeliveryIntent: restartAbort.dispose,
+          onPlatformSendDispatch: async () => assertPlatformSendCurrent(),
+          assertDirectAdapterHandoff: assertPlatformSendCurrent,
           onError: logDeliveryError,
           onPayload: logPayload,
           deps: createOutboundSendDeps(deps),

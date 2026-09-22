@@ -16,21 +16,25 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
   getPluginStateCapacityForTests,
   importPluginStateEntriesForDoctorForTests,
+  openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
+  type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
-import { openMatrixStorageMetaStoreOptions } from "./src/matrix/client/storage.js";
+import { openMatrixStorageMetaStoreOptions } from "./src/matrix/client/storage-metadata.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
-  MATRIX_RECOVERY_KEY_FILENAME,
   openMatrixIdbSnapshotStoreOptions,
   readMatrixIdbSnapshotJson,
-  readMatrixRecoveryKeyStateForPath,
+  openMatrixRecoveryKeyStoreOptions,
   scoreMatrixCryptoStateInStore,
   writeMatrixIdbSnapshotJson,
   type MatrixIdbSnapshotRecord,
@@ -84,9 +88,16 @@ function migrationById(id: string) {
 }
 
 describe("matrix doctor contract state migrations", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      cleanup();
+    }),
+  );
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     installMatrixTestRuntime();
   });
@@ -94,7 +105,6 @@ describe("matrix doctor contract state migrations", () => {
   afterEach(async () => {
     await clearAllIndexedDbState({ databasePrefix: DOCTOR_IDB_DATABASE_PREFIX });
     vi.restoreAllMocks();
-    resetPluginStateStoreForTests();
   });
 
   it("migrates legacy sync cache JSON to SQLite plugin state", async () => {
@@ -105,7 +115,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "0123456789abcdef",
     );
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
@@ -198,7 +208,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "0123456789abcdef",
     );
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
@@ -207,7 +217,7 @@ describe("matrix doctor contract state migrations", () => {
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         accountId: "default",
-        accessTokenHash: "token-hash",
+        accessTokenHash: "0123456789abcdef",
         deviceId: "DEVICE",
         currentTokenStateClaimed: true,
       }),
@@ -267,7 +277,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "0123456789abcdef",
     );
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
@@ -294,8 +304,12 @@ describe("matrix doctor contract state migrations", () => {
     });
 
     expect(
-      readMatrixRecoveryKeyStateForPath(path.join(storageRootDir, MATRIX_RECOVERY_KEY_FILENAME))
-        ?.keyId,
+      (
+        await createPluginStateKeyedStoreForTests<{ keyId: string }>(
+          "matrix",
+          openMatrixRecoveryKeyStoreOptions(storageRootDir),
+        ).lookup("current")
+      )?.keyId,
     ).toBe("SSSS");
     expect(fs.existsSync(path.join(storageRootDir, "recovery-key.json"))).toBe(false);
   });
@@ -360,7 +374,9 @@ describe("matrix doctor contract state migrations", () => {
     expect(JSON.parse(fs.readFileSync(archivePath ?? "", "utf8"))).toEqual(snapshot);
 
     expect(scoreMatrixCryptoStateInStore(storageRootDir)).toBe(5);
-    expect(JSON.parse(readMatrixIdbSnapshotJson(storageRootDir) ?? "null")).toEqual(snapshot);
+    expect(JSON.parse((await readMatrixIdbSnapshotJson(storageRootDir)) ?? "null")).toEqual(
+      snapshot,
+    );
     expect(fs.existsSync(path.join(storageRootDir, "legacy-crypto-migration.json"))).toBe(false);
     expect(fs.existsSync(snapshotPath)).toBe(false);
 
@@ -436,17 +452,17 @@ describe("matrix doctor contract state migrations", () => {
       data: "[",
     });
     const currentSnapshot = JSON.stringify([{ name: "current", version: 1, stores: [] }]);
-    writeMatrixIdbSnapshotJson({
+    await writeMatrixIdbSnapshotJson({
       storageRootDir: conflictRoot,
       snapshotJson: currentSnapshot,
       databaseCount: 1,
     });
-    writeMatrixIdbSnapshotJson({
+    await writeMatrixIdbSnapshotJson({
       storageRootDir: equivalentRoot,
       snapshotJson: JSON.stringify(equivalentSnapshot),
       databaseCount: 1,
     });
-    writeMatrixIdbSnapshotJson({
+    await writeMatrixIdbSnapshotJson({
       storageRootDir: invalidRoot,
       snapshotJson: JSON.stringify({ malformed: true }),
       databaseCount: 1,
@@ -472,11 +488,13 @@ describe("matrix doctor contract state migrations", () => {
     expect(JSON.parse(fs.readFileSync(conflictArchivePath ?? "", "utf8"))).toEqual(
       conflictSnapshot,
     );
-    expect(JSON.parse(readMatrixIdbSnapshotJson(partialRoot) ?? "null")).toEqual(partialSnapshot);
-    expect(JSON.parse(readMatrixIdbSnapshotJson(invalidRoot) ?? "null")).toEqual(
+    expect(JSON.parse((await readMatrixIdbSnapshotJson(partialRoot)) ?? "null")).toEqual(
+      partialSnapshot,
+    );
+    expect(JSON.parse((await readMatrixIdbSnapshotJson(invalidRoot)) ?? "null")).toEqual(
       invalidReplacement,
     );
-    expect(readMatrixIdbSnapshotJson(conflictRoot)).toBe(currentSnapshot);
+    expect(await readMatrixIdbSnapshotJson(conflictRoot)).toBe(currentSnapshot);
     expect(fs.existsSync(path.join(partialRoot, MATRIX_IDB_SNAPSHOT_FILENAME))).toBe(false);
     expect(fs.existsSync(path.join(conflictRoot, MATRIX_IDB_SNAPSHOT_FILENAME))).toBe(false);
     expect(fs.existsSync(path.join(equivalentRoot, MATRIX_IDB_SNAPSHOT_FILENAME))).toBe(false);
@@ -491,7 +509,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "ops",
       "matrix.example.org__bot",
-      "token-a",
+      "0123456789abcdef",
     );
     const jsonRoot = path.join(
       stateDir,
@@ -499,7 +517,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "home",
       "matrix.example.org__bot",
-      "token-b",
+      "fedcba9876543210",
     );
     fs.mkdirSync(sqliteRoot, { recursive: true });
     fs.mkdirSync(jsonRoot, { recursive: true });
@@ -701,7 +719,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "late",
       "matrix.example.org__bot",
-      "token-a",
+      "0123456789abcdef",
       "state",
       "openclaw.sqlite",
     );
@@ -717,7 +735,7 @@ describe("matrix doctor contract state migrations", () => {
   it("withholds completion after a directory read failure and imports the source on retry", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const blockedDir = path.join(stateDir, "matrix", "accounts", "home");
-    const jsonRoot = path.join(blockedDir, "matrix.example.org__bot", "token-a");
+    const jsonRoot = path.join(blockedDir, "matrix.example.org__bot", "0123456789abcdef");
     const jsonPath = path.join(jsonRoot, "inbound-dedupe.json");
     const roomId = "!room:example.org";
     const eventId = "$found-on-retry";
@@ -803,7 +821,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "home",
       "matrix.example.org__bot",
-      "token-a",
+      "0123456789abcdef",
     );
     fs.mkdirSync(jsonRoot, { recursive: true });
     const jsonPath = path.join(jsonRoot, "inbound-dedupe.json");
@@ -834,7 +852,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "home",
       "matrix.example.org__bot",
-      "token-a",
+      "0123456789abcdef",
     );
     fs.mkdirSync(jsonRoot, { recursive: true });
     const jsonPath = path.join(jsonRoot, "inbound-dedupe.json");
@@ -944,9 +962,26 @@ describe("matrix doctor contract state migrations", () => {
       defaultTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS,
       env,
     });
-    nowSpy.mockReturnValue(now + remainingTtlMs - 1);
+    const importedEntry = (await store.entries()).find((entry) => entry.key === storedEntry.key);
+    expect(importedEntry).toMatchObject({
+      createdAt: markerTs,
+      expiresAt: now + remainingTtlMs,
+      value: storedEntry.value,
+    });
+    nowSpy.mockRestore();
     await expect(store.lookup(storedEntry.key)).resolves.toEqual(storedEntry.value);
-    nowSpy.mockReturnValue(now + remainingTtlMs + 1);
+
+    // Preserve the imported deadline above, then seed expiry visible to the worker clock.
+    const { db } = openOpenClawStateDatabase({ env });
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabaseForTests, "plugin_state_entries">>(db)
+        .updateTable("plugin_state_entries")
+        .set({ expires_at: 1 })
+        .where("plugin_id", "=", "matrix")
+        .where("namespace", "=", resolveMatrixInboundDedupeStateNamespace())
+        .where("entry_key", "=", storedEntry.key),
+    );
     await expect(store.lookup(storedEntry.key)).resolves.toBeUndefined();
   });
 });

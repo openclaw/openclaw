@@ -1,3 +1,4 @@
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import type { PluginInstallArtifactInspection } from "./install-artifact-inspection.js";
@@ -17,6 +18,7 @@ export type PackageManifest = PluginPackageManifest & {
 };
 
 export const PLUGIN_INSTALL_ERROR_CODE = {
+  CONFIG_MUTATION_BLOCKED: "config_mutation_blocked",
   INVALID_NPM_SPEC: "invalid_npm_spec",
   INVALID_MIN_HOST_VERSION: "invalid_min_host_version",
   UNKNOWN_HOST_VERSION: "unknown_host_version",
@@ -79,6 +81,8 @@ export type PluginInstallArtifactConsentRequest = {
   currentArtifactDir?: string;
   stagedArtifactDir: string;
   mode: "install" | "update";
+  /** Source facts supplied by the installer after validating the staged artifact. */
+  sourceRecord?: PluginInstallRecord;
 };
 
 export type PluginInstallArtifactConsentHandler = (
@@ -97,6 +101,7 @@ export type PackageInstallCommonParams = InstallSafetyOverrides & {
   allowSourceTypeScriptEntries?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+  beforePersistentApply?: () => void;
 };
 
 export type InternalPackageInstallCommonParams = PackageInstallCommonParams & {
@@ -108,13 +113,8 @@ export type InternalPackageInstallCommonParams = PackageInstallCommonParams & {
  * broken install. Channel-aware installs use this to widen the selector instead
  * of failing when the requested release has no artifact.
  */
-export function isUnavailableNpmTarget(result: {
-  ok: false;
-  code?: string;
-  error: string;
-}): boolean {
-  return (
-    result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND ||
-    /\b(ETARGET|notarget)\b|No matching version found|dist-tag|tag .*not found/i.test(result.error)
-  );
+export function isUnavailableNpmTarget(result: { ok: false; code?: string }): boolean {
+  // Only the target lookup owns absence. Later failures can quote arbitrary
+  // package names, including npm error words, without authorizing fallback.
+  return result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND;
 }

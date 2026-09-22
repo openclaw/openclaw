@@ -30,10 +30,11 @@ function snapshotWith(
 function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   return {
     getRuntimeSnapshot: vi.fn(() => snapshot),
-    getPluginCommandCatalogAccounts: vi.fn(() => new Map()),
+    pauseChannelStarts: vi.fn(() => () => {}),
     startChannels: vi.fn(),
     startChannel: vi.fn(),
     stopChannel: vi.fn(),
+    releaseChannelRouteHandoffs: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
     recoverAutostartSuppression: vi.fn(async () => false),
@@ -41,6 +42,7 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
+    isAccountListed: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
     isAutoRestartScheduled: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
@@ -78,6 +80,7 @@ function createReadinessHarness(params: {
   getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
   getGatewayDraining?: Parameters<typeof createReadinessChecker>[0]["getGatewayDraining"];
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
+  getStateDatabaseFailure?: Parameters<typeof createReadinessChecker>[0]["getStateDatabaseFailure"];
   shouldSkipChannelReadiness?: Parameters<
     typeof createReadinessChecker
   >[0]["shouldSkipChannelReadiness"];
@@ -94,6 +97,7 @@ function createReadinessHarness(params: {
       getStartupPendingReason: params.getStartupPendingReason,
       getGatewayDraining: params.getGatewayDraining,
       getEventLoopHealth: params.getEventLoopHealth,
+      getStateDatabaseFailure: params.getStateDatabaseFailure,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
     }),
@@ -213,6 +217,22 @@ describe("createReadinessChecker", () => {
 
       gatewayDraining = false;
       expect(readiness()).toEqual(readySnapshot());
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("reports a terminal state database failure after the readiness cache expires", () => {
+    withReadinessClock(() => {
+      const stateDatabase = { failure: undefined as Error | undefined };
+      const { manager, readiness } = createReadinessHarness({
+        getStateDatabaseFailure: () => stateDatabase.failure,
+        cacheTtlMs: 1_000,
+      });
+      expect(readiness()).toEqual(readySnapshot());
+
+      stateDatabase.failure = new Error("newer shared-state schema");
+      vi.advanceTimersByTime(1_000);
+      expect(readiness()).toEqual(failingSnapshot(["state-database"], FIVE_MIN_MS + 1_000));
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
     });
   });

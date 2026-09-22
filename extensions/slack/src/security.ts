@@ -53,7 +53,7 @@ const collectSlackSecurityWarnings =
 const collectSlackSecurityFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectSlackSecurityWarnings,
   checkId: "channels.slack.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Slack security warning",
 });
 

@@ -227,7 +227,7 @@ describe("discordOutbound", () => {
     expect(options.webhookToken).toBe("tok-1");
     expect(options.accountId).toBe("default");
     expect(options.threadId).toBe("thread-1");
-    expect(options.replyTo).toBe("reply-1");
+    expect(options.replyTo).toEqual({ messageId: "reply-1", scope: "all" });
     expect(options.username).toBe("Codex");
     expect(options.avatarUrl).toBe("https://example.com/avatar.png");
     expect(options.cfg).toBe(cfg);
@@ -281,9 +281,11 @@ describe("discordOutbound", () => {
     });
   });
 
-  it("falls back to bot send when webhook send fails", async () => {
+  it("falls back to bot send when Discord rejects the webhook send", async () => {
     mockDiscordBoundThreadManager(hoisted);
-    hoisted.sendWebhookMessageDiscordMock.mockRejectedValueOnce(new Error("rate limited"));
+    hoisted.sendWebhookMessageDiscordMock.mockRejectedValueOnce(
+      Object.assign(new Error("rate limited"), { status: 429 }),
+    );
 
     const result = await discordOutbound.sendText?.({
       cfg: {},

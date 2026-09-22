@@ -1,3 +1,5 @@
+import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals-core.js";
+
 export const WORKER_REQUIRED_LOCAL_TOOL_NAMES = [
   "read",
   "write",
@@ -7,7 +9,7 @@ export const WORKER_REQUIRED_LOCAL_TOOL_NAMES = [
   "process",
 ] as const;
 
-const WORKER_OPTIONAL_LOCAL_TOOL_NAMES = ["browser"] as const;
+const WORKER_OPTIONAL_LOCAL_TOOL_NAMES = ["browser", "computer"] as const;
 
 export const WORKER_LOCAL_TOOL_NAMES = [
   ...WORKER_REQUIRED_LOCAL_TOOL_NAMES,
@@ -16,9 +18,9 @@ export const WORKER_LOCAL_TOOL_NAMES = [
 
 /** Gateway-proxied tools exposed through the closed worker protocol. */
 export const WORKER_SESSION_TOOL_NAMES = [
+  "skill_workshop",
   "sessions_spawn",
   "sessions_send",
-  "github_publish",
   "portal",
 ] as const;
 
@@ -37,6 +39,18 @@ export function isWorkerToolName(value: unknown): value is WorkerToolName {
   return typeof value === "string" && WORKER_TOOL_NAME_SET.has(value);
 }
 
+type WorkerExecAuthority = {
+  security: ExecSecurity;
+  ask: ExecAsk;
+  /** No host-specific approvals or default safe bins may be reconstructed remotely. */
+  safeBins?: [];
+} & ({ host: Exclude<ExecHost, "node">; node?: never } | { host: "node"; node?: string });
+
 export type WorkerToolAuthority = {
   allowedToolNames: WorkerToolName[];
+  /**
+   * Effective exec policy resolved at the Gateway. Optional for protocol compatibility only;
+   * consumers must treat an absent value as denied rather than re-deriving it worker-side.
+   */
+  exec?: WorkerExecAuthority;
 };

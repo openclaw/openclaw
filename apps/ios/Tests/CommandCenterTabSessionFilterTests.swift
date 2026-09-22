@@ -1,4 +1,5 @@
 import Testing
+import OpenClawChatUI
 @testable import OpenClaw
 
 struct CommandCenterTabSessionFilterTests {
@@ -37,5 +38,63 @@ struct CommandCenterTabSessionFilterTests {
         #expect(CommandCenterTab.isRecentChatSession(
             "agent:main:slack:channel:c1:thread:123",
             defaultSessionKey: "main"))
+    }
+
+    @Test func `prefers generated display names over ios key placeholders`() {
+        func entry(
+            key: String,
+            displayName: String? = nil,
+            label: String? = nil,
+            autoLabel: String? = nil) -> OpenClawChatSessionEntry
+        {
+            OpenClawChatSessionEntry(
+                key: key,
+                kind: nil,
+                displayName: displayName,
+                surface: nil,
+                subject: nil,
+                room: nil,
+                space: nil,
+                updatedAt: 1,
+                sessionId: nil,
+                systemSent: nil,
+                abortedLastRun: nil,
+                thinkingLevel: nil,
+                verboseLevel: nil,
+                inputTokens: nil,
+                outputTokens: nil,
+                totalTokens: nil,
+                modelProvider: nil,
+                model: nil,
+                contextTokens: nil,
+                label: label,
+                autoLabel: autoLabel)
+        }
+
+        #expect(
+            CommandCenterTab.sessionTitle(
+                entry(key: "agent:main:ios-abc123", displayName: "Compare session naming"))
+                == "Compare session naming")
+        #expect(CommandCenterTab.sessionTitle(entry(key: "agent:main:ios-abc123")) == "iOS chat")
+        #expect(
+            CommandCenterTab.sessionTitle(
+                entry(
+                    key: "agent:main:ios-abc123",
+                    displayName: "Compare session naming",
+                    label: "My thread"))
+                == "My thread")
+
+        let nodeKey = "agent:main:node-1234567890ab"
+        let autoLabel = "OpenClaw App · Pixel · 1234567890ab"
+        #expect(CommandCenterTab.sessionTitle(entry(key: nodeKey, autoLabel: autoLabel)) == autoLabel)
+        #expect(
+            CommandCenterTab.sessionTitle(
+                entry(key: nodeKey, displayName: "Compare session naming", autoLabel: autoLabel))
+                == "Compare session naming")
+        let manualLabel = "OpenClaw App · Release planning · 1234567890ab"
+        #expect(
+            CommandCenterTab.sessionTitle(
+                entry(key: nodeKey, displayName: "Compare session naming", label: manualLabel, autoLabel: autoLabel))
+                == manualLabel)
     }
 }

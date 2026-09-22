@@ -42,7 +42,7 @@ function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
   return sanitized.trim().slice(0, MAX_REPLY_TO_ID_LENGTH) || undefined;
 }
 
-export function resolveAuthorizedIMessageReplyReference(params: {
+export async function resolveAuthorizedIMessageReplyReference(params: {
   account: ResolvedIMessageAccount;
   target: IMessageTarget;
   cliPath: string;
@@ -52,7 +52,7 @@ export function resolveAuthorizedIMessageReplyReference(params: {
   service?: IMessageService;
   replyToId?: string;
   conversationReadOrigin?: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   if (!createActionGate(params.account.config.actions)("reply")) {
     return undefined;
   }
@@ -61,11 +61,11 @@ export function resolveAuthorizedIMessageReplyReference(params: {
     return undefined;
   }
   const chatContext = chatContextFromIMessageTarget(params.target, params.service);
-  const messageId = resolveIMessageMessageId(rawReplyToId, {
+  const messageId = await resolveIMessageMessageId(rawReplyToId, {
     requireKnownShortId: true,
     chatContext,
   });
-  authorizeIMessageResourceReference({
+  await authorizeIMessageResourceReference({
     accountId: params.account.accountId,
     chatContext,
     cliPath: params.cliPath,
@@ -78,17 +78,17 @@ export function resolveAuthorizedIMessageReplyReference(params: {
   return messageId;
 }
 
-export function authorizeIMessageResourceReference(
+export async function authorizeIMessageResourceReference(
   params: IMessageResourceAuthorizationParams,
-): void {
+): Promise<void> {
   const cacheContext = {
     ...params.chatContext,
     accountId: params.accountId,
   };
-  let cacheBinding = resolveIMessageCachedResourceBinding(params.messageId, cacheContext);
+  let cacheBinding = await resolveIMessageCachedResourceBinding(params.messageId, cacheContext);
   const normalizedMessageId = normalizeIMessageMessageGuidForLookup(params.messageId);
   if (cacheBinding === "unknown" && normalizedMessageId !== params.messageId.trim()) {
-    cacheBinding = resolveIMessageCachedResourceBinding(normalizedMessageId, cacheContext);
+    cacheBinding = await resolveIMessageCachedResourceBinding(normalizedMessageId, cacheContext);
   }
   if (cacheBinding === "match") {
     return;

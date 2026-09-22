@@ -1,6 +1,7 @@
 // Covers silent-pairing approval provenance and superseded-record pruning.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import {
@@ -17,8 +18,22 @@ type PairedDeviceApprovalKind = NonNullable<
   Parameters<typeof approveDevicePairing>[1]["approvedVia"]
 >;
 
+const suiteStateDirs: string[] = [];
+
 async function makeBaseDir(): Promise<string> {
-  return await suiteRootTracker.make("case");
+  const baseDir = await suiteRootTracker.make("case");
+  suiteStateDirs.push(baseDir);
+  return baseDir;
+}
+
+async function cleanupSuite(): Promise<void> {
+  for (const baseDir of suiteStateDirs) {
+    closeOpenClawStateDatabaseByPath(
+      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: baseDir }),
+    );
+  }
+  suiteStateDirs.length = 0;
+  await suiteRootTracker.cleanup();
 }
 
 // Rewrites a paired record without approvedVia to simulate approvals that
@@ -79,10 +94,7 @@ describe("device pairing approval provenance", () => {
     await suiteRootTracker.setup();
   });
 
-  afterAll(async () => {
-    closeOpenClawStateDatabaseForTest();
-    await suiteRootTracker.cleanup();
-  });
+  afterAll(cleanupSuite);
 
   test("records silent, owner, and bootstrap approval kinds", async () => {
     const baseDir = await makeBaseDir();
@@ -142,10 +154,7 @@ describe("pruneSupersededSilentPairedDevices", () => {
     await suiteRootTracker.setup();
   });
 
-  afterAll(async () => {
-    closeOpenClawStateDatabaseForTest();
-    await suiteRootTracker.cleanup();
-  });
+  afterAll(cleanupSuite);
 
   test("removes stale silent siblings from the same client cluster only", async () => {
     const baseDir = await makeBaseDir();

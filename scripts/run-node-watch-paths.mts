@@ -44,30 +44,23 @@ const ignoredRunNodeRepoPathPatterns = [
 ];
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 
-/** Normalizes watch paths to repository-style POSIX separators. */
+/** Canonicalizes native paths without treating POSIX filename backslashes as separators. */
 export const normalizeRunNodePath = (filePath: unknown): string =>
-  (typeof filePath === "string" ? filePath : "").replaceAll("\\", "/");
+  (typeof filePath === "string" ? filePath : "").replaceAll(path.sep, "/").replace(/^\.\/+/, "");
 
-const isIgnoredSourcePath = (relativePath: string): boolean => {
-  const normalizedPath = normalizeRunNodePath(relativePath);
-  return (
-    normalizedPath.endsWith(".test.ts") ||
-    normalizedPath.endsWith(".test.tsx") ||
-    normalizedPath.endsWith("test-helpers.ts")
-  );
-};
+const isIgnoredSourcePath = (relativePath: string): boolean =>
+  relativePath.endsWith(".test.ts") ||
+  relativePath.endsWith(".test.tsx") ||
+  relativePath.endsWith("test-helpers.ts");
 
-const isBuildRelevantSourcePath = (relativePath: string): boolean => {
-  const normalizedPath = normalizeRunNodePath(relativePath);
-  return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
-};
+const isBuildRelevantSourcePath = (relativePath: string): boolean =>
+  extensionSourceFilePattern.test(relativePath) && !isIgnoredSourcePath(relativePath);
 
 const isRestartRelevantExtensionPath = (relativePath: string): boolean => {
-  const normalizedPath = normalizeRunNodePath(relativePath);
-  if (extensionRestartMetadataFiles.has(path.posix.basename(normalizedPath))) {
+  if (extensionRestartMetadataFiles.has(path.posix.basename(relativePath))) {
     return true;
   }
-  return isBuildRelevantSourcePath(normalizedPath);
+  return isBuildRelevantSourcePath(relativePath);
 };
 
 const isRelevantRunNodePath = (
@@ -75,7 +68,7 @@ const isRelevantRunNodePath = (
   isRelevantBundledPluginPath: (relativePath: string) => boolean,
   generatedPluginAssetPaths: ReadonlySet<string>,
 ): boolean => {
-  const normalizedPath = normalizeRunNodePath(repoPath).replace(/^\.\/+/, "");
+  const normalizedPath = normalizeRunNodePath(repoPath);
   if (
     generatedPluginAssetPaths.has(normalizedPath) ||
     ignoredRunNodeRepoPathPatterns.some((pattern) => pattern.test(normalizedPath))

@@ -119,7 +119,7 @@ function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
  */
 export async function prepareOutboundPayloadBatch(
   params: DeliverOutboundPayloadsParams,
-  options?: { onBeforeFirstModifier?: () => void },
+  options?: { onBeforeFirstModifier?: () => Promise<void> },
 ): Promise<PreparedOutboundBatch> {
   const directiveOptions = await resolveChannelOutboundDirectiveOptions({
     cfg: params.cfg,
@@ -156,7 +156,8 @@ export async function prepareOutboundPayloadBatch(
   for (const { index: sourceIndex, payload } of normalized) {
     throwIfPreparationAborted(params.abortSignal, sourceIndex, payload);
     if (hasModifyingHooks && !modifierBoundaryEntered) {
-      options?.onBeforeFirstModifier?.();
+      await options?.onBeforeFirstModifier?.();
+      throwIfPreparationAborted(params.abortSignal, sourceIndex, payload);
       modifierBoundaryEntered = true;
     }
     let replyHookResult: Awaited<ReturnType<typeof applyReplyPayloadSendingHook>>;

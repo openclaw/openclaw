@@ -140,7 +140,7 @@ const rejectedStreamedToolFixture = (params: {
             },
           ]
         : [],
-      responseId: null,
+      responseId: params.status === "incomplete" ? "resp_rejected_streamed_tool" : null,
       stopReason: "stop",
       error: params.error,
     },
@@ -282,7 +282,7 @@ const rejectedOutOfOrderTerminalFixture = (
   };
 };
 
-const fixtures: ParityFixture[] = [
+const leadingFixtures: ParityFixture[] = [
   {
     name: "terminal final answer recovery preserves streamed commentary",
     events: [
@@ -463,6 +463,9 @@ const fixtures: ParityFixture[] = [
     arguments: '{"q":',
     error: "Responses stream completed tool call with invalid JSON arguments",
   }),
+];
+
+const toolOnlyFixtures: ParityFixture[] = [
   rejectedStreamedToolFixture({
     name: "streamed malformed tool arguments never complete their started call",
     status: "completed",
@@ -540,6 +543,9 @@ const fixtures: ParityFixture[] = [
       error: null,
     },
   },
+];
+
+const trailingFixtures: ParityFixture[] = [
   rejectedOutOfOrderTerminalFixture("completed"),
   rejectedOutOfOrderTerminalFixture("started"),
   rejectedOutOfOrderTerminalFixture("reasoning"),
@@ -775,8 +781,11 @@ const fixtures: ParityFixture[] = [
   },
 ];
 
+const fixtures = [...leadingFixtures, ...toolOnlyFixtures, ...trailingFixtures];
+const rotatedFixtures = [...leadingFixtures, ...trailingFixtures];
+
 describe.each(["stable", "rotated"])("Responses terminal recovery with %s item IDs", (ids) => {
-  it.each(fixtures)("$name", async (fixture) => {
+  it.each(ids === "rotated" ? rotatedFixtures : fixtures)("$name", async (fixture) => {
     let sequence = 0;
     const events: ParityFixture["events"] = JSON.parse(
       JSON.stringify(fixture.events),

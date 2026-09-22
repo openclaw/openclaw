@@ -1,6 +1,7 @@
 // @vitest-environment node
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { page as agentsPage, type AgentsRouteData } from "./agents/route.ts";
@@ -10,13 +11,15 @@ import {
   page as modelProvidersPage,
   type ModelProvidersRouteData,
 } from "./model-providers/route.ts";
-import type { PluginsRouteData } from "./plugins/plugins-page.ts";
-import { page as pluginsPage } from "./plugins/route.ts";
-import { page as sessionsPage, type SessionsRouteData } from "./sessions/route.ts";
-import { page as skillsPage } from "./skills/route.ts";
+import type { PluginsRouteData } from "./plugins/route-data.ts";
+import { pages as pluginPages } from "./plugins/route.ts";
+import { pages as skillPages } from "./skills/route.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
 import { page as usagePage } from "./usage/route.ts";
 import type { UsageRouteData } from "./usage/usage-page.ts";
+
+const pluginsPage = pluginPages[0];
+const skillsPage = skillPages[0];
 
 type RouteWithLoader = {
   loader?: (context: ApplicationContext, options: RouteLoaderOptions) => unknown;
@@ -30,14 +33,6 @@ const loaderOptions: RouteLoaderOptions = {
   deps: "",
   cause: "preload",
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function snapshot(
   client: GatewayBrowserClient | null,
@@ -83,6 +78,7 @@ describe("route preload gateway provenance", () => {
     const agentsGateway = mutableGateway(snapshot(null, false));
     const agentsData = await loadRoute<AgentsRouteData>(agentsPage, {
       gateway: agentsGateway.gateway,
+      settingsAgentSelection: { state: { selectedId: null, scopeId: null }, intentRevision: 0 },
       agents: {
         state: { agentsList: null, agentsError: null },
         ensureList: vi.fn(async () => null),
@@ -97,31 +93,6 @@ describe("route preload gateway provenance", () => {
     } as unknown as ApplicationContext);
     expect(devicesData.gateway).toBe(devicesGateway.gateway);
     expect(devicesData.gatewaySnapshot).toBe(devicesGateway.gateway.snapshot);
-  });
-
-  it("keeps sessions provenance from before its async preload", async () => {
-    const client = {} as GatewayBrowserClient;
-    const originalSnapshot = snapshot(client, true);
-    const mutable = mutableGateway(originalSnapshot);
-    const gateway = mutable.gateway;
-    const refresh = deferred<void>();
-    const managedSnapshot = { result: null, agentId: null, loading: false, error: null };
-    const request = loadRoute<SessionsRouteData>(sessionsPage, {
-      gateway,
-      sessions: {
-        listSnapshot: vi.fn(() => managedSnapshot),
-        refreshList: vi.fn(() => refresh.promise),
-      },
-      runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
-      agentSelection: { state: { selectedId: null, scopeId: null } },
-    } as unknown as ApplicationContext);
-
-    mutable.replaceSnapshot(snapshot(client, false));
-    refresh.resolve();
-    const data = await request;
-
-    expect(data.gateway).toBe(gateway);
-    expect(data.gatewaySnapshot).toBe(originalSnapshot);
   });
 
   it("keeps usage provenance from before its async preload", async () => {
@@ -163,7 +134,8 @@ describe("route preload gateway provenance", () => {
           agents: [{ id: "main" }],
         })),
       },
-      agentSelection: { state: { selectedId: "main", scopeId: "main" } },
+      agentSelection: { state: { selectedId: "research", scopeId: "research" }, intentRevision: 0 },
+      settingsAgentSelection: { state: { selectedId: "main", scopeId: "main" }, intentRevision: 0 },
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(replacementClient, true));
@@ -171,8 +143,8 @@ describe("route preload gateway provenance", () => {
 
     expect(data.gateway).toBe(mutable.gateway);
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
-    expect(data.client).toBe(originalClient);
-    expect(originalRequest).toHaveBeenCalled();
+    expect(data.client).toBeNull();
+    expect(originalRequest).not.toHaveBeenCalled();
     expect(replacementRequest).not.toHaveBeenCalled();
   });
 
@@ -192,17 +164,24 @@ describe("route preload gateway provenance", () => {
     const agents = {
       ensureList: vi.fn(() => agentsReady.promise),
     } as unknown as ApplicationContext["agents"];
+    const selection = {
+      state: { selectedId: "research", scopeId: "research" },
+      intentRevision: 7,
+    };
     const request = loadRoute<SkillsRouteData>(skillsPage, {
       gateway,
       agents,
+      agentSelection: selection,
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(client, false));
+    selection.intentRevision += 1;
     agentsReady.resolve(agentsList);
     const data = await request;
 
-    expect(requestMethod).toHaveBeenCalledWith("skills.status", { agentId: "main" });
-    expect(data.selectedAgentId).toBe("main");
+    expect(requestMethod).toHaveBeenCalledWith("skills.status", { agentId: "research" });
+    expect(data.selectedAgentId).toBe("research");
+    expect(data.selectionIntentRevision).toBe(7);
     expect(data.gateway).toBe(gateway);
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
     expect(data.agents).toBe(agents);

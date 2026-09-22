@@ -16,8 +16,8 @@ export async function maybeSendAckReaction(params: {
   agentId: string;
   sessionKey: string;
   verbose: boolean;
-  info: (obj: unknown, msg: string) => void;
-  warn: (obj: unknown, msg: string) => void;
+  info: (obj: object, msg: string) => void;
+  warn: (obj: object, msg: string) => void;
 }): Promise<AckReactionHandle | null> {
   const eligibility = await resolveWhatsAppReactionEligibility({
     cfg: params.cfg,

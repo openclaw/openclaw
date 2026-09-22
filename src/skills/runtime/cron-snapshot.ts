@@ -16,6 +16,7 @@ export async function resolveCronSkillsSnapshot(params: {
   config: OpenClawConfig;
   agentId: string;
   existingSnapshot?: SkillSnapshot;
+  librarySelections?: SkillSnapshot["librarySelections"];
   isFastTestEnv: boolean;
 }): Promise<SkillSnapshot> {
   if (params.isFastTestEnv) {
@@ -29,19 +30,22 @@ export async function resolveCronSkillsSnapshot(params: {
     cfg: params.config,
     agentId: params.agentId,
   });
-  return runtime.resolveReusableWorkspaceSkillSnapshot({
-    workspaceDir: params.workspaceDir,
-    config: params.config,
-    agentId: params.agentId,
-    existingSnapshot: params.existingSnapshot,
-    skillFilter,
-    eligibility: {
-      nodeSkills,
-      remote: runtime.getRemoteSkillEligibility({
-        advertiseExecNode: nodeSkills.canExec,
+  return (
+    await runtime.resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: params.workspaceDir,
+      config: params.config,
+      agentId: params.agentId,
+      existingSnapshot: params.existingSnapshot,
+      librarySelections: params.librarySelections,
+      skillFilter,
+      resolveEligibility: () => ({
+        nodeSkills,
+        remote: runtime.getRemoteSkillEligibility({
+          advertiseExecNode: nodeSkills.canExec,
+        }),
       }),
-    },
-    watch: false,
-    hydrateExisting: false,
-  }).snapshot;
+      watch: false,
+      hydrateExisting: false,
+    })
+  ).snapshot;
 }

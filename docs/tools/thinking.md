@@ -16,13 +16,13 @@ title: "Thinking levels"
   - xhigh ~ "ultrathink+" (GPT-5.2+ and Codex models, plus Anthropic Claude Opus 4.7+ effort)
   - adaptive → provider-managed adaptive thinking (supported for Claude 4.6 on Anthropic/Bedrock, Anthropic Claude Opus 4.7+, and Google Gemini dynamic thinking)
   - max → provider max reasoning (Anthropic Claude Opus 4.7+; Ollama maps this to its highest native `think` effort)
-  - ultra → provider max reasoning plus proactive sub-agent orchestration when the selected model/runtime supports it
+  - ultra → proactive sub-agent orchestration with runtime-selected reasoning when the selected model/runtime supports it
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
   - `highest` maps to `high`.
 - Provider notes:
   - Thinking menus and pickers are provider-profile driven. Provider plugins declare the exact level set for the selected model, including labels such as binary `on`.
   - `adaptive`, `xhigh`, `max`, and `ultra` are only advertised for provider/model/runtime profiles that support them. Typed directives for unsupported levels are rejected with that model's valid options.
-  - Existing stored unsupported levels are remapped by provider profile rank. `adaptive` falls back to `medium` on non-adaptive models, while `xhigh` and `max` fall back to the largest supported non-off level for the selected model.
+  - Existing stored unsupported levels are remapped by provider profile rank. When `adaptive` is not selectable, it uses the provider's declared non-off default; otherwise its ranked fallback preserves enabled thinking, usually `medium`. `xhigh` and `max` fall back to the largest supported non-off level for the selected model.
   - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
   - Anthropic Claude Opus 4.8 and Opus 4.7 keep thinking off unless you explicitly set a thinking level. Opus 4.8's provider-owned effort default is `high` after adaptive thinking is enabled.
   - Anthropic Claude Opus 4.7+ maps `/think xhigh` to adaptive thinking plus `output_config.effort: "xhigh"`, because `/think` is a thinking directive and `xhigh` is the Opus effort setting.
@@ -30,29 +30,66 @@ title: "Thinking levels"
   - Direct DeepSeek V4 models expose `/think xhigh|max`; both map to DeepSeek `reasoning_effort: "max"` while lower non-off levels map to `high`.
   - OpenRouter-routed DeepSeek V4 models expose `/think xhigh` and send OpenRouter-supported `reasoning.effort` values instead of DeepSeek-native top-level `reasoning_effort`. Lower non-off levels map to `high`, and stored `max` overrides fall back to `xhigh`.
   - Ollama thinking-capable models expose `/think low|medium|high|max`. Verified full-effort Ollama Cloud families such as GLM 5.2 and DeepSeek V4 send each matching native `think` effort, including `max`; other models and local Ollama keep the compatible `high` mapping for `/think max`.
-  - OpenAI GPT models map `/think` through model-specific Responses API effort support. `/think off` sends `reasoning.effort: "none"` only when the target model supports it; otherwise OpenClaw omits the disabled reasoning payload instead of sending an unsupported value.
-  - GPT-5.6 Sol and Terra expose native `/think ultra` through the Codex runtime. GPT-5.6 Luna exposes levels through `max` because its Codex catalog does not advertise Ultra.
-  - The embedded OpenClaw runtime exposes logical `/think ultra` for GPT-5.6 Sol, Terra, and Luna. It sends provider max effort and adds run-scoped proactive sub-agent orchestration guidance.
+  - OpenAI GPT models map `/think` through the selected model and auth route's effort support. On supported OpenAI Platform/API-key routes, `/think off` sends explicit `reasoning.effort: "none"`, including when using the Codex runtime. Subscription routes that do not support `none` retain the provider or native runtime's default reasoning behavior; `off` does not guarantee zero reasoning there. Supervised native Codex threads keep their own thinking settings.
+  - GPT-6 Astra and GPT-5.6 Sol and Terra expose native `/think ultra` through the Codex runtime with either Platform API-key or ChatGPT subscription auth. OpenClaw preserves Ultra for ordinary turns; `/btw` intentionally runs at `off`. Codex owns proactive delegation and the model-specific inference effort (Astra uses `xhigh`). Ultra is not sent as a raw Responses API reasoning effort. GPT-5.6 Luna exposes levels through `max` because its Codex catalog does not advertise Ultra.
+  - The embedded OpenClaw runtime exposes logical `/think ultra` for GPT-6 Astra and GPT-5.6 Sol, Terra, and Luna. It sends provider max effort and adds run-scoped proactive sub-agent orchestration guidance.
   - Custom OpenAI-compatible catalog entries can opt into `/think xhigh` by setting `models.providers.<provider>.models[].compat.supportedReasoningEfforts` to include `"xhigh"`. This uses the same compat metadata that maps outbound OpenAI reasoning effort payloads, so menus, session validation, agent CLI, and `llm-task` agree with transport behavior.
-  - Stale configured OpenRouter Hunter Alpha refs skip proxy reasoning injection because that retired route could return final answer text through reasoning fields.
+  - Since 2026.4.26, stale configured OpenRouter Hunter Alpha refs skip proxy reasoning injection because that retired route could return final answer text through reasoning fields.
   - Google Gemini maps `/think adaptive` to Gemini's provider-owned dynamic thinking. Gemini 3 requests omit a fixed `thinkingLevel`, while Gemini 2.5 requests send `thinkingBudget: -1`; fixed levels still map to the closest Gemini `thinkingLevel` or budget for that model family.
   - MiniMax M2.x (`minimax/MiniMax-M2*`) on the Anthropic-compatible streaming path defaults to `thinking: { type: "disabled" }` unless you explicitly set thinking in model params or request params. This avoids leaked `reasoning_content` deltas from M2.x's non-native Anthropic stream format. MiniMax-M3 (and M3.x) is exempt: M3 emits proper Anthropic thinking blocks and returns empty content when thinking is disabled, so OpenClaw keeps M3 on the provider's omitted/adaptive thinking path.
-  - Z.AI (`zai/*`) is binary (`on`/`off`) for most GLM models. GLM-5.2 is the exception: it exposes `/think off|low|high|max`, maps `low` and `high` to Z.AI `reasoning_effort: "high"`, and maps `max` to `reasoning_effort: "max"`.
-  - Moonshot API Kimi K3 (`moonshot/kimi-k3`) always thinks at `max`, sends `reasoning_effort: "max"`, omits the K2 `thinking` field and fixed sampling overrides, and preserves K3-supported tool choices. Kimi Code K3 (`kimi/k3` and `kimi/k3-256k`) exposes the full `/think` ladder with a `high` default: `off` sends `thinking.type: "disabled"`, `minimal`/`low` map to low effort, `medium`/`high`/`adaptive` to high effort, and `xhigh`/`max` to max effort. Current Kimi Code refs also include `kimi/kimi-for-coding` and `kimi/kimi-for-coding-highspeed`. Kimi K2.7 Code (`moonshot/kimi-k2.7-code` and `moonshot/kimi-k2.7-code-highspeed`) always thinks, exposes only `on`, and omits both outbound `thinking` and `reasoning_effort`. Other `moonshot/*` models map `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When K2 thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
+  - Z.AI (`zai/*`) is binary (`on`/`off`) for most GLM models. GLM-5.2 and GLM-5.3 are the exceptions. GLM-5.2 exposes `/think off|low|high|max` with an `off` default, maps `low` and `high` to Z.AI `reasoning_effort: "high"`, and maps `max` to `reasoning_effort: "max"`. GLM-5.3 exposes `/think low|high|max` with a `max` default, maps `off`, `minimal`, and `low` to `reasoning_effort: "low"`, `medium` and `high` to `"high"`, and `xhigh`, `adaptive`, and `max` to `"max"`.
+  - Moonshot API Kimi K3 (`moonshot/kimi-k3`) always thinks at `max`, sends `reasoning_effort: "max"`, omits the K2 `thinking` field and fixed sampling overrides, and preserves K3-supported tool choices. Kimi Code K3 (`kimi/k3` and `kimi/k3-256k`) exposes the full `/think` ladder with a `high` default: `off` sends `thinking.type: "disabled"`, `minimal`/`low` map to low effort, `medium`/`high`/`adaptive` to high effort, and `xhigh`/`max` to max effort. Kimi Code refs also include `kimi/kimi-for-coding` and `kimi/kimi-for-coding-highspeed`. Kimi K2.7 Code (`moonshot/kimi-k2.7-code` and `moonshot/kimi-k2.7-code-highspeed`) always thinks, exposes only `on`, and omits both outbound `thinking` and `reasoning_effort`. Other `moonshot/*` models map `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When K2 thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
 
 ## Resolution order
 
 1. Inline directive on the message (applies only to that message).
 2. Session override (set by sending a directive-only message).
 3. Per-agent default (`agents.entries.*.thinkingDefault` in config).
-4. Global default (`agents.defaults.thinkingDefault` in config).
-5. Fallback: provider-declared default when available; otherwise reasoning-capable models resolve to `medium` or the nearest supported non-`off` level for that model, and non-reasoning models stay `off`.
+4. Per-agent model default (`agents.entries.*.models["<provider>/<model>"].params.thinking` in config).
+5. Shared model default (`agents.defaults.models["<provider>/<model>"].params.thinking` in config).
+6. Global default (`agents.defaults.thinkingDefault` in config).
+7. Fallback: provider-declared default when available; otherwise reasoning-capable models resolve to `medium` or the nearest supported non-`off` level for that model, and non-reasoning models stay `off`.
+
+## Setting a model default
+
+Use `params.thinking` to set the default for one configured model without changing
+the default for your other models. The key must match the provider and model you
+actually select, including any model path exposed by a custom provider.
+
+Replace `<provider>/<model>` with a configured model's full ID, then merge this
+entry into your existing model configuration:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "<provider>/<model>": {
+          params: { thinking: "high" },
+        },
+      },
+    },
+  },
+}
+```
+
+The provider must already be configured, and the model must support the selected
+thinking level.
+
+To change that model's default for one agent, put the same entry under
+`agents.entries.<agent>.models`. This overrides the shared model setting.
+Model `params.thinking` accepts the same aliases as `/think`; `false` and
+`"disabled"` also select `off`.
+
+An inline directive, a saved session override, or a per-agent `thinkingDefault`
+still takes precedence. Send `/think default` to clear a saved session override;
+check the per-agent setting if the model default still does not take effect.
 
 ## Setting a session default
 
 - Send a message that is **only** the directive (whitespace allowed), e.g. `/think:medium` or `/t high`.
 - That sticks for the current session (per-sender by default). Use `/think default` to clear the session override and inherit the configured/provider default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
-- `/think off` stores an explicit off override. It disables thinking until you change or clear the session override.
+- `/think off` stores an explicit off override until you change or clear it. Whether the upstream model can disable thinking depends on the selected provider and auth route.
 - Confirmation reply is sent (`Thinking level set to high.` / `Thinking disabled.`). If the level is invalid (e.g. `/thinking big`), the command is rejected with a hint and the session state is left unchanged.
 - Send `/think` (or `/think:`) with no argument to see the current thinking level.
 
@@ -76,11 +113,12 @@ title: "Thinking levels"
 - Valid model-scoped `params.fastMode` / `params.fast_mode` values and valid cutoff keys are typed agent-runtime controls. They do not count as authored provider request params and do not select OpenClaw or Codex by themselves. Pin `agentRuntime.id: "openclaw"` or `agentRuntime.id: "codex"` when a recipe depends on one runtime.
 - `auto` keeps the session/config mode as auto but resolves each new model call independently. Calls that start before the auto cutoff have fast mode enabled; later retry, fallback, tool-result, or continuation calls start with fast mode disabled. The cutoff defaults to 60 seconds; set `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds` on the active model to change it.
 - For `openai/*`, fast mode maps to OpenAI API Fast mode (formerly Priority processing). OpenClaw currently sends `service_tier=priority` on supported Responses requests.
-- On Codex harness turns, the shared runtime control supersedes a configured native app-server tier: Fast on sends `priority`, Fast off sends `null` to clear the OpenClaw-owned tier, and auto decides for each model call. A configured Codex tier is used only when no shared Fast-mode run control is supplied. See [Codex harness](/plugins/codex-harness#shared-fast-mode-and-codex-fast-mode).
-- For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
+- On Codex harness turns, the shared runtime control supersedes a configured native app-server tier: Fast on sends `priority`, Fast off sends `null` to clear the OpenClaw-owned tier, and auto decides for each model call. A configured Codex tier is used only when no shared Fast-mode run control is supplied. See [Codex harness](/plugins/codex-harness/commands#shared-fast-mode-and-codex-fast-mode).
+- For direct API-key `anthropic/*` requests, Opus 5 and Opus 4.8 use native `speed=fast`. Other supported models use Priority Tier: on sets `service_tier=auto`, off sets `service_tier=standard_only`. Sonnet 5 supports neither mapping; OAuth requests receive neither field.
 - For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 - Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
-- `/status` reports the resolved OpenClaw policy (`on`, `off`, or `auto`) and the selected runtime. It does not report the upstream service tier actually honored or returned for a completed request. See [OpenAI Fast mode](/providers/openai#advanced-configuration) for provider details.
+- `/status` reports the resolved OpenClaw policy (`on`, `off`, or `auto`) and the selected runtime. It does not report the upstream service tier actually honored or returned for a completed request. See [OpenAI Fast mode](/providers/openai/advanced#advanced-configuration) for provider details.
+- The Control UI disables Fast choices confirmed to have no effect on the selected request. Existing saved preferences remain visible and clearable. When applicability is unknown, controls retain their existing behavior; availability does not promise vendor entitlement or faster responses.
 
 ## Verbose directives (/verbose or /v)
 
@@ -112,7 +150,9 @@ title: "Thinking levels"
 - Levels: `on|off|stream`.
 - Directive-only message toggles whether thinking blocks are shown in replies.
 - When enabled, reasoning is sent as a **separate message** prefixed with `Thinking`.
-- `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews, then sends the final answer without reasoning.
+- `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews, then sends the final answer without reasoning. Channel previews remove recognized internal runtime context before delivery; the original reasoning remains unchanged for model replay.
+- Control UI history shows saved reasoning only for `on`, with **View → Reasoning** enabled. `off` and `stream` keep it hidden, including after reload.
+- Visible Control UI reasoning preserves Markdown paragraphs and fenced code blocks, including blank lines inside code.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 - Resolution order: inline directive, then session override, then per-agent default (`agents.entries.*.reasoningDefault`), then global default (`agents.defaults.reasoningDefault`), then fallback (`off`).
@@ -122,6 +162,8 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 ## Related
 
 - Elevated mode docs live in [Elevated mode](/tools/elevated).
+- [Slash commands](/tools/slash-commands) — changing the thinking level mid-session
+- [Configuration reference](/gateway/configuration-reference) — where the thinking defaults are configured
 
 ## Heartbeats
 
@@ -130,10 +172,13 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 
 ## Web chat UI
 
-- The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.
-- Picking another level writes the session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
+- Model, thinking-level, and fast-mode overrides can be changed in an existing session with `operator.write`; administrator access is not required for these three controls. Read-only clients cannot change them.
+- These are session preferences for subsequent turns, not a promise to change an already-running model call. The composer disables the controls while a reply is running and while a model change is being applied.
+- The web chat thinking selector shows the explicit session override, or the inherited configured/provider default when no override is stored.
+- Refreshing, reloading, or compacting a conversation keeps an inherited choice inherited; it does not store the resolved level as an override. While model metadata is loading, refreshes retain the known thinking profile for the same model and runtime.
+- Selecting a level on the effort slider writes an explicit session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
 - Sending while model, reasoning, or speed picker changes are still being applied waits for every pending picker patch; if a change fails, the message stays unsent for review.
-- The first option is always the clear-override choice. It shows `Inherited: <resolved level>`, including `Inherited: Off` when inherited thinking is disabled.
+- The effort control displays the resolved level, such as `Medium` or `Off`. To clear an override and return to inheritance, send `/think default`.
 - Explicit picker choices use their direct level labels while preserving provider labels when present (for example `Maximum` for a provider-labeled `max` option).
 - The picker uses `thinkingLevels` returned by the gateway session row/defaults, with `thinkingOptions` kept as a legacy label list. The browser UI does not keep its own provider regex list; plugins own model-specific level sets.
 - `/think:<level>` still works and updates the same stored session level, so chat directives and the picker stay in sync.
@@ -143,7 +188,7 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 - Provider plugins can expose `resolveThinkingProfile(ctx)` to define the model's supported levels and default.
 - Provider plugins that proxy Claude models should reuse `resolveClaudeThinkingProfile(modelId)` from `openclaw/plugin-sdk/provider-model-shared` so direct Anthropic and proxy catalogs stay aligned.
 - Each profile level has a stored canonical `id` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`) and may include a display `label`. Binary providers use `{ id: "low", label: "on" }`.
-- Profile hooks receive merged catalog facts when available, including `reasoning`, `compat.thinkingFormat`, and `compat.supportedReasoningEfforts`. Use those facts to expose binary or custom profiles only when the configured request contract supports the matching payload.
+- Profile hooks receive merged catalog facts when available, including `reasoning`, `thinkingLevelMap`, `compat.thinkingFormat`, `compat.supportsReasoningEffort`, and `compat.supportedReasoningEfforts`. Use those facts to expose binary or custom profiles only when the configured request contract supports the matching payload. A `null` entry in `thinkingLevelMap` removes that level before choosing a default.
 - Tool plugins that need to validate an explicit thinking override should use `api.runtime.agent.resolveThinkingPolicy({ provider, model, agentRuntime })` plus `api.runtime.agent.normalizeThinkingLevel(...)`; they should not keep their own provider/model level lists. Pass `agentRuntime` when the tool owns the execution path, such as an always-embedded run.
 - Tool plugins with access to configured custom model metadata can pass `catalog` into `resolveThinkingPolicy` so `compat.supportedReasoningEfforts` opt-ins are reflected in plugin-side validation.
 - Published legacy hooks (`supportsXHighThinking`, `isBinaryThinking`, and `resolveDefaultThinkingLevel`) remain as compatibility adapters, but new custom level sets should use `resolveThinkingProfile`.

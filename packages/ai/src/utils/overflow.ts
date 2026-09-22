@@ -1,13 +1,9 @@
 // Overflow helpers classify provider overflow errors and retryable responses.
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import type { AssistantMessage } from "../types.js";
 
 const CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE =
   /prompt has [\d,]+ tokens?, but the configured context size is [\d,]+ tokens?/i;
-
-/** Detects DS4-style raw token-count context overflow errors. */
-export function isConfiguredContextSizeOverflowError(errorMessage: string): boolean {
-  return CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE.test(errorMessage);
-}
 
 /**
  * Canonical scoped patterns for context overflow errors from different providers.
@@ -55,7 +51,7 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
   /exceeds (?:the )?maximum allowed input length of [\d,]+ tokens?/i, // OpenRouter/Poolside
   /input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i, // Together AI
   /exceeds the limit of \d+/i, // GitHub Copilot
-  /exceeds the available context size/i, // llama.cpp server
+  /(?:exceeds the available context size|context size has been exceeded)/i, // llama.cpp server
   /greater than the context length/i, // LM Studio
   /context window exceeds limit/i, // MiniMax
   /exceeded model token limit/i, // Kimi For Coding
@@ -104,7 +100,7 @@ const PROVIDER_FALLBACK_OVERFLOW_PATTERNS = [
   /\binput exceeds the maximum number of tokens\b/i, // Google Vertex / Gemini
   /\bollama error:\s*context length exceeded(?:,\s*too many tokens)?\b/i,
   /\btotal tokens?.*exceeds? (?:the )?(?:model(?:'s)? )?(?:max|maximum|limit)/i, // Cohere
-  /\b(?:request|prompt) \(\d[\d,]*\s*tokens?\) exceeds (?:the )?available context size\b/i, // llama.cpp
+  /\b(?:(?:request|prompt) \(\d[\d,]*\s*tokens?\) exceeds (?:the )?available context size|context size has been exceeded)\b/i, // llama.cpp
   /\binput (?:is )?too long for (?:the )?model\b/i,
 ];
 
@@ -214,6 +210,10 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * @returns true if the message indicates a context overflow
  */
 export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
+  // A refusal explanation can mention overflow without authorizing compact-and-retry.
+  if (isProviderRefusalAssistantError(message)) {
+    return false;
+  }
   // Case 1: Check error message patterns
   if (message.stopReason === "error" && message.errorMessage) {
     // Hoist so the regex closures keep the narrowing without assertions.

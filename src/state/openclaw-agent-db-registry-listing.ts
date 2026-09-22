@@ -1,13 +1,18 @@
 import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawRegisteredAgentDatabase,
 } from "./openclaw-agent-db-contract.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "./openclaw-state-db-readonly.js";
 import { detectOpenClawStateDatabaseSchemaMigrationsFromDatabase } from "./openclaw-state-db-schema-repair.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
@@ -20,13 +25,17 @@ type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_da
 
 // Registry metadata is process-stable: registry writes invalidate after each commit;
 // other-process changes take effect on restart. Polling here puts schema probes back on hot reads.
-let registeredAgentDatabasesMemo:
-  | {
-      pathname: string;
-      token: symbol;
-      entries?: readonly OpenClawRegisteredAgentDatabase[];
-    }
-  | undefined;
+type AgentDatabaseRegistryMemo = {
+  pathname: string;
+  token: symbol;
+  entries?: readonly OpenClawRegisteredAgentDatabase[];
+};
+// A plugin may first open a hot-created agent; its registration must invalidate
+// native discovery even when subsequent callers reuse the shared connection.
+const registry = resolveGlobalSingleton<{ memo?: AgentDatabaseRegistryMemo }>(
+  Symbol.for("openclaw.agentDatabaseRegistryMemo"),
+  () => ({}),
+);
 
 function resolveAgentDatabaseRegistryPath(options: OpenClawStateDatabaseOptions): string {
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
@@ -34,14 +43,14 @@ function resolveAgentDatabaseRegistryPath(options: OpenClawStateDatabaseOptions)
 
 function activateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
-): NonNullable<typeof registeredAgentDatabasesMemo> {
+): AgentDatabaseRegistryMemo {
   const pathname = resolveAgentDatabaseRegistryPath(options);
-  if (registeredAgentDatabasesMemo?.pathname !== pathname) {
+  if (registry.memo?.pathname !== pathname) {
     // One active pathname keeps registry metadata process-stable without retaining
     // an unbounded generation map. Switching back creates a fresh generation.
-    registeredAgentDatabasesMemo = { pathname, token: Symbol(pathname) };
+    registry.memo = { pathname, token: Symbol(pathname) };
   }
-  return registeredAgentDatabasesMemo;
+  return registry.memo;
 }
 
 /** Return the process-stable generation for the active agent database registry. */
@@ -55,8 +64,8 @@ export function invalidateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
 ): void {
   const pathname = resolveAgentDatabaseRegistryPath(options);
-  if (registeredAgentDatabasesMemo?.pathname === pathname) {
-    registeredAgentDatabasesMemo = { pathname, token: Symbol(pathname) };
+  if (registry.memo?.pathname === pathname) {
+    registry.memo = { pathname, token: Symbol(pathname) };
   }
 }
 
@@ -103,14 +112,87 @@ function hasUnavailableMissingSqlitePath(pathname: string): boolean {
   }
 }
 
+type AgentDatabaseRegistryListOptions = OpenClawStateDatabaseOptions & {
+  includeIncompatibleSchemaVersions?: boolean;
+};
+
+/** Read durable registrations from an already opened live or captured database. */
+export function readOpenClawAgentDatabaseRegistryRows(database: DatabaseSync, pathname: string) {
+  const registryTable = database
+    .prepare("SELECT type FROM sqlite_master WHERE name = 'agent_databases'")
+    .get() as { type?: unknown } | undefined;
+  if (!registryTable) {
+    return [];
+  }
+  if (registryTable.type !== "table") {
+    throw new Error(`OpenClaw state database ${pathname} has an invalid agent registry.`);
+  }
+  const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database);
+  return executeSqliteQuerySync(
+    database,
+    db.selectFrom("agent_databases").selectAll().orderBy("agent_id", "asc").orderBy("path", "asc"),
+  ).rows;
+}
+
+export function readRegisteredAgentDatabases(
+  options: AgentDatabaseRegistryListOptions,
+  artifactPreserving: false,
+): OpenClawRegisteredAgentDatabase[];
+export function readRegisteredAgentDatabases(
+  options: AgentDatabaseRegistryListOptions,
+  artifactPreserving: true,
+): Promise<OpenClawRegisteredAgentDatabase[]>;
+export function readRegisteredAgentDatabases(
+  options: AgentDatabaseRegistryListOptions,
+  artifactPreserving: boolean,
+): OpenClawRegisteredAgentDatabase[] | Promise<OpenClawRegisteredAgentDatabase[]> {
+  const pathname = resolveAgentDatabaseRegistryPath(options);
+  const read = ({ db: database }: { db: import("node:sqlite").DatabaseSync }) => {
+    const schemaMigrations = detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
+      database,
+      pathname,
+    );
+    if (!artifactPreserving && schemaMigrations.length > 0) {
+      throw new Error(
+        `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
+      );
+    }
+    return readOpenClawAgentDatabaseRegistryRows(database, pathname).map((row) => ({
+      agentId: normalizeAgentId(row.agent_id),
+      path: resolveOpenClawRegisteredAgentDatabasePath(pathname, row.path),
+      schemaVersion: row.schema_version,
+      lastSeenAt: row.last_seen_at,
+      sizeBytes: row.size_bytes,
+    }));
+  };
+  const finish = (entries: OpenClawRegisteredAgentDatabase[] | undefined) => {
+    if (entries === undefined) {
+      if (hasUnavailableMissingSqlitePath(pathname)) {
+        throw new Error(`OpenClaw state database ${pathname} is unavailable.`);
+      }
+      return [];
+    }
+    return options.includeIncompatibleSchemaVersions
+      ? entries
+      : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
+  };
+  return artifactPreserving
+    ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(read, options).then(finish)
+    : finish(withExistingOpenClawStateDatabaseReadOnly(read, options));
+}
+
+/** Inspect a copied registry without creating SQLite artifacts or runtime memo state. */
+export async function inspectOpenClawRegisteredAgentDatabases(
+  options: AgentDatabaseRegistryListOptions = {},
+): Promise<OpenClawRegisteredAgentDatabase[]> {
+  return readRegisteredAgentDatabases(options, true);
+}
+
 /** List agent databases recorded in the shared OpenClaw state registry. */
 export function listOpenClawRegisteredAgentDatabases(
-  options: OpenClawStateDatabaseOptions & {
-    includeIncompatibleSchemaVersions?: boolean;
-  } = {},
+  options: AgentDatabaseRegistryListOptions = {},
 ): OpenClawRegisteredAgentDatabase[] {
   const memo = activateRegisteredAgentDatabasesMemo(options);
-  const { pathname } = memo;
   if (memo.entries) {
     const entries = cloneRegisteredAgentDatabases(memo.entries);
     return options.includeIncompatibleSchemaVersions
@@ -119,45 +201,10 @@ export function listOpenClawRegisteredAgentDatabases(
   }
   // Discovery runs per row in list hot paths, so the legacy-schema gate and the
   // query share one process-held state handle instead of opening two connections.
-  const entries = withExistingOpenClawStateDatabaseReadOnly(({ db: database }) => {
-    if (detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0) {
-      throw new Error(
-        `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
-      );
-    }
-    const registryTable = database
-      .prepare("SELECT type FROM sqlite_master WHERE name = 'agent_databases'")
-      .get() as { type?: unknown } | undefined;
-    if (!registryTable) {
-      return [];
-    }
-    if (registryTable.type !== "table") {
-      throw new Error(`OpenClaw state database ${pathname} has an invalid agent registry.`);
-    }
-    const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database);
-    const rows = executeSqliteQuerySync(
-      database,
-      db
-        .selectFrom("agent_databases")
-        .selectAll()
-        .orderBy("agent_id", "asc")
-        .orderBy("path", "asc"),
-    ).rows;
-    return rows.map((row) => ({
-      agentId: normalizeAgentId(row.agent_id),
-      path: resolveOpenClawRegisteredAgentDatabasePath(pathname, row.path),
-      schemaVersion: row.schema_version,
-      lastSeenAt: row.last_seen_at,
-      sizeBytes: row.size_bytes,
-    }));
-  }, options);
-  if (entries === undefined) {
-    if (hasUnavailableMissingSqlitePath(pathname)) {
-      throw new Error(`OpenClaw state database ${pathname} is unavailable.`);
-    }
-    memo.entries = [];
-    return [];
-  }
+  const entries = readRegisteredAgentDatabases(
+    { ...options, includeIncompatibleSchemaVersions: true },
+    false,
+  );
   memo.entries = entries;
   const cloned = cloneRegisteredAgentDatabases(entries);
   return options.includeIncompatibleSchemaVersions

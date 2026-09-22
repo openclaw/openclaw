@@ -10,10 +10,20 @@ describe("SessionSchema maintenance extensions", () => {
         resetArchiveRetention: "14d",
         maxDiskBytes: "500mb",
         highWaterBytes: "350mb",
+        coldStorage: { enabled: true, afterDays: 30 },
       },
     });
     expect(result.success).toBe(true);
   });
+
+  it.each([0, -1, 1.5, "30d", Number.POSITIVE_INFINITY])(
+    "rejects invalid cold-storage days: %s",
+    (afterDays) => {
+      expect(SessionSchema.safeParse({ maintenance: { coldStorage: { afterDays } } }).success).toBe(
+        false,
+      );
+    },
+  );
 
   it("accepts disabling recent-session preservation", () => {
     expect(SessionSchema.safeParse({ maintenance: { preserveRecent: false } }).success).toBe(true);

@@ -22,7 +22,9 @@ const taskStatusMocks = vi.hoisted(() => ({
   listTasksForSessionKeyForStatus: vi.fn(() => [] as never[]),
 }));
 const sessionAccessorMocks = vi.hoisted(() => ({
-  listSessionEntriesReadOnly: vi.fn(() => [] as Array<{ sessionKey: string; entry: unknown }>),
+  loadSessionEntryReadOnly: vi.fn<
+    typeof import("../../../config/sessions/session-accessor.js").loadSessionEntryReadOnly
+  >(() => undefined),
 }));
 
 const noop = () => {};
@@ -66,7 +68,7 @@ vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) =
     await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
   return {
     ...actual,
-    listSessionEntriesReadOnly: sessionAccessorMocks.listSessionEntriesReadOnly,
+    loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntryReadOnly,
   };
 });
 
@@ -78,6 +80,7 @@ vi.mock("../../../infra/agent-events.js", () => ({
 }));
 vi.mock("../../../infra/agent-run-registry.js", () => ({
   getAgentRunContext: vi.fn(() => undefined),
+  hasLiveAgentRunContext: vi.fn(() => false),
 }));
 
 vi.mock("../../../config/config.js", async () => {
@@ -115,11 +118,12 @@ describe("subagent registry archive behavior", () => {
   ) => {
     mod.testing.setDepsForTest({
       callGateway,
+      cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
       getRuntimeConfig:
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       loadAgentRuntimePluginRegistryHandle: vi.fn(),
       maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async (params) => {
-        params.completeBatch([params.settledEntry.runId]);
+        params.completeBatch([params.settledEntry]);
         return false;
       }),
       ...overrides,
@@ -160,8 +164,7 @@ describe("subagent registry archive behavior", () => {
     taskStatusMocks.findTaskByRunIdForStatus.mockReset();
     taskStatusMocks.listTasksForSessionKeyForStatus.mockReset();
     taskStatusMocks.listTasksForSessionKeyForStatus.mockReturnValue([]);
-    sessionAccessorMocks.listSessionEntriesReadOnly.mockReset();
-    sessionAccessorMocks.listSessionEntriesReadOnly.mockReturnValue([]);
+    sessionAccessorMocks.loadSessionEntryReadOnly.mockReset();
     taskStatusMocks.findTaskByRunIdForStatus.mockImplementation((runId: string) => {
       const entry = mod
         .listSubagentRunsForRequester("agent:main:main")
@@ -380,15 +383,11 @@ describe("subagent registry archive behavior", () => {
     const attachmentsDir = path.join(attachmentsRootDir, "child");
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
-    sessionAccessorMocks.listSessionEntriesReadOnly.mockReturnValue([
-      {
-        sessionKey: "agent:main:subagent:delete-retry",
-        entry: {
-          sessionId: "session-delete-retry",
-          lifecycleRevision: "lifecycle-delete-retry",
-        },
-      },
-    ]);
+    sessionAccessorMocks.loadSessionEntryReadOnly.mockReturnValue({
+      sessionId: "session-delete-retry",
+      lifecycleRevision: "lifecycle-delete-retry",
+      updatedAt: Date.now(),
+    });
     let deleteAttempts = 0;
     vi.mocked(callGateway).mockImplementation(async (request: unknown) => {
       const method = (request as { method?: string }).method;
@@ -427,6 +426,7 @@ describe("subagent registry archive behavior", () => {
 
     expect(deleteAttempts).toBe(1);
     expect(vi.mocked(callGateway)).toHaveBeenCalledWith({
+      assertDispatchCurrent: expect.any(Function),
       method: "sessions.delete",
       params: {
         key: "agent:main:subagent:delete-retry",
@@ -888,15 +888,11 @@ describe("subagent registry archive behavior", () => {
     const deletePromise = new Promise<void>((resolve) => {
       resolveDelete = resolve;
     });
-    sessionAccessorMocks.listSessionEntriesReadOnly.mockReturnValue([
-      {
-        sessionKey: "agent:main:subagent:delete-inflight",
-        entry: {
-          sessionId: "session-delete-inflight",
-          lifecycleRevision: "lifecycle-delete-inflight",
-        },
-      },
-    ]);
+    sessionAccessorMocks.loadSessionEntryReadOnly.mockReturnValue({
+      sessionId: "session-delete-inflight",
+      lifecycleRevision: "lifecycle-delete-inflight",
+      updatedAt: Date.now(),
+    });
     vi.mocked(callGateway).mockImplementation(async (request: unknown) => {
       const method = (request as { method?: string }).method;
       if (method === "agent.wait") {
@@ -930,6 +926,7 @@ describe("subagent registry archive behavior", () => {
         ),
     ).toHaveLength(1);
     expect(vi.mocked(callGateway)).toHaveBeenCalledWith({
+      assertDispatchCurrent: expect.any(Function),
       method: "sessions.delete",
       params: {
         key: "agent:main:subagent:delete-inflight",
@@ -1030,7 +1027,7 @@ describe("subagent registry archive behavior", () => {
     expect(run?.archiveAtMs).toBeUndefined();
   });
 
-  it("removes attachments for the replaced run after steer restart", async () => {
+  it("does not traverse legacy attachment paths after steer restart", async () => {
     const attachmentsRootDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-replace-attachments-"),
     );
@@ -1055,16 +1052,7 @@ describe("subagent registry archive behavior", () => {
     });
 
     expect(replaced).toBe(true);
-    await vi.waitFor(async () => {
-      let err: unknown;
-      try {
-        await fs.access(attachmentsDir);
-      } catch (caught) {
-        err = caught;
-      }
-      expect(err).toBeInstanceOf(Error);
-      expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
-    });
+    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
   });
 
   it("treats archiveAfterMinutes=0 as never archive", () => {

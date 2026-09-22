@@ -3,42 +3,53 @@
  * The public helpers expose raw JSON payloads so normalization stays in the
  * store/state layers that own compatibility rules.
  */
-import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
+import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
+import { executeWithCachedStatement } from "../../infra/kysely-sync-cache-state.js";
 import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  enableNodeSqliteKyselyStatementCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
-import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
-import { registerSqliteCacheExitClose } from "../../infra/sqlite-wal.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  assertExistingAgentSchemaOwner,
+  readExistingAgentSchemaMeta,
+} from "../../state/openclaw-agent-db-schema-helpers.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
-  deferOpenClawAgentPostCommitPublication,
-  OPENCLAW_AGENT_SCHEMA_VERSION,
   runOpenClawAgentWriteTransaction,
+  withOpenClawAgentDatabaseAsync,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
-  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
-import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
+import {
+  resolveSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+  type SharedAuthStoreOwnership,
+} from "./path-resolve.js";
 import { prepareFreshSharedAuthStoreWrite } from "./shared-store-bootstrap.js";
+import {
+  acquireAuthProfileReadDatabase,
+  closeAuthProfileReadDatabase,
+  isMissingDatabasePath,
+} from "./sqlite-read-pool.js";
+
+export { closeAuthProfileReadPool } from "./sqlite-read-pool.js";
 
 type AgentAuthProfileDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -46,6 +57,44 @@ type AgentAuthProfileDatabase = Pick<
 >;
 type SharedAuthProfileDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 export type AuthProfileDatabase = OpenClawAgentDatabase | OpenClawStateDatabase;
+
+/** Internal prepared ownership, carried through commit publication and compensation. */
+export type AuthProfileStoreOwner = {
+  databasePath: string;
+  sharedDatabasePath: string;
+  location: SharedAuthStoreOwnership["location"];
+};
+
+export type PreparedAuthProfileStoreOwner = AuthProfileStoreOwner & { env: NodeJS.ProcessEnv };
+
+export function resolveAuthProfileStoreOwner(
+  database: AuthProfileDatabase,
+  env: NodeJS.ProcessEnv = process.env,
+): AuthProfileStoreOwner | PreparedAuthProfileStoreOwner {
+  const prepared = authProfileTransactions.get(database)?.owner;
+  if (prepared) {
+    return prepared;
+  }
+  // A supplied shared connection already names its owner; ambient discovery can
+  // select another database (or fail on it) before this connection is ever used.
+  if (!("agentId" in database)) {
+    return { databasePath: database.path, sharedDatabasePath: database.path, location: "state-db" };
+  }
+  return {
+    ...prepareAuthProfileSharedOwner(env),
+    databasePath: database.path,
+  };
+}
+
+function prepareAuthProfileSharedOwner(env: NodeJS.ProcessEnv) {
+  const preparedEnv = cloneEnvWithPlatformSemantics(env);
+  preparedEnv.OPENCLAW_STATE_DIR = resolveStateDir(preparedEnv);
+  return {
+    env: preparedEnv,
+    sharedDatabasePath: resolveSharedAuthStorePath(preparedEnv),
+    location: resolveSharedAuthStoreOwnership(preparedEnv).location,
+  };
+}
 
 type AuthProfileDatabaseTarget =
   | { kind: "agent"; agentId: string; path: string; env: NodeJS.ProcessEnv }
@@ -93,30 +142,10 @@ function deleteSharedAuthKvCell(db: DatabaseSync, stateKey: string): void {
       .where("state_key", "=", stateKey),
   );
 }
-const AUTH_PROFILE_READ_HANDLE_CAP = 8;
-const authProfileReadDatabases = new Map<string, DatabaseSync>();
-const sharedAuthPostCommitPublications = new WeakMap<OpenClawStateDatabase, Array<() => void>>();
-let unregisterReadHandleExitClose: (() => void) | null = null;
-
-type AuthProfileReadPoolCloseScope =
-  | { kind: "database"; databasePath: string }
-  | { kind: "root"; rootPath: string };
-
-/** Queue runtime publication on the transaction edge owned by this database. */
-export function deferAuthProfilePostCommitPublication(
-  database: AuthProfileDatabase,
-  publish: () => void,
-): boolean {
-  if ("agentId" in database) {
-    return deferOpenClawAgentPostCommitPublication(database, publish);
-  }
-  const publications = sharedAuthPostCommitPublications.get(database);
-  if (!publications) {
-    return false;
-  }
-  publications.push(publish);
-  return true;
-}
+const authProfileTransactions = new WeakMap<
+  AuthProfileDatabase,
+  { owner: PreparedAuthProfileStoreOwner }
+>();
 
 function inferAgentIdFromDir(agentDir: string): string {
   const normalized = path.normalize(agentDir);
@@ -135,31 +164,26 @@ function resolveAuthProfileDatabaseOptions(
   agentDir?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): AuthProfileDatabaseTarget {
-  if (!agentDir) {
-    const pathname = resolveSharedAuthStorePath(env);
-    if (resolveSharedAuthStoreOwnership(env).location === "state-db") {
-      return { kind: "shared-state", path: pathname, env };
-    }
-    const dir = path.dirname(pathname);
-    return {
-      kind: "agent",
-      agentId: resolveRegisteredAgentIdForDir(dir) ?? inferAgentIdFromDir(dir),
-      path: pathname,
-      env,
-    };
+  const pathname = agentDir
+    ? resolveAuthProfileDatabasePath(agentDir)
+    : resolveSharedAuthStorePath(env);
+  if (!agentDir && resolveSharedAuthStoreOwnership(env).location === "state-db") {
+    return { kind: "shared-state", path: pathname, env };
   }
-  const dir = resolveUserPath(agentDir);
+  const dir = path.dirname(pathname);
   return {
     kind: "agent",
     agentId: resolveRegisteredAgentIdForDir(dir) ?? inferAgentIdFromDir(dir),
-    path: path.join(dir, "openclaw-agent.sqlite"),
+    path: pathname,
     env,
   };
 }
 
-/** Resolves the SQLite database path that stores auth profiles for an agent dir. */
+/** Filename-only consumers do not need reverse agent ownership discovery. */
 export function resolveAuthProfileDatabasePath(agentDir: string): string {
-  return resolveAuthProfileDatabaseOptions(agentDir).path;
+  return agentDir
+    ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
+    : resolveSharedAuthStorePath();
 }
 
 /** Resolves the durable agent owner expected for an auth-profile database. */
@@ -222,9 +246,12 @@ function inspectAuthProfileTable(
       : target === "store"
         ? "auth_profile_store"
         : "auth_profile_state";
-  const schemaObject = db
-    .prepare("SELECT type FROM sqlite_master WHERE name = ?")
-    .get(tableName) as { type?: unknown } | undefined;
+  const schemaObject = executeWithCachedStatement(
+    db,
+    "SELECT type FROM sqlite_master WHERE name = ?",
+    [tableName],
+    (statement) => statement.get(tableName),
+  ) as { type?: unknown } | undefined;
   if (!schemaObject) {
     // Agent databases shipped before SQLite auth storage do not have these
     // additive tables until their next writable bootstrap.
@@ -284,101 +311,25 @@ function inspectAuthProfileJsonCell(
   }
 }
 
-function closeAuthProfileReadDatabase(databasePath: string): void {
-  const pathname = path.resolve(databasePath);
-  const db = authProfileReadDatabases.get(pathname);
-  if (!db) {
+/** Validate selected-agent ownership without requiring a current session schema. */
+export function assertAuthProfileStoreAgentOwner(agentDir: string, agentId: string): void {
+  const pathname = resolveAuthProfileDatabasePath(agentDir);
+  const acquired = acquireAuthProfileReadDatabase(pathname);
+  if (acquired.status === "missing") {
     return;
   }
-  authProfileReadDatabases.delete(pathname);
-  clearNodeSqliteKyselyCacheForDatabase(db);
-  if (db.isOpen) {
-    db.close();
+  if (acquired.status === "unreadable") {
+    throw new Error(`Unable to read agent auth database ${pathname}.`);
   }
-  if (authProfileReadDatabases.size === 0) {
-    unregisterReadHandleExitClose?.();
-    unregisterReadHandleExitClose = null;
-  }
+  assertExistingAgentSchemaOwner(
+    readExistingAgentSchemaMeta(acquired.db),
+    normalizeAgentId(agentId),
+    pathname,
+  );
 }
 
-/** Internal lifecycle close for scoped or all process-local pooled auth-profile readers. */
-export function closeAuthProfileReadPool(scope?: AuthProfileReadPoolCloseScope): void {
-  if (scope?.kind === "database") {
-    closeAuthProfileReadDatabase(scope.databasePath);
-    return;
-  }
-  if (scope?.kind === "root") {
-    for (const pathname of authProfileReadDatabases.keys()) {
-      if (isPathInside(scope.rootPath, pathname)) {
-        closeAuthProfileReadDatabase(pathname);
-      }
-    }
-    return;
-  }
-  unregisterReadHandleExitClose?.();
-  unregisterReadHandleExitClose = null;
-  for (const pathname of authProfileReadDatabases.keys()) {
-    closeAuthProfileReadDatabase(pathname);
-  }
-}
-
-function isMissingDatabasePath(pathname: string): boolean {
-  try {
-    fs.statSync(pathname);
-    return false;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
-  }
-}
-
-function acquireAuthProfileReadDatabase(
-  pathname: string,
-): { status: "missing" } | { status: "unreadable" } | { status: "readable"; db: DatabaseSync } {
-  const resolvedPath = path.resolve(pathname);
-  const cached = authProfileReadDatabases.get(resolvedPath);
-  if (cached?.isOpen) {
-    authProfileReadDatabases.delete(resolvedPath);
-    authProfileReadDatabases.set(resolvedPath, cached);
-    return { status: "readable", db: cached };
-  }
-  if (cached) {
-    closeAuthProfileReadDatabase(resolvedPath);
-  }
-  while (authProfileReadDatabases.size >= AUTH_PROFILE_READ_HANDLE_CAP) {
-    const oldestPath = authProfileReadDatabases.keys().next().value;
-    if (oldestPath === undefined) {
-      break;
-    }
-    closeAuthProfileReadDatabase(oldestPath);
-  }
-  let db: DatabaseSync;
-  try {
-    db = openNodeSqliteDatabase(resolvedPath, { readOnly: true });
-  } catch {
-    return isMissingDatabasePath(resolvedPath) ? { status: "missing" } : { status: "unreadable" };
-  }
-  try {
-    enableNodeSqliteKyselyStatementCache(db);
-    // The pooled reader bypasses canonical agent DB bootstrap, but it shares
-    // the same busy policy and validates the process-stable schema on open.
-    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    if (readSqliteUserVersion(db) > OPENCLAW_AGENT_SCHEMA_VERSION) {
-      clearNodeSqliteKyselyCacheForDatabase(db);
-      db.close();
-      return { status: "unreadable" };
-    }
-  } catch {
-    clearNodeSqliteKyselyCacheForDatabase(db);
-    db.close();
-    return { status: "unreadable" };
-  }
-  authProfileReadDatabases.set(resolvedPath, db);
-  unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(closeAuthProfileReadPool);
-  return { status: "readable", db };
-}
-
-function inspectAuthProfileJsonCellReadOnly(
-  databaseTarget: AuthProfileDatabaseTarget,
+export function inspectAuthProfileJsonCellReadOnly(
+  databaseTarget: Pick<AuthProfileDatabaseTarget, "kind" | "path">,
   target: "store" | "state",
 ): PersistedAuthProfileStoreInspection {
   if (databaseTarget.kind === "shared-state") {
@@ -386,7 +337,7 @@ function inspectAuthProfileJsonCellReadOnly(
       return (
         withExistingOpenClawStateDatabaseReadOnly(
           ({ db }) => inspectAuthProfileJsonCell(db, target, "shared-state"),
-          { env: databaseTarget.env, path: databaseTarget.path },
+          { path: databaseTarget.path },
         ) ?? { status: "missing", reason: "database" }
       );
     } catch {
@@ -415,7 +366,6 @@ export function inspectPersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: Pick<AuthProfileDatabase, "db">,
 ): PersistedAuthProfileStoreInspection {
-  const databaseTarget = resolveAuthProfileDatabaseOptions(agentDir);
   if (database) {
     return inspectAuthProfileJsonCell(
       database.db,
@@ -423,7 +373,7 @@ export function inspectPersistedAuthProfileStoreRaw(
       resolveAuthProfileDatabaseKind(agentDir, database),
     );
   }
-  return inspectAuthProfileJsonCellReadOnly(databaseTarget, "store");
+  return inspectAuthProfileJsonCellReadOnly(resolveAuthProfileDatabaseOptions(agentDir), "store");
 }
 
 /** Distinguishes an absent auth-state row from state that could not be read. */
@@ -431,7 +381,6 @@ export function inspectPersistedAuthProfileStateRaw(
   agentDir?: string,
   database?: Pick<AuthProfileDatabase, "db">,
 ): PersistedAuthProfileStoreInspection {
-  const databaseTarget = resolveAuthProfileDatabaseOptions(agentDir);
   if (database) {
     return inspectAuthProfileJsonCell(
       database.db,
@@ -439,7 +388,7 @@ export function inspectPersistedAuthProfileStateRaw(
       resolveAuthProfileDatabaseKind(agentDir, database),
     );
   }
-  return inspectAuthProfileJsonCellReadOnly(databaseTarget, "state");
+  return inspectAuthProfileJsonCellReadOnly(resolveAuthProfileDatabaseOptions(agentDir), "state");
 }
 
 /** Inspect the shared store for an explicit state root without projecting it to an agent dir. */
@@ -467,7 +416,6 @@ export function readPersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): unknown {
-  const databaseTarget = resolveAuthProfileDatabaseOptions(agentDir);
   if (database) {
     if (resolveAuthProfileDatabaseKind(agentDir, database) === "shared-state") {
       return parseJsonCell(readSharedAuthKvCell(database.db, SHARED_STORE_STATE_KEY));
@@ -481,7 +429,10 @@ export function readPersistedAuthProfileStoreRaw(
     );
     return parseJsonCell(row?.store_json);
   }
-  const result = inspectAuthProfileJsonCellReadOnly(databaseTarget, "store");
+  const result = inspectAuthProfileJsonCellReadOnly(
+    resolveAuthProfileDatabaseOptions(agentDir),
+    "store",
+  );
   return result.status === "readable" ? result.raw : null;
 }
 
@@ -490,7 +441,6 @@ export function readPersistedAuthProfileStateRaw(
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): unknown {
-  const databaseTarget = resolveAuthProfileDatabaseOptions(agentDir);
   if (database) {
     if (resolveAuthProfileDatabaseKind(agentDir, database) === "shared-state") {
       return parseJsonCell(readSharedAuthKvCell(database.db, SHARED_STATE_STATE_KEY));
@@ -504,7 +454,10 @@ export function readPersistedAuthProfileStateRaw(
     );
     return parseJsonCell(row?.state_json);
   }
-  const result = inspectAuthProfileJsonCellReadOnly(databaseTarget, "state");
+  const result = inspectAuthProfileJsonCellReadOnly(
+    resolveAuthProfileDatabaseOptions(agentDir),
+    "state",
+  );
   return result.status === "readable" ? result.raw : null;
 }
 
@@ -629,19 +582,22 @@ export function writePersistedAuthProfileStateRaw(
   runAuthProfileWriteTransaction(agentDir, write);
 }
 
-/** Runs an auth-profile database write transaction for store/state updates. */
-export function runAuthProfileWriteTransaction<T>(
+type AuthProfileWriteOptions = {
+  env?: NodeJS.ProcessEnv;
+  sharedStoreWrite?: boolean;
+  stateDir?: string;
+};
+
+function prepareAuthProfileWriteTransaction(
   agentDir: string | undefined,
-  operation: (database: AuthProfileDatabase) => T,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    sharedStoreWrite?: boolean;
-    stateDir?: string;
-  } = {},
-): T {
-  const env =
-    options.env ??
-    (options.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: options.stateDir } : process.env);
+  options: AuthProfileWriteOptions,
+) {
+  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
+  if (!options.env && options.stateDir) {
+    env.OPENCLAW_STATE_DIR = options.stateDir;
+    env.OPENCLAW_AGENT_DIR = undefined;
+  }
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const sharedStoreWrite = prepareFreshSharedAuthStoreWrite({
     agentDir,
     allowExplicitMain: options.sharedStoreWrite === true,
@@ -651,34 +607,77 @@ export function runAuthProfileWriteTransaction<T>(
     sharedStoreWrite ? undefined : agentDir,
     env,
   );
-  if (databaseTarget.kind === "agent") {
-    return runOpenClawAgentWriteTransaction(operation, databaseTarget);
-  }
+  // Shared-owner discovery may inspect another database; complete it before BEGIN.
+  return { databaseTarget, sharedOwner: prepareAuthProfileSharedOwner(env) };
+}
 
+/** Runs an auth-profile database write transaction for store/state updates. */
+export function runAuthProfileWriteTransaction<T>(
+  agentDir: string | undefined,
+  operation: (database: AuthProfileDatabase, owner: PreparedAuthProfileStoreOwner) => T,
+  options: AuthProfileWriteOptions = {},
+): T {
+  return runPreparedAuthProfileWriteTransaction(
+    prepareAuthProfileWriteTransaction(agentDir, options),
+    operation,
+  );
+}
+
+/** Queue the physical agent owner; relocated shared-state auth retains its own coordinator. */
+export async function runAuthProfileWriteTransactionAsync<T>(
+  agentDir: string | undefined,
+  operation: (database: AuthProfileDatabase, owner: PreparedAuthProfileStoreOwner) => T,
+  options: AuthProfileWriteOptions = {},
+): Promise<T> {
+  const prepared = prepareAuthProfileWriteTransaction(agentDir, options);
+  const { databaseTarget } = prepared;
+  if (databaseTarget.kind === "shared-state") {
+    return runPreparedAuthProfileWriteTransaction(prepared, operation);
+  }
+  const assertCurrent = () => {
+    // Doctor can relocate the shared base while this writer waits or validates.
+    if (
+      resolveSharedAuthStorePath(prepared.sharedOwner.env) !==
+        prepared.sharedOwner.sharedDatabasePath ||
+      resolveSharedAuthStoreOwnership(prepared.sharedOwner.env).location !==
+        prepared.sharedOwner.location
+    ) {
+      throw new Error("Auth profile shared owner changed before write admission");
+    }
+  };
+  return runOpenClawAgentWriteAdmission(
+    databaseTarget,
+    () =>
+      withOpenClawAgentDatabaseAsync(
+        databaseTarget,
+        // The async owner retains the cached handle through this synchronous transaction.
+        () => runPreparedAuthProfileWriteTransaction(prepared, operation),
+        assertCurrent,
+      ),
+    true,
+  );
+}
+
+function runPreparedAuthProfileWriteTransaction<T>(
+  { databaseTarget, sharedOwner }: ReturnType<typeof prepareAuthProfileWriteTransaction>,
+  operation: (database: AuthProfileDatabase, owner: PreparedAuthProfileStoreOwner) => T,
+): T {
+  const run = (database: AuthProfileDatabase) => {
+    const previous = authProfileTransactions.get(database);
+    const context = previous ?? { owner: { ...sharedOwner, databasePath: database.path } };
+    authProfileTransactions.set(database, context);
+    try {
+      return operation(database, context.owner);
+    } finally {
+      if (!previous) {
+        authProfileTransactions.delete(database);
+      }
+    }
+  };
+  if (databaseTarget.kind === "agent") {
+    return runOpenClawAgentWriteTransaction(run, databaseTarget);
+  }
+  const { env } = databaseTarget;
   const database = openOpenClawStateDatabase({ env, path: databaseTarget.path });
-  const enteredNestedTransaction = database.db.isTransaction;
-  const publications: Array<() => void> | undefined = enteredNestedTransaction
-    ? sharedAuthPostCommitPublications.get(database)
-    : [];
-  const publicationStart = publications?.length ?? 0;
-  if (!enteredNestedTransaction && publications) {
-    sharedAuthPostCommitPublications.set(database, publications);
-  }
-  let result: T;
-  try {
-    result = runOpenClawStateWriteTransaction(operation, { env, database });
-  } catch (error) {
-    publications?.splice(publicationStart);
-    throw error;
-  } finally {
-    if (!enteredNestedTransaction && publications) {
-      sharedAuthPostCommitPublications.delete(database);
-    }
-  }
-  if (!enteredNestedTransaction) {
-    for (const publish of publications ?? []) {
-      publish();
-    }
-  }
-  return result;
+  return runOpenClawStateWriteTransaction(run, { env, database });
 }

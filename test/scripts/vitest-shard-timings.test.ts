@@ -3,10 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
   createShardTimingSample,
   readShardTimings,
-  resolveShardTimingKey,
   writeShardTimings,
 } from "../../scripts/lib/vitest-shard-timings.mts";
 
@@ -39,20 +39,64 @@ describe("scripts/lib/vitest-shard-timings.mts", () => {
     ).toBe("test/vitest/vitest.auto-reply-reply.config.ts#auto-reply-reply-agent-dispatch");
   });
 
-  it("falls back to a stable include-pattern hash outside CI", () => {
-    const first = resolveShardTimingKey({
-      config: "test/vitest/vitest.auto-reply-reply.config.ts",
-      env: {},
-      includePatterns: ["src/auto-reply/reply/agent-runner.test.ts"],
-    });
-    const second = resolveShardTimingKey({
-      config: "test/vitest/vitest.auto-reply-reply.config.ts",
-      env: {},
-      includePatterns: ["src/auto-reply/reply/agent-runner.test.ts"],
-    });
+  it("keeps expanded chunk samples separate under one inherited shard name", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shard-timings-"));
+    tempDirs.push(tempDir);
+    const env = {
+      OPENCLAW_TEST_PROJECTS_TIMINGS_PATH: path.join(tempDir, "timings.json"),
+      OPENCLAW_VITEST_SHARD_NAME: "same-parent",
+    };
+    const config = "test/vitest/vitest.tooling.config.ts";
+    const first = { config, env, includePatterns: null, timingTargets: ["src/a.test.ts"] };
+    const second = { ...first, timingTargets: ["src/b.test.ts"] };
+    const firstKey = resolveShardTimingKey(first);
+    const secondKey = resolveShardTimingKey(second);
+    expect(firstKey).not.toBe(config);
+    expect(firstKey).not.toBe(secondKey);
+    const firstSample = createShardTimingSample(first, 1000)!;
+    const secondSample = createShardTimingSample(second, 3000)!;
+    expect(firstSample.includePatternCount).toBe(1);
+    expect(secondSample.includePatternCount).toBe(1);
 
-    expect(first).toBe(second);
-    expect(first).toMatch(/^test\/vitest\/vitest\.auto-reply-reply\.config\.ts#include-1-/u);
+    writeShardTimings([firstSample, secondSample], tempDir, env);
+
+    expect(readShardTimings(tempDir, env)).toEqual(
+      new Map([
+        [firstKey, 1000],
+        [secondKey, 3000],
+      ]),
+    );
+  });
+
+  it.each([
+    ["src/b.test.ts", "src/a.test.ts"],
+    ["src/ä.test.ts", "src/z.test.ts", "src/A.test.ts"],
+  ])("reuses timing history for reordered selections: %s", (...patterns) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shard-timings-"));
+    tempDirs.push(tempDir);
+    const env = { OPENCLAW_TEST_PROJECTS_TIMINGS_PATH: path.join(tempDir, "timings.json") };
+    const config = "test/vitest/vitest.unit-fast.config.ts";
+    const includePatterns = Object.freeze(patterns);
+    const sample = createShardTimingSample({ config, env, includePatterns }, 1000)!;
+    writeShardTimings([sample], tempDir, env);
+    const reordered = createShardTimingSample(
+      { config, env, includePatterns: includePatterns.toReversed() },
+      2000,
+    )!;
+    writeShardTimings([reordered], tempDir, env);
+
+    expect(readShardTimings(tempDir, env)).toEqual(new Map([[sample.config, 1300]]));
+    const { configs } = JSON.parse(
+      fs.readFileSync(env.OPENCLAW_TEST_PROJECTS_TIMINGS_PATH, "utf8"),
+    );
+    expect(configs[sample.config].sampleCount).toBe(2);
+    expect(
+      resolveShardTimingKey({
+        config,
+        env,
+        includePatterns: [...includePatterns, "src/c.test.ts"],
+      }),
+    ).not.toBe(sample.config);
   });
 
   it("persists include-pattern timing metadata", () => {

@@ -91,7 +91,10 @@ export async function runDiscordScenario(
         observationScenarioTitle: scenario.title,
         triggerMessageId: sent.id,
         triggerTimestamp: sent.timestamp,
-        predicate: (message) => message.senderId === environment.sutIdentity.id,
+        predicate: (message) =>
+          message.senderId === environment.sutIdentity.id &&
+          message.text.includes(run.progressLabel) &&
+          message.text.includes("🛠️ Exec"),
       });
       await discordQaScenarioSupport.testing.waitForDiscordMessageText({
         token: environment.runtimeEnv.driverBotToken,
@@ -184,12 +187,15 @@ export async function runDiscordScenario(
       artifacts: evidence,
     };
   }
+  const replyTimeoutMs = run.expectReply
+    ? scenario.timeoutMs
+    : Math.max(1, Math.min(5_000, scenario.timeoutMs - 3_000));
   try {
     const matched = await discordQaScenarioSupport.testing.pollChannelMessages({
       token: environment.runtimeEnv.driverBotToken,
       channelId: environment.runtimeEnv.channelId,
       afterSnowflake: sent.id,
-      timeoutMs: scenario.timeoutMs,
+      timeoutMs: replyTimeoutMs,
       observedMessages: environment.observedMessages,
       observationScenarioId: scenario.id,
       observationScenarioTitle: scenario.title,
@@ -210,12 +216,33 @@ export async function runDiscordScenario(
       expectedTextIncludes: run.expectedTextIncludes,
       message: matched.message,
     });
-    return { details: "reply matched" };
+    const requestStartedAt = sent.timestamp;
+    const responseObservedAt = matched.message.timestamp;
+    const rttMs = discordQaScenarioSupport.testing.computeDiscordRttMs(
+      requestStartedAt,
+      responseObservedAt,
+    );
+    return {
+      details: "reply matched",
+      ...(requestStartedAt === undefined ? {} : { requestStartedAt }),
+      ...(responseObservedAt === undefined ? {} : { responseObservedAt }),
+      ...(rttMs === undefined || requestStartedAt === undefined || responseObservedAt === undefined
+        ? {}
+        : {
+            rttMs,
+            rttMeasurement: {
+              finalMatchedReplyRttMs: rttMs,
+              requestStartedAt,
+              responseObservedAt,
+              source: "request-to-observed-message" as const,
+            },
+          }),
+    };
   } catch (error) {
     if (
       !run.expectReply &&
       formatErrorMessage(error) ===
-        `timed out after ${scenario.timeoutMs}ms waiting for Discord message`
+        `timed out after ${replyTimeoutMs}ms waiting for Discord message`
     ) {
       return { details: "no reply" };
     }

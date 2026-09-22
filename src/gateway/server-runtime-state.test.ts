@@ -1,10 +1,13 @@
 /**
  * Gateway runtime state construction tests.
  */
+import { once } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { connect } from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
@@ -96,6 +99,61 @@ describe("createGatewayRuntimeState", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
+  });
+
+  it("yields between buffered WebSocket messages without reordering them", async () => {
+    const runtimeState = await createGatewayRuntimeStateForTest();
+    const server = runtimeState.httpServers[0]!;
+    const events: string[] = [];
+    let sentinel: ReturnType<typeof setImmediate> | undefined;
+    const received = new Promise<void>((resolve, reject) => {
+      runtimeState.wss.once("connection", (socket, req) => {
+        socket.once("error", reject);
+        socket.on("message", (data) => {
+          const message = rawDataToString(data);
+          events.push(message);
+          if (message === "a") {
+            sentinel = setImmediate(() => events.push("yield"));
+          } else {
+            resolve();
+          }
+        });
+        // Feed both masked text frames as one receive chunk through the real
+        // upgraded socket, independent of TCP packet splitting/coalescing.
+        req.socket.pause();
+        req.socket.unshift(
+          Buffer.from([0x81, 0x81, 1, 2, 3, 4, 0x60, 0x81, 0x81, 1, 2, 3, 4, 0x63]),
+        );
+        req.socket.resume();
+      });
+    });
+    let client: WebSocket | undefined;
+    try {
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP gateway address");
+      }
+      client = new WebSocket(`ws://127.0.0.1:${address.port}/`, {
+        handshakeTimeout: 2_000,
+      });
+      await once(client, "open");
+      await received;
+      expect(events).toEqual(["a", "yield", "b"]);
+    } finally {
+      clearImmediate(sentinel);
+      client?.terminate();
+      for (const socket of runtimeState.wss.clients) {
+        socket.terminate();
+      }
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+      runtimeState.wss.close();
+    }
   });
 
   it("keeps unrelated plugin HTTP routes cold for core HTTP and WebSocket requests", async () => {
@@ -489,30 +547,33 @@ describe("createGatewayRuntimeState", () => {
     );
   });
 
-  it("starts the shared sandbox host on a dedicated adjacent-port origin", async () => {
-    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
-      cfg: { mcp: { apps: { enabled: true } } },
-      port: 18789,
-    });
+  it.each([undefined, 19100])(
+    "starts the normal sandbox host with configured port %s",
+    async (sandboxPort) => {
+      const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+        cfg: { mcp: { apps: { enabled: true, sandboxPort } } },
+        port: 18789,
+      });
 
-    expect(runtimeState.getMcpAppSandboxPort()).toBeUndefined();
-    await runtimeState.startListening();
+      expect(runtimeState.getMcpAppSandboxPort()).toBeUndefined();
+      await runtimeState.startListening();
 
-    expect(runtimeState.getMcpAppSandboxPort()).toBe(18790);
-    expect(runtimeState.httpServers).toHaveLength(2);
-    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ bindHost: "127.0.0.1", port: 18789 }),
-    );
-    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        bindHost: "127.0.0.1",
-        port: 18790,
-        retryEaddrinuse: false,
-      }),
-    );
-  });
+      expect(runtimeState.getMcpAppSandboxPort()).toBe(sandboxPort ?? 18790);
+      expect(runtimeState.httpServers).toHaveLength(2);
+      expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ bindHost: "127.0.0.1", port: 18789 }),
+      );
+      expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          bindHost: "127.0.0.1",
+          port: sandboxPort ?? 18790,
+          retryEaddrinuse: false,
+        }),
+      );
+    },
+  );
 
   it("starts the shared sandbox host lazily when MCP Apps are disabled", async () => {
     const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
@@ -534,12 +595,28 @@ describe("createGatewayRuntimeState", () => {
     );
   });
 
+  it("keeps an update canary off the configured sandbox listener, including lazy acquisition", async () => {
+    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+      cfg: { mcp: { apps: { enabled: true, sandboxPort: 18790 } } },
+      port: 19000,
+      updateCanary: true,
+    });
+
+    await runtimeState.startListening();
+
+    expect(runtimeState.getMcpAppSandboxPort()).toBeUndefined();
+    expect(runtimeState.httpServers).toHaveLength(1);
+    await expect(runtimeState.ensureSandboxHostPort()).rejects.toThrow(
+      "Sandbox host is disabled during update validation",
+    );
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ bindHost: "127.0.0.1", port: 19000 }),
+    );
+  });
+
   it("waits for every gateway bind host before freezing lazy sandbox listeners", async () => {
     mocks.resolveGatewayListenHosts.mockResolvedValue(["127.0.0.1", "::1"]);
-    let releaseSecondBind: () => void = () => {};
-    const secondBind = new Promise<void>((resolve) => {
-      releaseSecondBind = resolve;
-    });
+    const { promise: secondBind, resolve: releaseSecondBind } = createDeferred();
     mocks.listenGatewayHttpServer.mockImplementation(async ({ bindHost, port }) => {
       if (bindHost === "::1" && port === 18789) {
         await secondBind;

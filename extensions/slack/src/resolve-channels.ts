@@ -3,8 +3,8 @@ import type { WebClient } from "@slack/web-api";
 import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackLookupClient } from "./client.js";
-import { collectSlackCursorPages } from "./cursor-pages.js";
-import { formatSlackTarget, parseSlackTarget } from "./target-parsing.js";
+import { collectSlackCursorPages, fetchSlackChannelListPage } from "./cursor-pages.js";
+import { resolveWorkspaceQualifiedSlackTarget } from "./target-parsing.js";
 
 export type SlackChannelLookup = {
   id: string;
@@ -20,25 +20,6 @@ export type SlackChannelResolution = {
   name?: string;
   archived?: boolean;
 };
-
-function resolveWorkspaceQualifiedChannel(input: string): SlackChannelResolution | undefined {
-  if (!/^team:/i.test(input)) {
-    return undefined;
-  }
-  try {
-    const target = parseSlackTarget(input);
-    if (target?.kind !== "channel" || !target.teamId) {
-      return undefined;
-    }
-    return {
-      input,
-      resolved: true,
-      id: formatSlackTarget({ teamId: target.teamId, kind: "channel", id: target.id }),
-    };
-  } catch {
-    return undefined;
-  }
-}
 
 function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
   const trimmed = raw.trim();
@@ -61,13 +42,7 @@ function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
 
 async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[]> {
   return collectSlackCursorPages({
-    fetchPage: (cursor) =>
-      client.conversations.list({
-        types: "public_channel,private_channel",
-        exclude_archived: false,
-        limit: 1000,
-        cursor,
-      }),
+    fetchPage: (cursor) => fetchSlackChannelListPage(client, cursor),
     collectPageItems: (res) =>
       (res.channels ?? [])
         .map((channel) => {
@@ -110,12 +85,12 @@ export async function resolveSlackChannelAllowlist(params: {
   entries: string[];
   client?: WebClient;
 }): Promise<SlackChannelResolution[]> {
-  const workspaceResolved = params.entries.map(resolveWorkspaceQualifiedChannel);
+  const workspaceResolved = params.entries.map((input) =>
+    resolveWorkspaceQualifiedSlackTarget(input, "channel"),
+  );
   const lookupEntries = params.entries.filter((_, index) => !workspaceResolved[index]);
   if (lookupEntries.length === 0) {
-    return workspaceResolved.filter(
-      (entry): entry is SlackChannelResolution => entry !== undefined,
-    );
+    return workspaceResolved.filter((entry) => entry !== undefined);
   }
   const parsedEntries = lookupEntries.map((input) => ({
     input,

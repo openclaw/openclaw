@@ -1,15 +1,12 @@
-// Github Copilot plugin module implements auth behavior.
-import {
-  findNormalizedProviderValue,
-  resolveAuthProfileOrder,
-} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderPrepareDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   coerceSecretRef,
   ensureAuthProfileStore,
+  findNormalizedProviderValue,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
+  resolveAuthProfileOrder,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   resolveConfiguredSecretInputWithFallback,
@@ -29,6 +26,7 @@ export async function resolveFirstGithubToken(params: {
   githubToken: string;
   githubDomain?: string;
   hasProfile: boolean;
+  profileId?: string;
 }> {
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
@@ -36,10 +34,7 @@ export async function resolveFirstGithubToken(params: {
   const profileIds = listProfilesForProvider(authStore, PROVIDER_ID);
   const hasProfile = profileIds.length > 0;
   const requestedProfileId = params.profileId?.trim();
-  const githubToken =
-    [params.env.COPILOT_GITHUB_TOKEN, params.env.GH_TOKEN, params.env.GITHUB_TOKEN]
-      .map((value) => normalizeOptionalSecretInput(value))
-      .find((value) => value !== undefined) ?? "";
+  const githubToken = normalizeOptionalSecretInput(params.env.COPILOT_GITHUB_TOKEN) ?? "";
   const providerConfig = params.config?.models?.providers?.[PROVIDER_ID];
   const configuredRefCanOwnAuth =
     providerConfig?.auth === undefined ||
@@ -105,6 +100,7 @@ export async function resolveFirstGithubToken(params: {
       ...parsed,
       githubDomain: parsed.githubDomain ?? PUBLIC_GITHUB_COPILOT_DOMAIN,
       hasProfile,
+      profileId,
     };
   }
   if (profile?.type !== "token") {
@@ -116,5 +112,5 @@ export async function resolveFirstGithubToken(params: {
     value: profile.tokenRef,
     path: `providers.github-copilot.authProfiles.${profileId ?? "default"}.tokenRef`,
   });
-  return { githubToken: (resolved ?? profile.token ?? "").trim(), hasProfile };
+  return { githubToken: (resolved ?? profile.token ?? "").trim(), hasProfile, profileId };
 }

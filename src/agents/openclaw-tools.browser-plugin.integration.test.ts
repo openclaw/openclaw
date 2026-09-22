@@ -14,6 +14,7 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../gateway/message-action-turn-capability.js";
+import { resolveGatewayScopedTools } from "../gateway/tool-resolution.js";
 import { buildOutboundMediaLoadOptions } from "../media/load-options.js";
 import { loadWebMediaRaw } from "../media/web-media.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -22,7 +23,10 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { getRuntimeAuthProfileStoreCredentialsRevision } from "./auth-profiles/runtime-snapshots.js";
+import {
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
+} from "./auth-profiles/runtime-snapshots.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
@@ -159,7 +163,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(details.workspaceOnly).toBe(true);
   });
 
-  it("binds plugin delivery to the current route, media roots, and turn lifetime", async () => {
+  it.each(["agent:main:telegram:group:123", undefined])("binds delivery for %s", async (key) => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-delivery-"));
     const mediaUrl = path.join(workspaceDir, "photo.png");
     const outsideMediaUrl = `${workspaceDir}-outside.png`;
@@ -237,7 +241,8 @@ describe("createOpenClawTools browser plugin integration", () => {
     const turnCapability = mintMessageActionTurnCapability({
       agentId: "main",
       runId: "run-1",
-      sessionKey: "agent:main:telegram:group:123",
+      sessionKey: key ?? "agent:main:main",
+      sourceReplySessionKey: "agent:main:main",
       sessionId: "session-1",
       requesterAccountId: "work",
       requesterSenderId: "sender-1",
@@ -263,6 +268,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       const context = (
         params as {
           context?: {
+            sessionKey?: string;
             deliveryContext?: {
               to?: string;
               accountId?: string;
@@ -274,6 +280,7 @@ describe("createOpenClawTools browser plugin integration", () => {
           };
         }
       ).context;
+      expect(context?.sessionKey).toBe("agent:main:main");
       delivery = context?.delivery;
       if (context?.deliveryContext) {
         context.deliveryContext.to = "attacker-chat";
@@ -288,7 +295,8 @@ describe("createOpenClawTools browser plugin integration", () => {
     try {
       createOpenClawTools({
         config,
-        agentSessionKey: "agent:main:telegram:group:123",
+        agentSessionKey: key,
+        runSessionKey: "agent:main:main",
         runId: "run-1",
         sessionId: "session-1",
         agentChannel: "telegram",
@@ -341,12 +349,14 @@ describe("createOpenClawTools browser plugin integration", () => {
       nextTurnCapability = mintMessageActionTurnCapability({
         agentId: "main",
         runId: "run-2",
-        sessionKey: "agent:main:telegram:group:123",
+        sessionKey: key ?? "agent:main:main",
+        sourceReplySessionKey: "agent:main:main",
         sessionId: "session-2",
       });
       createOpenClawTools({
         config,
-        agentSessionKey: "agent:main:telegram:group:123",
+        agentSessionKey: key,
+        runSessionKey: "agent:main:main",
         runId: "run-2",
         sessionId: "session-2",
         agentChannel: "telegram",
@@ -398,6 +408,110 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(
       (firstResolvePluginToolsParams().context as { delivery?: unknown } | undefined)?.delivery,
     ).toBeUndefined();
+  });
+
+  it("does not expose CLI message-only authority to plugin delivery", () => {
+    const sessionKey = "agent:main:telegram:group:123";
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "cli-message-only",
+      sessionId: "session-cli",
+      sessionKey,
+      requesterAccountId: "work",
+      requesterSenderId: "sender-1",
+    });
+    try {
+      hoisted.resolvePluginTools.mockReturnValue([]);
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      resolveGatewayScopedTools({
+        cfg: { tools: { allow: ["message"] } },
+        surface: "loopback",
+        sessionKey,
+        agentId: "main",
+        runId: "cli-message-only",
+        sessionId: "session-cli",
+        messageProvider: "telegram",
+        accountId: "work",
+        currentChannelId: "123",
+        senderIsOwner: false,
+        messageActionTurnCapability: turnCapability,
+      });
+      expect(
+        (firstResolvePluginToolsParams().context as { delivery?: unknown } | undefined)?.delivery,
+      ).toBeUndefined();
+    } finally {
+      revokeMessageActionTurnCapability(turnCapability);
+    }
+  });
+
+  it("does not expose scheduled message authority to plugin delivery with an announce route", () => {
+    const sessionKey = "agent:main:cron:scheduled-plugin-delivery";
+    const telegramPlugin = createOutboundTestPlugin({
+      id: "telegram",
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "telegram", messageId: "sent-1" }),
+      },
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...telegramPlugin,
+            config: {
+              ...telegramPlugin.config,
+              listAccountIds: () => ["work"],
+              resolveAccount: () => ({}),
+            },
+          },
+        },
+      ]),
+    );
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "scheduled-message-run",
+      sessionId: "session-cron",
+      sessionKey,
+      scheduled: {
+        policy: { version: 1, mode: "trusted" },
+        assertCurrent: () => {},
+      },
+    });
+    try {
+      hoisted.resolvePluginTools.mockReturnValue([]);
+      createOpenClawTools({
+        config: {
+          channels: { telegram: { enabled: true, accounts: { work: { enabled: true } } } },
+          plugins: { allow: ["telegram"] },
+        },
+        agentSessionKey: sessionKey,
+        runSessionKey: `${sessionKey}:run:session-cron`,
+        runId: "scheduled-message-run",
+        sessionId: "session-cron",
+        agentChannel: "telegram",
+        agentAccountId: "work",
+        agentTo: "123",
+        agentThreadId: "7",
+        requesterAgentIdOverride: "main",
+        messageActionTurnCapability: turnCapability,
+        disableMessageTool: true,
+      });
+      const context = firstResolvePluginToolsParams().context as {
+        deliveryContext?: unknown;
+        delivery?: unknown;
+      };
+      expect(context.deliveryContext).toEqual({
+        channel: "telegram",
+        to: "123",
+        accountId: "work",
+        threadId: "7",
+      });
+      expect(context.delivery).toBeUndefined();
+    } finally {
+      revokeMessageActionTurnCapability(turnCapability);
+    }
   });
 
   it("does not expose process-local plugin delivery to gateway-owned channels", () => {
@@ -483,7 +597,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     });
     expect(
       prepareOwnedPluginLoadContext(
-        { agentDir: "/tmp/agent", config, workspaceDir: "/tmp" },
+        { config, workspaceDir: "/tmp" },
         process.env,
         pluginRegistry,
         metadataSnapshot,
@@ -499,10 +613,13 @@ describe("createOpenClawTools browser plugin integration", () => {
         config,
         workspaceDir: "/tmp",
         preparedModelRuntime: {
+          catalogOwner: undefined,
           agentDir: "/tmp/agent",
           workspaceDir: "/tmp",
           activeProjectKeys: [],
           config,
+          observationConfig: config,
+          isCurrent: () => true,
           authModes: {},
           metadataSnapshot,
           pluginRegistry,
@@ -744,6 +861,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       config: staleRuntimeConfig,
       authStores: [],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
       warnings: [],
       webTools: {
         search: {
@@ -766,85 +884,96 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(capturedRuntimeConfig).toBe(resolvedRunConfig);
   });
 
-  it("does not let a source-less pinned config snapshot override explicit plugin tool config", () => {
-    const pinnedRuntimeConfig = {
-      plugins: {
-        allow: ["old-plugin"],
-      },
-    } as OpenClawConfig;
-    const explicitConfig = {
-      plugins: {
-        allow: ["browser"],
-      },
-      tools: {
-        updatePlan: true,
-      },
-    } as OpenClawConfig;
-    let capturedRuntimeConfig: OpenClawConfig | undefined;
-    let getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined;
-    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
-      const context = (
-        params as {
-          context?: {
-            runtimeConfig?: OpenClawConfig;
-            getRuntimeConfig?: () => OpenClawConfig | undefined;
-          };
-        }
-      ).context;
-      capturedRuntimeConfig = context?.runtimeConfig;
-      getRuntimeConfig = context?.getRuntimeConfig;
-      return [];
-    });
-    setRuntimeConfigSnapshot(pinnedRuntimeConfig);
+  it.each(["custom", "source-less", "absent"] as const)(
+    "keeps explicit plugin tool config isolated from an initially %s runtime",
+    (initialRuntime) => {
+      const pinnedRuntimeConfig: OpenClawConfig = { plugins: { allow: ["old-plugin"] } };
+      const explicitConfig: OpenClawConfig = {
+        plugins: { allow: ["browser"] },
+        tools: { updatePlan: true },
+      };
+      let capturedRuntimeConfig: OpenClawConfig | undefined;
+      let getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined;
+      hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+        const context = (
+          params as {
+            context?: {
+              runtimeConfig?: OpenClawConfig;
+              getRuntimeConfig?: () => OpenClawConfig | undefined;
+            };
+          }
+        ).context;
+        capturedRuntimeConfig = context?.runtimeConfig;
+        getRuntimeConfig = context?.getRuntimeConfig;
+        return [];
+      });
+      if (initialRuntime !== "absent") {
+        setRuntimeConfigSnapshot(
+          pinnedRuntimeConfig,
+          initialRuntime === "custom" ? pinnedRuntimeConfig : undefined,
+        );
+      }
 
-    resolveOpenClawPluginToolsForOptions({
-      options: { config: explicitConfig },
-      resolvedConfig: explicitConfig,
-    });
+      resolveOpenClawPluginToolsForOptions({
+        options: { config: explicitConfig },
+        resolvedConfig: explicitConfig,
+      });
 
-    expect(capturedRuntimeConfig).toBe(explicitConfig);
-    expect(getRuntimeConfig?.()).toBe(explicitConfig);
-  });
+      expect(capturedRuntimeConfig).toBe(explicitConfig);
+      expect(getRuntimeConfig?.()).toBe(explicitConfig);
+      setRuntimeConfigSnapshot({ ...explicitConfig, tools: { updatePlan: false } }, explicitConfig);
+      expect(getRuntimeConfig?.()).toBe(explicitConfig);
+    },
+  );
 
-  it("exposes a live runtime config getter to plugin tool factories", () => {
-    const sourceConfig = {
-      plugins: {
-        allow: ["memory-core"],
-      },
-    } as OpenClawConfig;
-    const firstRuntimeConfig = {
-      plugins: {
-        allow: ["memory-core"],
-        entries: { "memory-core": { enabled: true } },
-      },
-    } as OpenClawConfig;
-    const nextRuntimeConfig = {
-      plugins: {
-        allow: ["memory-core"],
-        entries: { "memory-core": { enabled: false } },
-      },
-    } as OpenClawConfig;
-    let getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined;
-    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
-      getRuntimeConfig = (
-        params as { context?: { getRuntimeConfig?: () => OpenClawConfig | undefined } }
-      ).context?.getRuntimeConfig;
-      return [];
-    });
-    setRuntimeConfigSnapshot(firstRuntimeConfig, sourceConfig);
+  it.each(["source", "runtime", "ambient"] as const)(
+    "keeps the plugin tool getter live across authored reloads for %s config",
+    (inputKind) => {
+      const sourceConfig: OpenClawConfig = {
+        gateway: { publicOrigin: "https://first.example" },
+        plugins: { allow: ["memory-core"] },
+      };
+      const firstRuntimeConfig: OpenClawConfig = {
+        ...sourceConfig,
+        plugins: {
+          ...sourceConfig.plugins,
+          entries: { "memory-core": { enabled: true } },
+        },
+      };
+      const nextSourceConfig: OpenClawConfig = {
+        ...sourceConfig,
+        gateway: { publicOrigin: "https://second.example" },
+      };
+      const nextRuntimeConfig: OpenClawConfig = {
+        ...firstRuntimeConfig,
+        ...nextSourceConfig,
+      };
+      let getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined;
+      hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+        getRuntimeConfig = (
+          params as { context?: { getRuntimeConfig?: () => OpenClawConfig | undefined } }
+        ).context?.getRuntimeConfig;
+        return [];
+      });
+      setRuntimeConfigSnapshot(firstRuntimeConfig, sourceConfig);
+      const inputConfig =
+        inputKind === "source"
+          ? sourceConfig
+          : inputKind === "runtime"
+            ? firstRuntimeConfig
+            : undefined;
 
-    resolveOpenClawPluginToolsForOptions({
-      options: { config: sourceConfig },
-      resolvedConfig: sourceConfig,
-    });
+      resolveOpenClawPluginToolsForOptions({
+        options: { config: inputConfig },
+        resolvedConfig: inputConfig,
+      });
 
-    expect(getRuntimeConfig?.()).toStrictEqual(firstRuntimeConfig);
-
-    setRuntimeConfigSnapshot(nextRuntimeConfig, sourceConfig);
-
-    expect(getRuntimeConfig?.()).toStrictEqual(nextRuntimeConfig);
-    expect(getRuntimeConfig?.()?.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
-  });
+      expect(getRuntimeConfig?.()).toBe(firstRuntimeConfig);
+      setRuntimeConfigSnapshot(nextRuntimeConfig, nextSourceConfig);
+      expect(getRuntimeConfig?.()).toBe(nextRuntimeConfig);
+      expect(getRuntimeConfig?.()?.gateway?.publicOrigin).toBe("https://second.example");
+    },
+  );
 });
 
 function requirePluginTool(name: string, overrides?: Parameters<typeof createOpenClawTools>[0]) {

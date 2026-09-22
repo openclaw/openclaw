@@ -1,6 +1,7 @@
 -- Session storage doctrine: session_nodes.entry_json is the canonical logical-session
 -- record. Promoted session_nodes columns are query indexes projected only by the
 -- session entry writer; session_windows and their children own transcript generations.
+-- Legacy ACP provenance is private import evidence carried with its logical session.
 
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
@@ -16,6 +17,7 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   session_key TEXT NOT NULL PRIMARY KEY,
   current_session_id TEXT NOT NULL,
   entry_json TEXT NOT NULL,
+  legacy_acp_migration_json TEXT,
   entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),
   updated_at INTEGER NOT NULL,
   status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
@@ -51,6 +53,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_updated_at
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_last_interaction_at
   ON session_nodes(last_interaction_at DESC, session_key);
 
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_label
+  ON session_nodes(label, session_key)
+  WHERE label IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_parent_session_key
   ON session_nodes(parent_session_key, session_key);
 
@@ -65,6 +71,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_archived_at
   ON session_nodes(archived_at, session_key)
   WHERE archived_at IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_active
+  ON session_nodes(session_key)
+  WHERE archived_at IS NULL;
+
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_current_session_id
   ON session_nodes(current_session_id);
 
@@ -74,13 +84,12 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending
 
 CREATE TABLE IF NOT EXISTS session_participants (
   session_key TEXT NOT NULL,
-  actor_type TEXT NOT NULL,
+  identity_namespace TEXT NOT NULL,
   actor_id TEXT NOT NULL,
-  actor_source TEXT,
-  contribution_count INTEGER,
-  first_prompted_at INTEGER NOT NULL,
-  last_prompted_at INTEGER NOT NULL,
-  PRIMARY KEY (session_key, actor_type, actor_id),
+  contribution_count INTEGER NOT NULL,
+  first_prompted_at INTEGER,
+  last_prompted_at INTEGER,
+  PRIMARY KEY (session_key, identity_namespace, actor_id),
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;
 
@@ -153,6 +162,121 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_windows_created_at
 CREATE INDEX IF NOT EXISTS idx_agent_session_windows_conversation
   ON session_windows(primary_conversation_id, updated_at DESC, session_id)
   WHERE primary_conversation_id IS NOT NULL;
+
+-- No foreign key: node triggers settle key renames and deletion even while a
+-- maintenance owner has disabled foreign-key enforcement.
+CREATE TABLE IF NOT EXISTS session_canonical_validation_pending (
+  session_key TEXT NOT NULL PRIMARY KEY
+) STRICT;
+
+-- Avoid trigger-local conflict clauses: SQLite inherits the outer writer's
+-- conflict policy, including writers that predate this validation projection.
+CREATE TRIGGER IF NOT EXISTS session_nodes_canonical_pending_after_insert
+AFTER INSERT ON session_nodes
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT NEW.session_key
+  WHERE NOT EXISTS (
+    SELECT 1 FROM session_canonical_validation_pending WHERE session_key = NEW.session_key
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_nodes_canonical_pending_after_update
+AFTER UPDATE OF session_key, current_session_id, entry_json, entry_valid,
+  parent_session_key, spawned_by, fork_source_session_key ON session_nodes
+WHEN OLD.session_key IS NOT NEW.session_key
+  OR OLD.current_session_id IS NOT NEW.current_session_id
+  OR OLD.entry_json IS NOT NEW.entry_json
+  OR OLD.entry_valid IS NOT NEW.entry_valid
+  OR OLD.parent_session_key IS NOT NEW.parent_session_key
+  OR OLD.spawned_by IS NOT NEW.spawned_by
+  OR OLD.fork_source_session_key IS NOT NEW.fork_source_session_key
+BEGIN
+  DELETE FROM session_canonical_validation_pending
+  WHERE session_key = OLD.session_key AND OLD.session_key IS NOT NEW.session_key;
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT NEW.session_key
+  WHERE NOT EXISTS (
+    SELECT 1 FROM session_canonical_validation_pending WHERE session_key = NEW.session_key
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_nodes_canonical_pending_after_delete
+AFTER DELETE ON session_nodes
+BEGIN
+  DELETE FROM session_canonical_validation_pending WHERE session_key = OLD.session_key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_windows_canonical_pending_after_insert
+AFTER INSERT ON session_windows
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT node.session_key FROM session_nodes AS node
+  WHERE node.current_session_id = NEW.session_id
+    AND NOT EXISTS (
+      SELECT 1 FROM session_canonical_validation_pending AS pending
+      WHERE pending.session_key = node.session_key
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_windows_canonical_pending_after_update
+AFTER UPDATE OF session_id, session_key ON session_windows
+WHEN OLD.session_id IS NOT NEW.session_id OR OLD.session_key IS NOT NEW.session_key
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT node.session_key FROM session_nodes AS node
+  WHERE node.current_session_id IN (OLD.session_id, NEW.session_id)
+    AND NOT EXISTS (
+      SELECT 1 FROM session_canonical_validation_pending AS pending
+      WHERE pending.session_key = node.session_key
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_windows_canonical_pending_after_delete
+AFTER DELETE ON session_windows
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT node.session_key FROM session_nodes AS node
+  WHERE node.current_session_id = OLD.session_id
+    AND NOT EXISTS (
+      SELECT 1 FROM session_canonical_validation_pending AS pending
+      WHERE pending.session_key = node.session_key
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_key_contract_canonical_pending_after_insert
+AFTER INSERT ON session_key_contract
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT node.session_key FROM session_nodes AS node
+  WHERE NOT EXISTS (
+    SELECT 1 FROM session_canonical_validation_pending AS pending
+    WHERE pending.session_key = node.session_key
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_key_contract_canonical_pending_after_update
+AFTER UPDATE OF main_key ON session_key_contract
+WHEN OLD.main_key IS NOT NEW.main_key
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT node.session_key FROM session_nodes AS node
+  WHERE NOT EXISTS (
+    SELECT 1 FROM session_canonical_validation_pending AS pending
+    WHERE pending.session_key = node.session_key
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_key_contract_canonical_pending_after_delete
+AFTER DELETE ON session_key_contract
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT node.session_key FROM session_nodes AS node
+  WHERE NOT EXISTS (
+    SELECT 1 FROM session_canonical_validation_pending AS pending
+    WHERE pending.session_key = node.session_key
+  );
+END;
 
 CREATE TABLE IF NOT EXISTS conversations (
   conversation_id TEXT NOT NULL PRIMARY KEY,
@@ -373,6 +497,20 @@ CREATE TABLE IF NOT EXISTS message_tool_run_outcomes (
 CREATE INDEX IF NOT EXISTS idx_agent_message_tool_run_outcomes_occurred
   ON message_tool_run_outcomes(occurred_at DESC, id DESC);
 
+-- Receipts outlive Goal clear and session reset so a delayed retry cannot recreate a Goal.
+-- They intentionally have no session FK; bounded retention belongs to the operation owner.
+CREATE TABLE IF NOT EXISTS session_goal_operations (
+  session_key TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  request_fingerprint TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, operation_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_agent_session_goal_operations_expiry
+  ON session_goal_operations(expires_at);
+
 CREATE TABLE IF NOT EXISTS transcript_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
@@ -408,6 +546,23 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_transcript_archives_pending
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_transcript_archives_retention
   ON session_transcript_archives(created_at, session_id, generation);
+
+CREATE TABLE IF NOT EXISTS session_transcript_cold_archives (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  generation TEXT NOT NULL,
+  archive_name TEXT NOT NULL UNIQUE,
+  archive_sha256 TEXT NOT NULL CHECK (length(archive_sha256) = 64),
+  event_count INTEGER NOT NULL CHECK (event_count >= 1),
+  raw_bytes INTEGER NOT NULL CHECK (raw_bytes >= 0),
+  archive_bytes INTEGER NOT NULL CHECK (archive_bytes >= 0),
+  last_seq INTEGER NOT NULL,
+  archived_at INTEGER NOT NULL,
+  storage TEXT NOT NULL CHECK (storage IN ('file', 'sqlite')),
+  archive_blob BLOB,
+  FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE,
+  CHECK (length(archive_name) > 0 AND archive_name NOT IN ('.', '..') AND archive_name NOT LIKE '%/%' AND archive_name NOT LIKE '%\%'),
+  CHECK ((storage = 'file' AND archive_blob IS NULL) OR (storage = 'sqlite' AND archive_blob IS NOT NULL))
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (
   session_id TEXT NOT NULL PRIMARY KEY,
@@ -662,6 +817,7 @@ CREATE TABLE IF NOT EXISTS session_transcript_active_events (
   active_position INTEGER NOT NULL CHECK (active_position >= 0),
   event_seq INTEGER NOT NULL,
   message_position INTEGER CHECK (message_position IS NULL OR message_position >= 0),
+  context_eligible INTEGER,
   PRIMARY KEY (session_id, active_position),
   FOREIGN KEY (session_id, event_seq) REFERENCES transcript_events(session_id, seq) ON DELETE CASCADE
 ) STRICT;
@@ -672,6 +828,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_active_event_seq
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_active_messages
   ON session_transcript_active_events(session_id, message_position)
   WHERE message_position IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_transcript_context_pending
+  ON session_transcript_active_events(session_id)
+  WHERE context_eligible IS NULL;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
   text,
@@ -734,3 +894,40 @@ CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
 
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
   ON memory_index_chunks(source);
+
+-- Accepted input stays outside the active transcript until its exact turn owns execution.
+CREATE TABLE IF NOT EXISTS session_pending_inputs (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  input_id TEXT NOT NULL UNIQUE,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  message_json TEXT NOT NULL,
+  lifecycle_generation TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('queued', 'interrupted', 'cancelled')),
+  accepted_at INTEGER NOT NULL,
+  consumed_event_id TEXT,
+  UNIQUE (session_id, idempotency_key),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
+  FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_pending_inputs_session
+  ON session_pending_inputs(session_key, session_id, seq DESC);
+
+-- Processing completion is separate from input consumption; neither schedules replay.
+CREATE TABLE IF NOT EXISTS session_input_completions (
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  outcome_json TEXT NOT NULL,
+  succeeded INTEGER NOT NULL CHECK (succeeded IN (0, 1)),
+  completed_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, idempotency_key),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
+  FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
+) STRICT;

@@ -28,4 +28,5 @@ vi.mock("../../../infra/agent-events.js", () => ({
 }));
 vi.mock("../../../infra/agent-run-registry.js", () => ({
   getAgentRunContext: () => undefined,
+  hasLiveAgentRunContext: () => false,
 }));

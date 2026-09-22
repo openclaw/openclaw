@@ -1,5 +1,6 @@
 import {
   bootstrapHarnessContextEngine,
+  buildAgentHookContextChannelFields,
   buildHarnessContextEngineRuntimeContext,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   embeddedAgentLog,
@@ -53,7 +54,6 @@ export async function prepareCodexAttemptContext(
     contextSessionKey,
     activeContextEngine,
     initialStartupBindingHadInactiveThreadBootstrap,
-    sandboxSessionKey,
     effectiveWorkspace,
     effectiveCwd,
     agentDir,
@@ -72,10 +72,15 @@ export async function prepareCodexAttemptContext(
   };
   const readFencedHistory = async () => {
     const transcriptReadFence = params.userTurnTranscriptRecorder?.getAdmissionReceipt();
-    return await readMirroredSessionHistoryMessages({
+    const messages = await readMirroredSessionHistoryMessages({
       ...activeTranscriptTarget,
+      signal: connection.runAbortController.signal,
+      contextTokenBudget: effectiveContextTokenBudget,
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
+    connection.runAbortController.signal.throwIfAborted();
+    connection.assertCurrent();
+    return messages;
   };
   const historyState = {
     messages:
@@ -100,12 +105,27 @@ export async function prepareCodexAttemptContext(
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
-    sessionKey: sandboxSessionKey,
+    sessionKey: contextSessionKey,
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,
-    messageProvider: params.messageProvider ?? undefined,
+    // Native-owned models are confirmed after startup; hooks must not publish
+    // stale bindings or private transport overrides as the selected model.
+    ...(!usesSupervisionConnection &&
+    connection.mutable.startupBinding?.preserveNativeModel !== true
+      ? { modelProviderId: params.provider, modelId: params.modelId }
+      : {}),
     trigger: params.trigger,
-    channelId: hookChannelId,
+    inputProvenance: params.inputProvenance,
+    ...buildAgentHookContextChannelFields({
+      sessionKey: contextSessionKey,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      currentChannelId: hookChannelId,
+      messageTo: params.messageTo,
+      senderId: params.senderId,
+      agentAccountId: params.agentAccountId,
+    }),
+    channelContext: params.channelContext,
     ...hookContextWindowFields,
   };
   const hookRunner = getAgentHarnessHookRunner();
@@ -141,6 +161,8 @@ export async function prepareCodexAttemptContext(
     });
     historyState.messages = (await readFencedHistory()) ?? historyState.messages;
   }
+  // The admission fence intentionally excludes this logical turn's committed results.
+  historyState.messages.push(...(params.pluginRuntimeRefreshMessages ?? []));
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,
@@ -167,16 +189,20 @@ export async function prepareCodexAttemptContext(
     }),
     agentWorkspaceDeveloperInstructions,
   );
-  const openClawPromptContext = buildCodexOpenClawPromptContext({
-    params: runtimeParams,
-    workspacePromptContext: workspaceBootstrapContext.promptContext,
-    watchedSessionsContext: buildCodexWatchedSessionsContext({
-      attempt: runtimeParams,
-      dynamicTools: toolBridge.availableSpecs,
-      sessionKey: contextSessionKey,
-      sandboxed: sandbox?.enabled === true,
-    }),
+  const watchedSessionsContext = buildCodexWatchedSessionsContext({
+    attempt: runtimeParams,
+    dynamicTools: toolBridge.availableSpecs,
+    sessionKey: contextSessionKey,
+    sandboxed: sandbox?.enabled === true,
   });
+  const buildOpenClawPromptContext = (includeWorkspaceReferences: boolean) =>
+    buildCodexOpenClawPromptContext({
+      params: runtimeParams,
+      workspacePromptContext: includeWorkspaceReferences
+        ? workspaceBootstrapContext.promptContext
+        : undefined,
+      watchedSessionsContext,
+    });
   const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
@@ -216,7 +242,7 @@ export async function prepareCodexAttemptContext(
     workspaceBootstrapContext,
     agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
-    openClawPromptContext,
+    buildOpenClawPromptContext,
     skillsCollaborationInstructions,
     promptState,
     codexContextProjectionMaxChars,

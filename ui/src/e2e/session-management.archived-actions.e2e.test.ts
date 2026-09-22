@@ -2,6 +2,8 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
@@ -10,9 +12,7 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
-  uiProofArtifactDir,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
@@ -26,9 +26,7 @@ suite.define(() => {
     it(`keeps archived transcript actions inert on ${viewport.label}`, async () => {
       const context = await suite.browser.newContext({
         locale: "en-US",
-        recordVideo: captureUiProofEnabled
-          ? { dir: uiProofArtifactDir, size: viewport }
-          : undefined,
+        recordVideo: captureUiProofEnabled ? { dir: suite.artifactDir, size: viewport } : undefined,
         serviceWorkers: "block",
         viewport,
       });
@@ -41,6 +39,7 @@ suite.define(() => {
       const sessionKey = "agent:main:archive-actions";
       const messageText = "Archive action proof.";
       const session = sessionRow(sessionKey, "Archive actions", baseTime);
+      const main = sessionRow("agent:main:main", "Main", baseTime + 1_000);
       const gateway = await installMockGateway(page, {
         featureMethods: [
           "chat.metadata",
@@ -67,6 +66,7 @@ suite.define(() => {
             __openclaw: { id: "archive-action-assistant", seq: 2 },
           },
         ],
+        mainSessionKey: "agent:main:main",
         methodResponses: {
           [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
           "sessions.branches.list": {
@@ -89,10 +89,7 @@ suite.define(() => {
             editorText: messageText,
             sessionKey: "agent:main:dashboard:archive-action-fork",
           },
-          "sessions.list": sessionsListResponse([
-            sessionRow("agent:main:main", "Main", baseTime + 1_000),
-            session,
-          ]),
+          "sessions.list": sessionsListResponse([main, session]),
         },
         sessionArchiveFiltering: true,
         sessionKey,
@@ -138,10 +135,27 @@ suite.define(() => {
         await rewind.click();
         await page.locator(".chat-confirm-popover").waitFor({ state: "visible" });
 
-        await gateway.emitGatewayEvent("sessions.changed", {
+        const confirmation = page.locator(".chat-confirm-popover");
+        const remember = confirmation.getByRole("checkbox");
+        await remember.check();
+        expect(await remember.isChecked()).toBe(true);
+        await remember.uncheck();
+        await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+        await confirmation.waitFor({ state: "detached" });
+        expect(await gateway.getRequests("sessions.rewind")).toHaveLength(0);
+        expect(await initialMenu.isVisible()).toBe(true);
+        expect(await rewind.evaluate((element) => element === document.activeElement)).toBe(true);
+        await rewind.click();
+        await confirmation.waitFor({ state: "visible" });
+
+        const archived = {
           ...session,
           archived: true,
           archivedAt: baseTime + 2_000,
+        };
+        await gateway.setSessionsListResponse(sessionsListResponse([main, archived]));
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...archived,
           reason: "update",
           sessionKey,
         });
@@ -167,8 +181,8 @@ suite.define(() => {
         const menu = page.locator(".chat-reply-context-menu");
         await menu.waitFor({ state: "visible" });
         const actions = menu.locator("button");
-        expect(await actions.count()).toBe(2);
-        for (const [index, name] of ["Copy", "Fork from here"].entries()) {
+        expect(await actions.count()).toBe(3);
+        for (const [index, name] of ["Copy", "Copy as markdown", "Fork from here"].entries()) {
           expect(
             await menu
               .getByRole("menuitem", { name, exact: true })
@@ -178,7 +192,9 @@ suite.define(() => {
               ),
           ).toBe(true);
         }
-        await captureUiProof(page, `archived-actions-${viewport.label}.png`);
+        await captureUiProof(suite, page, `archived-actions-${viewport.label}.png`, menu, [
+          actions.first(),
+        ]);
         expect(
           await page.evaluate(() => {
             const portal = document.querySelector<HTMLElement>(".chat-reply-context-menu");
@@ -200,6 +216,16 @@ suite.define(() => {
           .poll(() => page.evaluate(() => navigator.clipboard.readText()))
           .toBe(messageText);
 
+        await page.evaluate(async () => {
+          window.getSelection()?.removeAllRanges();
+          await navigator.clipboard.writeText("Before archived message copy.");
+        });
+        await userBubble.click({ button: "right" });
+        await menu.getByRole("menuitem", { name: "Copy as markdown", exact: true }).click();
+        await expect
+          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toBe(messageText);
+
         await userBubble.click({ button: "right" });
         await page
           .locator(".chat-reply-context-menu")
@@ -217,7 +243,7 @@ suite.define(() => {
         await context.close();
         if (proofVideo) {
           await proofVideo.saveAs(
-            path.join(uiProofArtifactDir, `archived-actions-${viewport.label}.webm`),
+            path.join(suite.artifactDir, `archived-actions-${viewport.label}.webm`),
           );
         }
       }
@@ -225,11 +251,7 @@ suite.define(() => {
   }
 
   it("shows the archived notice when an archived session is cold-loaded outside the active list", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const archived = sessionRow(
       "agent:main:dashboard:cold-archive",
@@ -237,7 +259,10 @@ suite.define(() => {
       Date.parse("2026-07-01T16:00:00.000Z"),
       { archived: true },
     );
+    const main = sessionRow("agent:main:main", "Main", archived.updatedAt + 1);
     const gateway = await installMockGateway(page, {
+      mainSessionKey: "agent:main:main",
+      sessions: [main, archived],
       methodResponses: {
         "sessions.branches.list": {
           branches: [
@@ -245,10 +270,7 @@ suite.define(() => {
             { active: false, headline: "Other branch", leafEntryId: "other", messageCount: 1 },
           ],
         },
-        "sessions.describe": { session: archived },
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", archived.updatedAt + 1),
-        ]),
+        "sessions.list": sessionsListResponse([main]),
         "sessions.patch": {},
       },
       sessionArchiveFiltering: true,
@@ -278,9 +300,6 @@ suite.define(() => {
         .toBe(true);
       expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);
 
-      await gateway.setMethodResponse("sessions.describe", {
-        session: { ...archived, archived: false },
-      });
       await activateSelfRemovingControl(archivedNotice.getByRole("button", { name: "Unarchive" }));
       await waitForPatch(
         gateway,
@@ -289,6 +308,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent("sessions.changed", {
         ...archived,
         archived: false,
+        archivedAt: undefined,
         reason: "update",
         sessionKey: archived.key,
       });

@@ -1,27 +1,12 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import {
-  listAgentIds,
-  resolveAgentConfig,
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-} from "../../../agents/agent-scope.js";
-import { createOpenClawCodingTools } from "../../../agents/agent-tools.js";
-import { resolveModelAsync } from "../../../agents/embedded-agent-runner/model.js";
-import { normalizeAgentRuntimeTools } from "../../../agents/runtime-plan/tools.js";
-import {
-  filterRuntimeCompatibleTools,
-  type RuntimeToolSchemaDiagnostic,
-} from "../../../agents/tool-schema-projection.js";
-// Doctor warnings for active tools whose schemas cannot be projected to the selected runtime.
-import { buildReadableToolsByName } from "../../../agents/tools-effective-inventory-build.js";
+import type { RuntimeToolSchemaDiagnostic } from "../../../agents/tool-schema-projection.js";
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../../plugins/current-plugin-metadata-snapshot.js";
-import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
+import type { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
-import { getPluginToolMeta } from "../../../plugins/tools.js";
-import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
+import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 
 type RuntimeModelContext = {
   modelApi?: string;
@@ -38,18 +23,20 @@ async function resolveRuntimeModelContext(params: {
   provider: string;
   modelId: string;
 }): Promise<RuntimeModelContext> {
-  // Doctor diagnostics resolve static transport facts without publishing a live agent generation.
+  const { resolveModelAsync } = await import("../../../agents/embedded-agent-runner/model.js");
+  const { extractModelCompat } = await import("../../../plugins/provider-model-compat.js");
+  // Doctor diagnostics resolve static model facts without publishing a live agent generation.
   const resolution = await resolveModelAsync(
     params.provider,
     params.modelId,
     params.agentDir,
     params.cfg,
     {
+      modelIdSource: "selected",
       agentId: params.agentId,
       workspaceDir: params.workspaceDir,
       skipAgentDiscovery: true,
       allowBundledStaticCatalogFallback: true,
-      preferBundledStaticCatalogTransport: true,
     },
   );
   const model = resolution.model as ProviderRuntimeModel | undefined;
@@ -102,6 +89,17 @@ export async function collectActiveToolSchemaProjectionWarnings(params: {
   if (params.cfg.plugins?.enabled === false) {
     return [];
   }
+
+  // Disabled plugin diagnostics must not load the agent/tool runtime.
+  const { listAgentIds, resolveAgentConfig, resolveAgentDir, resolveAgentWorkspaceDir } =
+    await import("../../../agents/agent-scope.js");
+  const { createOpenClawCodingTools } = await import("../../../agents/agent-tools.js");
+  const { normalizeAgentRuntimeTools } = await import("../../../agents/runtime-plan/tools.js");
+  const { filterRuntimeCompatibleTools } =
+    await import("../../../agents/tool-schema-projection.js");
+  const { buildReadableToolsByName } =
+    await import("../../../agents/tools-effective-inventory-build.js");
+  const { resolveDoctorPrimaryModelRef } = await import("./primary-model-ref.js");
 
   const env = params.env ?? process.env;
   const warnings: string[] = [];

@@ -190,50 +190,73 @@ describe("bonjour-discovery", () => {
     expect(beacon.txt?.displayName).toBe("Peter’s Mac Studio");
   });
 
-  it("rejects malformed and out-of-range advertised ports", async () => {
-    const run = vi.fn(async (argv: string[]) => {
-      const domain = argv[3] ?? "";
-      if (argv[0] === "dns-sd" && argv[1] === "-B" && domain === "local.") {
-        return {
-          stdout: ["Add 2 3 local. _openclaw-gw._tcp. Broken Gateway", ""].join("\n"),
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-        };
-      }
+  it.each(["darwin", "linux"] as const)(
+    "rejects invalid advertised ports on %s",
+    async (platform) => {
+      const run = vi.fn(async (argv: string[]) => {
+        const domain = argv[3] ?? "";
+        const txt =
+          "txtvers=1 displayName=Broken gatewayPort=70000 sshPort=22x gatewayTls=yes gatewayTlsSha256=synthetic role=gateway transport=gateway";
+        if (argv[0] === "avahi-browse") {
+          return {
+            stdout: `= eth0 IPv4 Broken Gateway _openclaw-gw._tcp local.\n hostname = [broken.local]\n port = [70000]\n txt = [${txt
+              .split(" ")
+              .map((token) => `"${token}"`)
+              .join(" ")}]`,
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+          };
+        }
+        if (argv[0] === "dns-sd" && argv[1] === "-B" && domain === "local.") {
+          return {
+            stdout: ["Add 2 3 local. _openclaw-gw._tcp. Broken Gateway", ""].join("\n"),
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+          };
+        }
 
-      if (argv[0] === "dns-sd" && argv[1] === "-L") {
-        return {
-          stdout: [
-            "Broken Gateway._openclaw-gw._tcp. can be reached at broken.local:18789abc",
-            "txtvers=1 displayName=Broken gatewayPort=70000 sshPort=22x",
-            "",
-          ].join("\n"),
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-        };
-      }
+        if (argv[0] === "dns-sd" && argv[1] === "-L") {
+          return {
+            stdout: [
+              "Broken Gateway._openclaw-gw._tcp. can be reached at broken.local:18789abc",
+              txt,
+              "",
+            ].join("\n"),
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+          };
+        }
 
-      throw new Error(`unexpected argv: ${argv.join(" ")}`);
-    });
+        throw new Error(`unexpected argv: ${argv.join(" ")}`);
+      });
 
-    const beacons = await discoverGatewayBeacons({
-      platform: "darwin",
-      timeoutMs: 800,
-      domains: ["local."],
-      run: run as unknown as typeof runCommandWithTimeout,
-    });
+      const beacons = await discoverGatewayBeacons({
+        platform,
+        timeoutMs: 800,
+        domains: ["local."],
+        run: run as unknown as typeof runCommandWithTimeout,
+      });
 
-    const beacon = getOnlyBeacon(beacons);
-    expect(beacon.host).toBe("broken.local");
-    expect(beacon.port).toBeUndefined();
-    expect(beacon.gatewayPort).toBeUndefined();
-    expect(beacon.sshPort).toBeUndefined();
-    expect(resolveGatewayDiscoveryEndpoint(beacon)).toBeNull();
-  });
+      const beacon = getOnlyBeacon(beacons);
+      expect(beacon.host).toBe("broken.local");
+      expect(beacon.port).toBeUndefined();
+      expect(beacon.gatewayPort).toBeUndefined();
+      expect(beacon.sshPort).toBeUndefined();
+      expect(beacon).toMatchObject({
+        gatewayTls: true,
+        gatewayTlsFingerprintSha256: "synthetic",
+        role: "gateway",
+        transport: "gateway",
+      });
+      expect(resolveGatewayDiscoveryEndpoint(beacon)).toBeNull();
+    },
+  );
 
   it("falls back to tailnet DNS probing for wide-area when split DNS is not configured", async () => {
     const calls: Array<{ argv: string[]; timeoutMs: number }> = [];

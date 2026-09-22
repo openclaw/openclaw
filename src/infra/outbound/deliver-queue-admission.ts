@@ -2,12 +2,13 @@
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
-import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import {
   collectPayloadMediaSources,
   resolveOutboundMediaAccessForSend,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
+import { resolveConversationDeliveryScope } from "./delivery-completion.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
 import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
@@ -26,9 +27,9 @@ import {
 import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 export function restoreQueuedDeliveryCustody(
-  params: DeliverOutboundPayloadsParams,
+  params: InternalDeliverOutboundPayloadsParams,
   entry: QueuedDelivery,
-): DeliverOutboundPayloadsParams {
+): InternalDeliverOutboundPayloadsParams {
   // A regenerated caller owns current runtime authority, never the durable
   // effect. Recipient, staged payload, and completion stay with the first row.
   const {
@@ -50,6 +51,19 @@ export function restoreQueuedDeliveryCustody(
     legacyPreparedContentUnavailable: _legacyPreparedContentUnavailable,
     ...custody
   } = entry;
+  const target = params.conversationDeliveryTarget;
+  const completion = custody.deliveryCompletion;
+  if (target) {
+    if (completion?.kind !== "conversation") {
+      throw new Error("Conversation delivery target does not match durable custody");
+    }
+    resolveConversationDeliveryScope(
+      completion,
+      params.deliveryQueueStateDir,
+      params.deliveryQueueStateContext,
+      target,
+    );
+  }
   const payloads = acceptedPreparedOutboundEntries(custody.preparedBatch).map(
     (prepared) => prepared.payload,
   );
@@ -58,14 +72,15 @@ export function restoreQueuedDeliveryCustody(
 
 /** Stages producer-owned media and atomically admits one durable outbound intent. */
 export async function stageAndEnqueueOutboundDelivery(
-  params: DeliverOutboundPayloadsParams,
+  params: InternalDeliverOutboundPayloadsParams,
   preparedBatch: PreparedOutboundBatch,
   options?: {
-    getStablePreparation?: () => StableDeliveryPreparation;
+    getStablePreparation?: () => Promise<StableDeliveryPreparation>;
     claimForLiveDelivery?: boolean;
   },
 ): Promise<{ id: string; created: boolean; producerClaimId?: string } | null> {
   const { channel, to } = params;
+  const stateDir = params.deliveryQueueStateDir;
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const acceptedPayloads = acceptedPreparedOutboundEntries(preparedBatch).map((entry) =>
     stripInternalRuntimeScaffoldingFromPayload(entry.payload),
@@ -74,7 +89,11 @@ export async function stageAndEnqueueOutboundDelivery(
     params.renderedBatchPlan ?? createRenderedMessageBatchPlan(acceptedPayloads);
 
   if (params.deliveryIntentId && params.reusePendingDeliveryIntent) {
-    const existing = await loadPendingDelivery(params.deliveryIntentId);
+    const existing = await loadPendingDelivery(
+      params.deliveryIntentId,
+      stateDir,
+      params.deliveryQueueStateContext,
+    );
     if (existing) {
       // Durable custody owns its already-staged media. A regenerated TTS or
       // producer file may have vanished, so claim the row before staging it.
@@ -85,22 +104,26 @@ export async function stageAndEnqueueOutboundDelivery(
   // (TTS temps above all) are deleted when this process exits, so the queue
   // takes its own copy first and the row references that; the live send below
   // keeps the original path and stays copy-free.
-  const staged = await stageQueuePayloadMedia({
-    payloads: acceptedPayloads,
-    // Resolved exactly as the live send resolves it: staging must neither
-    // reject media the send would deliver (agent workspace sources are only
-    // reachable through the agent-scoped roots) nor read more than the send may.
-    mediaAccess: resolveOutboundMediaAccessForSend(
-      params,
-      channel,
-      collectPayloadMediaSources(acceptedPayloads),
-    ),
-    maxBytes: resolveOutboundMediaMaxBytes({
-      cfg: params.cfg,
-      channel,
-      accountId: params.accountId,
-    }),
-  });
+  const staged = await stageQueuePayloadMedia(
+    {
+      stateDir,
+      payloads: acceptedPayloads,
+      // Resolved exactly as the live send resolves it: staging must neither
+      // reject media the send would deliver (agent workspace sources are only
+      // reachable through the agent-scoped roots) nor read more than the send may.
+      mediaAccess: resolveOutboundMediaAccessForSend(
+        params,
+        channel,
+        collectPayloadMediaSources(acceptedPayloads),
+      ),
+      maxBytes: resolveOutboundMediaMaxBytes({
+        cfg: params.cfg,
+        channel,
+        accountId: params.accountId,
+      }),
+    },
+    params.deliveryQueueStateContext,
+  );
   if (staged.status !== "staged") {
     // Sensitive media must reach neither the spool nor the row, so there is no
     // replayable copy to promise. Required sends fail closed instead of
@@ -148,19 +171,25 @@ export async function stageAndEnqueueOutboundDelivery(
         ? await enqueuePreparedDeliveryOnce(
             delivery,
             params.deliveryIntentId,
-            options.getStablePreparation(),
-            undefined,
+            await options.getStablePreparation(),
+            stateDir,
             staged.mediaStageId,
+            params.deliveryQueueStateContext,
           )
         : await enqueueDeliveryOnce(
             delivery,
             params.deliveryIntentId,
-            undefined,
+            stateDir,
             staged.mediaStageId,
+            params.deliveryQueueStateContext,
           );
       if (!queued.created) {
-        cancelDeliveryQueueMediaRetention(staged.mediaStageId);
-        await releaseSpoolArtifacts(staged.artifacts);
+        cancelDeliveryQueueMediaRetention(
+          staged.mediaStageId,
+          stateDir,
+          params.deliveryQueueStateContext,
+        );
+        await releaseSpoolArtifacts(staged.artifacts, stateDir);
       }
       return {
         ...queued,
@@ -169,15 +198,24 @@ export async function stageAndEnqueueOutboundDelivery(
           : {}),
       };
     }
-    const id = await enqueueDelivery(delivery, undefined, staged.mediaStageId);
+    const id = await enqueueDelivery(
+      delivery,
+      stateDir,
+      staged.mediaStageId,
+      params.deliveryQueueStateContext,
+    );
     return {
       id,
       created: true,
       ...(initialProducerClaim ? { producerClaimId: initialProducerClaim.producerClaimId } : {}),
     };
   } catch (err) {
-    cancelDeliveryQueueMediaRetention(staged.mediaStageId);
-    await releaseSpoolArtifacts(staged.artifacts);
+    cancelDeliveryQueueMediaRetention(
+      staged.mediaStageId,
+      stateDir,
+      params.deliveryQueueStateContext,
+    );
+    await releaseSpoolArtifacts(staged.artifacts, stateDir);
     throw err;
   }
 }

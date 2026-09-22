@@ -2,6 +2,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
@@ -14,6 +15,8 @@ import type { ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   configFieldId,
   hasSensitiveConfigData,
+  hintForPath,
+  pathKey as configPathKey,
   redactedPlaceholder,
   type JsonSchema,
 } from "./config-form.shared.ts";
@@ -30,7 +33,7 @@ const META_KEYS = new Set([
 ]);
 const jsonTextareaState = new WeakMap<
   HTMLTextAreaElement,
-  { sourceValue: unknown; rowIdentity: unknown; fallback: string; pathKey: string }
+  { sourceValue: unknown; fallback: string; pathKey: string }
 >();
 
 export type ConfigNodeRenderParams = {
@@ -44,13 +47,18 @@ export type ConfigNodeRenderParams = {
   isRequired?: boolean;
   sourceIdentity?: unknown;
   controlIdentity?: unknown;
-  rowIdentity?: unknown;
   structuredDraftOwner?: boolean;
   showLabel?: boolean;
+  /** Description rendered by the surrounding field layout. */
+  descriptionId?: string;
+  /** Compact editors show effective defaults and inline collection controls. */
+  compact?: boolean;
+  commitOnBlur?: boolean;
   /** Section shells own the title while collection rows still own help/default metadata. */
   showHeaderMeta?: boolean;
   searchCriteria?: ConfigSearchCriteria;
   revealSensitive?: boolean;
+  maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => boolean | void;
@@ -63,6 +71,7 @@ export type ConfigNodeRenderer = (
 
 type SensitiveRenderState = {
   isSensitive: boolean;
+  isMasked: boolean;
   isRedacted: boolean;
   isRevealed: boolean;
   canReveal: boolean;
@@ -93,27 +102,6 @@ export function schemaWithDefault(schema: JsonSchema, value: unknown): JsonSchem
   return { ...schema, default: value };
 }
 
-function formatComparablePrimitive(value: unknown): string | null {
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  ) {
-    return String(value);
-  }
-  return null;
-}
-
-function matchesComparablePrimitiveValue(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) {
-    return true;
-  }
-  const leftComparable = formatComparablePrimitive(left);
-  const rightComparable = formatComparablePrimitive(right);
-  return leftComparable !== null && leftComparable === rightComparable;
-}
-
 export function isSecretRefObject(value: unknown): value is {
   source: string;
   id: string;
@@ -133,7 +121,8 @@ export function getSensitiveRenderState(params: {
   path: Array<string | number>;
   value: unknown;
   hints: ConfigUiHints;
-  revealSensitive: boolean;
+  revealSensitive?: boolean;
+  maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
 }): SensitiveRenderState {
   const isSensitive = hasSensitiveConfigData(params.value, params.path, params.hints);
@@ -147,6 +136,14 @@ export function getSensitiveRenderState(params: {
     (params.revealSensitive || (params.isSensitivePathRevealed?.(params.path) ?? false));
   return {
     isSensitive,
+    isMasked:
+      params.maskSensitive === true &&
+      !params.revealSensitive &&
+      !isRevealed &&
+      (params.value === undefined || typeof params.value === "string") &&
+      (hintForPath(params.path, params.hints)?.sensitive ||
+        isSensitiveConfigPath(configPathKey(params.path)) ||
+        isSensitive),
     isRedacted: isSensitive && !isRevealed,
     isRevealed,
     canReveal: isSensitive && !sentinel,
@@ -199,24 +196,11 @@ export function wrapSensitiveControl(
   return html`<span class="settings-secret">${control}${toggle}</span>`;
 }
 
-export function renderTags(tags: string[]): TemplateResult | typeof nothing {
-  const visibleTags = tags.filter((tag) => tag !== "advanced");
-  if (visibleTags.length === 0) {
-    return nothing;
-  }
-  return html`
-    <div class="cfg-tags">
-      ${visibleTags.map((tag) => html`<span class="cfg-tag">${tag}</span>`)}
-    </div>
-  `;
-}
-
 export function renderFieldRow(params: {
   label: unknown;
   help?: unknown;
   helpId?: string;
   defaultDescription?: unknown;
-  tags: string[];
   showLabel: boolean;
   control: TemplateResult | typeof nothing;
   stacked?: boolean;
@@ -228,74 +212,55 @@ export function renderFieldRow(params: {
   const help = params.showLabel ? params.help : undefined;
   const defaultDescription = params.showLabel ? params.defaultDescription : undefined;
   const hasText =
-    params.showLabel ||
-    Boolean(help) ||
-    Boolean(defaultDescription) ||
-    params.tags.length > 0 ||
-    Boolean(params.error);
+    params.showLabel || Boolean(help) || Boolean(defaultDescription) || Boolean(params.error);
   // Control-only rows (array/map item values) stack so the control gets full width.
   const stacked = params.stacked || !hasText;
   const className = stacked ? "settings-row settings-row--stacked" : "settings-row";
   return html`
     <div class=${className}>
-      ${hasText
-        ? html`
-            <div class="settings-row__text">
-              ${params.showLabel
-                ? html`<span class="settings-row__title">${params.label}</span>`
-                : nothing}
-              ${help
-                ? html`<span class="settings-row__desc" id=${params.helpId ?? nothing}
-                    >${help}</span
-                  >`
-                : nothing}
-              ${defaultDescription
-                ? html`<span class="settings-row__desc">${defaultDescription}</span>`
-                : nothing}
-              ${renderTags(params.tags)}
-              ${params.error
-                ? html`<span class="cfg-field__error" role="alert">${params.error}</span>`
-                : nothing}
-            </div>
-          `
-        : nothing}
-      ${params.control !== nothing
-        ? html`<div class="settings-row__control">${params.control}</div>`
-        : nothing}
+      ${
+        hasText
+          ? html`
+              <div class="settings-row__text">
+                ${
+                  params.showLabel
+                    ? html`<span class="settings-row__title">${params.label}</span>`
+                    : nothing
+                }
+                ${
+                  help
+                    ? html`<span class="settings-row__desc" id=${params.helpId ?? nothing}
+                        >${help}</span
+                      >`
+                    : nothing
+                }
+                ${
+                  defaultDescription
+                    ? html`<span class="settings-row__desc">${defaultDescription}</span>`
+                    : nothing
+                }
+                ${
+                  params.error
+                    ? html`<span class="cfg-field__error" role="alert">${params.error}</span>`
+                    : nothing
+                }
+              </div>
+            `
+          : nothing
+      }
+      ${
+        params.control !== nothing
+          ? html`<div class="settings-row__control">${params.control}</div>`
+          : nothing
+      }
     </div>
   `;
 }
 
-export function renderFlatDefaultRow(presentation: {
-  description: TemplateResult | typeof nothing;
-  action: TemplateResult | typeof nothing;
-}): TemplateResult | typeof nothing {
-  if (presentation.description === nothing && presentation.action === nothing) {
-    return nothing;
-  }
-  return html`
-    <div class="settings-row">
-      ${presentation.description === nothing
-        ? nothing
-        : html`
-            <div class="settings-row__text">
-              <span class="settings-row__desc">${presentation.description}</span>
-            </div>
-          `}
-      ${presentation.action === nothing
-        ? nothing
-        : html`<div class="settings-row__control">${presentation.action}</div>`}
-    </div>
-  `;
-}
-
-export function renderCollectionDefaultPresentation(
+export function renderCollectionDefaultDescription(
   params: ConfigNodeRenderParams,
   effectiveValue: unknown,
-): {
-  description: TemplateResult | typeof nothing;
-  action: TemplateResult | typeof nothing;
-} {
+): TemplateResult | typeof nothing {
   const redacted = getSensitiveRenderState({
     path: params.path,
     value: effectiveValue,
@@ -303,13 +268,7 @@ export function renderCollectionDefaultPresentation(
     revealSensitive: params.revealSensitive ?? false,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
   }).isRedacted;
-  return {
-    description: redacted ? nothing : renderSchemaDefaultDescription(params.schema, params.value),
-    action: renderRestoreDefaultButton({
-      ...params,
-      disabled: params.disabled || redacted,
-    }),
-  };
+  return redacted ? nothing : renderSchemaDefaultDescription(params.schema, params.value);
 }
 
 export function renderSchemaDefaultDescription(
@@ -324,50 +283,16 @@ export function renderSchemaDefaultDescription(
   })}`;
 }
 
-export function renderRestoreDefaultButton(
-  params: Pick<
-    ConfigNodeRenderParams,
-    "schema" | "value" | "path" | "disabled" | "isRequired" | "onPatch" | "onRemove"
-  >,
-): TemplateResult | typeof nothing {
-  if (params.schema.default === undefined || params.value === undefined) {
-    return nothing;
-  }
-  return html`
-    <openclaw-tooltip .content=${t("configForm.resetToDefault")}>
-      <button
-        type="button"
-        class="btn btn--icon"
-        aria-label=${t("configForm.resetToDefault")}
-        ?disabled=${params.disabled}
-        @click=${(event: Event) => {
-          event.stopPropagation();
-          if (params.isRequired) {
-            params.onPatch(params.path, structuredClone(params.schema.default));
-            return;
-          }
-          if (params.onRemove) {
-            params.onRemove(params.path);
-            return;
-          }
-          params.onPatch(params.path, undefined);
-        }}
-      >
-        ${icons.refresh}
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
 export function renderSegmentedControl(params: {
   options: unknown[];
   resolvedValue: unknown;
   disabled: boolean;
   ariaLabel: string;
-  onSelect: (value: unknown) => void;
+  descriptionId?: string;
+  onSelect: (value: unknown) => boolean | void;
 }): TemplateResult {
   const selectedIndex = params.options.findIndex((option) =>
-    matchesComparablePrimitiveValue(option, params.resolvedValue),
+    configValuesEqual(option, params.resolvedValue),
   );
   return renderSettingsSegmented({
     value: selectedIndex < 0 ? "" : String(selectedIndex),
@@ -377,10 +302,11 @@ export function renderSegmentedControl(params: {
     })),
     disabled: params.disabled,
     ariaLabel: params.ariaLabel,
+    descriptionId: params.descriptionId,
     onChange: (index) => {
       const option = params.options[Number(index)];
       if (option !== undefined) {
-        params.onSelect(option);
+        return params.onSelect(option);
       }
     },
   });
@@ -406,7 +332,6 @@ export function renderJsonTextareaControl(params: {
   ariaLabel: string;
   descriptionId?: string;
   sourceValue: unknown;
-  rowIdentity?: unknown;
   fallback: string;
   rows: number;
   sensitiveState: SensitiveRenderState;
@@ -447,7 +372,7 @@ export function renderJsonTextareaControl(params: {
     return !message;
   };
   const renderedFallback = sensitiveState.isRedacted ? "" : fallback;
-  const pathKey = JSON.stringify(path);
+  const pathKey = JSON.stringify(path.filter((segment) => typeof segment === "string"));
   const commitJsonValue = (target: HTMLTextAreaElement, candidate: unknown) => {
     if (onPatch(path, candidate) !== false) {
       return true;
@@ -470,7 +395,6 @@ export function renderJsonTextareaControl(params: {
           // (possibly not-yet-valid) JSON the operator is typing.
           ((!Object.is(previous.sourceValue, params.sourceValue) &&
             !configValuesEqual(previous.sourceValue, params.sourceValue)) ||
-            !Object.is(previous.rowIdentity, params.rowIdentity) ||
             previous.fallback !== renderedFallback ||
             previous.pathKey !== pathKey)
         ) {
@@ -479,7 +403,6 @@ export function renderJsonTextareaControl(params: {
         }
         jsonTextareaState.set(element, {
           sourceValue: params.sourceValue,
-          rowIdentity: params.rowIdentity,
           fallback: renderedFallback,
           pathKey,
         });

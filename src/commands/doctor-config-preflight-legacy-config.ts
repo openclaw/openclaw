@@ -1,10 +1,129 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveCanonicalConfigPath } from "../config/paths.js";
+import { note } from "../../packages/terminal-core/src/note.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
+import {
+  parseConfigJson5,
+  recoverConfigFromJsonRootSuffix,
+  recoverConfigFromLastKnownGood,
+  type ConfigSnapshotReadMeasure,
+} from "../config/io.js";
+import { resolveCanonicalConfigPath, resolveIsConfigReadOnly } from "../config/paths.js";
+import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
+import type { ConfigFileSnapshot } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import { resolveHomeDir } from "../utils.js";
+import {
+  shouldSkipPluginValidationForDoctorConfigPreflight,
+  type DoctorConfigPreflightPluginSnapshotRead,
+} from "./doctor-config-preflight-plugin-index.js";
+import { planAutomaticConfigRepair } from "./doctor/shared/automatic-startup-config-repair.js";
+import type { DoctorConfigPreflightOptions } from "./doctor/shared/config-migration-result.js";
 
-export async function maybeMigrateLegacyConfig(): Promise<string[]> {
+export function createDoctorConfigRepairPlanner(params: {
+  options: DoctorConfigPreflightOptions;
+  gatewayStartupCheckpointRequired: boolean;
+  stateMigrationsRequested: boolean;
+  skipLegacyParentConfigWrite: boolean;
+  hasImportedPluginConfig: () => boolean;
+  runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
+}) {
+  const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) => {
+    // Read in the caller's lease cache before entering a retained Doctor metadata scope.
+    const installRecords = params.hasImportedPluginConfig()
+      ? loadInstalledPluginIndexInstallRecordsSync()
+      : undefined;
+    return params.runWithPluginMetadataSnapshot(
+      { config: snapshot.sourceConfig ?? snapshot.config ?? {} },
+      () => planAutomaticConfigRepair(snapshot, { installRecords }),
+    );
+  };
+  const planAdmittedConfigRepair = (
+    snapshot: ConfigFileSnapshot,
+    prepared: ReturnType<typeof planAutomaticConfigRepair> = null,
+  ) =>
+    (params.gatewayStartupCheckpointRequired ||
+      params.options.repairPrefixedConfig === true ||
+      (params.stateMigrationsRequested && params.options.migrateLegacyConfig !== false)) &&
+    !snapshot.valid &&
+    !params.skipLegacyParentConfigWrite &&
+    (params.options.repairPrefixedConfig === true ||
+      !shouldSkipPluginValidationForDoctorConfigPreflight()) &&
+    !resolveIsConfigReadOnly(process.env) &&
+    !resolveFutureConfigActionBlock({ action: "normalize legacy config", snapshot })
+      ? (prepared ?? planScopedConfigRepair(snapshot))
+      : null;
+  return { planScopedConfigRepair, planAdmittedConfigRepair };
+}
+
+export function createDoctorLegacyConfigMigration(params: {
+  enabled: boolean;
+  measure: ConfigSnapshotReadMeasure;
+}): () => Promise<void> {
+  let complete = false;
+  return async () => {
+    if (complete || !params.enabled) {
+      return;
+    }
+    complete = true;
+    const changes = await params.measure("legacy-config-migration", maybeMigrateLegacyConfig);
+    if (changes.length > 0) {
+      note(changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+    }
+  };
+}
+
+/** Repair active legacy bytes before considering an older backup. */
+export async function prepareDoctorConfigRecovery(params: {
+  enabled: boolean;
+  snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
+  planRepair: (snapshot: ConfigFileSnapshot) => ReturnType<typeof planAutomaticConfigRepair>;
+  readSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
+}) {
+  let snapshotRead = params.snapshotRead;
+  let snapshot = snapshotRead.snapshot;
+  let activeConfigRepair: ReturnType<typeof planAutomaticConfigRepair> = null;
+  if (params.enabled && snapshot.exists && !snapshot.valid) {
+    const pendingPluginInstallConfig =
+      inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig).status !== "missing";
+    // One retired key must not discard newer valid settings by restoring an older backup.
+    activeConfigRepair =
+      typeof snapshot.raw === "string" && parseConfigJson5(snapshot.raw).ok
+        ? params.planRepair(snapshot)
+        : null;
+    let configRepaired = false;
+    if (!activeConfigRepair && (await recoverConfigFromJsonRootSuffix(snapshot))) {
+      note("Removed non-JSON prefix from openclaw.json.", "Config");
+      configRepaired = true;
+    } else if (
+      !activeConfigRepair &&
+      // Config preparation imports these records; backup recovery would erase its source.
+      !pendingPluginInstallConfig &&
+      (await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" }))
+    ) {
+      note(
+        "Restored openclaw.json from last-known-good; original saved as .clobbered.*.",
+        "Config",
+      );
+      configRepaired = true;
+    }
+    if (configRepaired) {
+      snapshotRead = await params.readSnapshot();
+      snapshot = snapshotRead.snapshot;
+    }
+    if (!snapshot.valid && typeof snapshot.raw === "string" && !parseConfigJson5(snapshot.raw).ok) {
+      throw new Error(
+        `Config at ${snapshot.path} is not parseable and cannot be repaired automatically. The file remains unchanged. Inspect the exact parse error with ${formatCliCommand("openclaw config validate")}, then hand-edit the file; or move it aside and run ${formatCliCommand("openclaw onboard")} to generate a fresh config.`,
+      );
+    }
+  }
+  return { snapshotRead, activeConfigRepair };
+}
+
+async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
   const home = resolveHomeDir();
   if (!home) {

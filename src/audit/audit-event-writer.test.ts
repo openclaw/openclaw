@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -9,6 +9,8 @@ import {
   openOpenClawStateDatabase,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../state/openclaw-state-db.js";
+import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { listAuditEvents, recordAuditEvent } from "./audit-event-store.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
@@ -167,12 +169,53 @@ function captureWork(envelope: ExecutionIdentityAdmissionEnvelope) {
   return { kind: "capture" as const, envelope };
 }
 
+const tempDirs = createTempDirTracker();
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  tempDirs.cleanup();
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("audit event writer", () => {
+  it("preserves external supervision for claimed state writes", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-external-");
+    const supervisedDatabase = {
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_SUPERVISOR_MODE: "external",
+      },
+    };
+    claimOpenClawStateOwnership("gateway-test-supervisor", supervisedDatabase);
+    closeOpenClawStateDatabaseForTest();
+    const write = async (runId: string, supervisorMode: string | undefined) => {
+      const errors: string[] = [];
+      await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: supervisorMode }, async () => {
+        const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+        await writer.ready;
+        expect(writer.record({ ...input(), sourceId: `${runId}:1:started`, runId })).toBe(true);
+        await writer.stop();
+      });
+      return errors;
+    };
+
+    const supervisedErrors = await write("supervised-run", "external");
+    expect(supervisedErrors).toEqual([]);
+    expect(
+      listAuditEvents({ database: supervisedDatabase, limit: 10 }).events.map(
+        (event) => event.runId,
+      ),
+    ).toEqual(["supervised-run"]);
+    closeOpenClawStateDatabaseForTest();
+
+    const unmarkedErrors = await write("unmarked-run", undefined);
+    expect(unmarkedErrors.some((error) => error.includes("gateway-test-supervisor"))).toBe(true);
+    expect(
+      listAuditEvents({ database: supervisedDatabase, limit: 10 }).events.map(
+        (event) => event.runId,
+      ),
+    ).toEqual(["supervised-run"]);
+  });
+
   it("keeps progress absent while disabled and routes enabled progress off audit_events", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };

@@ -1,3 +1,4 @@
+import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
@@ -28,7 +29,8 @@ function isVerifyTarget(value: unknown): value is OpenClawDatabaseVerifyTarget {
 }
 
 function formatVerifyError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return `${message}${formatSqliteErrorCodeSuffix(error)}`;
 }
 
 async function verifyOpenClawDatabase(
@@ -39,12 +41,12 @@ async function verifyOpenClawDatabase(
     import("../infra/sqlite-integrity.js"),
     import("../infra/sqlite-readonly-location.js"),
   ]);
-  let cleanup: (() => boolean) | undefined;
+  let cleanup: (() => Promise<boolean>) | undefined;
   let database: import("node:sqlite").DatabaseSync | undefined;
   let result = await (async (): Promise<OpenClawDatabaseVerifyResult> => {
     try {
       const prepared = await location.prepareSqliteReadOnlyLocationInProcess(target.path);
-      cleanup = prepared.cleanup;
+      cleanup = prepared.cleanupAsync;
       database = sqlite.openNodeSqliteDatabase(prepared.location, {
         readOnly: true,
       });
@@ -73,7 +75,7 @@ async function verifyOpenClawDatabase(
       };
     }
   } finally {
-    cleanup?.();
+    await cleanup?.();
   }
   return result;
 }

@@ -23,12 +23,9 @@ import type {
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionMessageSubscription,
+  SessionRefreshOutcome,
 } from "./session-capability.ts";
-import {
-  areUiSessionKeysEquivalent,
-  isUiGlobalSessionKey,
-  normalizeAgentId,
-} from "./session-key.ts";
+import { areUiSessionKeysEquivalent, normalizeAgentId } from "./session-key.ts";
 import {
   requestSessionBranchSwitch,
   requestSessionBranches,
@@ -45,8 +42,7 @@ import {
 
 type SessionScopedOperationsHost = {
   connection: SessionConnectionOwner;
-  agentId: () => string | null;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
+  reconcileMutation: (agentId?: string | null) => Promise<SessionRefreshOutcome>;
   notifyCreated: (key: string) => void;
   reportError: (error: unknown) => void;
 };
@@ -67,7 +63,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
         return null;
       }
       host.notifyCreated(result.key);
-      await host.refreshReplacement(params.agentId);
+      await host.reconcileMutation(params.agentId);
       return host.connection.isCurrent(scope) ? result : null;
     } catch (error) {
       if (host.connection.isCurrent(scope)) {
@@ -145,10 +141,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       throw new Error("Session message subscription requires an active Gateway connection");
     }
     const normalizedKey = key.trim();
-    const agentId =
-      isUiGlobalSessionKey(normalizedKey) && options.agentId?.trim()
-        ? normalizeAgentId(options.agentId)
-        : null;
+    const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
     const subscription = await getGatewaySessionMessageSubscriptionCoordinator(scope.client, {
       keysEquivalent: areUiSessionKeysEquivalent,
     })
@@ -210,7 +203,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     if (!host.connection.isCurrent(scope)) {
       throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
     }
-    await host.refreshReplacement(options.agentId ?? host.agentId() ?? undefined);
+    await host.reconcileMutation(options.agentId);
     if (!host.connection.isCurrent(scope)) {
       throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
     }
@@ -238,7 +231,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     // The gateway response commits destructive work; refresh is connection-scoped
     // best effort and must never turn that commit into uncertainty or a retry.
     if (host.connection.isCurrent(scope)) {
-      await host.refreshReplacement(agentId ?? host.agentId() ?? undefined).catch(() => {});
+      await host.reconcileMutation(agentId).catch(() => {});
     }
   };
 
@@ -311,13 +304,13 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     subscribeMessages,
     switchBranch,
     unsubscribeMessages,
-    retireConnection(previousClient: GatewayBrowserClient | null) {
+    retireConnection: (previousClient: GatewayBrowserClient | null) => {
       if (previousClient) {
         resetGatewaySessionMessageSubscriptionCoordinator(previousClient);
       }
       ownedSubscriptions.clear();
     },
-    dispose() {
+    dispose: () => {
       for (const subscription of ownedSubscriptions) {
         void unsubscribeMessages(subscription).catch(() => undefined);
       }

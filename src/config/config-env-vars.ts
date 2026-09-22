@@ -17,6 +17,8 @@ function isBlockedConfigEnvVar(key: string): boolean {
   return (
     key.toUpperCase() === ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV ||
     key.toUpperCase() === "OPENCLAW_INCLUDE_ROOTS" ||
+    // Config cannot opt into or out of the host-selected read-only mode.
+    key.toUpperCase() === "OPENCLAW_CONFIG_READONLY" ||
     isDangerousHostEnvVarName(key) ||
     isDangerousHostEnvOverrideVarName(key)
   );
@@ -362,8 +364,15 @@ export function initializePublishedConfigRuntimeEnv(
   pendingConfigRuntimeEnvPublication = null;
 }
 
-export function resetPublishedConfigRuntimeEnv(): void {
-  publishedConfigRuntimeEnvState = { generation: 0, ownedEnv: {}, sourceConfig: null };
+export function resetPublishedConfigRuntimeEnv(
+  options: { preserveOwnership?: boolean } = {},
+): void {
+  publishedConfigRuntimeEnvState = options.preserveOwnership
+    ? {
+        ...publishedConfigRuntimeEnvState,
+        generation: publishedConfigRuntimeEnvState.generation + 1,
+      }
+    : { generation: 0, ownedEnv: {}, sourceConfig: null };
   publishedConfigRuntimeEnvEpoch += 1;
   pendingConfigRuntimeEnvPublication = null;
 }
@@ -414,6 +423,103 @@ export function prepareConfigRuntimeEnv(params: {
   const afterByPlatformKey = snapshotEnvByPlatformKey(after);
   const preparedOwnedEnv = collectConfigRuntimeEnvOwnership(params.nextConfig, base, after);
 
+  return prepareConfigRuntimeEnvPublication({
+    targetEnv,
+    before,
+    preparedEnv,
+    afterByPlatformKey,
+    configState: { sourceConfig: params.nextConfig, ownedEnv: preparedOwnedEnv },
+  });
+}
+
+export type PreparedConfigRuntimeEnvLoad = {
+  env: NodeJS.ProcessEnv;
+  captureDotEnvBaseline: () => void;
+  prepare: (nextConfig: OpenClawConfig) => PreparedConfigRuntimeEnv;
+  prepareFailure: () => PreparedConfigRuntimeEnv;
+};
+
+/** Stages loader mutations; its caller retains authority over publication. */
+export function prepareConfigRuntimeEnvLoad(params: {
+  previousConfig: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  previousOwnedEnv?: Readonly<Record<string, string>>;
+}): PreparedConfigRuntimeEnvLoad {
+  const targetEnv = params.env ?? process.env;
+  const originalEnv = cloneEnvWithPlatformSemantics(targetEnv);
+  const before = snapshotEnvByPlatformKey(originalEnv);
+  const env = createConfigRuntimeEnvBase(
+    params.previousConfig,
+    targetEnv,
+    params.previousOwnedEnv ? { ownedEnv: params.previousOwnedEnv } : {},
+  );
+  const initialBase = snapshotEnvByPlatformKey(env);
+  const retainedOwnedEnv = Object.fromEntries(
+    Object.entries(
+      params.previousOwnedEnv ??
+        (targetEnv === process.env ? publishedConfigRuntimeEnvState.ownedEnv : {}),
+    ).filter(([key, value]) => initialBase.get(envSnapshotKey(key))?.value === value),
+  );
+  let dotenvBaseline = cloneEnvWithPlatformSemantics(env);
+
+  return {
+    env,
+    captureDotEnvBaseline: () => {
+      // Capture in the dotenv caller's finally, before any config or shell effects.
+      dotenvBaseline = cloneEnvWithPlatformSemantics(env);
+    },
+    prepare: (nextConfig) => {
+      const preparedEnv = cloneEnvWithPlatformSemantics(env);
+      return prepareConfigRuntimeEnvPublication({
+        targetEnv,
+        before,
+        preparedEnv,
+        afterByPlatformKey: snapshotEnvByPlatformKey(preparedEnv),
+        configState: {
+          sourceConfig: nextConfig,
+          ownedEnv: {
+            ...filterConfigRuntimeEnvOwnership(nextConfig, preparedEnv, retainedOwnedEnv),
+            ...collectConfigRuntimeEnvOwnership(nextConfig, dotenvBaseline, preparedEnv),
+          },
+        },
+      });
+    },
+    prepareFailure: () => {
+      const preparedEnv = cloneEnvWithPlatformSemantics(originalEnv);
+      const dotenv = snapshotEnvByPlatformKey(dotenvBaseline);
+      for (const key of new Set([...initialBase.keys(), ...dotenv.keys()])) {
+        const original = before.get(key);
+        const base = initialBase.get(key);
+        const loaded = dotenv.get(key);
+        // Failure preserves the original config-owned layer, including values
+        // stripped from the isolated base before dotenv was loaded.
+        if (envSnapshotEntriesEqual(original, base) && !envSnapshotEntriesEqual(base, loaded)) {
+          replaceEnvSnapshotEntry(preparedEnv, original, loaded);
+        }
+      }
+      return prepareConfigRuntimeEnvPublication({
+        targetEnv,
+        before,
+        preparedEnv,
+        afterByPlatformKey: snapshotEnvByPlatformKey(preparedEnv),
+      });
+    },
+  };
+}
+
+function prepareConfigRuntimeEnvPublication(params: {
+  targetEnv: NodeJS.ProcessEnv;
+  before: ReadonlyMap<string, EnvSnapshotEntry>;
+  preparedEnv: NodeJS.ProcessEnv;
+  afterByPlatformKey: ReadonlyMap<string, EnvSnapshotEntry>;
+  /** Omitted for ambient dotenv publication after a failed strict load. */
+  configState?: {
+    sourceConfig: OpenClawConfig;
+    ownedEnv: Readonly<Record<string, string>>;
+  };
+}): PreparedConfigRuntimeEnv {
+  const { targetEnv, before, preparedEnv, afterByPlatformKey } = params;
+
   return {
     env: preparedEnv,
     publish: () => {
@@ -457,7 +563,7 @@ export function prepareConfigRuntimeEnv(params: {
       let processPublicationState: PendingConfigRuntimeEnvPublication | null = null;
       if (publicationGeneration !== null) {
         const ownedEnv: Record<string, string> = {};
-        for (const [key, value] of Object.entries(preparedOwnedEnv)) {
+        for (const [key, value] of Object.entries(params.configState?.ownedEnv ?? {})) {
           const platformKey = envSnapshotKey(key);
           const currentEntry = snapshotEnvByPlatformKey(targetEnv).get(platformKey);
           const preparedEntry = afterByPlatformKey.get(platformKey);
@@ -474,8 +580,8 @@ export function prepareConfigRuntimeEnv(params: {
         }
         publishedConfigRuntimeEnvState = {
           generation: publicationGeneration,
-          ownedEnv,
-          sourceConfig: params.nextConfig,
+          ownedEnv: params.configState ? ownedEnv : previousPublishedState.ownedEnv,
+          sourceConfig: params.configState?.sourceConfig ?? previousPublishedState.sourceConfig,
         };
         processPublicationState = {
           epoch: publicationEpoch,

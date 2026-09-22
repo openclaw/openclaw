@@ -6,6 +6,7 @@ import {
 } from "../../packages/gateway-client/src/session-projection.js";
 import { agentSessionKeysMatchByRequestKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { extractTextFromMessage } from "./tui-formatters.js";
+import { extractTuiImageSources, type TuiImageSource } from "./tui-images.js";
 import type { SessionMessageEvent, TuiStateAccess } from "./tui-types.js";
 
 type TuiSessionEvent = {
@@ -19,6 +20,8 @@ export function readTuiSessionUserMessage(event: SessionMessageEvent): {
   text: string;
   messageId: string;
   runId?: string;
+  sendId?: string;
+  images?: readonly TuiImageSource[];
 } | null {
   const message = event.message;
   if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -43,7 +46,14 @@ export function readTuiSessionUserMessage(event: SessionMessageEvent): {
   if (!messageId || !text) {
     return null;
   }
-  return { messageId, text, ...(identity.runId ? { runId: identity.runId } : {}) };
+  const images = extractTuiImageSources(message);
+  return {
+    messageId,
+    text,
+    ...(identity.runId ? { runId: identity.runId } : {}),
+    ...(identity.sendId ? { sendId: identity.sendId } : {}),
+    ...(images.length > 0 ? { images } : {}),
+  };
 }
 
 /** Preserves opaque peer IDs while guarding canonical, global, and alias ownership. */

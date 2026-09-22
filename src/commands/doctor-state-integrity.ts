@@ -9,6 +9,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { isSharedAuthStoreOwner } from "../agents/agent-delete-safety.js";
+import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import {
   listAgentIds,
   resolveDefaultAgentDir,
@@ -27,11 +28,6 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
-import {
-  formatSessionArchiveTimestamp,
-  isPrimarySessionTranscriptFileName,
-} from "../config/sessions/artifacts.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import {
   resolveSessionFilePathCore,
@@ -51,14 +47,17 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
+import { findGitRoot } from "../infra/git-root.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
 } from "../infra/state-migrations.legacy-session-store.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
@@ -71,7 +70,8 @@ import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
-import { countLabel, formatFilePreview } from "./doctor-state-integrity-format.js";
+import { countLabel } from "./doctor-state-integrity-format.js";
+import { collectRetainedUnconfiguredAgentDatabaseWarnings } from "./doctor-unconfigured-agent-databases.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 
@@ -110,6 +110,11 @@ type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 export type StateIntegrityHealthIssue =
   | {
       kind: "mac-cloud-state-dir";
+      path: string;
+      storage: string;
+    }
+  | {
+      kind: "windows-cloud-state-dir";
       path: string;
       storage: string;
     }
@@ -163,10 +168,6 @@ function tryResolveNativeRealPath(targetPath: string): string | null {
   } catch {
     return null;
   }
-}
-
-function resolveComparableTranscriptPath(filePath: string): string {
-  return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
 }
 
 function areComparablePathsEqual(leftPath: string, rightPath: string): boolean {
@@ -223,6 +224,11 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
         const nestedAgentDir = path.join(agentsRoot, dirName, "agent");
         const hasNestedAgentDir = existsDir(nestedAgentDir);
         if (!hasNestedAgentDir) {
+          return false;
+        }
+        // Reserved system agent ids own a state dir but can never appear in
+        // agents.list, so their directories are never orphans.
+        if (isReservedSystemAgentId(agentId)) {
           return false;
         }
         if (
@@ -331,50 +337,8 @@ function countJsonlLines(filePath: string): number {
   }
 }
 
-function findOtherStateDirs(stateDir: string): string[] {
-  const resolvedState = path.resolve(stateDir);
-  const roots =
-    process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
-  const found: string[] = [];
-  for (const root of roots) {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(root, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      if (entry.name.startsWith(".")) {
-        continue;
-      }
-      const candidates = [".openclaw"].map((dir) => path.resolve(root, entry.name, dir));
-      for (const candidate of candidates) {
-        if (candidate === resolvedState) {
-          continue;
-        }
-        if (existsDir(candidate)) {
-          found.push(candidate);
-        }
-      }
-    }
-  }
-  return found;
-}
-
 function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
-  const normalizedTarget = path.resolve(targetPath);
-  const normalizedRoot = path.resolve(rootPath);
-  const rootToken = path.parse(normalizedRoot).root;
-  if (normalizedRoot === rootToken) {
-    return normalizedTarget.startsWith(rootToken);
-  }
-  return (
-    normalizedTarget === normalizedRoot ||
-    normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
-  );
+  return isPathUnderRootWithPathOps(targetPath, rootPath, path);
 }
 
 const tryResolveRealPath = safeRealpathSync;
@@ -526,6 +490,32 @@ function tryReadLinuxMountInfo(): string | null {
   }
 }
 
+function resolveLinuxStateMount(
+  stateDir: string,
+  deps?: {
+    mountInfo?: string;
+    resolveRealPath?: (targetPath: string) => string | null;
+  },
+): LinuxSdBackedStateDir | null {
+  const linuxPath = path.posix;
+  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
+    linuxPath.resolve(stateDir);
+  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
+  const mountEntry = mountInfo
+    ? findLinuxMountInfoEntryForPath(resolvedStatePath, parseLinuxMountInfo(mountInfo), linuxPath)
+    : null;
+  return mountEntry
+    ? {
+        path: linuxPath.resolve(resolvedStatePath),
+        mountPoint: linuxPath.resolve(mountEntry.mountPoint),
+        fsType: mountEntry.fsType,
+        source: mountEntry.source,
+      }
+    : null;
+}
+
 /** Detects Linux state directories mounted from SD/eMMC-style block devices. */
 export function detectLinuxSdBackedStateDir(
   stateDir: string,
@@ -541,29 +531,15 @@ export function detectLinuxSdBackedStateDir(
     return null;
   }
   const linuxPath = path.posix;
-
-  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
-  const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
-    linuxPath.resolve(stateDir);
-  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
-  if (!mountInfo) {
+  const stateMount = resolveLinuxStateMount(stateDir, deps);
+  if (!stateMount) {
     return null;
   }
 
-  const mountEntry = findLinuxMountInfoEntryForPath(
-    resolvedStatePath,
-    parseLinuxMountInfo(mountInfo),
-    linuxPath,
-  );
-  if (!mountEntry) {
-    return null;
-  }
-
-  const sourceCandidates = [mountEntry.source];
-  if (mountEntry.source.startsWith("/dev/")) {
+  const sourceCandidates = [stateMount.source];
+  if (stateMount.source.startsWith("/dev/")) {
     const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? tryResolveRealPath)(
-      mountEntry.source,
+      stateMount.source,
     );
     if (resolvedDevicePath) {
       sourceCandidates.push(linuxPath.resolve(resolvedDevicePath));
@@ -573,12 +549,7 @@ export function detectLinuxSdBackedStateDir(
     return null;
   }
 
-  return {
-    path: linuxPath.resolve(resolvedStatePath),
-    mountPoint: linuxPath.resolve(mountEntry.mountPoint),
-    fsType: mountEntry.fsType,
-    source: mountEntry.source,
-  };
+  return stateMount;
 }
 
 /** Formats the warning for state stored on SD/eMMC media. */
@@ -600,11 +571,7 @@ export function formatLinuxSdBackedStateDirWarning(
   ].join("\n");
 }
 
-type LinuxVolatileStateDir = {
-  path: string;
-  mountPoint: string;
-  fsType: string;
-};
+type LinuxVolatileStateDir = Omit<LinuxSdBackedStateDir, "source">;
 
 /** Filesystems whose state disappears on reboot. Docker overlayfs is intentionally excluded. */
 const VOLATILE_FS_TYPES = new Set(["tmpfs", "ramfs"]);
@@ -622,31 +589,12 @@ export function detectLinuxVolatileStateDir(
   if (platform !== "linux") {
     return null;
   }
-  const linuxPath = path.posix;
-
-  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
-  const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
-    linuxPath.resolve(stateDir);
-  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
-  if (!mountInfo) {
+  const stateMount = resolveLinuxStateMount(stateDir, deps);
+  if (!stateMount || !VOLATILE_FS_TYPES.has(stateMount.fsType)) {
     return null;
   }
-
-  const mountEntry = findLinuxMountInfoEntryForPath(
-    resolvedStatePath,
-    parseLinuxMountInfo(mountInfo),
-    linuxPath,
-  );
-  if (!mountEntry || !VOLATILE_FS_TYPES.has(mountEntry.fsType)) {
-    return null;
-  }
-
-  return {
-    path: linuxPath.resolve(resolvedStatePath),
-    mountPoint: linuxPath.resolve(mountEntry.mountPoint),
-    fsType: mountEntry.fsType,
-  };
+  const { source: _source, ...volatileStateMount } = stateMount;
+  return volatileStateMount;
 }
 
 /** Formats the warning for state stored on a volatile Linux filesystem. */
@@ -710,6 +658,79 @@ export function detectMacCloudSyncedStateDir(
   return null;
 }
 
+/** Detects Windows state directories under OneDrive sync roots. */
+export function detectWindowsCloudSyncedStateDir(
+  stateDir: string,
+  deps?: {
+    platform?: NodeJS.Platform;
+    env?: NodeJS.ProcessEnv;
+    resolveRealPath?: (targetPath: string) => string | null;
+  },
+): {
+  path: string;
+  storage: "OneDrive" | "OneDrive for Business";
+} | null {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "win32") {
+    return null;
+  }
+
+  // The OneDrive sync client maintains these variables, so they are the
+  // canonical sync-root source; path-shape heuristics would misfire on
+  // ordinary local folders that merely contain "OneDrive" in a segment.
+  const env = deps?.env ?? process.env;
+  const roots: { storage: "OneDrive" | "OneDrive for Business"; root: string }[] = [];
+  const addRoot = (storage: "OneDrive" | "OneDrive for Business", root: string | undefined) => {
+    if (root && root.trim() !== "") {
+      roots.push({ storage, root });
+    }
+  };
+  addRoot("OneDrive", resolveEnvironmentValue(env, "OneDrive", platform));
+  addRoot("OneDrive", resolveEnvironmentValue(env, "OneDriveConsumer", platform));
+  addRoot("OneDrive for Business", resolveEnvironmentValue(env, "OneDriveCommercial", platform));
+  if (roots.length === 0) {
+    return null;
+  }
+
+  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  // A state dir that does not exist yet cannot be resolved directly, and
+  // falling back to the lexical path misreads a not-yet-created leaf beneath a
+  // OneDrive-named junction that actually resolves to local storage. Resolve
+  // through the nearest existing ancestor, as the Linux detectors do, so the
+  // junction is followed even when the leaf is absent.
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
+
+  for (const { storage, root } of roots) {
+    // Windows filesystems are case-insensitive by default; compare folded.
+    if (isPathUnderRoot(resolvedStatePath.toLowerCase(), root.toLowerCase())) {
+      return { path: resolvedStatePath, storage };
+    }
+  }
+
+  return null;
+}
+
+type WindowsCloudSyncedStateDir = NonNullable<ReturnType<typeof detectWindowsCloudSyncedStateDir>>;
+
+/** Formats the warning for state stored under a OneDrive sync root. */
+export function formatWindowsCloudSyncedStateDirWarning(
+  displayStateDir: string,
+  windowsCloudSyncedStateDir: WindowsCloudSyncedStateDir,
+): string {
+  return [
+    `- State directory is under Windows cloud-synced storage (${displayStateDir}; ${windowsCloudSyncedStateDir.storage}).`,
+    "- This can cause slow I/O, sync/lock races, and Files On-Demand dehydration for sessions and credentials.",
+    "- Prefer a local non-synced state dir (for example: %USERPROFILE%\\.openclaw).",
+    // No one-shot `OPENCLAW_STATE_DIR=... openclaw doctor` hint here: that
+    // retargets only the doctor process, while the managed Gateway keeps
+    // using the synced directory, so it reads as a fix but is not one.
+    "- To relocate: stop the Gateway, move the whole state directory, set",
+    "  OPENCLAW_STATE_DIR to the new path for the Gateway service (not just",
+    "  one shell), then restart it and re-run doctor to verify.",
+  ].join("\n");
+}
+
 function isPairingPolicy(value: unknown): boolean {
   return normalizeOptionalLowercaseString(value) === "pairing";
 }
@@ -738,15 +759,6 @@ function hasPairingPolicy(value: unknown): boolean {
   return false;
 }
 
-function isSlashRoutingSessionKey(sessionKey: string): boolean {
-  const raw = normalizeOptionalLowercaseString(sessionKey);
-  if (!raw) {
-    return false;
-  }
-  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
-  return /^[^:]+:slash:[^:]+(?:$|:)/.test(scoped);
-}
-
 function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   if (env.OPENCLAW_OAUTH_DIR?.trim()) {
     return true;
@@ -771,9 +783,11 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if ([...withPersistedAuth].some((channelId) => !withoutPersistedAuth.has(channelId))) {
     return true;
   }
-  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json.
+  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json, so a
+  // channel id with no effective plugin owner can never pair and must not require the dir.
   for (const [channelId, channelCfg] of Object.entries(channels)) {
-    if (channelId === "defaults" || channelId === "modelByChannel") {
+    const scopedChannelId = normalizeOptionalLowercaseString(channelId);
+    if (!scopedChannelId || !withPersistedAuth.has(scopedChannelId)) {
       continue;
     }
     if (hasPairingPolicy(channelCfg)) {
@@ -801,7 +815,7 @@ export function detectStateIntegrityHealthIssues(
     ? resolveSessionTranscriptsDirForAgent(agentId, env, homedir)
     : undefined;
   const storePath = agentId
-    ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
+    ? resolveSessionStorePathCore(cfg.session?.store, { agentId, env })
     : undefined;
   const storeDir = storePath ? path.dirname(storePath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
@@ -812,6 +826,15 @@ export function detectStateIntegrityHealthIssues(
       kind: "mac-cloud-state-dir",
       path: cloudSyncedStateDir.path,
       storage: cloudSyncedStateDir.storage,
+    });
+  }
+
+  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir, { env });
+  if (windowsCloudSyncedStateDir) {
+    issues.push({
+      kind: "windows-cloud-state-dir",
+      path: windowsCloudSyncedStateDir.path,
+      storage: windowsCloudSyncedStateDir.storage,
     });
   }
 
@@ -927,6 +950,15 @@ export function stateIntegrityIssueToHealthFinding(
         path: issue.path,
         fixHint: "Move OPENCLAW_STATE_DIR to local non-synced storage such as ~/.openclaw.",
       };
+    case "windows-cloud-state-dir":
+      return {
+        checkId: STATE_INTEGRITY_CHECK_ID,
+        severity: "warning",
+        message: `State directory is under Windows cloud-synced storage (${issue.storage}), which can cause slow I/O, sync races, and Files On-Demand dehydration.`,
+        path: issue.path,
+        fixHint:
+          "Move OPENCLAW_STATE_DIR to local non-synced storage such as %USERPROFILE%\\.openclaw.",
+      };
     case "linux-sd-state-dir":
       return {
         checkId: STATE_INTEGRITY_CHECK_ID,
@@ -1007,6 +1039,7 @@ export function stateIntegrityIssueToRepairEffect(
 ): HealthRepairEffect {
   switch (issue.kind) {
     case "mac-cloud-state-dir":
+    case "windows-cloud-state-dir":
     case "linux-sd-state-dir":
     case "linux-volatile-state-dir":
       return {
@@ -1089,6 +1122,7 @@ export async function noteStateIntegrity(
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
+  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
   const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
 
@@ -1100,6 +1134,11 @@ export async function noteStateIntegrity(
         "- Prefer a local non-synced state dir (for example: ~/.openclaw).",
         `  Set locally: OPENCLAW_STATE_DIR=~/.openclaw ${formatCliCommand("openclaw doctor")}`,
       ].join("\n"),
+    );
+  }
+  if (windowsCloudSyncedStateDir) {
+    warnings.push(
+      formatWindowsCloudSyncedStateDirWarning(displayStateDir, windowsCloudSyncedStateDir),
     );
   }
   if (linuxSdBackedStateDir) {
@@ -1277,20 +1316,12 @@ export async function noteStateIntegrity(
     }
   }
 
-  const extraStateDirs = new Set<string>();
-  if (path.resolve(stateDir) !== path.resolve(defaultStateDir)) {
-    if (existsDir(defaultStateDir)) {
-      extraStateDirs.add(defaultStateDir);
-    }
-  }
-  for (const other of findOtherStateDirs(stateDir)) {
-    extraStateDirs.add(other);
-  }
-  if (extraStateDirs.size > 0) {
+  // Compare only the effective home's default; other accounts do not share this history.
+  if (path.resolve(stateDir) !== path.resolve(defaultStateDir) && existsDir(defaultStateDir)) {
     warnings.push(
       [
         "- Multiple state directories detected. This can split session history.",
-        ...Array.from(extraStateDirs).map((dir) => `  - ${shortenHomePath(dir)}`),
+        `  - ${shortenHomePath(defaultStateDir)}`,
         `  Active state dir: ${displayStateDir}`,
       ].join("\n"),
     );
@@ -1298,14 +1329,19 @@ export async function noteStateIntegrity(
 
   const orphanAgentDirs = listOrphanAgentDirs(cfg, stateDir);
   if (orphanAgentDirs.length > 0) {
+    const authoredAgentRosterPath =
+      readAgentRosterProperty(cfg)?.kind === "list" ? "agents.list" : "agents.entries";
     warnings.push(
       [
-        `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching agents.list entry.`,
+        `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching ${authoredAgentRosterPath} entry.`,
         "  These agents can still have sessions/auth state on disk, but config-driven routing, identity, and model selection will ignore them.",
         `  Examples: ${formatOrphanAgentDirPreview(orphanAgentDirs)}`,
-        `  Restore the missing agents.list entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
+        `  Restore the missing ${authoredAgentRosterPath} entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
       ].join("\n"),
     );
+  }
+  if (stateDirExists) {
+    warnings.push(...collectRetainedUnconfiguredAgentDatabaseWarnings({ cfg, env }));
   }
 
   const compatibilityAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
@@ -1319,9 +1355,7 @@ export async function noteStateIntegrity(
     inspectLegacyStore: boolean,
   ) => {
     const { agentId, storePath } = target;
-    const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
     const absoluteStorePath = path.resolve(storePath);
-    const displaySessionsDir = shortenHomePath(sessionsDir);
 
     const sqliteStorePath = resolveSqliteTargetFromSessionStorePath(absoluteStorePath, {
       agentId,
@@ -1338,10 +1372,10 @@ export async function noteStateIntegrity(
       (candidate): candidate is [string, SessionEntry] =>
         candidate[1] != null && typeof candidate[1] === "object",
     );
-    const legacyOrder = new Map(legacyEntries.map(([sessionKey], index) => [sessionKey, index]));
+    const legacySessionKeys = new Set(legacyEntries.map(([sessionKey]) => sessionKey));
     const sqliteSessionKeys = new Set<string>();
     const isSessionKeyOccupied = (sessionKey: string) =>
-      sqliteSessionKeys.has(sessionKey) || legacyOrder.has(sessionKey);
+      sqliteSessionKeys.has(sessionKey) || legacySessionKeys.has(sessionKey);
     const mainKey = resolveCanonicalMainSessionKey({
       agentId,
       mainKey: cfg.session?.mainKey,
@@ -1352,21 +1386,7 @@ export async function noteStateIntegrity(
     const sqlitePluginStateScanner = createPluginSessionStateDoctorScanner({ agentId, cfg, env });
     const legacyPluginStateScanner = createPluginSessionStateDoctorScanner({ agentId, cfg, env });
     let mainEntry: SessionEntry | undefined;
-    let sqliteNewKeyIndex = 0;
-    const recent: Array<{ entry: SessionEntry; order: number; sessionKey: string }> = [];
-    const addRecent = (sessionKey: string, entry: SessionEntry, order: number) => {
-      recent.push({ entry, order, sessionKey });
-      recent.sort((left, right) => {
-        const leftUpdated = typeof left.entry.updatedAt === "number" ? left.entry.updatedAt : 0;
-        const rightUpdated = typeof right.entry.updatedAt === "number" ? right.entry.updatedAt : 0;
-        return rightUpdated - leftUpdated || left.order - right.order;
-      });
-      if (recent.length > 5) {
-        recent.pop();
-      }
-    };
-    const inspectMergedEntry = (sessionKey: string, entry: SessionEntry, order: number) => {
-      addRecent(sessionKey, entry, order);
+    const inspectMergedEntry = (sessionKey: string, entry: SessionEntry) => {
       if (sessionKey === mainKey) {
         mainEntry = entry;
       }
@@ -1382,22 +1402,19 @@ export async function noteStateIntegrity(
       ({ entry, sessionKey }) => {
         sqliteSessionKeys.add(sessionKey);
         sqlitePluginStateScanner.scanEntry(sessionKey, entry);
-        const order = legacyOrder.get(sessionKey) ?? legacyEntries.length + sqliteNewKeyIndex++;
-        inspectMergedEntry(sessionKey, entry, order);
+        inspectMergedEntry(sessionKey, entry);
         const recovery = inspectMainSessionRecoveryEntry(sessionKey, entry);
         if (recovery) {
           mainRecoveryWedged.push(recovery);
         }
       },
     );
-    let mergedEntryCount = sqliteEntryCount;
     for (const [sessionKey, entry] of legacyEntries) {
       if (sqliteSessionKeys.has(sessionKey)) {
         continue;
       }
       legacyPluginStateScanner.scanEntry(sessionKey, entry);
-      inspectMergedEntry(sessionKey, entry, legacyOrder.get(sessionKey) ?? mergedEntryCount);
-      mergedEntryCount += 1;
+      inspectMergedEntry(sessionKey, entry);
     }
     const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
     await noteMainSessionRecoveryIntegrity({
@@ -1408,36 +1425,9 @@ export async function noteStateIntegrity(
       confirmRepair: (params) => prompter.confirmRuntimeRepair(params),
       countLabel,
     });
-    if (mergedEntryCount > 0) {
-      const recentTranscriptCandidates = recent
-        .map(({ entry, sessionKey }) => [sessionKey, entry] as const)
-        .filter(([key]) => !isSlashRoutingSessionKey(key));
-      const missing = recentTranscriptCandidates.filter(([key, entry]) => {
-        if (sqliteSessionKeys.has(key)) {
-          return false;
-        }
-        const sessionId = entry.sessionId;
-        if (!sessionId) {
-          return false;
-        }
-        const legacySessionFile = (entry as SessionEntry & { sessionFile?: string }).sessionFile;
-        if (parseSqliteSessionFileMarker(legacySessionFile)) {
-          return false;
-        }
-        const transcriptPath = resolveSessionFilePathCore(sessionId, entry, sessionPathOpts);
-        return !existsFile(transcriptPath);
-      });
-      if (missing.length > 0) {
-        warnings.push(
-          [
-            `- ${missing.length}/${recentTranscriptCandidates.length} recent sessions are missing transcripts.`,
-            `  Verify sessions in store: ${formatCliCommand(`openclaw sessions --store "${sqliteStorePath}"`)}`,
-            `  Preview cleanup impact: ${formatCliCommand(`openclaw sessions cleanup --store "${sqliteStorePath}" --dry-run --fix-missing`)}`,
-            `  Prune missing entries: ${formatCliCommand(`openclaw sessions cleanup --store "${sqliteStorePath}" --enforce --fix-missing`)}`,
-          ].join("\n"),
-        );
-      }
-
+    // Session SQLite migration owns legacy transcript validation and archival.
+    // Repeating it here turns healthy pending imports into integrity warnings.
+    if (sqliteEntryCount > 0 || legacyEntries.length > 0) {
       if (wedgedSubagentSessions.length > 0) {
         const wedgedCount = countLabel(wedgedSubagentSessions.length, "wedged subagent session");
         warnings.push(
@@ -1565,78 +1555,19 @@ export async function noteStateIntegrity(
         }
       }
     }
-
-    // SQLite transcript ownership is repaired by the import/migration workflow.
-    // Never offer generic file archival against a live canonical session store.
-    if (sqliteEntryCount === 0 && inspectLegacyStore && existsDir(sessionsDir)) {
-      const referencedTranscriptPaths = new Set<string>();
-      for (const [, entry] of legacyEntries) {
-        if (!entry?.sessionId) {
-          continue;
-        }
-        try {
-          referencedTranscriptPaths.add(
-            resolveComparableTranscriptPath(
-              resolveSessionFilePathCore(entry.sessionId, entry, sessionPathOpts),
-            ),
-          );
-        } catch {
-          // ignore invalid legacy paths
-        }
-      }
-      const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
-      const orphanTranscriptPaths = sessionDirEntries
-        .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-        .map((entry) => path.join(sessionsDir, entry.name))
-        .filter(
-          (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
-        );
-      if (orphanTranscriptPaths.length > 0) {
-        const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
-        const orphanPreview = formatFilePreview(orphanTranscriptPaths);
-        warnings.push(
-          [
-            `- Found ${orphanCount} in ${displaySessionsDir}.`,
-            "  These .jsonl files are no longer referenced by sessions.json, so they are not part of any active session history.",
-            "  Doctor can archive them safely by renaming each file to *.deleted.<timestamp>.",
-            `  Examples: ${orphanPreview}`,
-          ].join("\n"),
-        );
-        const archiveOrphans = await prompter.confirmRuntimeRepair({
-          message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
-          initialValue: false,
-          requiresInteractiveConfirmation: true,
-        });
-        if (archiveOrphans) {
-          let archived = 0;
-          const archivedAt = formatSessionArchiveTimestamp();
-          for (const orphanPath of orphanTranscriptPaths) {
-            const archivedPath = `${orphanPath}.deleted.${archivedAt}`;
-            try {
-              fs.renameSync(orphanPath, archivedPath);
-              archived += 1;
-            } catch (err) {
-              warnings.push(
-                `- Failed to archive orphan transcript ${shortenHomePath(orphanPath)}: ${String(err)}`,
-              );
-            }
-          }
-          if (archived > 0) {
-            changes.push(
-              `- Archived ${countLabel(archived, "orphan transcript file")} in ${displaySessionsDir} as .deleted timestamped backups.`,
-            );
-          }
-        }
-      }
-    }
   };
 
   // A fixed store can map to several agent-owned SQLite targets but only one legacy JSON file.
   // Scan that file once under the compatibility owner so full-store work is not repeated.
   const inspectedLegacyStores = new Set<string>();
   for (const target of sessionTargets) {
+    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+      continue;
+    }
     const legacyStorePath = path.resolve(target.storePath);
-    await inspectAgentSessionIntegrity(target, !inspectedLegacyStores.has(legacyStorePath));
+    const inspectLegacyStore =
+      !legacyStorePath.endsWith(".sqlite") && !inspectedLegacyStores.has(legacyStorePath);
+    await inspectAgentSessionIntegrity(target, inspectLegacyStore);
     inspectedLegacyStores.add(legacyStorePath);
   }
   for (const warning of describeHeartbeatSessionTargetIssues(cfg)) {
@@ -1656,11 +1587,11 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   if (!existsDir(workspaceDir)) {
     return null;
   }
-  const gitMarker = path.join(workspaceDir, ".git");
-  if (fs.existsSync(gitMarker)) {
+  const resolvedWorkspaceDir = safeRealpathSync(workspaceDir);
+  if (!resolvedWorkspaceDir || findGitRoot(resolvedWorkspaceDir)) {
     return null;
   }
-  return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended";
+  return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
 }
 
 /** Emits the workspace backup tip when applicable. */

@@ -10,10 +10,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const agentScopeState = vi.hoisted(() => ({
@@ -78,6 +75,7 @@ async function makeHarness(): Promise<{
   stateDir: string;
   workspaceDir: string;
 }> {
+  const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
   const testState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-skill-upload-handler-",
@@ -86,7 +84,6 @@ async function makeHarness(): Promise<{
   const stateDir = testState.stateDir;
   const workspaceDir = testState.workspaceDir;
   agentScopeState.workspaceDir = workspaceDir;
-  vi.resetModules();
   const { skillsHandlers } = await import("./skills.js");
   return { handlers: skillsHandlers, stateDir, workspaceDir };
 }

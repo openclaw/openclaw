@@ -3,21 +3,18 @@
 import {
   isSessionTranscriptProjectionUnavailableError,
   readSessionTranscriptMessageEventPage,
-  readSessionTranscriptTitleProbeBatch,
   readSessionTranscriptWatermark,
-  readSessionTranscriptWatermarkBatch,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
+  type SessionTranscriptReadTarget,
 } from "../config/sessions/session-accessor.js";
+import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-accessor.transcript-target.js";
+import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
-import {
-  resolveTranscriptReadTarget,
-  sqliteMessageEventWithSeq,
-  toTranscriptReadScope,
-  type ResolvedTranscriptReadTarget,
-} from "./session-transcript-readers.js";
+import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
+import { toTranscriptReadScope } from "./session-transcript-read-target.js";
 
 type SessionTitleFields = {
   firstUserMessage: string | null;
@@ -28,14 +25,6 @@ const EMPTY_SESSION_TITLE_FIELDS: SessionTitleFields = {
   firstUserMessage: null,
   lastMessagePreview: null,
 };
-// Degraded nulls advance the sessions.list cache fence so the completed result cannot
-// outlive the projection rebuild that made those title fields temporarily unavailable.
-let sessionTitleProjectionUnavailableVersion = 0;
-
-export function readSessionTitleProjectionUnavailableVersion(): number {
-  return sessionTitleProjectionUnavailableVersion;
-}
-
 // Session-list title probes must not scale with transcript size. Read at most
 // this many active-path messages from either end, widening only once.
 const SQLITE_TITLE_PROBE_INITIAL_MESSAGES = 20;
@@ -48,10 +37,10 @@ type SqliteTitleFieldCacheEntry = ReturnType<typeof readSessionTranscriptWaterma
 
 // Appends advance maxSeq while rewind, fork, and compaction rotate generation. Both tokens must
 // match or stale titles can survive transcript replacement. Actively streaming sessions therefore
-// miss by design; the store-batched probe bounds that load while this LRU still serves idle rows.
+// miss by design; bounded probes limit that load while this LRU still serves idle rows.
 const sqliteTitleFieldCache = new Map<string, SqliteTitleFieldCacheEntry>();
 
-function sqliteTitleFieldCacheKey(target: ResolvedTranscriptReadTarget): string {
+function sqliteTitleFieldCacheKey(target: SessionTranscriptReadTarget): string {
   return `${target.agentId ?? ""}\0${target.sessionId}\0${target.storePath ?? ""}`;
 }
 
@@ -78,50 +67,62 @@ function readSqliteTitleProbeRange(
   }).events;
 }
 
-function findFirstTitleUserMessage(
-  entries: readonly SessionTranscriptMessageEvent[],
+function findFirstTitleUserText(
+  entries: readonly Parameters<typeof sqliteMessageEventWithSeq>[0][],
   includeInterSession: boolean,
-): unknown {
-  return entries.map(sqliteMessageEventWithSeq).find((message) => {
-    if (projectSessionDisplayMessage(message)?.role !== "user") {
-      return false;
+): string | null {
+  for (const entry of entries) {
+    const message = sqliteMessageEventWithSeq(entry);
+    const projected = projectSessionDisplayMessage(message);
+    if (
+      projected?.role === "user" &&
+      (includeInterSession ||
+        !hasInterSessionUserProvenance(message as { role?: unknown; provenance?: unknown }))
+    ) {
+      return projected.text;
     }
-    return (
-      includeInterSession ||
-      !hasInterSessionUserProvenance(message as { role?: unknown; provenance?: unknown })
-    );
+  }
+  return null;
+}
+
+function findLastMessageText(
+  entries: readonly Parameters<typeof sqliteMessageEventWithSeq>[0][],
+): string | null {
+  let text: string | null = null;
+  entries.findLast((entry) => {
+    const message = sqliteMessageEventWithSeq(entry);
+    text = projectSessionDisplayMessage(message, { flattenMarkdown: true })?.text ?? null;
+    return text !== null;
   });
+  return text;
 }
 
-function findLastMessageText(entries: readonly SessionTranscriptMessageEvent[]): string | null {
-  return (
-    entries
-      .toReversed()
-      .map(sqliteMessageEventWithSeq)
-      .map((message) => projectSessionDisplayMessage(message, { flattenMarkdown: true }))
-      .find(Boolean)?.text ?? null
-  );
+function copySessionTitleText(text: string | null): string | null {
+  // V8 slices can pin whole transcript payloads behind a short cached preview.
+  // Copy UTF-16 code units so ownership changes without altering lone surrogates.
+  return text === null ? null : Buffer.from(text, "utf16le").toString("utf16le");
 }
 
-function readSqliteTitleFields(
-  target: ResolvedTranscriptReadTarget,
+function hydrateSqliteTitleFields(
+  target: SessionTranscriptReadTarget,
   opts?: { includeInterSession?: boolean },
 ): SessionTitleFields {
-  const scope = toTranscriptReadScope(target);
-  const cacheKey = sqliteTitleFieldCacheKey(target);
-  const watermark = readSessionTranscriptWatermark(scope);
-  const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
-  const cached = sqliteTitleFieldCache.get(cacheKey);
-  const cachedFields =
-    cached?.generation === watermark.generation && cached.maxSeq === watermark.maxSeq
-      ? cached.fields[variant]
-      : undefined;
-  if (cached && cachedFields) {
-    setSqliteTitleFieldCache(cacheKey, cached);
-    return { ...cachedFields };
-  }
-  let fields: SessionTitleFields;
   try {
+    const scope = toTranscriptReadScope(target);
+    const cacheKey = sqliteTitleFieldCacheKey(target);
+    const watermark = readSessionTranscriptWatermark(scope);
+    if (watermark.maxSeq === null) {
+      return { ...EMPTY_SESSION_TITLE_FIELDS };
+    }
+    const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
+    const cached = sqliteTitleFieldCache.get(cacheKey);
+    const current =
+      cached?.generation === watermark.generation && cached.maxSeq === watermark.maxSeq;
+    const cachedFields = current ? cached.fields[variant] : undefined;
+    if (cached && cachedFields) {
+      setSqliteTitleFieldCache(cacheKey, cached);
+      return { ...cachedFields };
+    }
     const tail = readSessionTranscriptMessageEventPage(scope, {
       maxMessages: SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
       offset: 0,
@@ -137,7 +138,6 @@ function readSqliteTitleFields(
         ),
       );
     }
-
     const head =
       tail.totalMessages <= SQLITE_TITLE_PROBE_INITIAL_MESSAGES
         ? tail.events
@@ -147,9 +147,9 @@ function readSqliteTitleFields(
             0,
             SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
           );
-    let firstUser = findFirstTitleUserMessage(head, opts?.includeInterSession === true);
-    if (!firstUser && tail.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES) {
-      firstUser = findFirstTitleUserMessage(
+    let firstText = findFirstTitleUserText(head, opts?.includeInterSession === true);
+    if (!firstText && tail.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES) {
+      firstText = findFirstTitleUserText(
         readSqliteTitleProbeRange(
           scope,
           tail.totalMessages,
@@ -159,184 +159,36 @@ function readSqliteTitleFields(
         opts?.includeInterSession === true,
       );
     }
-    fields = {
-      firstUserMessage: firstUser ? (projectSessionDisplayMessage(firstUser)?.text ?? null) : null,
-      lastMessagePreview: lastText,
-    };
-  } catch (error) {
-    if (!isSessionTranscriptProjectionUnavailableError(error)) {
-      throw error;
-    }
-    // Titles are optional list decoration: degrade only this session while its projection rebuilds.
-    // Do not cache nulls, so the next list can restore titles after reconciliation.
-    sessionTitleProjectionUnavailableVersion += 1;
-    return { ...EMPTY_SESSION_TITLE_FIELDS };
-  }
-  const fieldsByVariant =
-    cached?.generation === watermark.generation && cached.maxSeq === watermark.maxSeq
-      ? cached.fields
-      : {};
-  fieldsByVariant[variant] = fields;
-  setSqliteTitleFieldCache(cacheKey, { ...watermark, fields: fieldsByVariant });
-  return { ...fields };
-}
-
-function readSqliteTitleFieldsOrEmpty(
-  target: ResolvedTranscriptReadTarget,
-  opts?: { includeInterSession?: boolean },
-): SessionTitleFields {
-  try {
-    return readSqliteTitleFields(target, opts);
-  } catch (error) {
-    if (!isSessionTranscriptProjectionUnavailableError(error)) {
-      throw error;
-    }
-    sessionTitleProjectionUnavailableVersion += 1;
-    return { ...EMPTY_SESSION_TITLE_FIELDS };
-  }
-}
-
-/** Batch-hydrates list title fields once per store, with canonical widening only for misses. */
-function readSessionTitleFieldsFromTranscriptBatchCurrent(
-  scopes: readonly SessionTranscriptReadScope[],
-  opts?: { includeInterSession?: boolean },
-): SessionTitleFields[] {
-  const targets: ResolvedTranscriptReadTarget[] = [];
-  const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
-  const results = new Map<number, SessionTitleFields>();
-  const misses: Array<{
-    cacheKey: string;
-    index: number;
-    scope: SessionTranscriptReadScope;
-    target: ResolvedTranscriptReadTarget;
-  }> = [];
-  const cachedCandidates: Array<{
-    cacheKey: string;
-    cached: SqliteTitleFieldCacheEntry;
-    cachedFields: SessionTitleFields;
-    index: number;
-    scope: SessionTranscriptReadScope;
-    target: ResolvedTranscriptReadTarget;
-  }> = [];
-
-  for (const [index, scope] of scopes.entries()) {
-    const target = resolveTranscriptReadTarget(scope);
-    targets.push(target);
-    const cacheKey = sqliteTitleFieldCacheKey(target);
-    const cached = sqliteTitleFieldCache.get(cacheKey);
-    const cachedFields = cached?.fields[variant];
-    if (cached && cachedFields) {
-      cachedCandidates.push({ cacheKey, cached, cachedFields, index, scope, target });
-      continue;
-    }
-    misses.push({ cacheKey, index, scope, target });
-  }
-
-  const watermarks = readSessionTranscriptWatermarkBatch(
-    cachedCandidates.map((candidate) => toTranscriptReadScope(candidate.target)),
-  );
-  for (const [candidateIndex, candidate] of cachedCandidates.entries()) {
-    const watermark = watermarks[candidateIndex];
-    if (
-      watermark &&
-      candidate.cached.generation === watermark.generation &&
-      candidate.cached.maxSeq === watermark.maxSeq
-    ) {
-      setSqliteTitleFieldCache(candidate.cacheKey, candidate.cached);
-      results.set(candidate.index, { ...candidate.cachedFields });
-      continue;
-    }
-    misses.push({
-      cacheKey: candidate.cacheKey,
-      index: candidate.index,
-      scope: candidate.scope,
-      target: candidate.target,
-    });
-  }
-
-  const probes =
-    misses.length > 0
-      ? readSessionTranscriptTitleProbeBatch(
-          misses.map((miss) => toTranscriptReadScope(miss.target)),
-        )
-      : [];
-  for (const [probeIndex, miss] of misses.entries()) {
-    const probe = probes[probeIndex];
-    if (!probe) {
-      results.set(miss.index, readSqliteTitleFieldsOrEmpty(miss.target, opts));
-      continue;
-    }
-    const cached = sqliteTitleFieldCache.get(miss.cacheKey);
-    const cachedFields =
-      cached?.generation === probe.generation && cached.maxSeq === probe.maxSeq
-        ? cached.fields[variant]
-        : undefined;
-    if (cached && cachedFields) {
-      setSqliteTitleFieldCache(miss.cacheKey, cached);
-      results.set(miss.index, { ...cachedFields });
-      continue;
-    }
-    const firstUser = findFirstTitleUserMessage(probe.head, opts?.includeInterSession === true);
-    const lastText = findLastMessageText(probe.tail);
-    if (probe.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES && (!firstUser || !lastText)) {
-      results.set(miss.index, readSqliteTitleFieldsOrEmpty(miss.target, opts));
-      continue;
-    }
     const fields = {
-      firstUserMessage: firstUser ? (projectSessionDisplayMessage(firstUser)?.text ?? null) : null,
-      lastMessagePreview: lastText,
+      firstUserMessage: copySessionTitleText(firstText),
+      lastMessagePreview: copySessionTitleText(lastText),
     };
-    const fieldsByVariant =
-      cached?.generation === probe.generation && cached.maxSeq === probe.maxSeq
-        ? cached.fields
-        : {};
+    const fieldsByVariant = current ? cached.fields : {};
     fieldsByVariant[variant] = fields;
-    setSqliteTitleFieldCache(miss.cacheKey, {
-      generation: probe.generation,
-      maxSeq: probe.maxSeq,
+    // Retain only the watermark and bounded strings, never the probe's transcript payloads.
+    setSqliteTitleFieldCache(cacheKey, {
+      generation: watermark.generation,
+      maxSeq: watermark.maxSeq,
       fields: fieldsByVariant,
     });
-    results.set(miss.index, { ...fields });
-  }
-
-  return targets.map((target, index) => {
-    const fields = results.get(index);
-    if (!fields) {
-      throw new Error(`Missing batched title fields for session ${target.sessionId}`);
-    }
-    return fields;
-  });
-}
-
-/** Batch-hydrates list title fields while isolating a rebuilding projection to its session. */
-export function readSessionTitleFieldsFromTranscriptBatch(
-  scopes: readonly SessionTranscriptReadScope[],
-  opts?: { includeInterSession?: boolean },
-): SessionTitleFields[] {
-  try {
-    return readSessionTitleFieldsFromTranscriptBatchCurrent(scopes, opts);
+    return { ...fields };
   } catch (error) {
-    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+    if (
+      !isSessionTranscriptProjectionUnavailableError(error) &&
+      !(error instanceof SessionTranscriptColdError)
+    ) {
       throw error;
     }
-    return scopes.map((scope) =>
-      readSqliteTitleFieldsOrEmpty(resolveTranscriptReadTarget(scope), opts),
-    );
+    // Optional titles must not restore cold payloads. Do not cache nulls under the preserved
+    // watermark: restoration and projection reconciliation can make these fields available again.
+    return { ...EMPTY_SESSION_TITLE_FIELDS };
   }
 }
 
-/** Reads title and preview text from a transcript through the reader seam. */
+/** Reads title and preview text from one transcript. */
 export function readSessionTitleFieldsFromTranscript(
   scope: SessionTranscriptReadScope,
   opts?: { includeInterSession?: boolean },
 ): SessionTitleFields {
-  return readSqliteTitleFieldsOrEmpty(resolveTranscriptReadTarget(scope), opts);
-}
-
-/** Reads title and preview text asynchronously through the reader seam. */
-export async function readSessionTitleFieldsFromTranscriptAsync(
-  scope: SessionTranscriptReadScope,
-  opts?: { includeInterSession?: boolean },
-): Promise<SessionTitleFields> {
-  return readSqliteTitleFieldsOrEmpty(resolveTranscriptReadTarget(scope), opts);
+  return hydrateSqliteTitleFields(resolveSessionTranscriptReadTarget(scope), opts);
 }

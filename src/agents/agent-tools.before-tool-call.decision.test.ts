@@ -11,7 +11,7 @@ import {
 import { addTestHook } from "../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import {
@@ -36,7 +36,7 @@ function assembledTool(
     codingRoot: process.cwd(),
     containmentRoot: process.cwd(),
     includeBaseCodingTools: kind === "data",
-    includeShellTools: kind === "tool",
+    shellTools: kind === "tool" ? "full" : "disabled",
     workspaceOnly: false,
     readOnly: false,
     applyPatchEnabled: false,

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -14,7 +14,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-doctor-"));
+    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-doctor-")));
   });
 
   afterEach(() => {
@@ -110,6 +110,25 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     expect(warnings[0]).toContain("Heartbeats will run");
   });
 
+  it("does not read a canonical database as JSON for a missing heartbeat target", async () => {
+    const cfg = cfgWithSession("slack:channel:c123");
+    const storePath = path.join(tmpDir, "sessions.sqlite");
+    cfg.session = { ...cfg.session, store: storePath };
+    await upsertSessionEntryCore(
+      { agentId: "ops", sessionKey: "agent:ops:other", storePath },
+      { sessionId: "other-session", updatedAt: Date.now() },
+    );
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+    try {
+      const warnings = describeHeartbeatSessionTargetIssues(cfg);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
+      expect(readFileSyncSpy.mock.calls.map(([file]) => file)).not.toContain(storePath);
+    } finally {
+      readFileSyncSpy.mockRestore();
+    }
+  });
+
   it("does not warn when an explicit heartbeat recipient does not need session history", () => {
     const cfg = cfgWithSession("slack:channel:c123");
     const agent = cfg.agents?.list?.[0];
@@ -198,6 +217,9 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
     const warning = describeHeartbeatSessionTargetIssues(cfg)[0];
     expect(warning).toContain('reason="no-route"');
-    expect(warning).toContain("set commands.ownerAllowFrom or a channel allowFrom");
+    expect(warning).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
+    expect(warning).toContain('heartbeat.target="telegram"');
+    expect(warning).toContain('heartbeat.to="123456789"');
+    expect(warning).toContain('heartbeat.target="none"');
   });
 });

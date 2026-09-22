@@ -1,12 +1,13 @@
+import { existsSync } from "node:fs";
 // Persists short-lived gateway restart intent for supervisor SIGTERM handoff.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -15,6 +16,15 @@ import {
 
 const GATEWAY_RESTART_INTENT_KEY = "gateway-restart";
 const GATEWAY_RESTART_INTENT_TTL_MS = 60_000;
+const schemaStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+  "CREATE TABLE IF NOT EXISTS gateway_restart_intent (",
+);
+const schemaEndMarker = ") STRICT;";
+const schemaEnd = OPENCLAW_STATE_SCHEMA_SQL.indexOf(schemaEndMarker, schemaStart);
+if (schemaStart < 0 || schemaEnd < 0) {
+  throw new Error("Gateway restart intent schema markers are missing");
+}
+const schema = OPENCLAW_STATE_SCHEMA_SQL.slice(schemaStart, schemaEnd + schemaEndMarker.length);
 
 const restartLog = createSubsystemLogger("restart");
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
@@ -57,6 +67,10 @@ export function writeGatewayRestartIntentSync(opts: {
   }
   const env = opts.env ?? process.env;
   try {
+    if (!existsSync(resolveOpenClawStateSqlitePath(env))) {
+      restartLog.info("skipped gateway restart intent: no existing state database");
+      return false;
+    }
     const reason = normalizeRestartIntentReason(opts.reason ?? opts.intent?.reason);
     const waitMs =
       typeof opts.intent?.waitMs === "number" &&
@@ -65,7 +79,8 @@ export function writeGatewayRestartIntentSync(opts: {
         ? Math.floor(opts.intent.waitMs)
         : null;
     const createdAt = Date.now();
-    runOpenClawStateWriteTransaction(
+    // The old Gateway still owns the schema until the restart hands off.
+    runExistingOpenClawStateWriteTransaction(
       ({ db }) => {
         const stateDb = getNodeSqliteKysely<GatewayRestartIntentDatabase>(db);
         executeSqliteQuerySync(
@@ -96,6 +111,7 @@ export function writeGatewayRestartIntentSync(opts: {
         );
       },
       { env },
+      { schemaSql: schema, operationLabel: "gateway.restart-intent.write" },
     );
     return true;
   } catch (err) {
@@ -106,7 +122,7 @@ export function writeGatewayRestartIntentSync(opts: {
 
 export function clearGatewayRestartIntentSync(env: NodeJS.ProcessEnv = process.env): void {
   try {
-    runOpenClawStateWriteTransaction(
+    runExistingOpenClawStateWriteTransaction(
       ({ db }) => {
         const stateDb = getNodeSqliteKysely<GatewayRestartIntentDatabase>(db);
         executeSqliteQuerySync(
@@ -117,6 +133,7 @@ export function clearGatewayRestartIntentSync(env: NodeJS.ProcessEnv = process.e
         );
       },
       { env },
+      { schemaSql: schema, operationLabel: "gateway.restart-intent.clear" },
     );
   } catch {}
 }

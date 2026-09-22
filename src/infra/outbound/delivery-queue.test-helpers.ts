@@ -4,12 +4,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import type { DeliverFn, RecoveryLogger } from "./delivery-queue-recovery.js";
+import type { QueuedDelivery } from "./delivery-queue-types.js";
+
+export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
+  return loadDeliveryQueueEntries(OUTBOUND_DELIVERY_QUEUE_NAME, stateDir) as QueuedDelivery[];
+}
 
 /** Installs Vitest hooks that provide a fresh delivery-queue state dir per case. */
 export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => string } {
@@ -26,7 +33,8 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
     fs.mkdirSync(tmpDir, { recursive: true });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     if (tmpDir) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -34,7 +42,8 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
     }
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     if (!fixtureRoot) {
       return;

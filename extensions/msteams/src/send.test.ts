@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
+import { teamsQuotedTableReply } from "./format.test-fixtures.js";
 import {
   deleteMessageMSTeams,
   editAdaptiveCardMSTeams,
@@ -39,9 +40,11 @@ vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 
-vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
-  resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
-}));
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/markdown-table-runtime")>();
+  return { ...actual, resolveMarkdownTableMode: mockState.resolveMarkdownTableMode };
+});
 
 vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
@@ -417,12 +420,12 @@ describe("sendMessageMSTeams", () => {
       throw new Error("MSTeams runtime not initialized");
     });
     mockState.resolveMarkdownTableMode.mockReturnValue("off");
-    mockState.convertMarkdownTables.mockReturnValue("hello");
+    const { source: text, expected } = teamsQuotedTableReply;
 
     const result = await sendMessageMSTeams({
       cfg: {} as OpenClawConfig,
       to: "conversation:19:conversation@thread.tacv2",
-      text: "hello",
+      text,
     });
 
     expect(result.messageId).toBe("message-1");
@@ -437,7 +440,10 @@ describe("sendMessageMSTeams", () => {
       cfg: {},
       channel: "msteams",
     });
-    expect(mockState.convertMarkdownTables).toHaveBeenCalledWith("hello", "off");
+    expect(mockState.convertMarkdownTables).toHaveBeenCalledWith(text, "off");
+    expect(firstObjectArg(mockState.sendMSTeamsMessages).messages).toEqual([
+      { text: expected, mediaUrl: undefined },
+    ]);
   });
 
   it("passes the resolved proactive replyStyle to text sends", async () => {
@@ -549,12 +555,6 @@ describe("sendMessageMSTeams", () => {
   });
 });
 
-describe("MSTeams continueConversation failure handling", () => {
-  beforeEach(() => {
-    mockState.resolveMSTeamsSendContext.mockReset();
-  });
-});
-
 describe("editMessageMSTeams", () => {
   beforeEach(() => {
     mockState.resolveMSTeamsSendContext.mockReset();
@@ -601,6 +601,15 @@ describe("editMessageMSTeams", () => {
         type: "message",
         id: "activity-123",
         text: "Updated message text",
+        entities: [
+          {
+            type: "https://schema.org/Message",
+            "@type": "Message",
+            "@context": "https://schema.org",
+            "@id": "",
+            additionalType: ["AIGeneratedContent"],
+          },
+        ],
       },
       { serviceUrlBoundary: { cloud: "Public" } },
     );

@@ -1,4 +1,3 @@
-// Discord plugin module implements handle action behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   readPositiveIntegerParam,
@@ -22,6 +21,7 @@ import {
 } from "../active-turn-thread-route.js";
 import { coerceDiscordComponentParam } from "../components.js";
 import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
+import { withDiscordRequestAuthority } from "../internal/request-authority.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
   isDiscordComponentSpecWithinMessageLimit,
@@ -59,25 +59,37 @@ function readCurrentDiscordTarget(
   return target || undefined;
 }
 
+type DiscordMessageActionContext = Pick<
+  ChannelMessageActionContext,
+  | "action"
+  | "params"
+  | "cfg"
+  | "accountId"
+  | "requesterAccountId"
+  | "requesterSenderId"
+  | "senderIsOwner"
+  | "toolContext"
+  | "mediaAccess"
+  | "mediaLocalRoots"
+  | "mediaReadFile"
+  | "sessionKey"
+  | "inboundEventKind"
+  | "conversationReadOrigin"
+  | "reply"
+  | "assertDirectAdapterHandoff"
+>;
+
 export async function handleDiscordMessageAction(
-  ctx: Pick<
-    ChannelMessageActionContext,
-    | "action"
-    | "params"
-    | "cfg"
-    | "accountId"
-    | "requesterAccountId"
-    | "requesterSenderId"
-    | "senderIsOwner"
-    | "toolContext"
-    | "mediaAccess"
-    | "mediaLocalRoots"
-    | "mediaReadFile"
-    | "sessionKey"
-    | "inboundEventKind"
-    | "conversationReadOrigin"
-    | "reply"
-  >,
+  ctx: DiscordMessageActionContext,
+): Promise<AgentToolResult<unknown>> {
+  ctx.assertDirectAdapterHandoff?.();
+  return await withDiscordRequestAuthority(ctx.assertDirectAdapterHandoff, () =>
+    dispatchDiscordMessageAction(ctx),
+  );
+}
+
+async function dispatchDiscordMessageAction(
+  ctx: DiscordMessageActionContext,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
@@ -89,6 +101,8 @@ export async function handleDiscordMessageAction(
           requesterAccountId: ctx.requesterAccountId,
           currentChannelProvider: ctx.toolContext.currentChannelProvider,
           currentChannelId: ctx.toolContext.currentChannelId,
+          currentChatType: ctx.toolContext.currentChatType,
+          currentMessagingTarget: ctx.toolContext.currentMessagingTarget,
         }
       : undefined;
   const readPolicyOptions: DiscordMessagingActionOptions | undefined =
@@ -193,7 +207,7 @@ export async function handleDiscordMessageAction(
       readStringParam(params, "media", { trim: false }) ??
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "filePath", { trim: false });
-    const requestedContent = readStringParam(params, "message", { allowEmpty: true });
+    const content = readStringParam(params, "message", { allowEmpty: true, trim: false });
     const explicitComponents = coerceDiscordComponentParam(params.components);
     const presentation =
       explicitComponents == null ? normalizeMessagePresentation(params.presentation) : undefined;
@@ -208,7 +222,7 @@ export async function handleDiscordMessageAction(
       generatedPresentationComponents &&
       isDiscordComponentSpecWithinMessageLimit({
         spec: generatedPresentationComponents,
-        fallbackText: requestedContent,
+        fallbackText: content,
         includesMedia: Boolean(mediaUrl),
       })
         ? generatedPresentationComponents
@@ -227,10 +241,6 @@ export async function handleDiscordMessageAction(
     const components = hasComponents ? rawComponents : undefined;
     const rawEmbeds = params.embeds;
     const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
-    const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents && !embeds?.length && !mediaUrl && !presentationFellBack,
-      allowEmpty: true,
-    });
     const deliveryContent =
       presentationFellBack && presentation
         ? renderMessagePresentationFallbackText({
@@ -250,7 +260,7 @@ export async function handleDiscordMessageAction(
         action: "sendMessage",
         accountId: accountId ?? undefined,
         to,
-        content: deliveryContent ?? "",
+        content: deliveryContent,
         ...(threadName ? { threadName } : {}),
         mediaUrl: mediaUrl ?? undefined,
         filename: filename ?? undefined,
@@ -286,12 +296,12 @@ export async function handleDiscordMessageAction(
       throw new Error("upload-file requires filePath, path, or media.");
     }
     const content =
-      readStringParam(params, "message", { allowEmpty: true }) ??
-      readStringParam(params, "content", { allowEmpty: true }) ??
+      readStringParam(params, "message", { allowEmpty: true, trim: false }) ??
+      readStringParam(params, "content", { allowEmpty: true, trim: false }) ??
       // `media` is accepted as an alias for the file, so a send-shaped call
       // arrives with its text in `caption`; without this alias that text is
       // silently dropped instead of becoming the uploaded message's content.
-      readStringParam(params, "caption", { allowEmpty: true });
+      readStringParam(params, "caption", { allowEmpty: true, trim: false });
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const silent = readBooleanParam(params, "silent") === true;
@@ -370,36 +380,22 @@ export async function handleDiscordMessageAction(
         before: readStringParam(params, "before"),
         after: readStringParam(params, "after"),
         around: readStringParam(params, "around"),
+        messageId: readStringParam(params, "messageId"),
       },
       cfg,
       actionOptions,
     );
   }
 
-  if (action === "edit") {
-    const messageId = readStringParam(params, "messageId", { required: true });
-    const content = readStringParam(params, "message", { required: true });
-    return await handleDiscordAction(
-      {
-        action: "editMessage",
-        accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
-        messageId,
-        content,
-      },
-      cfg,
-      actionOptions,
-    );
-  }
-
-  if (action === "delete") {
+  if (action === "edit" || action === "delete") {
     const messageId = readStringParam(params, "messageId", { required: true });
     return await handleDiscordAction(
       {
-        action: "deleteMessage",
+        action: action === "edit" ? "editMessage" : "deleteMessage",
         accountId: accountId ?? undefined,
         channelId: resolveChannelId(),
         messageId,
+        ...(action === "edit" ? { content: params.message } : {}),
       },
       cfg,
       actionOptions,
@@ -436,7 +432,7 @@ export async function handleDiscordMessageAction(
   if (action === "thread-create") {
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
-    const content = readStringParam(params, "message");
+    const content = readStringParam(params, "message", { trim: false });
     const autoArchiveMinutes = readDiscordAutoArchiveDurationParam(params, "autoArchiveMin");
     const appliedTags = readStringArrayParam(params, "appliedTags");
     const result = await handleDiscordAction(
@@ -484,7 +480,7 @@ export async function handleDiscordMessageAction(
         accountId: accountId ?? undefined,
         to,
         stickerIds,
-        content: readStringParam(params, "message"),
+        content: readStringParam(params, "message", { trim: false }),
         ...(readBooleanParam(params, "silent") === true ? { silent: true } : {}),
       },
       cfg,

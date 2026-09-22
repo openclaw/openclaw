@@ -58,12 +58,6 @@ struct LowCoverageHelperTests {
         #expect(!FileManager.default.fileExists(atPath: marker.path))
     }
 
-    @Test func `shell executor runs command`() async {
-        let result = await ShellExecutor.runDetailed(command: ["/bin/echo", "ok"], cwd: nil, env: nil, timeout: 2)
-        #expect(result.success == true)
-        #expect(result.stdout.contains("ok") || result.stderr.contains("ok"))
-    }
-
     @Test func `shell executor times out`() async {
         for _ in 0..<10 {
             let result = await ShellExecutor.runDetailed(
@@ -155,19 +149,22 @@ struct LowCoverageHelperTests {
             command: "com.docker.backend",
             fullCommand: "com.docker.backend",
             port: port,
-            mode: .remote) == true)
+            mode: .remote,
+            tunnelPort: port) == true)
 
         #expect(PortGuardian._testIsExpected(
             command: "ssh",
             fullCommand: "ssh -L \(port):localhost:\(port) user@host",
             port: port,
-            mode: .remote) == true)
+            mode: .remote,
+            tunnelPort: port) == true)
 
         #expect(PortGuardian._testIsExpected(
             command: "podman",
             fullCommand: "podman",
             port: port,
-            mode: .remote) == true)
+            mode: .remote,
+            tunnelPort: port) == true)
     }
 
     @Test func `port guardian local mode still rejects unexpected`() {

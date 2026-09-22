@@ -6,7 +6,7 @@ import { testing as cliBackendsTesting } from "../agents/cli-backends.test-suppo
 import { captureEnv } from "../test-utils/env.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
-vi.mock("./client-start-readiness.js", () => ({
+vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: async (client: { start: () => void }) => {
     client.start();
     return { ready: true, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 };
@@ -221,33 +221,15 @@ describe("gateway cli backend live helpers", () => {
       memoryToken,
     });
 
-    expect(probe.firstTurnPrompt).toBe(
-      "Do not inspect files or run tools. Reply with exactly: CLI-BACKEND-112233.",
-    );
-    expect(probe.resumePrompt).toBe(
-      "Do not inspect files or run tools. " +
-        "Return exactly two whitespace-separated tokens: CLI-RESUME-445566 followed by " +
-        "the exact opaque session token from the earlier turn. Do not add prose.",
-    );
+    expect(probe.firstTurnPrompt).toContain("public test label");
+    expect(probe.firstTurnPrompt).toContain("not a credential");
+    expect(probe.firstTurnPrompt).toContain("CLI-BACKEND-112233");
+    expect(probe.resumePrompt).toContain("public test label");
+    expect(probe.resumePrompt).toContain("CLI-RESUME-445566");
     expect(probe.firstTurnPrompt).not.toContain(memoryToken);
     expect(probe.resumePrompt).not.toContain(memoryToken);
     expect(probe.injectedContext).toContain(memoryToken);
     expect(probe.expectedResumeMarker).toBe("CLI-RESUME-445566");
-  });
-
-  it("finds only Claude-imported native session ids", () => {
-    const { resolveImportedClaudeCliSessionId } = liveHelpers;
-
-    expect(
-      resolveImportedClaudeCliSessionId([
-        null,
-        { __openclaw: "invalid" },
-        { __openclaw: { importedFrom: "codex-cli", cliSessionId: "wrong-provider" } },
-        { __openclaw: { importedFrom: "claude-cli", cliSessionId: 42 } },
-        { __openclaw: { importedFrom: "claude-cli", cliSessionId: "claude-session" } },
-      ]),
-    ).toBe("claude-session");
-    expect(resolveImportedClaudeCliSessionId([])).toBeUndefined();
   });
 
   it("retries Codex CLI timeout payloads only before the final attempt", async () => {

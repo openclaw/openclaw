@@ -4,8 +4,15 @@ import {
   MEMORY_CHUNKING_VERSION,
   normalizeExtraMemoryPathEntries,
   type MemoryExtraPath,
+  type MemoryIndexIdentityState as HostMemoryIndexIdentityState,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+
+export type MemoryIndexIdentityState =
+  | Exclude<HostMemoryIndexIdentityState, { status: "mismatched"; owner: "openclaw" }>
+  | (Extract<HostMemoryIndexIdentityState, { status: "mismatched"; owner: "openclaw" }> & {
+      versionOrder: "older" | "newer";
+    });
 
 export type MemoryIndexMeta = {
   model: string;
@@ -22,19 +29,6 @@ export type MemoryIndexMeta = {
 };
 
 export const MEMORY_INDEX_PROVENANCE_VERSION = 1;
-
-export type MemoryIndexIdentityState =
-  | {
-      status: "valid";
-    }
-  | {
-      status: "missing";
-      reason: string;
-    }
-  | {
-      status: "mismatched";
-      reason: string;
-    };
 
 export type MemoryIndexProviderIdentity = {
   provider: string;
@@ -106,6 +100,29 @@ function configuredMetaSourcesDiffer(params: {
   return metaSources.some((source, index) => source !== params.configuredSources[index]);
 }
 
+function openClawIndexMismatch(
+  code: "provenance_version" | "chunking_version",
+  reason: string,
+  versionOrder: "older" | "newer",
+): MemoryIndexIdentityState {
+  return { status: "mismatched", reason, code, owner: "openclaw", versionOrder };
+}
+
+function configuredIndexMismatch(
+  code:
+    | "model"
+    | "provider"
+    | "provider_settings"
+    | "sources"
+    | "scope"
+    | "chunking"
+    | "vector_dims"
+    | "fts_tokenizer",
+  reason: string,
+): MemoryIndexIdentityState {
+  return { status: "mismatched", reason, code, owner: "configuration" };
+}
+
 export function resolveConfiguredScopeHash(params: {
   workspaceDir: string;
   extraPaths?: MemoryExtraPath[];
@@ -149,19 +166,39 @@ export function resolveMemoryIndexIdentityState(params: {
 }): MemoryIndexIdentityState {
   const { meta } = params;
   if (!meta) {
-    return { status: "missing", reason: "index metadata is missing" };
-  }
-  if (meta.provenanceVersion !== MEMORY_INDEX_PROVENANCE_VERSION) {
     return {
-      status: "mismatched",
-      reason: "index provenance classifier changed",
+      status: "missing",
+      reason: "index metadata is missing",
+      code: "metadata_missing",
+      owner: "openclaw",
     };
   }
-  if (meta.chunkingVersion !== MEMORY_CHUNKING_VERSION) {
-    return {
-      status: "mismatched",
-      reason: "index chunking implementation changed",
-    };
+  // A newer dimension wins over an older one: a rollback cannot rewrite that index.
+  if (
+    (meta.provenanceVersion ?? 0) > MEMORY_INDEX_PROVENANCE_VERSION ||
+    (meta.chunkingVersion ?? 0) > MEMORY_CHUNKING_VERSION
+  ) {
+    return openClawIndexMismatch(
+      (meta.provenanceVersion ?? 0) > MEMORY_INDEX_PROVENANCE_VERSION
+        ? "provenance_version"
+        : "chunking_version",
+      "the index was written by a newer OpenClaw version; upgrade OpenClaw or reindex explicitly",
+      "newer",
+    );
+  }
+  if ((meta.provenanceVersion ?? 0) < MEMORY_INDEX_PROVENANCE_VERSION) {
+    return openClawIndexMismatch(
+      "provenance_version",
+      "index provenance classifier changed",
+      "older",
+    );
+  }
+  if ((meta.chunkingVersion ?? 0) < MEMORY_CHUNKING_VERSION) {
+    return openClawIndexMismatch(
+      "chunking_version",
+      "index chunking implementation changed",
+      "older",
+    );
   }
   const expectedModel =
     params.provider && params.provider.model === undefined
@@ -172,27 +209,24 @@ export function resolveMemoryIndexIdentityState(params: {
     ...(params.providerAliases ?? []),
   ].filter((identity) => identity.model === meta.model);
   if (expectedModel !== undefined && matchingModelIdentities.length === 0) {
-    return {
-      status: "mismatched",
-      reason: `index was built for model ${meta.model}, expected ${expectedModel}`,
-    };
+    return configuredIndexMismatch(
+      "model",
+      `index was built for model ${meta.model}, expected ${expectedModel}`,
+    );
   }
   const expectedProvider = params.provider ? params.provider.id : "none";
   if (meta.provider !== expectedProvider) {
-    return {
-      status: "mismatched",
-      reason: `index was built for provider ${meta.provider}, expected ${expectedProvider}`,
-    };
+    return configuredIndexMismatch(
+      "provider",
+      `index was built for provider ${meta.provider}, expected ${expectedProvider}`,
+    );
   }
   if (
     expectedModel !== undefined &&
     params.providerKeyKnown !== false &&
     !matchingModelIdentities.some((identity) => identity.providerKey === meta.providerKey)
   ) {
-    return {
-      status: "mismatched",
-      reason: "index provider settings changed",
-    };
+    return configuredIndexMismatch("provider_settings", "index provider settings changed");
   }
   if (
     configuredMetaSourcesDiffer({
@@ -200,34 +234,19 @@ export function resolveMemoryIndexIdentityState(params: {
       configuredSources: params.configuredSources,
     })
   ) {
-    return {
-      status: "mismatched",
-      reason: "index sources changed",
-    };
+    return configuredIndexMismatch("sources", "index sources changed");
   }
   if (meta.scopeHash !== params.configuredScopeHash) {
-    return {
-      status: "mismatched",
-      reason: "index scope changed",
-    };
+    return configuredIndexMismatch("scope", "index scope changed");
   }
   if (meta.chunkTokens !== params.chunkTokens || meta.chunkOverlap !== params.chunkOverlap) {
-    return {
-      status: "mismatched",
-      reason: "index chunking changed",
-    };
+    return configuredIndexMismatch("chunking", "index chunking changed");
   }
   if (params.vectorReady && params.hasIndexedChunks !== false && !meta.vectorDims) {
-    return {
-      status: "mismatched",
-      reason: "index vector dimensions are missing",
-    };
+    return configuredIndexMismatch("vector_dims", "index vector dimensions are missing");
   }
   if ((meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer) {
-    return {
-      status: "mismatched",
-      reason: "index FTS tokenizer changed",
-    };
+    return configuredIndexMismatch("fts_tokenizer", "index FTS tokenizer changed");
   }
   return { status: "valid" };
 }

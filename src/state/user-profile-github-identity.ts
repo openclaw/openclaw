@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/users.js";
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  isGitCoauthorCreditEnabled,
+} from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { UserProfileGitHubIdentity } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
@@ -7,9 +11,9 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { mutateUserPreference, selectUserPreferenceValues } from "./user-preferences.js";
-import { selectResolvedUserProfileById, userProfilesDb } from "./user-profiles-internal.js";
-import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
+import { mutateUserPreference, selectUserPreferenceValues } from "./user-preferences.store.js";
+import { selectResolvedUserProfileMetadataById, userProfilesDb } from "./user-profiles-internal.js";
+import { ensureUserProfilesSchema, UserProfileOwnerError } from "./user-profiles-schema.js";
 
 const GITHUB_PROVIDER = "github";
 const GITHUB_LOGIN_SUBJECT_PREFIX = "login:";
@@ -36,7 +40,7 @@ function toPublicGitHubIdentity(identity: StoredGitHubIdentity): UserProfileGitH
   };
 }
 
-function selectStoredGitHubIdentities(
+export function selectStoredGitHubIdentities(
   db: DatabaseSync,
   profileIds?: readonly string[],
 ): Map<string, StoredGitHubIdentity> {
@@ -78,7 +82,7 @@ export function resolveCachedGitHubIdentity(
       .select("profile_id")
       .where("email", "=", email),
   );
-  const profile = alias ? selectResolvedUserProfileById(db, alias.profile_id) : undefined;
+  const profile = alias ? selectResolvedUserProfileMetadataById(db, alias.profile_id) : undefined;
   if (!profile) {
     return undefined;
   }
@@ -128,7 +132,7 @@ export function selectUserProfileGitHubIdentities(
   );
 }
 
-/** Resolves bounded participants only when verified identity and public credit opt-in agree. */
+/** Resolves bounded participants for verified identities that have not opted out of public credit. */
 export function resolveUserProfileGitHubAttribution(
   profileIds: readonly string[],
   options: OpenClawStateDatabaseOptions = {},
@@ -155,7 +159,9 @@ export function resolveUserProfileGitHubAttribution(
   return new Map(
     [...canonicalBySource].map(([sourceId, canonicalId]) => [
       sourceId,
-      preferences.get(canonicalId) === true ? (identities.get(canonicalId) ?? null) : null,
+      isGitCoauthorCreditEnabled(preferences.get(canonicalId))
+        ? (identities.get(canonicalId) ?? null)
+        : null,
     ]),
   );
 }
@@ -232,7 +238,7 @@ export function applyVerifiedGitHubIdentity(params: {
             .where("canonical_login", "is", null),
         );
   const aliasProfileId = aliasIdentity
-    ? selectResolvedUserProfileById(db, aliasIdentity.profile_id)?.id
+    ? selectResolvedUserProfileMetadataById(db, aliasIdentity.profile_id)?.id
     : undefined;
   const aliasGitHubIdentity = aliasProfileId
     ? selectStoredGitHubIdentities(db, [aliasProfileId]).get(aliasProfileId)
@@ -245,11 +251,20 @@ export function applyVerifiedGitHubIdentity(params: {
       : undefined;
   const currentProfileId =
     reusableAliasProfileId ??
-    (existing ? selectResolvedUserProfileById(db, existing.profile_id)?.id : undefined) ??
+    (existing ? selectResolvedUserProfileMetadataById(db, existing.profile_id)?.id : undefined) ??
     params.createProfile();
   const targetProfileId = existing
-    ? (selectResolvedUserProfileById(db, existing.profile_id)?.id ?? currentProfileId)
+    ? (selectResolvedUserProfileMetadataById(db, existing.profile_id)?.id ?? currentProfileId)
     : currentProfileId;
+  // An email linked by older code must not turn shared owner attribution into a person.
+  if (
+    aliasIdentity?.profile_id === GATEWAY_OWNER_PROFILE_ID ||
+    existing?.profile_id === GATEWAY_OWNER_PROFILE_ID ||
+    currentProfileId === GATEWAY_OWNER_PROFILE_ID ||
+    targetProfileId === GATEWAY_OWNER_PROFILE_ID
+  ) {
+    throw new UserProfileOwnerError("merge");
+  }
   const currentIdentity = selectStoredGitHubIdentities(db, [currentProfileId]).get(
     currentProfileId,
   );

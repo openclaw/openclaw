@@ -5,26 +5,10 @@ import { buildConfiguredModelCatalog } from "../../agents/model-selection-shared
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  LlmCompleteErrorCode,
-  LlmCompleteParams,
-  LlmIsolatedAgentRuntimeCompleteParams,
-} from "./types-core.js";
+import { createLlmCompleteError as completionError } from "./runtime-llm-error.js";
+import type { LlmCompleteParams, LlmIsolatedAgentRuntimeCompleteParams } from "./types-core.js";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
-
-function completionError(
-  code: LlmCompleteErrorCode,
-  message: string,
-  cause?: unknown,
-): Error & { code: LlmCompleteErrorCode } {
-  const error = new Error(message, cause === undefined ? undefined : { cause }) as Error & {
-    code: LlmCompleteErrorCode;
-  };
-  error.name = "LlmCompleteError";
-  error.code = code;
-  return error;
-}
 
 function requireIsolatedUserPrompt(params: LlmCompleteParams): string {
   if (
@@ -62,6 +46,15 @@ export function assertSupportedExecutionMode(params: LlmCompleteParams): void {
     throw completionError(
       "LLM_ISOLATED_INPUT_REJECTED",
       'Plugin LLM completion execution.mode must be "isolated-agent-runtime" when execution is provided.',
+    );
+  }
+  if (
+    ("requiredAuthMode" in params && params.requiredAuthMode !== undefined) ||
+    ("responseFormat" in params && params.responseFormat !== undefined)
+  ) {
+    throw completionError(
+      "LLM_ISOLATED_INPUT_REJECTED",
+      "Isolated agent-runtime completion does not support requiredAuthMode or responseFormat; use direct completion for provider controls.",
     );
   }
 }

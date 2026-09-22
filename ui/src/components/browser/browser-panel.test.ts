@@ -1,9 +1,55 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./browser-panel.ts";
+import { createBrowserClient, createView } from "./browser-panel-controller-test-support.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
+
+function attachAnnotationOverlay(panel: {
+  browserPanelController: BrowserPanelController;
+  renderRoot: ShadowRoot;
+}) {
+  const stage = document.createElement("div");
+  stage.className = "bp-stage";
+  vi.spyOn(stage, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    left: 0,
+    top: 0,
+    right: 100,
+    bottom: 100,
+    width: 100,
+    height: 100,
+    toJSON: () => ({}),
+  });
+  const overlay = document.createElement("canvas");
+  const capturedPointers = new Set<number>();
+  overlay.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
+  overlay.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
+  overlay.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
+  overlay.addEventListener("pointerdown", (event) =>
+    panel.browserPanelController.handleOverlayPointerDown(event as PointerEvent),
+  );
+  overlay.addEventListener("pointermove", (event) =>
+    panel.browserPanelController.handleOverlayPointerMove(event as PointerEvent),
+  );
+  stage.append(overlay);
+  panel.renderRoot.append(stage);
+
+  const dispatchPointer = (
+    type: "pointerdown" | "pointermove",
+    clientX: number,
+    clientY: number,
+  ) => {
+    const event = new MouseEvent(type, { bubbles: true, button: 0, clientX, clientY });
+    Object.defineProperty(event, "pointerId", { configurable: true, value: 7 });
+    overlay.dispatchEvent(event);
+  };
+  return { capturedPointers, dispatchPointer };
+}
 
 describe("normalizeBrowserUrlDraft", () => {
   beforeEach(() => {
@@ -102,6 +148,65 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Browser");
     expect(empty?.querySelector("svg")).not.toBeNull();
   });
+
+  it.each([true, false])(
+    "keeps refresh feedback out of an existing page (retained: %s)",
+    async (retained) => {
+      const response = createDeferred<unknown>();
+      const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+        available: boolean;
+        embedded: boolean;
+        presented: boolean;
+        refreshOnPresentation: boolean;
+        client: GatewayBrowserClient;
+        browserPanelController: BrowserPanelController;
+        renderRoot: ShadowRoot;
+        requestUpdate: () => void;
+        updateComplete: Promise<unknown>;
+      };
+      panel.available = true;
+      panel.embedded = true;
+      panel.presented = true;
+      panel.refreshOnPresentation = false;
+      panel.client = createBrowserClient(async () => response.promise).client;
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      panel.browserPanelController.activeTargetId = "tab-a";
+      panel.browserPanelController.view = retained ? createView("tab-a") : null;
+      panel.requestUpdate();
+      await panel.updateComplete;
+      const preview = panel.renderRoot.querySelector(".bp-shot");
+      const input = panel.renderRoot.querySelector<HTMLTextAreaElement>(".bp-input");
+      input?.focus();
+      const refresh = panel.browserPanelController.refreshAll();
+      await panel.updateComplete;
+
+      expect(panel.renderRoot.querySelector(".bp-shot")).toBe(preview);
+      expect(panel.renderRoot.querySelector("openclaw-panel-loading-skeleton") !== null).toBe(
+        !retained,
+      );
+      const reload = panel.renderRoot.querySelector('button[aria-label="Reload"]');
+      expect(reload?.getAttribute("aria-busy")).toBe("true");
+      expect(panel.renderRoot.querySelector(".bp-viewport")?.getAttribute("aria-busy")).toBe(
+        "true",
+      );
+      if (retained) {
+        expect(panel.renderRoot.activeElement).toBe(input);
+      }
+
+      response.reject(new Error("Refresh connection interrupted"));
+      await refresh;
+      await panel.updateComplete;
+
+      expect(panel.renderRoot.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+      expect(panel.renderRoot.querySelector(".bp-shot")).toBe(preview);
+      expect(reload?.getAttribute("aria-busy")).toBe("false");
+      expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(
+        "Refresh connection interrupted",
+      );
+    },
+  );
 
   it("suppresses an open dock without overwriting its persisted preference", async () => {
     localStorage.setItem(
@@ -206,6 +311,45 @@ describe("normalizeBrowserUrlDraft", () => {
 
     expect(panel.browserPanelIsOpen()).toBe(false);
   });
+
+  it.each(["close", "suppress"] as const)(
+    "ends an active annotation gesture on panel %s",
+    async (transition) => {
+      localStorage.setItem(
+        "openclaw.browser.panel.v1",
+        JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
+      );
+      const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+        available: boolean;
+        suppressed: boolean;
+        browserPanelController: BrowserPanelController;
+        handleToggleRequest: (event: Event) => void;
+        renderRoot: ShadowRoot;
+        updateComplete: Promise<unknown>;
+      };
+      panel.available = true;
+      document.body.append(panel);
+      await panel.updateComplete;
+      const { capturedPointers, dispatchPointer } = attachAnnotationOverlay(panel);
+
+      panel.browserPanelController.setMode("annotate");
+      dispatchPointer("pointerdown", 10, 20);
+      expect(capturedPointers.has(7)).toBe(true);
+
+      if (transition === "close") {
+        panel.handleToggleRequest(
+          new CustomEvent("openclaw:browser-toggle", { detail: { open: false } }),
+        );
+      } else {
+        panel.suppressed = true;
+        await panel.updateComplete;
+      }
+
+      expect(capturedPointers.has(7)).toBe(false);
+      dispatchPointer("pointermove", 30, 40);
+      expect(panel.browserPanelController.strokes).toEqual([{ points: [{ x: 0.1, y: 0.2 }] }]);
+    },
+  );
 
   it("treats an embedded panel as open only while it is presented", async () => {
     const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {

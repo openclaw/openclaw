@@ -7,8 +7,26 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-sta
 type CronJobsTable = OpenClawStateKyselyDatabase["cron_jobs"];
 type CronStoreDatabase = Pick<OpenClawStateKyselyDatabase, "cron_job_scratch" | "cron_jobs">;
 
-/** Read shape for rows in the cron_jobs SQLite table. */
+// Keep native integer conversion in the table's column order.
+export const CRON_JOB_READ_COLUMNS = [
+  "job_id",
+  "declaration_key",
+  "enabled",
+  "agent_id",
+  "payload_kind",
+  "job_json",
+  "state_json",
+  "runtime_updated_at_ms",
+  "schedule_identity",
+  "sort_order",
+  "updated_at",
+] as const;
+
+/** Complete stored row used by independent cron inventories. */
 export type CronJobRow = Selectable<CronJobsTable>;
+
+/** Read shape consumed by cron decoding, conflict checks, and owner migration. */
+export type CronJobReadRow = Pick<CronJobRow, (typeof CRON_JOB_READ_COLUMNS)[number]>;
 
 /** Insert/update shape for rows in the cron_jobs SQLite table. */
 export type CronJobInsert = Insertable<CronJobsTable>;

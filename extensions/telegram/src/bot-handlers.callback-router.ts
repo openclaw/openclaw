@@ -4,7 +4,10 @@ import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { applySessionModelSelection } from "openclaw/plugin-sdk/model-session-runtime";
-import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
+import {
+  formatModelsAvailableHeader,
+  MODEL_PICKER_CHANGED_MESSAGE,
+} from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -46,7 +49,10 @@ import {
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
-import { getTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
+import {
+  getTelegramCallbackQueryAnswerPromise,
+  startTelegramCallbackQueryAnswer,
+} from "./callback-query-answer-state.js";
 import { buildCommandsPaginationKeyboard, buildTelegramModelsMenuButtons } from "./command-ui.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
@@ -101,14 +107,11 @@ export function createTelegramCallbackRouter({
       return;
     }
     let callbackAnswered = false;
-    const answerCallbackQuery = async (text?: string) => {
+    const answerCallbackQuery = async () => {
       await withTelegramApiErrorLogging({
         operation: "answerCallbackQuery",
         runtime,
-        fn: () =>
-          text
-            ? bot.api.answerCallbackQuery(callback.id, { text })
-            : bot.api.answerCallbackQuery(callback.id),
+        fn: () => startTelegramCallbackQueryAnswer(bot, callback.id, false),
       }).catch(() => {});
       callbackAnswered = true;
     };
@@ -524,10 +527,12 @@ async function handleTelegramModelCallback(params: {
       senderId,
       runtimeCfg,
     });
-    const providerData = await telegramDeps.buildModelsProviderData(runtimeCfg, session.agentId);
+    const providerData = await telegramDeps.buildModelsProviderData(runtimeCfg, session.agentId, {
+      sessionEntry: session.sessionEntry,
+    });
     return { sessionState: session, modelData: providerData };
   });
-  const { byProvider, providers, modelNames, resolvedDefault: activeResolvedDefault } = modelData;
+  const { byProvider, providers, resolvedDefault: activeResolvedDefault } = modelData;
   const providerInfos: ProviderInfo[] = providers.map((provider) => ({
     id: provider,
     count: byProvider.get(provider)?.size ?? 0,
@@ -538,9 +543,13 @@ async function handleTelegramModelCallback(params: {
       await retryModelAction(() => editMessageWithButtons("No providers available.", []));
       return true;
     }
+    const notice = [...(modelData.modelMenu?.byProvider.values() ?? [])]
+      .map((provider) => provider.notice)
+      .filter(Boolean)
+      .join("\n");
     await retryModelAction(() =>
       editMessageWithButtons(
-        "Select a provider:",
+        [modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n"),
         buildTelegramModelsMenuButtons({ providers: providerInfos }),
       ),
     );
@@ -552,7 +561,7 @@ async function handleTelegramModelCallback(params: {
     if (!listSelection) {
       await retryModelAction(() =>
         editMessageWithButtons(
-          "This model picker is stale or ambiguous. Reopen /model and try again.",
+          MODEL_PICKER_CHANGED_MESSAGE,
           buildTelegramModelsMenuButtons({ providers: providerInfos }),
         ),
       );
@@ -563,7 +572,7 @@ async function handleTelegramModelCallback(params: {
     if (!modelSet || modelSet.size === 0) {
       await retryModelAction(() =>
         editMessageWithButtons(
-          `Unknown provider: ${provider}\n\nSelect a provider:`,
+          MODEL_PICKER_CHANGED_MESSAGE,
           buildTelegramModelsMenuButtons({ providers: providerInfos }),
         ),
       );
@@ -574,22 +583,29 @@ async function handleTelegramModelCallback(params: {
     const safePage = Math.max(1, Math.min(page, totalPages));
     const currentModel =
       sessionState.model || `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
+    const availability = modelData.modelMenu?.byProvider.get(provider);
     const buttons = buildModelsKeyboard({
       provider,
       models,
       currentModel,
       currentPage: safePage,
       totalPages,
-      modelNames,
+      modelNames: modelData.modelMenu?.modelNames ?? modelData.modelNames,
     });
-    const text = formatModelsAvailableHeader({
+    const text = `${formatModelsAvailableHeader({
       provider,
       total: models.length,
       cfg: runtimeCfg,
       agentDir: resolveAgentDir(runtimeCfg, sessionState.agentId),
       sessionEntry: sessionState.sessionEntry,
-    });
-    await retryModelAction(() => editMessageWithButtons(text, buttons));
+      availability,
+    })}\nSelecting a model also applies its configured runtime.`;
+    await retryModelAction(() =>
+      editMessageWithButtons(
+        [modelData.refreshWarning, text].filter(Boolean).join("\n\n"),
+        buttons,
+      ),
+    );
     return true;
   }
 
@@ -597,20 +613,11 @@ async function handleTelegramModelCallback(params: {
     return true;
   }
   const selection = resolveModelSelection({ callback: modelCallback, providers, byProvider });
-  if (selection.kind !== "resolved") {
+  if (selection.kind !== "resolved" || !byProvider.get(selection.provider)?.has(selection.model)) {
     await retryModelAction(() =>
       editMessageWithButtons(
-        `Could not resolve model "${selection.model}".\n\nSelect a provider:`,
+        MODEL_PICKER_CHANGED_MESSAGE,
         buildTelegramModelsMenuButtons({ providers: providerInfos }),
-      ),
-    );
-    return true;
-  }
-  if (!byProvider.get(selection.provider)?.has(selection.model)) {
-    await retryModelAction(() =>
-      editMessageWithButtons(
-        `❌ Model "${selection.provider}/${selection.model}" is not allowed.`,
-        [],
       ),
     );
     return true;
@@ -637,9 +644,6 @@ async function handleTelegramModelCallback(params: {
     };
     const previousAuthProfileId = sessionEntry.authProfileOverride?.trim();
     const sessionStore = { [sessionState.sessionKey]: sessionEntry };
-    const modelCatalog = [...byProvider.entries()].flatMap(([provider, models]) =>
-      [...models].map((model) => ({ provider, id: model, name: model })),
-    );
     const currentModelRef = sessionState.model?.trim();
     const currentModelSeparator = currentModelRef?.indexOf("/") ?? -1;
     const currentProvider =
@@ -663,14 +667,13 @@ async function handleTelegramModelCallback(params: {
         defaultModel: resolvedDefault.model,
         currentProvider,
         currentModel,
-        allowedModelKeys: new Set(modelCatalog.map((entry) => `${entry.provider}/${entry.id}`)),
-        modelCatalog,
+        modelCatalog: modelData.modelCatalog,
         canPersistStickyModelSelection: false,
         request: {
           provider: selection.provider,
           model: selection.model,
           isDefault: isDefaultSelection,
-          runtime: { kind: "unchanged" },
+          runtime: { kind: "clear" },
         },
         markLiveSwitchPending: true,
       }),
@@ -691,13 +694,10 @@ async function handleTelegramModelCallback(params: {
     const actionText = isDefaultSelection
       ? "reset to default"
       : `changed to <b>${escapeHtml(selection.provider)}/${escapeHtml(selection.model)}</b>`;
-    const runtimeText =
-      applied.runtimeChange?.kind === "clear"
-        ? "Runtime reset to configured policy."
-        : "Runtime unchanged.";
+    const runtimeText = `Runtime set to <b>${escapeHtml(applied.agentRuntime)}</b> from configured policy.`;
     const scopeText = isDefaultSelection
       ? `Session model selection cleared.${defaultAuthProfileNotice ? ` ${defaultAuthProfileNotice}` : ""} ${runtimeText} New replies use the agent's configured default.`
-      : `Session-only model selection. ${runtimeText} Use /model ${escapeHtml(selection.provider)}/${escapeHtml(selection.model)} --runtime &lt;runtime&gt; -s to switch harnesses. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
+      : `Session-only model selection. ${runtimeText} The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
     await editMessageWithButtons(`✅ Model ${actionText}\n\n${scopeText}`, [], {
       parse_mode: "HTML",
     });

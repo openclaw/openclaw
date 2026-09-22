@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -197,10 +198,7 @@ test("sessions.patch rechecks plugin ownership after waiting for lifecycle admis
     internal: { pluginRuntimeOwnerId: "memory-core" },
   } as never;
   let releaseMutation = () => {};
-  let markMutationStarted = () => {};
-  const mutationStarted = new Promise<void>((resolve) => {
-    markMutationStarted = resolve;
-  });
+  const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
   const mutation = runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities: [sessionKey, sessionId],

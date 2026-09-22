@@ -1,6 +1,7 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -151,6 +152,8 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
   opts: MatrixActionClientOpts;
   run: (target: { client: MatrixClient; roomId: string }) => Promise<T>;
 }): Promise<T> {
+  const assertCurrent = captureChannelReadAuthority();
+  assertCurrent?.();
   const account = resolveMatrixAccount({ cfg: params.cfg, accountId: params.accountId });
   const baseConfig = resolveMatrixBaseConfig(params.cfg);
   const preliminaryRoomId = normalizeMatrixResolvableTarget(params.roomId);
@@ -164,10 +167,13 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
     throw new ToolAuthorizationError("Matrix read target is not allowed.");
   }
   return await withResolvedActionClient(params.opts, async (client) => {
+    assertCurrent?.();
     const roomId = await resolveMatrixRoomId(client, params.roomId);
+    assertCurrent?.();
     const inputAlias = params.roomId.trim().startsWith("#") ? params.roomId.trim() : undefined;
     const { getRoomInfo } = createMatrixRoomInfoResolver(client);
     const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
+    assertCurrent?.();
     const mutableRoomName =
       account.config.dangerouslyAllowNameMatching === true ? roomInfo.name : undefined;
     const aliases = [
@@ -203,6 +209,7 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
         : current && trustedCurrentClassification
           ? trustedCurrentClassification
           : await classifyMatrixReadRoom({ client, roomId });
+    assertCurrent?.();
     const resolvedGroupPolicy = resolveAllowlistProviderRuntimeGroupPolicy({
       providerConfigPresent: params.cfg.channels?.matrix !== undefined,
       groupPolicy: account.config.groupPolicy,

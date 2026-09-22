@@ -1,5 +1,9 @@
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { detectMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import {
+  detectMime,
+  FILE_TYPE_SNIFF_MAX_BYTES,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
 import { convertImageToJpeg, convertImageToPng } from "./image-ops.js";
 
 const ANTHROPIC_SUPPORTED_IMAGE_MIMES = [
@@ -10,6 +14,7 @@ const ANTHROPIC_SUPPORTED_IMAGE_MIMES = [
 ] as const;
 // Match OpenClaw's decoded inbound-image hard cap before any copy or native decode.
 const ANTHROPIC_INLINE_IMAGE_DECODE_SAFETY_BYTES = 10 * 1024 * 1024;
+const ANTHROPIC_MIME_PREFIX_BASE64_CHARS = 4 * Math.ceil(FILE_TYPE_SNIFF_MAX_BYTES / 3);
 
 type AnthropicSupportedImageMime = (typeof ANTHROPIC_SUPPORTED_IMAGE_MIMES)[number];
 type AnthropicInlineTextBlock = { type: "text"; text: string };
@@ -34,21 +39,25 @@ async function normalizeAnthropicInlineImage(block: AnthropicInlineImageBlock): 
   data: string;
   mimeType: AnthropicSupportedImageMime;
 }> {
-  const canonicalData = canonicalizeBase64(block.data) ?? block.data.trim();
-  const buffer = Buffer.from(canonicalData, "base64");
+  const canonicalData = canonicalizeBase64(block.data);
+  const data = canonicalData ?? block.data.trim();
+  // Only canonical input can be truncated without changing permissive base64 decoding.
+  const sniffData = canonicalData?.slice(0, ANTHROPIC_MIME_PREFIX_BASE64_CHARS) ?? data;
+  const buffer = Buffer.from(sniffData, "base64");
   const declaredMime = normalizeMimeType(block.mimeType);
   const detectedMime = normalizeMimeType(await detectMime({ buffer }));
   if (isAnthropicSupportedImageMime(detectedMime)) {
-    return { data: canonicalData, mimeType: detectedMime };
+    return { data, mimeType: detectedMime };
   }
   if (!detectedMime && isAnthropicSupportedImageMime(declaredMime)) {
-    return { data: canonicalData, mimeType: declaredMime };
+    return { data, mimeType: declaredMime };
   }
 
   const convertToPng = detectedMime === "image/bmp";
+  const conversionBuffer = sniffData.length === data.length ? buffer : Buffer.from(data, "base64");
   const normalizedBuffer = convertToPng
-    ? await convertImageToPng(buffer)
-    : await convertImageToJpeg(buffer);
+    ? await convertImageToPng(conversionBuffer)
+    : await convertImageToJpeg(conversionBuffer);
   if (normalizedBuffer.byteLength > ANTHROPIC_INLINE_IMAGE_DECODE_SAFETY_BYTES) {
     throw new Error("Normalized Anthropic inline image exceeds the 10 MB decoded safety limit.");
   }

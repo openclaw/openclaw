@@ -102,6 +102,10 @@ without activating it.
 
 Gateway control-plane bypass is limited to `localhost` and literal loopback IP URLs — use `ws://127.0.0.1:18789`, `ws://[::1]:18789`, or `ws://localhost:18789`. Other hostnames route like ordinary traffic.
 
+Update canary `/startupz` and `/readyz` probes use temporary exceptions for their exact loopback URLs under `gateway-only`. The updater releases each exception after polling. The `proxy` and `block` modes still apply. If a running canary never answers successfully within the validation budget, the update records the observed HTTP or transport failure as a warning, including the next troubleshooting step, and continues best effort.
+
+Environment-only HTTP proxy routing honors `no_proxy`/`NO_PROXY` (lowercase takes precedence). These environment bypass lists do not override managed proxy policy.
+
 ### Containers
 
 For `openclaw --container ...` commands, OpenClaw forwards `OPENCLAW_PROXY_URL` into the container-targeted child CLI when it is set. The URL must be reachable from inside the container — `127.0.0.1` there refers to the container itself, not the host. OpenClaw rejects loopback proxy URLs for container-targeted commands unless you set `OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL=1` to explicitly override that check.
@@ -150,7 +154,7 @@ openclaw proxy validate --proxy-url https://proxy.corp.example:8443 --proxy-ca-f
 
 If no config, environment, or `--proxy-url` value is available, the command reports a config problem; pass `--proxy-url` for a one-off preflight before changing config.
 
-With no `--allowed-url`/`--denied-url`, the default checks are: `https://example.com/` must succeed, and a temporary loopback canary server the proxy must not reach must be blocked. The loopback check passes on a transport failure, or on a non-2xx response that lacks the canary's per-run token; it fails on a 2xx response missing the token (an unexpected success from something other than the canary) and, especially, on any response carrying the matching token, since that proves the proxy actually forwarded a loopback destination it should have denied. Custom `--denied-url` targets have no such canary token, so they are fail-closed: any HTTP response counts as reachable (fail), and a transport error is reported as inconclusive rather than proven-blocked, because OpenClaw cannot confirm your proxy denied a reachable origin versus something else going wrong. `--apns-reachable` sends an intentionally invalid provider token, so a `403 InvalidProviderToken` response counts as proof the tunnel reached Apple. The command exits `1` on any validation failure; proxy URL credentials are redacted from both text and JSON output.
+With no `--allowed-url`/`--denied-url`, the default checks are: `https://example.com/` must succeed, and a temporary loopback canary server the proxy must not reach must be blocked. The loopback check passes on a transport failure, or on a non-2xx response that lacks the canary's per-run token; it fails on a 2xx response missing the token (an unexpected success from something other than the canary) and, especially, on any response carrying the matching token, since that proves the proxy actually forwarded a loopback destination it should have denied. Custom `--denied-url` targets have no such canary token, so they are fail-closed: any HTTP response counts as reachable, and a transport error fails the check too, because OpenClaw cannot confirm your proxy denied a reachable origin versus something else going wrong. Only the built-in loopback canary treats a transport error as proof of blocking. See [`openclaw proxy`](/cli/proxy) for the CLI-side statement of the same rule. `--apns-reachable` sends an intentionally invalid provider token, so a `403 InvalidProviderToken` response counts as proof the tunnel reached Apple. The command exits `1` on any validation failure; proxy URL credentials are redacted from both text and JSON output.
 
 ```json
 {
@@ -217,3 +221,9 @@ Add any additional metadata hosts or reserved ranges your cloud provider or netw
 - User local WebUIs and local model servers are not covered by a general local-network bypass — allowlist them in the operator proxy policy if needed. The exception is the bundled Ollama memory embedding provider's guarded direct path, scoped to the exact host-local loopback origin from its configured `baseUrl`; LAN, tailnet, private-network, and public Ollama hosts still use the managed proxy.
 - The local debug proxy's direct upstream forwarding (for proxy requests and `CONNECT` tunnels) is disabled by default while managed proxy mode is active; enable it only for approved local diagnostics.
 - OpenClaw does not inspect, test, or certify your proxy policy. Treat proxy policy changes as security-sensitive operational changes.
+
+## Related
+
+- [Threat model](/security/THREAT-MODEL-ATLAS) — adversarial threats to the OpenClaw platform and ClawHub, mapped to MITRE ATLAS
+- [Security](/gateway/security) — the trust model, safe defaults, and hardening guidance for running OpenClaw
+- [Proxy](/cli/proxy) — `openclaw proxy`, which validates operator-managed proxy routing and runs the local debug capture proxy

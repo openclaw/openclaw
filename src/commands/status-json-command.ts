@@ -1,6 +1,7 @@
 // Shared command runner for `openclaw status --json`.
 // It keeps scan execution separate from JSON payload assembly so CLI variants can reuse the same output path.
 
+import { readUpdateRunStatus } from "../infra/update-run-status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
 
@@ -36,14 +37,15 @@ export async function runStatusJsonCommand(params: {
     { timeoutMs: params.opts.timeoutMs, all: params.opts.all },
     params.runtime,
   );
-  writeRuntimeJson(
-    params.runtime,
-    await resolveStatusJsonOutput({
+  const updateRunStatus = readUpdateRunStatus();
+  writeRuntimeJson(params.runtime, {
+    ...(await resolveStatusJsonOutput({
       scan,
       opts: params.opts,
       includeSecurityAudit: params.includeSecurityAudit,
       includePluginCompatibility: params.includePluginCompatibility,
       suppressHealthErrors: params.suppressHealthErrors,
-    }),
-  );
+    })),
+    ...(Object.keys(updateRunStatus).length ? { updateRunStatus } : {}),
+  });
 }

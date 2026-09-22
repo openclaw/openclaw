@@ -7,18 +7,17 @@ import { describe, expect, it, vi } from "vitest";
 import officialExternalChannelCatalog from "../../scripts/lib/official-external-channel-catalog.json" with { type: "json" };
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import type { PluginPackageInstall } from "./manifest.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   getOfficialExternalChannelSecretContract,
-  type HostedOfficialExternalPluginCatalogSnapshot,
-  type HostedOfficialExternalPluginCatalogSnapshotStore,
   type OfficialExternalPluginCatalogEntry,
   type OfficialExternalPluginCatalogFeed,
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
+  isExternallyDistributedPlugin,
   isOfficialExternalPluginId,
   isOfficialExternalPluginCatalogFeed,
   listOfficialExternalChannelEnvVars,
@@ -31,7 +30,10 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLegacyIds,
+  resolveOfficialExternalPluginLegacyNpmPackageNames,
 } from "./official-external-plugin-catalog.js";
+import { createInMemoryHostedCatalogSnapshotStore } from "./official-external-plugin-catalog.test-support.js";
+import type { HostedOfficialExternalPluginCatalogSnapshot } from "./official-external-plugin-catalog.types.js";
 
 type ExtensionPackageMetadata = {
   name?: unknown;
@@ -61,10 +63,12 @@ function resolveBundledCatalogIdentity(entry: BundledCatalogIdentity): string | 
   );
 }
 
-function listPublishedExternalPluginOwners(): Array<{
+function listPublishedPluginOwners(): Array<{
   id: string;
   packageName: string;
   install: PluginPackageInstall;
+  publishToClawHub: boolean;
+  external: boolean;
 }> {
   const extensionsDir = new URL("../../extensions/", import.meta.url);
   return readdirSync(extensionsDir, { withFileTypes: true }).flatMap((entry) => {
@@ -82,7 +86,7 @@ function listPublishedExternalPluginOwners(): Array<{
     }
     const release = packageJson.openclaw?.release;
     if (
-      packageJson.openclaw?.build?.bundledDist !== false ||
+      packageJson.openclaw?.build?.bundledDist === true ||
       (release?.publishToClawHub !== true && release?.publishToNpm !== true)
     ) {
       return [];
@@ -106,7 +110,15 @@ function listPublishedExternalPluginOwners(): Array<{
     if (typeof manifest.id !== "string" || !manifest.id.trim()) {
       throw new Error(`${entry.name} publishes without a manifest id`);
     }
-    return [{ id: manifest.id, packageName, install }];
+    return [
+      {
+        id: manifest.id,
+        packageName,
+        install,
+        publishToClawHub: release?.publishToClawHub === true,
+        external: packageJson.openclaw?.build?.bundledDist === false,
+      },
+    ];
   });
 }
 
@@ -157,23 +169,6 @@ function expectBundledFallback(
   result: HostedCatalogLoadResult,
 ): asserts result is Extract<HostedCatalogLoadResult, { source: "bundled-fallback" }> {
   expect(result.source).toBe("bundled-fallback");
-}
-
-function createInMemoryHostedCatalogSnapshotStore(
-  initialSnapshots: HostedOfficialExternalPluginCatalogSnapshot[] = [],
-): HostedOfficialExternalPluginCatalogSnapshotStore {
-  const snapshots = new Map<string, HostedOfficialExternalPluginCatalogSnapshot>();
-  for (const snapshot of initialSnapshots) {
-    snapshots.set(snapshot.metadata.url, snapshot);
-  }
-  return {
-    async read(url) {
-      return snapshots.get(url) ?? null;
-    },
-    async write(snapshot) {
-      snapshots.set(snapshot.metadata.url, snapshot);
-    },
-  };
 }
 
 function hostedCatalogFeed(params: {
@@ -327,9 +322,33 @@ describe("official external plugin catalog", () => {
       "utf8",
     );
 
-    expect(source).not.toMatch(/from ["']\.\.\/infra\/net\/fetch-guard\.js["']/);
-    expect(source).toContain('await import("../infra/net/fetch-guard.js")');
+    const hostedSource = readFileSync(
+      new URL("./official-external-plugin-catalog-hosted.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).not.toMatch(/from ["'].*(?:catalog-hosted|fetch-guard)\.js["']/);
+    expect(source).toContain('await import("./official-external-plugin-catalog-hosted.js")');
+    expect(hostedSource).not.toMatch(/from ["']\.\.\/infra\/net\/fetch-guard\.js["']/);
+    expect(hostedSource).toContain('await import("../infra/net/fetch-guard.js")');
   });
+
+  it.each([
+    { pluginId: "google-meet", packageName: "@openclaw/google-meet", external: true },
+    { pluginId: "google-meet", packageName: "@example/google-meet", external: false },
+    { pluginId: "other-plugin", packageName: "@openclaw/google-meet", external: false },
+    {
+      pluginId: "source-external",
+      packageName: "@example/source-external",
+      packageBuild: { bundledDist: false },
+      external: true,
+    },
+  ])(
+    "classifies distribution ownership for $pluginId from $packageName",
+    ({ external, ...plugin }) => {
+      expect(isExternallyDistributedPlugin(plugin)).toBe(external);
+    },
+  );
 
   it("ships the official plugin catalog as a feed-shaped bundled fallback", () => {
     expect(isOfficialExternalPluginCatalogFeed(officialExternalPluginCatalog)).toBe(true);
@@ -351,39 +370,56 @@ describe("official external plugin catalog", () => {
     expectBundledFallback(fallback);
     const fallbackIds = fallback.entries.map(resolveOfficialExternalPluginId);
 
-    const gaps = listPublishedExternalPluginOwners().flatMap(({ id, packageName, install }) => {
-      const catalogMatches = catalogs.flatMap(([catalog, entries]) =>
-        entries
-          .filter((entry) => resolveBundledCatalogIdentity(entry) === id)
-          .map((entry) => ({ catalog, entry })),
-      );
-      const catalogEntry = catalogMatches.length === 1 ? catalogMatches[0]?.entry : undefined;
-      const catalogInstall = catalogEntry
-        ? resolveOfficialExternalPluginInstall(catalogEntry)
-        : undefined;
-      const official = isOfficialExternalPluginId(id);
-      const bundledFallbackMatches = fallbackIds.filter((candidate) => candidate === id).length;
-      return catalogMatches.length === 1 &&
-        catalogEntry?.name === packageName &&
-        isDeepStrictEqual(catalogInstall, install) &&
-        official &&
-        bundledFallbackMatches === 1
-        ? []
-        : [
-            {
-              id,
-              packageName,
-              install,
-              catalogMatches: catalogMatches.map(({ catalog }) => catalog),
-              catalogPackageName: catalogEntry?.name,
-              catalogInstall,
-              official,
-              bundledFallbackMatches,
-            },
-          ];
-    });
+    const gaps = listPublishedPluginOwners()
+      .filter(({ external }) => external)
+      .flatMap(({ id, packageName, install }) => {
+        const catalogMatches = catalogs.flatMap(([catalog, entries]) =>
+          entries
+            .filter((entry) => resolveBundledCatalogIdentity(entry) === id)
+            .map((entry) => ({ catalog, entry })),
+        );
+        const catalogEntry = catalogMatches.length === 1 ? catalogMatches[0]?.entry : undefined;
+        const catalogInstall = catalogEntry
+          ? resolveOfficialExternalPluginInstall(catalogEntry)
+          : undefined;
+        const official = isOfficialExternalPluginId(id);
+        const bundledFallbackMatches = fallbackIds.filter((candidate) => candidate === id).length;
+        return catalogMatches.length === 1 &&
+          catalogEntry?.name === packageName &&
+          isDeepStrictEqual(catalogInstall, install) &&
+          official &&
+          bundledFallbackMatches === 1
+          ? []
+          : [
+              {
+                id,
+                packageName,
+                install,
+                catalogMatches: catalogMatches.map(({ catalog }) => catalog),
+                catalogPackageName: catalogEntry?.name,
+                catalogInstall,
+                official,
+                bundledFallbackMatches,
+              },
+            ];
+      });
 
     expect(gaps).toEqual([]);
+  });
+
+  it("declares ClawHub counterparts in packages and their external discovery catalogs", () => {
+    const owners = listPublishedPluginOwners().filter((owner) => owner.publishToClawHub);
+    for (const owner of owners) {
+      const { id, packageName, install, external } = owner;
+      const expected = `clawhub:${packageName}`;
+      expect(install.clawhubSpec, id).toBe(expected);
+      const catalogEntry = external
+        ? expectCatalogEntry(id)
+        : getOfficialExternalPluginCatalogEntry(id);
+      if (catalogEntry) {
+        expect(resolveOfficialExternalPluginInstall(catalogEntry)?.clawhubSpec, id).toBe(expected);
+      }
+    }
   });
 
   it("keeps Codex installable as a harness without declaring a model provider", () => {
@@ -823,7 +859,7 @@ describe("official external plugin catalog", () => {
         },
       });
     } finally {
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       rmSync(stateDir, { recursive: true, force: true });
     }
   });
@@ -876,7 +912,7 @@ describe("official external plugin catalog", () => {
       });
       await expect(snapshotStore.read(url)).resolves.toMatchObject({ body: newer.body });
     } finally {
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       rmSync(stateDir, { recursive: true, force: true });
     }
   });
@@ -924,7 +960,7 @@ describe("official external plugin catalog", () => {
         snapshotStore.read("https://packages.acme.example/openclaw/feed"),
       ).resolves.toMatchObject({ body: resigned.body });
     } finally {
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       rmSync(stateDir, { recursive: true, force: true });
     }
   });
@@ -988,7 +1024,7 @@ describe("official external plugin catalog", () => {
 
       await expect(snapshotStore.read(url)).resolves.toMatchObject({ body: valid.body });
     } finally {
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       rmSync(stateDir, { recursive: true, force: true });
     }
   });
@@ -1026,7 +1062,7 @@ describe("official external plugin catalog", () => {
 
       await expect(snapshotStore.read(url)).resolves.toMatchObject({ body: valid.body });
     } finally {
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       rmSync(stateDir, { recursive: true, force: true });
     }
   });
@@ -1119,7 +1155,7 @@ describe("official external plugin catalog", () => {
         snapshotStore.read("https://packages.acme.example/openclaw/feed"),
       ).resolves.toMatchObject({ body: accepted.body });
     } finally {
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       rmSync(stateDir, { recursive: true, force: true });
     }
   });
@@ -1281,7 +1317,7 @@ describe("official external plugin catalog", () => {
       expectHostedSnapshot(retainedCurrent);
       expect(retainedCurrent.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-v9"]);
     } finally {
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       rmSync(stateDir, { recursive: true, force: true });
     }
   });
@@ -1333,7 +1369,7 @@ describe("official external plugin catalog", () => {
         snapshotStore.read("https://packages.acme.example/openclaw/feed"),
       ).resolves.toMatchObject({ body: repaired.body });
     } finally {
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       rmSync(stateDir, { recursive: true, force: true });
     }
   });
@@ -1718,7 +1754,7 @@ describe("official external plugin catalog", () => {
     }
   });
 
-  it("filters hosted entries that reference unknown source profiles", async () => {
+  it("filters every source reference and refreshes profiles between hosted loads", async () => {
     const body = JSON.stringify({
       schemaVersion: 1,
       id: "openclaw-official-external-plugins",
@@ -1741,22 +1777,57 @@ describe("official external plugin catalog", () => {
             install: { sourceRef: "attacker-npm", npmSpec: "@acme/unknown-source" },
           },
         },
+        {
+          name: "@acme/mixed-sources",
+          kind: "plugin",
+          install: {
+            candidates: [{ sourceRef: "acme-npm" }, { sourceRef: "attacker-npm" }],
+          },
+          openclaw: {
+            plugin: { id: "mixed-sources" },
+            install: { sourceRef: "acme-npm", npmSpec: "@acme/mixed-sources" },
+          },
+        },
+        {
+          name: "@acme/valid-tail",
+          kind: "plugin",
+          openclaw: {
+            plugin: { id: "valid-tail" },
+            install: { sourceRef: "acme-npm", npmSpec: "@acme/valid-tail" },
+          },
+        },
       ],
     });
-    const result = await loadHostedCatalog({
+    const sources: NonNullable<HostedCatalogConfig["sources"]> = {
+      "acme-npm": { type: "npm", registry: "https://packages.acme.example/npm/" },
+    };
+    const params: HostedCatalogLoadParams = {
       feedProfile: "acme",
       catalogConfig: {
         feeds: { acme: { url: "https://packages.acme.example/openclaw/feed" } },
-        sources: {
-          "acme-npm": { type: "npm", registry: "https://packages.acme.example/npm/" },
-        },
+        sources,
       },
       fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
       snapshotStore: null,
-    });
+    };
+    const result = await loadHostedCatalog(params);
 
     expectHosted(result);
-    expect(result.entries.map((entry) => entry.name)).toEqual(["@acme/known-source"]);
+    expect(result.entries.map((entry) => entry.name)).toEqual([
+      "@acme/known-source",
+      "@acme/valid-tail",
+    ]);
+    expect(result.entries[0]).toBe(result.feed.entries[0]);
+
+    sources["attacker-npm"] = { type: "npm" };
+    const refreshed = await loadHostedCatalog(params);
+    expectHosted(refreshed);
+    expect(refreshed.entries.map((entry) => entry.name)).toEqual([
+      "@acme/known-source",
+      "@acme/unknown-source",
+      "@acme/mixed-sources",
+      "@acme/valid-tail",
+    ]);
   });
 
   it("enforces hosted checksum and response-size limits", async () => {
@@ -2059,14 +2130,17 @@ describe("official external plugin catalog", () => {
     );
     expect(resolveOfficialExternalPluginId(qqbotByChannel)).toBe("openclaw-qqbot");
     expect(qqbotByPlugin).toBe(qqbotByChannel);
+    expect(resolveOfficialExternalPluginLegacyNpmPackageNames(qqbotByChannel)).toEqual([
+      "@openclaw/qqbot",
+    ]);
     expect(
       getOfficialExternalPluginCatalogManifest(qqbotByChannel)?.channel?.doctorCapabilities,
     ).toEqual({ openDmRequiresAllowFromWildcard: false });
     expect(resolveOfficialExternalPluginInstall(qqbotByChannel)).toEqual({
-      npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+      npmSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
       defaultChoice: "npm",
       expectedIntegrity:
-        "sha512-2010PaCummeQaxerLtaGfQ/5HChiXaW/KpTERid7V/1zyTs46S2ACi0hgZQ1SB7tH0t1InWr8tzVBJV/pLss3Q==",
+        "sha512-yngu/2cPeZjJfIfHWCXWB2/6KlDHrb9vpOUjKLdQxePLSp6wCn3CFOALcBIVq/9o6jlYz9WTU9idW6nfX1xpFA==",
     });
     expect(getOfficialExternalChannelSecretContract("qqbot")).toEqual({
       channelId: "qqbot",
@@ -2144,7 +2218,7 @@ describe("official external plugin catalog", () => {
     expect(manifest?.providerEndpoints).toEqual([
       {
         endpointClass: "opencode-native",
-        hostSuffixes: ["opencode.ai"],
+        baseUrls: ["https://opencode.ai/zen", "https://opencode.ai/zen/v1"],
       },
     ]);
   });
@@ -2164,8 +2238,8 @@ describe("official external plugin catalog", () => {
     expect(manifest?.contracts?.mediaUnderstandingProviders).toEqual(["opencode-go"]);
     expect(manifest?.providerEndpoints).toEqual([
       {
-        endpointClass: "opencode-native",
-        hostSuffixes: ["opencode.ai"],
+        endpointClass: "opencode-go-native",
+        baseUrls: ["https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1"],
       },
     ]);
   });
@@ -2656,7 +2730,7 @@ describe("official external plugin catalog", () => {
     });
   });
 
-  it("lists Matrix as an official external ClawHub channel after cutover", () => {
+  it("lists Matrix as an official external npm-first channel after cutover", () => {
     const ids = new Set<string>();
     for (const entry of listOfficialExternalPluginCatalogEntries()) {
       const pluginId = resolveOfficialExternalPluginId(entry);
@@ -2670,7 +2744,7 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual({
       clawhubSpec: "clawhub:@openclaw/matrix",
       npmSpec: "@openclaw/matrix",
-      defaultChoice: "clawhub",
+      defaultChoice: "npm",
       minHostVersion: ">=2026.4.10",
       allowInvalidConfigRecovery: true,
     });

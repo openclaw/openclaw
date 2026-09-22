@@ -2,7 +2,7 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripToolMessages } from "../../../agents/tools/chat-history-text.js";
-import { callGateway } from "../../../gateway/call.js";
+import { bindAgentToolGatewayRequest } from "../../../agents/tools/in-process-gateway.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
@@ -36,7 +36,9 @@ export async function handleSubagentsLogAction(
     return targetResolution.reply;
   }
 
-  const history = await callGateway<{ messages: Array<unknown> }>({
+  const history = await bindAgentToolGatewayRequest({ hostedOnly: true })<{
+    messages: Array<unknown>;
+  }>({
     method: "chat.history",
     params: { sessionKey: targetResolution.entry.childSessionKey, limit },
   });

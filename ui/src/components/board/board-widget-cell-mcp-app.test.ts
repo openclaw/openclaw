@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
@@ -85,14 +86,6 @@ async function settle(cell: BoardWidgetCell): Promise<void> {
   await cell.updateComplete;
   await Promise.resolve();
   await cell.updateComplete;
-}
-
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-  let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
 }
 
 function stubVisibility(visible: (index: number) => boolean): {

@@ -1,6 +1,9 @@
 import { t } from "../../../i18n/index.ts";
+import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
 import { isActiveTask, taskStatusLabel } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+
+registerBackgroundTasksEnglish();
 
 export { newestTaskSnapshot } from "../../../lib/tasks/data.ts";
 
@@ -18,11 +21,51 @@ export const STATUS_TONES = {
 
 export function backgroundTaskStatusLabel(task: TaskSummary): string {
   if (isActiveTask(task)) {
-    return taskStatusLabel(task.status);
+    if (task.execution?.state === "waiting") {
+      const labels = {
+        children: "chat.backgroundTasks.waitingChildren",
+        external: "chat.backgroundTasks.waitingExternal",
+        agent_messages: "chat.backgroundTasks.waitingMessages",
+        approval: "chat.backgroundTasks.waitingApproval",
+        user_input: "chat.backgroundTasks.waitingUser",
+      } as const;
+      return task.execution.wait
+        ? t(labels[task.execution.wait.kind])
+        : t("chat.backgroundTasks.waiting");
+    }
+    if (task.execution?.state === "unknown") {
+      return t("chat.backgroundTasks.activityUnknown");
+    }
+    if (task.execution?.state === "finished") {
+      return t("chat.backgroundTasks.executionFinished");
+    }
+    return taskStatusLabel(task.execution?.state === "queued" ? "queued" : task.status);
   }
-  // Finished history intentionally has two outcomes: completed or failed.
-  // Cancellation and timeout stay grouped as unsuccessful work.
-  return task.status === "completed"
-    ? t("tasksPage.status.completed")
-    : t("tasksPage.status.failed");
+  return task.status === "completed" &&
+    (task.deliveryStatus === "pending" || task.deliveryStatus === "session_queued")
+    ? t("chat.backgroundTasks.resultReady")
+    : taskStatusLabel(task.status);
+}
+
+export function backgroundTaskIsExecuting(task: TaskSummary): boolean {
+  return (
+    task.status === "running" &&
+    (task.execution === undefined || task.execution.state === "running")
+  );
+}
+
+export function backgroundTaskDeliveryLabel(task: TaskSummary): string | undefined {
+  if (isActiveTask(task) || task.runtime !== "subagent" || !task.deliveryStatus) {
+    return undefined;
+  }
+  const labels = {
+    pending: "chat.backgroundTasks.deliveryPending",
+    session_queued: "chat.backgroundTasks.deliveryQueued",
+    delivered: "chat.backgroundTasks.deliveryDelivered",
+    failed: "chat.backgroundTasks.deliveryFailed",
+    dismissed: "chat.backgroundTasks.deliveryDismissed",
+    parent_missing: "chat.backgroundTasks.deliveryParentMissing",
+    not_applicable: "chat.backgroundTasks.deliveryNotApplicable",
+  } as const;
+  return t(labels[task.deliveryStatus]);
 }

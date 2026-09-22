@@ -329,18 +329,36 @@ describe("createCliJsonlStreamingParser reasoning", () => {
       ],
     },
     {
-      name: "emits snapshot thinking blocks when no thinking deltas streamed",
+      name: "keeps snapshot-only thinking blocks ordered when later deltas arrive",
       frames: [
         claudeAssistantSnapshot("msg-1", [
           { type: "thinking", thinking: "Snapshot-only reasoning.", signature: "sig" },
           { type: "redacted_thinking", data: "opaque-blob" },
+          { type: "thinking", thinking: " Next block." },
           { type: "text", text: "Answer." },
         ]),
+        claudeThinkingDelta(" Revised.", 0),
+        claudeThinkingDelta(" Done.", 2),
       ],
       expected: [
         {
           text: "Snapshot-only reasoning.",
           delta: "Snapshot-only reasoning.",
+          isReasoningSnapshot: true,
+        },
+        {
+          text: "Snapshot-only reasoning. Next block.",
+          delta: " Next block.",
+          isReasoningSnapshot: true,
+        },
+        {
+          text: "Snapshot-only reasoning. Revised. Next block.",
+          delta: " Revised.",
+          isReasoningSnapshot: true,
+        },
+        {
+          text: "Snapshot-only reasoning. Revised. Next block. Done.",
+          delta: " Done.",
           isReasoningSnapshot: true,
         },
       ],
@@ -353,10 +371,16 @@ describe("createCliJsonlStreamingParser reasoning", () => {
           { type: "thinking", thinking: "revised thought", signature: "sig" },
           { type: "text", text: "Answer." },
         ]),
+        claudeAssistantSnapshot("msg-1", [
+          { type: "thinking", thinking: "revised thought", signature: "sig" },
+          { type: "text", text: "Answer." },
+        ]),
+        claudeThinkingDelta(" continued", 0),
       ],
       expected: [
         { text: "rough draft", delta: "rough draft", isReasoningSnapshot: true },
         { text: "revised thought", delta: "revised thought", isReasoningSnapshot: true },
+        { text: "revised thought continued", delta: " continued", isReasoningSnapshot: true },
       ],
     },
     {
@@ -368,10 +392,58 @@ describe("createCliJsonlStreamingParser reasoning", () => {
           { type: "thinking", thinking: "A", signature: "sig-a" },
           { type: "thinking", thinking: "B", signature: "sig-b" },
         ]),
+        claudeThinkingDelta("C", 0),
+        claudeThinkingDelta("D", 1),
       ],
       expected: [
         { text: "A", delta: "A", isReasoningSnapshot: true },
         { text: "AB", delta: "B", isReasoningSnapshot: true },
+        { text: "ACB", delta: "C", isReasoningSnapshot: true },
+        { text: "ACBD", delta: "D", isReasoningSnapshot: true },
+      ],
+    },
+    {
+      name: "orders new earlier thinking blocks before appending to the greatest index",
+      frames: [
+        claudeThinkingDelta("C", 2),
+        claudeThinkingDelta("A", 0),
+        claudeThinkingDelta("B", 1),
+        claudeThinkingDelta("D", 2),
+        claudeThinkingDelta("E", 0),
+      ],
+      expected: [
+        { text: "C", delta: "C", isReasoningSnapshot: true },
+        { text: "AC", delta: "A", isReasoningSnapshot: true },
+        { text: "ABC", delta: "B", isReasoningSnapshot: true },
+        { text: "ABCD", delta: "D", isReasoningSnapshot: true },
+        { text: "AEBCD", delta: "E", isReasoningSnapshot: true },
+      ],
+    },
+    {
+      name: "preserves negative, infinite, and signed-zero thinking indexes",
+      // Raw JSON preserves overflowed numeric exponents and negative zero.
+      frames: [
+        { index: "-1e400", thinking: "L" },
+        { index: "-1e400", thinking: "!" },
+        { index: "-2", thinking: "N" },
+        { index: "-0", thinking: "Z" },
+        { index: "0", thinking: "+" },
+        { index: "1e400", thinking: "H" },
+        { index: "1e400", thinking: "!" },
+        { index: "-2", thinking: "?" },
+      ].map(
+        ({ index, thinking }) =>
+          `{"type":"stream_event","event":{"type":"content_block_delta","index":${index},"delta":{"type":"thinking_delta","thinking":${JSON.stringify(thinking)}}}}`,
+      ),
+      expected: [
+        { text: "L", delta: "L", isReasoningSnapshot: true },
+        { text: "L!", delta: "!", isReasoningSnapshot: true },
+        { text: "L!N", delta: "N", isReasoningSnapshot: true },
+        { text: "L!NZ", delta: "Z", isReasoningSnapshot: true },
+        { text: "L!NZ+", delta: "+", isReasoningSnapshot: true },
+        { text: "L!NZ+H", delta: "H", isReasoningSnapshot: true },
+        { text: "L!NZ+H!", delta: "!", isReasoningSnapshot: true },
+        { text: "L!N?Z+H!", delta: "?", isReasoningSnapshot: true },
       ],
     },
     {

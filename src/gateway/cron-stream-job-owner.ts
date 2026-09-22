@@ -177,6 +177,14 @@ export class CronStreamJobOwner {
           );
         });
       },
+      requestMatchFailureStop: (error) => {
+        void this.stop("restart-exhausted", undefined, error).catch((stopError: unknown) => {
+          this.params.logger.warn(
+            { jobId: this.job.id, err: formatErrorMessage(stopError) },
+            "cron-stream: match failure teardown failed",
+          );
+        });
+      },
       getGeneration: () => this.generation,
       getState: () => this.state,
       isDesiredRunning: () => this.desiredRunning,
@@ -255,15 +263,26 @@ export class CronStreamJobOwner {
     });
   }
 
-  stop(reason: CronStreamStopReason, job?: CronStreamJob): Promise<void> {
+  stop(reason: CronStreamStopReason, job?: CronStreamJob, failure?: string): Promise<void> {
     // Fence output and queued starts synchronously, before the stop operation runs.
     ++this.requestEpoch;
     this.desiredRunning = false;
+    this.output.cancelMatching();
     if (reason === "removed") {
       this.removalRequested = true;
     }
     this.params.getProcessSupervisor().cancelScope(scopeKey(this.job.id), "manual-cancel");
-    const queuedStop = this.enqueue("stop", async () => await this.stopOperation(reason, job));
+    const queuedStop = this.enqueue("stop", async () => {
+      if (failure) {
+        this.restartExhausted = true;
+        await this.persistFailure(failure, {
+          streamStatus: "error",
+          streamError: failure,
+          streamRestartExhausted: true,
+        });
+      }
+      await this.stopOperation(reason, job);
+    });
     return this.awaitBoundedStop(queuedStop);
   }
 
@@ -370,7 +389,7 @@ export class CronStreamJobOwner {
     this.state = "starting";
     this.restartExhausted = false;
     const generation = ++this.generation;
-    this.output.resetSourceBuffers();
+    this.output.startSource();
     const ownsPersistedJob = await this.persistState({
       streamStatus: this.consecutiveFailures > 0 ? "restarting" : "starting",
       streamError: undefined,
@@ -391,8 +410,6 @@ export class CronStreamJobOwner {
     let run: ManagedRun;
     try {
       run = await this.params.getProcessSupervisor().spawn({
-        sessionId: `cron-stream:${this.job.id}`,
-        backendId: "cron-stream-source",
         scopeKey: scopeKey(this.job.id),
         replaceExistingScope: true,
         mode: "child",
@@ -548,7 +565,7 @@ export class CronStreamJobOwner {
     } else {
       this.params.getProcessSupervisor().cancelScope(scopeKey(this.job.id), "manual-cancel");
     }
-    await this.output.finishStop(outputStopState);
+    await this.output.finishStop(await outputStopState);
 
     if (stopError !== undefined) {
       // Keep ownership while the child is still retryable; do not claim stopped.

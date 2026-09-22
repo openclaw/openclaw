@@ -373,7 +373,7 @@ describe("renderConfigValidationIssueLines", () => {
         parsed: config,
         effective: config,
       }),
-    ).toBe('openclaw.json:1 — foo.bar: Invalid input, got: "literal"');
+    ).toBe('openclaw.json:1 — ["foo.bar"]: Invalid input, got: "literal"');
     expect(
       renderIssue({
         issue: issue(["foo", "bar"], "Invalid input"),
@@ -395,7 +395,10 @@ describe("renderConfigValidationIssueLines", () => {
     ).toBe("openclaw.json:1 — gateway.bind: Invalid input");
   });
 
-  it.each(["custom", "vendor.plugin"])("omits plugin-owned values for %s", (pluginId) => {
+  it.each([
+    ["custom", "plugins.entries.custom.config.accessCode"],
+    ["vendor.plugin", 'plugins.entries["vendor.plugin"].config.accessCode'],
+  ])("omits plugin-owned values for %s", (pluginId, displayPath) => {
     const config = {
       plugins: { entries: { [pluginId]: { config: { accessCode: "private" } } } },
     };
@@ -406,6 +409,6 @@ describe("renderConfigValidationIssueLines", () => {
         parsed: config,
         effective: config,
       }),
-    ).toBe(`openclaw.json:1 — plugins.entries.${pluginId}.config.accessCode: Invalid input`);
+    ).toBe(`openclaw.json:1 — ${displayPath}: Invalid input`);
   });
 });

@@ -1,6 +1,8 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type {
   OpenClawPluginApi,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
@@ -31,8 +33,27 @@ import {
   validateLlamaServerNonInteractive,
 } from "./external-server/setup.js";
 import { wrapLlamaServerStream } from "./external-server/stream.js";
-import { ensureManagedLlamaServerForChat } from "./managed-server.js";
+import { ensureManagedLlamaServerForChat, reconcileManagedLlamaServer } from "./managed-server.js";
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
+
+function wrapLlamaCppStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+  const inner = wrapLlamaServerStream(ctx);
+  const providerConfig = ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (!providerConfig?.localService) {
+    return inner;
+  }
+  const selectedModel = ctx.model;
+  if (!selectedModel) {
+    return undefined;
+  }
+  return async (...args: Parameters<typeof inner>) => {
+    await ensureManagedLlamaServerForChat({
+      provider: providerConfig,
+      model: selectedModel,
+    });
+    return inner(...args);
+  };
+}
 
 export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
   api.registerProvider({
@@ -44,13 +65,13 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
       {
         id: "local",
         label: LLAMA_CPP_PROVIDER_LABEL,
-        hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
+        hint: "Choose a Qwen, Gemma, or Muse model for this Gateway’s hardware and install llama.cpp",
         kind: "custom",
         wizard: {
           choiceId: LLAMA_CPP_PROVIDER_ID,
           choiceLabel: "Managed local server",
           choiceHint:
-            "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
+            "Choose a Qwen, Gemma, or Muse model for this Gateway’s hardware and install llama.cpp",
           groupId: LLAMA_CPP_PROVIDER_ID,
           groupLabel: "Local llama.cpp",
           groupHint: "Managed or external llama.cpp server",
@@ -127,24 +148,9 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
       ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.localService
         ? undefined
         : await prepareLlamaServerDynamicModel(ctx),
-    wrapStreamFn: (ctx) => {
-      const providerConfig = ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-      if (!providerConfig?.localService) {
-        return wrapLlamaServerStream(ctx);
-      }
-      const inner = ctx.streamFn;
-      const selectedModel = ctx.model;
-      if (!inner || !selectedModel) {
-        return undefined;
-      }
-      return async (model, context, options) => {
-        await ensureManagedLlamaServerForChat({
-          provider: providerConfig,
-          model: selectedModel,
-        });
-        return inner(model, context, options);
-      };
-    },
+    reconcileLocalService: reconcileManagedLlamaServer,
+    wrapSimpleCompletionStreamFn: wrapLlamaCppStream,
+    wrapStreamFn: wrapLlamaCppStream,
     ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
     wizard: {
       modelPicker: {

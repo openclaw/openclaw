@@ -40,7 +40,7 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({ gateway: { handshakeTimeoutMs: 1_000 } })),
 }));
 
-vi.mock("../gateway/client-start-readiness.js", () => ({
+vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: mocks.startGatewayClientWhenEventLoopReady,
 }));
 
@@ -87,6 +87,7 @@ vi.mock("../infra/path-env.js", () => ({
 
 vi.mock("./config.js", () => ({
   configureNodeHost: mocks.configureNodeHost,
+  loadNodeHostConfig: async () => null,
 }));
 
 vi.mock("./plugin-node-host.js", () => ({

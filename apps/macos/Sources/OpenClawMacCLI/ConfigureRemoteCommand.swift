@@ -3,7 +3,6 @@ import Foundation
 import Darwin
 #endif
 
-private let appDefaultsSuites = ["ai.openclaw.mac", "ai.openclaw.mac.debug"]
 private let appOnboardingVersion = 7
 
 struct ConfigureRemoteOptions {
@@ -14,6 +13,8 @@ struct ConfigureRemoteOptions {
     var sshHostKeyPolicy: String?
     var token: String?
     var password: String?
+    var tokenSource: MacControlOptions.SecretSource?
+    var passwordSource: MacControlOptions.SecretSource?
     var identity: String?
     var projectRoot: String?
     var cliPath: String?
@@ -40,10 +41,15 @@ struct ConfigureRemoteOptions {
                 opts.remotePort = try parsePortFlag(args, index: &i, flag: arg)
             case "--ssh-host-key-policy":
                 opts.sshHostKeyPolicy = try parseSSHHostKeyPolicyFlag(args, index: &i)
-            case "--token":
-                opts.token = CLIArgParsingSupport.nextValue(args, index: &i)
-            case "--password":
-                opts.password = CLIArgParsingSupport.nextValue(args, index: &i)
+            case "--token", "--password":
+                guard let value = CLIArgParsingSupport.nextValue(args, index: &i), !value.hasPrefix("--") else {
+                    throw MacControlOptions.usage("\(arg) requires a value.")
+                }
+                if arg == "--token" { opts.token = value } else { opts.password = value }
+            case "--token-file", "--token-stdin":
+                opts.tokenSource = try self.parseSecretSource(args, index: &i, previous: opts.tokenSource)
+            case "--password-file", "--password-stdin":
+                opts.passwordSource = try self.parseSecretSource(args, index: &i, previous: opts.passwordSource)
             case "--identity":
                 opts.identity = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--project-root":
@@ -55,7 +61,32 @@ struct ConfigureRemoteOptions {
             }
             i += 1
         }
+        for (kind, value, source) in [
+            ("token", opts.token, opts.tokenSource),
+            ("password", opts.password, opts.passwordSource),
+        ] where value != nil && source != nil {
+            throw MacControlOptions.usage("Choose --\(kind), --\(kind)-file, or --\(kind)-stdin, not more than one.")
+        }
+        guard !(opts.tokenSource == .stdin && opts.passwordSource == .stdin) else {
+            throw MacControlOptions.usage("Standard input can supply only one secret.")
+        }
         return opts
+    }
+
+    private static func parseSecretSource(
+        _ args: [String],
+        index: inout Int,
+        previous: MacControlOptions.SecretSource?) throws -> MacControlOptions.SecretSource
+    {
+        guard previous == nil else {
+            throw MacControlOptions.usage("Choose a file or standard input for each secret.")
+        }
+        let flag = args[index]
+        if flag.hasSuffix("-stdin") { return .stdin }
+        guard let path = CLIArgParsingSupport.nextValue(args, index: &index),
+              !path.isEmpty, !path.hasPrefix("--")
+        else { throw MacControlOptions.usage("\(flag) requires a path.") }
+        return .file(path)
     }
 }
 
@@ -72,7 +103,7 @@ struct ConfigureRemoteOutput: Encodable {
     var onboardingSkipped: Bool
 }
 
-func runConfigureRemote(_ args: [String]) {
+func runConfigureRemote(_ args: [String], context: MacCLIContext) {
     do {
         let opts = try ConfigureRemoteOptions.parse(args)
         if opts.help {
@@ -81,21 +112,31 @@ func runConfigureRemote(_ args: [String]) {
 
             Usage:
               openclaw-mac configure-remote --ssh-target <user@host[:port]> [--local-port <port>]
-                                          [--remote-port <port>] [--token <token>] [--password <password>]
+                                          [--remote-port <port>] [secret options]
                                           [--identity <path>] [--ssh-host-key-policy <strict|openssh>]
                                           [--project-root <path>] [--cli-path <path>] [--json]
-              openclaw-mac configure-remote --direct-url <ws://host:port|wss://host> [--token <token>]
-                                          [--password <password>] [--project-root <path>] [--cli-path <path>] [--json]
+              openclaw-mac configure-remote --direct-url <ws://host:port|wss://host> [secret options]
+                                          [--project-root <path>] [--cli-path <path>] [--json]
+
+            Offline preconfiguration; prefer openclaw-mac primary set when the app is running.
 
             Options:
+              --profile <name>   App profile; overrides OPENCLAW_PROFILE (default: default).
               --ssh-target <t>    SSH target for the remote gateway host.
               --direct-url <url>  Direct remote gateway URL; skips SSH tunneling.
               --local-port <p>    Local tunnel port for the mac app/UI. Default: 18789.
+                                  Leaves the local Gateway hosting port unchanged.
               --remote-port <p>   Gateway port on the remote host. Default: 18789.
               --ssh-host-key-policy <strict|openssh>
                                   Require a trusted host key (default), or explicitly use SSH config policy.
-              --token <token>     Remote gateway token.
-              --password <pw>     Remote gateway password.
+              --token-file <path> | --token-stdin
+                                  Read the remote gateway token from a file or standard input.
+              --password-file <path> | --password-stdin
+                                  Read the remote gateway password from a file or standard input.
+                                  Secrets are read once; trailing newlines are removed.
+                                  Standard input can supply only one secret.
+              --token <token>     Deprecated: use --token-file or --token-stdin.
+              --password <pw>     Deprecated: use --password-file or --password-stdin.
               --identity <path>   SSH identity file.
               --project-root <p>  Remote OpenClaw checkout for CLI commands.
               --cli-path <path>   Remote openclaw executable or entrypoint.
@@ -104,7 +145,7 @@ func runConfigureRemote(_ args: [String]) {
             """)
             return
         }
-        let output = try configureRemote(opts)
+        let output = try configureRemote(opts, configURL: context.configURL, defaultsSuites: context.defaultsSuites)
         printConfigureRemoteOutput(output, json: opts.json)
     } catch {
         if args.contains("--json") {
@@ -119,18 +160,30 @@ func runConfigureRemote(_ args: [String]) {
 @discardableResult
 func configureRemote(
     _ opts: ConfigureRemoteOptions,
-    defaultsSuites: [String] = appDefaultsSuites) throws -> ConfigureRemoteOutput
+    configURL: URL,
+    defaultsSuites: [String]) throws -> ConfigureRemoteOutput
 {
+    var opts = opts
+    for (kind, value) in [("token", opts.token), ("password", opts.password)] where value != nil {
+        fputs("configure-remote: --\(kind) is deprecated; use --\(kind)-file or --\(kind)-stdin.\n", stderr)
+    }
+    opts.token = try readMacControlSecret(opts.tokenSource) ?? opts.token
+    opts.password = try readMacControlSecret(opts.passwordSource) ?? opts.password
     if let directUrlRaw = opts.directUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
        !directUrlRaw.isEmpty
     {
-        return try configureDirectRemote(opts, directUrlRaw: directUrlRaw, defaultsSuites: defaultsSuites)
+        return try configureDirectRemote(
+            opts,
+            directUrlRaw: directUrlRaw,
+            configURL: configURL,
+            defaultsSuites: defaultsSuites)
     }
-    return try configureSSHRemote(opts, defaultsSuites: defaultsSuites)
+    return try configureSSHRemote(opts, configURL: configURL, defaultsSuites: defaultsSuites)
 }
 
 private func configureSSHRemote(
     _ opts: ConfigureRemoteOptions,
+    configURL: URL,
     defaultsSuites: [String]) throws -> ConfigureRemoteOutput
 {
     let target = opts.sshTarget?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -141,7 +194,6 @@ private func configureSSHRemote(
             userInfo: [NSLocalizedDescriptionKey: "SSH target must look like user@host[:port]"])
     }
 
-    let configURL = resolveOpenClawConfigURL()
     var root = try loadConfigRoot(from: configURL)
     var gateway = root["gateway"] as? [String: Any] ?? [:]
     var remote = gateway["remote"] as? [String: Any] ?? [:]
@@ -150,7 +202,6 @@ private func configureSSHRemote(
         .trimmingCharacters(in: .whitespacesAndNewlines)
 
     gateway["mode"] = "remote"
-    gateway["port"] = opts.localPort
     remote["transport"] = "ssh"
     remote["url"] = localURL
     remote["remotePort"] = opts.remotePort
@@ -170,7 +221,7 @@ private func configureSSHRemote(
     root["gateway"] = gateway
 
     try saveConfigRoot(root, to: configURL)
-    writeAppDefaults(opts: opts, target: target, suites: defaultsSuites)
+    writeAppDefaults(opts: opts, target: target, targetChanged: existingTarget != target, suites: defaultsSuites)
 
     return ConfigureRemoteOutput(
         status: "ok",
@@ -188,6 +239,7 @@ private func configureSSHRemote(
 private func configureDirectRemote(
     _ opts: ConfigureRemoteOptions,
     directUrlRaw: String,
+    configURL: URL,
     defaultsSuites: [String]) throws -> ConfigureRemoteOutput
 {
     guard let directURL = normalizeDirectURL(directUrlRaw) else {
@@ -201,11 +253,12 @@ private func configureDirectRemote(
             ])
     }
 
-    let configURL = resolveOpenClawConfigURL()
     var root = try loadConfigRoot(from: configURL)
     var gateway = root["gateway"] as? [String: Any] ?? [:]
     var remote = gateway["remote"] as? [String: Any] ?? [:]
 
+    let targetChanged = remote["transport"] as? String != "direct"
+        || remote["url"] as? String != directURL.absoluteString
     gateway["mode"] = "remote"
     remote["transport"] = "direct"
     remote["url"] = directURL.absoluteString
@@ -219,7 +272,7 @@ private func configureDirectRemote(
     root["gateway"] = gateway
 
     try saveConfigRoot(root, to: configURL)
-    writeAppDefaults(opts: opts, target: "", suites: defaultsSuites)
+    writeAppDefaults(opts: opts, target: "", targetChanged: targetChanged, suites: defaultsSuites)
 
     return ConfigureRemoteOutput(
         status: "ok",
@@ -246,9 +299,15 @@ private func saveConfigRoot(_ root: [String: Any], to url: URL) throws {
     try data.write(to: url, options: [.atomic])
 }
 
-private func writeAppDefaults(opts: ConfigureRemoteOptions, target: String, suites: [String]) {
+private func writeAppDefaults(opts: ConfigureRemoteOptions, target: String, targetChanged: Bool, suites: [String]) {
     for suite in suites {
         guard let defaults = UserDefaults(suiteName: suite) else { continue }
+        let previousTarget = defaults.string(forKey: "openclaw.remoteTarget") ?? ""
+        if targetChanged || previousTarget != target {
+            for key in ["openclaw.remoteIdentity", "openclaw.remoteProjectRoot", "openclaw.remoteCliPath"] {
+                defaults.removeObject(forKey: key)
+            }
+        }
         defaults.set("remote", forKey: "openclaw.connectionMode")
         setDefaultString(defaults, key: "openclaw.remoteTarget", value: target)
         defaults.set(true, forKey: "openclaw.onboardingSeen")

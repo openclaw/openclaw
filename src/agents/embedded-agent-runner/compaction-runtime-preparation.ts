@@ -1,5 +1,6 @@
 /** Shared model, harness, and auth preparation for embedded compaction. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -8,17 +9,14 @@ import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
 } from "../harness/selection.js";
-import {
-  resolveAgentHarnessPreparedAuthSupport,
-  resolveAgentHarnessPreparedRouteSupport,
-} from "../harness/support.js";
+import { projectPreparedModelProvider } from "../harness/support.js";
 import type { AgentHarness } from "../harness/types.js";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
 } from "../model-auth.js";
+import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { isOpenAIProvider } from "../openai-routing.js";
 import {
   providerUsesCredentialScopedModelMetadata,
@@ -32,8 +30,31 @@ import {
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 import {
   resolveCompactionHarnessRuntime,
+  resolveCompactionTargetRuntime,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
+
+export function projectCodexHostTranscriptBytePreflightConfig(
+  config: OpenClawConfig | undefined,
+  active: boolean,
+): OpenClawConfig | undefined {
+  const compaction = config?.agents?.defaults?.compaction;
+  if (
+    !active ||
+    !compaction ||
+    (!Object.hasOwn(compaction, "model") && !Object.hasOwn(compaction, "provider"))
+  ) {
+    return config;
+  }
+  const { model: _model, provider: _provider, ...projectedCompaction } = compaction;
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: { ...config.agents?.defaults, compaction: projectedCompaction },
+    },
+  };
+}
 
 /** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
 export function resolveCompactionRuntimeSelection(params: {
@@ -43,18 +64,22 @@ export function resolveCompactionRuntimeSelection(params: {
   authProfileId?: string | null;
   modelSelectionLocked?: boolean;
   sandboxSessionKey?: string | null;
+  sandboxAgentId?: string;
   sessionKey?: string | null;
   agentId?: string;
   boundHarnessRuntime?: string | null;
   preparedRuntimePlan?: AgentRuntimePlan;
   runtimeAuthPlan?: AgentRuntimeAuthPlan;
   selectedHarnessRuntime?: string;
+  allowPluginNormalization?: boolean;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }) {
   const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey ?? undefined;
   const runtimePolicyAgentId =
-    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
+    params.sandboxAgentId ??
+    (params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
       ? undefined
-      : params.agentId;
+      : params.agentId);
   const policyTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
@@ -63,6 +88,8 @@ export function resolveCompactionRuntimeSelection(params: {
     modelSelectionLocked: params.modelSelectionLocked,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
   const policyProvider = policyTarget.provider ?? DEFAULT_PROVIDER;
   const policyModelId = policyTarget.model ?? DEFAULT_MODEL;
@@ -89,19 +116,21 @@ export function resolveCompactionRuntimeSelection(params: {
       provider: policyProvider,
       modelId: policyModelId,
     });
-  const target = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    authProfileId: params.authProfileId,
-    harnessRuntime: selectedHarnessRuntime,
-    modelSelectionLocked: params.modelSelectionLocked,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+  const target = {
+    ...policyTarget,
+    ...resolveCompactionTargetRuntime(policyTarget.provider, selectedHarnessRuntime),
+  };
   const provider = target.provider ?? DEFAULT_PROVIDER;
   const modelId = target.model ?? DEFAULT_MODEL;
+  const selectedRuntime = normalizeOptionalAgentRuntimeId(selectedHarnessRuntime);
+  const attemptNativeHarnessCompaction = Boolean(
+    selectedRuntime &&
+    selectedRuntime !== "auto" &&
+    selectedRuntime !== "openclaw" &&
+    (!isOpenAIProvider(provider) || target.nativeHarnessCompaction === true),
+  );
   return {
+    attemptNativeHarnessCompaction,
     runtimePolicySessionKey,
     runtimePolicyAgentId,
     boundHarnessRuntime,
@@ -118,27 +147,6 @@ export function resolveCompactionRuntimeSelection(params: {
     runtimeProvider: target.runtimeProvider ?? provider,
     contextConfigProvider: target.contextProvider ?? provider,
     modelId,
-  };
-}
-
-function buildCompactionHarnessModelProvider(params: {
-  model?: ProviderRuntimeModel;
-  plan?: AgentRuntimeAuthPlan;
-  attempt?: PreparedAgentRuntimeAuthAttempt;
-}): AgentHarnessPreparedModelProvider {
-  const route = params.plan?.modelRoute;
-  return {
-    api: route?.api ?? params.model?.api,
-    baseUrl: route?.baseUrl ?? params.model?.baseUrl,
-    ...resolveAgentHarnessPreparedRouteSupport(params.plan),
-    ...(params.plan
-      ? {
-          preparedAuth: resolveAgentHarnessPreparedAuthSupport({
-            plan: params.plan,
-            source: params.attempt?.kind === "implicit" ? undefined : params.attempt?.kind,
-          }),
-        }
-      : {}),
   };
 }
 
@@ -159,71 +167,102 @@ export async function prepareCompactionHarnessAuth(params: {
   agentHarnessId?: string;
   agentHarnessRuntimeOverride?: string;
   convergenceErrorPrefix?: "Prepared compaction" | "Prepared queued compaction";
-}): Promise<{
-  runtimeAuthProfileStore: ReturnType<typeof ensureAuthProfileStore>;
-  runtimeAuthPreparation: PreparedAgentRuntimeAuth;
-  selectedPreparedHarness: AgentHarness;
-  providerUsesProfileScopedModelMetadata: boolean;
-}> {
+}): Promise<
+  | {
+      ok: true;
+      runtimeAuthProfileStore: ReturnType<typeof ensureAuthProfileStore>;
+      runtimeAuthPreparation: PreparedAgentRuntimeAuth;
+      selectedPreparedHarness: AgentHarness;
+      providerUsesProfileScopedModelMetadata: boolean;
+    }
+  | { ok: false; error: unknown }
+> {
   const runtimeAuthProfileStore = isOpenAIProvider(params.provider)
     ? ensureAuthProfileStore(params.agentDir, {
+        profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       })
     : ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+        profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         allowKeychainPrompt: false,
       });
+  const harnessSelectionParams = {
+    provider: params.provider,
+    modelId: params.modelId,
+    config: params.config,
+    agentId: params.runtimePolicyAgentId,
+    sessionKey: params.runtimePolicySessionKey ?? undefined,
+    agentHarnessId: params.agentHarnessId,
+    agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+  };
   const selectPreparedHarness = (attempts: readonly PreparedAgentRuntimeAuthAttempt[]) =>
     selectAgentHarnessForPreparedModelProviders({
-      provider: params.provider,
-      modelId: params.modelId,
+      ...harnessSelectionParams,
       modelProviders: attempts.map((attempt) =>
-        buildCompactionHarnessModelProvider({ model: params.model, plan: attempt.plan, attempt }),
+        projectPreparedModelProvider({
+          model: params.model,
+          plan: attempt.plan,
+          attemptKind: attempt.kind,
+        }),
       ),
-      config: params.config,
-      agentId: params.runtimePolicyAgentId,
-      sessionKey: params.runtimePolicySessionKey ?? undefined,
-      agentHarnessId: params.agentHarnessId,
-      agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
     });
   const initialHarness = params.reusableRuntimeAuthPlan
     ? undefined
     : selectAgentHarness({
-        provider: params.provider,
-        modelId: params.modelId,
-        modelProvider: buildCompactionHarnessModelProvider({ model: params.model }),
-        config: params.config,
-        agentId: params.runtimePolicyAgentId,
-        sessionKey: params.runtimePolicySessionKey ?? undefined,
-        agentHarnessId: params.agentHarnessId,
-        agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+        ...harnessSelectionParams,
+        modelProvider: projectPreparedModelProvider({ model: params.model }),
       });
-  const prepare = (harness: AgentHarness) =>
-    prepareAgentRuntimeAuth({
-      provider: params.provider,
-      modelId: params.modelId,
-      modelApi: params.model?.api,
-      modelBaseUrl: params.model?.baseUrl,
-      config: params.config,
-      env: process.env,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      authProfileStore: runtimeAuthProfileStore,
-      sessionAuthProfileId: params.authProfileId,
-      sessionAuthProfileSource: params.authProfileIdSource,
-      harnessId: harness.id,
-      harnessRuntime: harness.id,
-      harnessAuthBootstrap: harness.authBootstrap,
-    });
-  let runtimeAuthPreparation: PreparedAgentRuntimeAuth = params.reusableRuntimeAuthPlan
+  const prepare = (harness: AgentHarness) => {
+    try {
+      return {
+        ok: true as const,
+        auth: prepareAgentRuntimeAuth({
+          provider: params.provider,
+          modelId: params.modelId,
+          modelApi: params.model?.api,
+          modelBaseUrl: params.model?.baseUrl,
+          config: params.config,
+          agentId: params.runtimePolicyAgentId,
+          env: process.env,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          authProfileStore: runtimeAuthProfileStore,
+          sessionAuthProfileId: params.authProfileId,
+          sessionAuthProfileSource: params.authProfileIdSource,
+          harnessId: harness.id,
+          harnessRuntime: harness.id,
+          harnessAuthBootstrap: harness.authBootstrap,
+        }),
+      };
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+      // Auth refusals are compaction failures; store and harness failures still reject.
+      return { ok: false as const, error };
+    }
+  };
+  const initialAuth = params.reusableRuntimeAuthPlan
     ? {
-        plan: params.reusableRuntimeAuthPlan,
-        attempts: [{ kind: "implicit", plan: params.reusableRuntimeAuthPlan }],
+        ok: true as const,
+        auth: {
+          plan: params.reusableRuntimeAuthPlan,
+          attempts: [{ kind: "implicit", plan: params.reusableRuntimeAuthPlan }],
+        } satisfies PreparedAgentRuntimeAuth,
       }
     : prepare(initialHarness!);
+  if (!initialAuth.ok) {
+    return initialAuth;
+  }
+  let runtimeAuthPreparation: PreparedAgentRuntimeAuth = initialAuth.auth;
   let selectedPreparedHarness = selectPreparedHarness(runtimeAuthPreparation.attempts);
   if (!params.reusableRuntimeAuthPlan && selectedPreparedHarness.id !== initialHarness?.id) {
-    runtimeAuthPreparation = prepare(selectedPreparedHarness);
+    const preparedAuth = prepare(selectedPreparedHarness);
+    if (!preparedAuth.ok) {
+      return preparedAuth;
+    }
+    runtimeAuthPreparation = preparedAuth.auth;
     const confirmedHarness = selectPreparedHarness(runtimeAuthPreparation.attempts);
     if (confirmedHarness.id !== selectedPreparedHarness.id) {
       throw new Error(
@@ -233,6 +272,7 @@ export async function prepareCompactionHarnessAuth(params: {
     selectedPreparedHarness = confirmedHarness;
   }
   return {
+    ok: true,
     runtimeAuthProfileStore,
     runtimeAuthPreparation,
     selectedPreparedHarness,

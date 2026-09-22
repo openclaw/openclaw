@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatApprovalResultValue } from "../../shared/live-approval-result.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
@@ -326,16 +327,6 @@ function assertApprovalDecisionResult(params: {
       `approval decision was ${formatApprovalResultValue(result?.decision)} instead of ${params.decision}`,
     );
   }
-}
-
-function formatApprovalResultValue(value: unknown) {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (value == null) {
-    return "<missing>";
-  }
-  return JSON.stringify(value) ?? "<unserializable>";
 }
 
 async function requestExecApproval(params: {

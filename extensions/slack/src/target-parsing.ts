@@ -75,6 +75,28 @@ export function formatSlackTarget(params: {
   return `team:${encodeURIComponent(teamId)}:${params.kind}:${encodeURIComponent(id)}`;
 }
 
+export function resolveWorkspaceQualifiedSlackTarget(
+  input: string,
+  kind: SlackTargetKind,
+): { input: string; resolved: true; id: string } | undefined {
+  if (!/^team:/i.test(input)) {
+    return undefined;
+  }
+  try {
+    const target = parseSlackTarget(input);
+    if (target?.kind !== kind || !target.teamId) {
+      return undefined;
+    }
+    return {
+      input,
+      resolved: true,
+      id: formatSlackTarget({ teamId: target.teamId, kind, id: target.id }),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function isUnambiguousSlackUserId(rawId: string): boolean {
   const id = rawId.trim();
   return /^[UW][A-Z0-9]+$/.test(id) || /^[uw][0-9][a-z0-9]{7,}$/.test(id);

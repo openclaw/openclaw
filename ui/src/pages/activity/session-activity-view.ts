@@ -1,11 +1,14 @@
 import { html, nothing } from "lit";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import { html as staticHtml, literal } from "lit/static-html.js";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/ip-location.ts";
 import "../../components/viewer-facepile.ts";
 import "../../components/web-awesome-popover.ts";
-import { renderSettingsStatus } from "../../components/settings-ui.ts";
+import { renderSettingsStatus, renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -16,10 +19,21 @@ import {
 } from "../../lib/presence-users.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
+  isSessionKeyAddressable,
+  resolveSessionNavigationAgentId,
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import {
+  isUiGlobalScopeConfigured,
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+  scopedSessionArtifactKey,
+} from "../../lib/sessions/session-key.ts";
+import "./session-activity-git.ts";
+import "./session-activity-media.ts";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
+import { renderSessionActivitySummary } from "./session-activity-summary.ts";
 import {
   ACTIVITY_TIME_FILTERS,
   projectSessionActivity,
@@ -31,14 +45,18 @@ import {
 } from "./session-activity.ts";
 
 type SessionActivityViewProps = {
-  context: ApplicationContext;
+  context: ApplicationContext<RouteId>;
   expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
-  retainedIdentity: PresenceViewer | null;
-  rows: readonly GatewaySessionRow[];
+  result?: SessionsListResult;
+  loading: boolean;
+  retrying: boolean;
+  error?: string;
+  onRetry: () => void;
   onAutomationDayToggle: (dayKey: string) => void;
   onFiltersChange: (filters: SessionActivityFilters) => void;
+  onSummaryRetry?: (row: GatewaySessionRow) => void;
 };
 
 const TIME_LABELS: Record<ActivityTimeFilter, string> = {
@@ -48,7 +66,7 @@ const TIME_LABELS: Record<ActivityTimeFilter, string> = {
   all: "activityFeed.timeAll",
 };
 
-type ActivityPerson = PresenceViewer & { count: number; lastActiveAt: number };
+type ActivityPerson = PresenceViewer & { count: number };
 
 function isUnresolvedPerson(person: PresenceViewer): boolean {
   return !person.name && !person.email && presenceViewerLabel(person) === person.id;
@@ -70,16 +88,19 @@ function renderPersonAvatar(person: PresenceViewer, showPresence = false) {
   }
   return html`<span class="activity-feed__person-avatar">
     <openclaw-viewer-avatar
+      .identity=${{ type: "profile", id: person.id }}
       .user=${person}
       .markAsViewer=${false}
       variant="footer"
     ></openclaw-viewer-avatar>
-    ${showPresence && (person.entries?.length ?? 0) > 0
-      ? html`<span
-          class="activity-feed__presence-dot"
-          aria-label=${t("activityFeed.online")}
-        ></span>`
-      : nothing}
+    ${
+      showPresence && (person.entries?.length ?? 0) > 0
+        ? html`<span
+            class="activity-feed__presence-dot"
+            aria-label=${t("activityFeed.online")}
+          ></span>`
+        : nothing
+    }
   </span>`;
 }
 
@@ -99,7 +120,6 @@ function setPeopleExpanded(event: Event, expanded: boolean) {
 }
 
 function renderPersonRow(person: ActivityPerson, props: SessionActivityViewProps) {
-  const online = (person.entries?.length ?? 0) > 0;
   return html`<button
     type="button"
     class="session-menu__item activity-feed__people-row"
@@ -110,13 +130,6 @@ function renderPersonRow(person: ActivityPerson, props: SessionActivityViewProps
     ${renderPersonAvatar(person, true)}
     <span class="activity-feed__people-copy">
       <span class="activity-feed__people-name">${compactPersonLabel(person)}</span>
-      ${online
-        ? nothing
-        : html`<span class="activity-feed__last-active">
-            ${t("activityFeed.lastActive", {
-              time: formatRelativeTimestamp(person.lastActiveAt, { fallback: "" }),
-            })}
-          </span>`}
     </span>
     <span class="activity-feed__people-count">${person.count}</span>
   </button>`;
@@ -141,32 +154,40 @@ function renderPeopleControl(
       aria-haspopup="dialog"
       aria-expanded="false"
     >
-      ${selectedPerson
-        ? html`${renderPersonAvatar(selectedPerson)}<span class="activity-feed__selected-person"
-              >${compactPersonLabel(selectedPerson)}</span
-            >`
-        : html`<span class="activity-feed__facepile" aria-hidden="true">
-            ${visible.length > 0
-              ? visible.map((person) => renderPersonAvatar(person))
-              : html`<span
-                  class="viewer-avatar viewer-avatar--overflow activity-feed__unknown-avatar"
-                  >${icons.users}</span
-                >`}
-            ${overflow > 0
-              ? html`<span class="viewer-avatar viewer-avatar--overflow">+${overflow}</span>`
-              : nothing}
-          </span>`}
+      ${
+        selectedPerson
+          ? html`${renderPersonAvatar(selectedPerson)}<span class="activity-feed__selected-person"
+                >${compactPersonLabel(selectedPerson)}</span
+              >`
+          : html`<span class="activity-feed__facepile" aria-hidden="true">
+              ${
+                visible.length > 0
+                  ? visible.map((person) => renderPersonAvatar(person))
+                  : html`<span
+                      class="viewer-avatar viewer-avatar--overflow activity-feed__unknown-avatar"
+                      >${icons.users}</span
+                    >`
+              }
+              ${
+                overflow > 0
+                  ? html`<span class="viewer-avatar viewer-avatar--overflow">+${overflow}</span>`
+                  : nothing
+              }
+            </span>`
+      }
     </button>
-    ${selectedPerson
-      ? html`<button
-          type="button"
-          class="btn btn--sm activity-feed__people-clear"
-          aria-label=${t("activityFeed.clearPersonFilter")}
-          @click=${() => props.onFiltersChange({ ...props.filters, personId: null })}
-        >
-          ×
-        </button>`
-      : nothing}
+    ${
+      selectedPerson
+        ? html`<button
+            type="button"
+            class="btn btn--sm activity-feed__people-clear"
+            aria-label=${t("activityFeed.clearPersonFilter")}
+            @click=${() => props.onFiltersChange({ ...props.filters, personId: null })}
+          >
+            ×
+          </button>`
+        : nothing
+    }
     <wa-popover
       class="activity-feed__people-popover"
       for="activity-feed-people-trigger"
@@ -194,36 +215,20 @@ function renderPeopleControl(
           <span class="activity-feed__people-count">${totalSessions}</span>
         </button>
         ${resolved.map((person) => renderPersonRow(person, props))}
-        ${unresolved.length > 0
-          ? html`<div class="session-menu__separator" role="separator"></div>
-              <div class="activity-feed__people-group-label">
-                ${t("activityFeed.unresolvedIdentities")}
-              </div>
-              <div data-activity-unresolved>
-                ${unresolved.map((person) => renderPersonRow(person, props))}
-              </div>`
-          : nothing}
+        ${
+          unresolved.length > 0
+            ? html`<div class="session-menu__separator" role="separator"></div>
+                <div class="activity-feed__people-group-label">
+                  ${t("activityFeed.unresolvedIdentities")}
+                </div>
+                <div data-activity-unresolved>
+                  ${unresolved.map((person) => renderPersonRow(person, props))}
+                </div>`
+            : nothing
+        }
       </div>
     </wa-popover>
   </div>`;
-}
-
-function navigateToSession(event: MouseEvent, context: ApplicationContext, row: GatewaySessionRow) {
-  if (!shouldHandleNavigationClick(event)) {
-    return;
-  }
-  event.preventDefault();
-  const face = resolveSessionPreferredFace(row);
-  const target = sessionNavigationTarget({ context, face, sessionKey: row.key });
-  context.navigate(face, target.options);
-}
-
-function sessionHref(context: ApplicationContext, row: GatewaySessionRow): string {
-  return sessionNavigationTarget({
-    context,
-    face: resolveSessionPreferredFace(row),
-    sessionKey: row.key,
-  }).href;
 }
 
 function dayLabel(timestamp: number | null, now = Date.now()): string {
@@ -247,7 +252,37 @@ function dayLabel(timestamp: number | null, now = Date.now()): string {
   }).format(timestamp);
 }
 
-function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) {
+function renderSessionLink(
+  context: ApplicationContext<RouteId>,
+  row: GatewaySessionRow,
+  onSummaryRetry?: (row: GatewaySessionRow) => void,
+) {
+  const agentId =
+    parseAgentSessionKey(row.key)?.agentId ??
+    row.agentId ??
+    resolveSessionNavigationAgentId(context);
+  const face = resolveSessionPreferredFace(row);
+  const addressable = isSessionKeyAddressable(
+    row.key,
+    isUiGlobalScopeConfigured({
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    }),
+  );
+  const target = addressable
+    ? sessionNavigationTarget({
+        face,
+        sessionKey: row.key,
+        fallbackAgentId: row.key === "global" ? agentId : resolveSessionNavigationAgentId(context),
+        basePath: context.basePath,
+        row,
+        mainKey: resolveUiConfiguredMainKey({
+          agentsList: context.agents.state.agentsList,
+          hello: context.gateway.snapshot.hello,
+        }),
+      })
+    : null;
+  const tag = target ? literal`a` : literal`div`;
   const owner = sessionActivityOwner(row);
   const ownerName = presenceViewerLabel(owner);
   const activityAt = sessionActivityTimestamp(row);
@@ -257,27 +292,32 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
       ? digestRunId
       : undefined;
   const headline = activeObserverRunId ? row.observerDigest?.headline.trim() : "";
-  const scope = row.channel
-    ? t("activityFeed.channelLabel", { value: row.channel })
-    : row.agentId
-      ? t("activityFeed.agentLabel", { value: row.agentId })
-      : null;
+  const scope = row.channel ? t("activityFeed.channelLabel", { value: row.channel }) : null;
+  const showAgent = row.kind !== "global" || Boolean(row.agentId);
   const source = row.createdVia === "cron" ? t("activityFeed.automation") : null;
-  return html`<div class="activity-feed__session-row">
-    <a
+  return staticHtml`<div class="activity-feed__session-row">
+    <${tag}
       class="activity-feed__session"
       data-activity-session=${row.key}
-      href=${sessionHref(context, row)}
-      @click=${(event: MouseEvent) => navigateToSession(event, context, row)}
+      href=${target?.href ?? nothing}
+      @click=${(event: MouseEvent) => {
+        if (target && shouldHandleNavigationClick(event)) {
+          event.preventDefault();
+          context.navigate(face, target.options);
+        }
+      }}
     >
       <span class="activity-feed__session-avatar">
-        ${row.hasActiveRun === true
-          ? html`<span
-              class="activity-feed__presence-dot activity-feed__run-dot"
-              aria-hidden="true"
-            ></span>`
-          : nothing}
+        ${
+          row.hasActiveRun === true
+            ? html`<span
+                class="activity-feed__presence-dot activity-feed__run-dot"
+                aria-hidden="true"
+              ></span>`
+            : nothing
+        }
         <openclaw-viewer-avatar
+          .identity=${row.owner?.actor.identity ?? row.createdActor?.identity}
           .user=${owner}
           .markAsViewer=${false}
           variant="footer"
@@ -286,35 +326,60 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
       <span class="activity-feed__session-main">
         <span class="activity-feed__session-title">${resolveSessionDisplayName(row.key, row)}</span>
         <span class="activity-feed__session-meta">
-          ${headline
-            ? html`<span
-                class="activity-feed__session-headline"
-                data-health=${row.observerDigest?.health ?? nothing}
-                >${headline}</span
-              >`
-            : html`<span>${ownerName}</span>`}${source
-            ? html`<span class="activity-feed__session-source" data-activity-created-via="cron"
-                >· ${source}${scope ? " ·" : ""}</span
-              >`
-            : nothing}${scope
-            ? html`<span class="activity-feed__session-scope">${scope}</span>`
-            : nothing}
+          ${
+            headline
+              ? html`<span
+                  class="activity-feed__session-headline"
+                  data-health=${row.observerDigest?.health ?? nothing}
+                  >${headline}</span
+                >`
+              : html`<span>${ownerName}</span>`
+          }${
+            source
+              ? html`<span class="activity-feed__session-source" data-activity-created-via="cron"
+                  >· ${source}${scope || showAgent ? " ·" : ""}</span
+                >`
+              : nothing
+          }${
+            showAgent
+              ? html`<span class="activity-feed__session-scope"
+                  >${renderAgentRowChip(agentId)}</span
+                >`
+              : nothing
+          }${scope ? html`<span class="activity-feed__session-scope">${scope}</span>` : nothing}
         </span>
       </span>
       <span class="activity-feed__session-time">
         ${headline ? html`<span class="activity-feed__session-owner">${ownerName}</span>` : nothing}
-        ${activityAt > 0
-          ? html`<span>${formatRelativeTimestamp(activityAt, { fallback: "" })}</span>`
-          : nothing}
+        ${
+          activityAt > 0
+            ? html`<span>${formatRelativeTimestamp(activityAt, { fallback: "" })}</span>`
+            : nothing
+        }
       </span>
-    </a>
-    ${activeObserverRunId
-      ? html`<a
-          class="activity-feed__inspect-run"
-          href=${activityRunInspectorHref(activeObserverRunId, context.basePath)}
-          >${t("activityFeed.inspectRun")}</a
-        >`
-      : nothing}
+    </${tag}>
+    ${renderSessionActivitySummary(row, onSummaryRetry)}
+    <openclaw-activity-session-git
+      .context=${context}
+      .sessionKey=${scopedSessionArtifactKey(row.key, agentId)}
+      .agentId=${agentId}
+    ></openclaw-activity-session-git>
+    <openclaw-activity-session-media
+      .context=${context}
+      .sessionKey=${scopedSessionArtifactKey(row.key, agentId)}
+      .agentId=${agentId}
+      .revision=${row.updatedAt ?? 0}
+      .session=${row}
+    ></openclaw-activity-session-media>
+    ${
+      activeObserverRunId
+        ? html`<a
+            class="activity-feed__inspect-run"
+            href=${activityRunInspectorHref(activeObserverRunId, context.basePath)}
+            >${t("activityFeed.inspectRun")}</a
+          >`
+        : nothing
+    }
   </div>`;
 }
 
@@ -323,19 +388,19 @@ function renderDaySessions(
   day: ReturnType<typeof projectSessionActivity>["days"][number],
 ) {
   if (props.filters.query || props.filters.personId) {
-    return day.sessions.map((row) => renderSessionLink(props.context, row));
+    return day.sessions.map((row) => renderSessionLink(props.context, row, props.onSummaryRetry));
   }
   // GatewaySessionRow.hasAutomation records that an enabled cron job is bound to the session;
   // grouping must consume that fact directly rather than infer automation from titles or keys.
   const automation = day.sessions.filter((row) => row.hasAutomation === true);
   if (automation.length < 2) {
-    return day.sessions.map((row) => renderSessionLink(props.context, row));
+    return day.sessions.map((row) => renderSessionLink(props.context, row, props.onSummaryRetry));
   }
   const expanded = props.expandedAutomationDays.has(day.key);
   return html`
     ${day.sessions
       .filter((row) => row.hasAutomation !== true)
-      .map((row) => renderSessionLink(props.context, row))}
+      .map((row) => renderSessionLink(props.context, row, props.onSummaryRetry))}
     <button
       type="button"
       class="activity-feed__session activity-feed__automation-group"
@@ -349,12 +414,16 @@ function renderDaySessions(
         >${icons.chevronRight}</span
       >
     </button>
-    ${expanded ? automation.map((row) => renderSessionLink(props.context, row)) : nothing}
+    ${
+      expanded
+        ? automation.map((row) => renderSessionLink(props.context, row, props.onSummaryRetry))
+        : nothing
+    }
   `;
 }
 
 function renderIdentityHeader(
-  context: ApplicationContext,
+  context: ApplicationContext<RouteId>,
   identity: PresenceViewer,
   rows: readonly GatewaySessionRow[],
 ) {
@@ -371,6 +440,7 @@ function renderIdentityHeader(
     <section class="activity-feed__identity" data-activity-identity=${identity.id}>
       <div class="activity-feed__identity-main">
         <openclaw-viewer-avatar
+          .identity=${{ type: "profile", id: identity.id }}
           .user=${identity}
           .markAsViewer=${false}
           variant="profile"
@@ -381,52 +451,92 @@ function renderIdentityHeader(
         </div>
         ${renderSettingsStatus({ kind: online ? (idle ? "warn" : "ok") : "muted", label: status })}
       </div>
-      ${devices.length > 0
-        ? html`<div class="activity-feed__devices">
-            ${devices.map((entry) => {
-              const device = [entry.deviceFamily, entry.platform, entry.ip, entry.timeZone]
-                .filter(Boolean)
-                .join(" · ");
-              return html`<div class="activity-feed__device">
-                <span class="activity-feed__device-name"
-                  >${entry.host ?? t("activityFeed.unknownDevice")}</span
-                >
-                ${device ? html`<span>${device}</span>` : nothing}
-                ${entry.ip
-                  ? html`<openclaw-ip-location .ip=${entry.ip}></openclaw-ip-location>`
-                  : nothing}
-                ${entry.lastInputSeconds !== undefined
-                  ? html`<span
-                      >${t("activityFeed.lastInput", {
-                        time: formatTimeAgo(entry.lastInputSeconds * 1000, { suffix: false }),
-                      })}</span
-                    >`
-                  : nothing}
-              </div>`;
-            })}
-          </div>`
-        : nothing}
+      ${
+        devices.length > 0
+          ? html`<div class="activity-feed__devices">
+              ${devices.map((entry) => {
+                const device = [entry.deviceFamily, entry.platform, entry.ip, entry.timeZone]
+                  .filter(Boolean)
+                  .join(" · ");
+                return html`<div class="activity-feed__device">
+                  <span class="activity-feed__device-name"
+                    >${entry.host ?? t("activityFeed.unknownDevice")}</span
+                  >
+                  ${device ? html`<span>${device}</span>` : nothing}
+                  ${
+                    entry.ip
+                      ? html`<openclaw-ip-location .ip=${entry.ip}></openclaw-ip-location>`
+                      : nothing
+                  }
+                  ${
+                    entry.lastInputSeconds !== undefined
+                      ? html`<span
+                          >${t("activityFeed.lastInput", {
+                            time: formatTimeAgo(entry.lastInputSeconds * 1000, { suffix: false }),
+                          })}</span
+                        >`
+                      : nothing
+                  }
+                </div>`;
+              })}
+            </div>`
+          : nothing
+      }
       <div class="activity-feed__viewing">
         <h3>${t("activityFeed.viewingNow")}</h3>
-        ${viewing.length > 0
-          ? html`<div class="activity-feed__viewing-list">
-              ${viewing.map((row) => renderSessionLink(context, row))}
-            </div>`
-          : html`<p class="activity-feed__empty-note">${t("activityFeed.notViewing")}</p>`}
+        ${
+          viewing.length > 0
+            ? html`<div class="activity-feed__viewing-list">
+                ${viewing.map((row) => renderSessionLink(context, row))}
+              </div>`
+            : html`<p class="activity-feed__empty-note">${t("activityFeed.notViewing")}</p>`
+        }
       </div>
     </section>
   `;
 }
 
+function renderActivityLoading() {
+  return html`<section class="activity-feed__loading" aria-busy="true">
+    <span class="sr-only" role="status">${t("common.loading")}</span>
+    <div class="activity-feed__sessions" aria-hidden="true">
+      ${Array.from(
+        { length: 4 },
+        () => html`
+          <div class="activity-feed__session-row">
+            <div class="activity-feed__session">
+              <span class="skeleton activity-feed__loading-avatar"></span>
+              <div class="activity-feed__session-main">
+                <div class="skeleton skeleton-line skeleton-line--medium"></div>
+                <div class="skeleton skeleton-line activity-feed__loading-meta"></div>
+              </div>
+            </div>
+            <div class="activity-feed__recap activity-feed__recap-skeleton">
+              <div class="skeleton skeleton-line skeleton-line--long"></div>
+              <div class="skeleton skeleton-line skeleton-line--medium"></div>
+            </div>
+          </div>
+        `,
+      )}
+    </div>
+  </section>`;
+}
+
 export function renderSessionActivityView(props: SessionActivityViewProps) {
-  const projection = projectSessionActivity(props.rows, props.filters);
-  const identity = props.retainedIdentity;
-  const onlineById = new Map(props.presenceViewers.map((person) => [person.id, person]));
+  const projection = projectSessionActivity(props.result);
+  const onlineById = new Map(
+    props.presenceViewers.flatMap((person) =>
+      person.identity ? [[person.identity.id, person] as const] : [],
+    ),
+  );
+  const identity = props.filters.personId
+    ? (onlineById.get(props.filters.personId) ??
+      projection.people.find((person) => person.id === props.filters.personId) ??
+      null)
+    : null;
   const people = projection.people.map((person) => {
     const online = onlineById.get(person.id);
-    return online
-      ? { ...person, ...online, count: person.count, lastActiveAt: person.lastActiveAt }
-      : person;
+    return online ? { ...person, ...online, count: person.count } : person;
   });
   const selectedPerson = props.filters.personId
     ? (people.find((person) => person.id === props.filters.personId) ?? identity)
@@ -447,60 +557,80 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
             }}
           />
         </label>
-        <div
-          class="settings-segmented activity-feed__time-filter"
-          role="group"
-          aria-label=${t("activityFeed.time")}
-        >
-          ${ACTIVITY_TIME_FILTERS.map(
-            (time) => html`<button
-              type="button"
-              class="settings-segmented__btn ${props.filters.time === time
-                ? "settings-segmented__btn--active"
-                : ""}"
-              data-compact-label=${time === "all" ? t(TIME_LABELS[time]) : time}
-              aria-label=${t(TIME_LABELS[time])}
-              aria-pressed=${String(props.filters.time === time)}
-              @click=${() => props.onFiltersChange({ ...props.filters, time })}
-            >
-              ${t(TIME_LABELS[time])}
-            </button>`,
-          )}
-        </div>
+        ${renderSettingsSegmented({
+          mode: "buttons",
+          className: "activity-feed__time-filter",
+          value: props.filters.time,
+          ariaLabel: t("activityFeed.time"),
+          options: ACTIVITY_TIME_FILTERS.map((time) => ({
+            value: time,
+            label: t(TIME_LABELS[time]),
+            ariaLabel: t(TIME_LABELS[time]),
+            compactLabel: time === "all" ? t(TIME_LABELS[time]) : time,
+          })),
+          onChange: (time) => props.onFiltersChange({ ...props.filters, time }),
+          onReselect: (time) => props.onFiltersChange({ ...props.filters, time }),
+        })}
         ${renderPeopleControl(props, people, selectedPerson, projection.timeCount)}
       </div>
+      <div class="activity-feed__feedback">
+        <span role=${props.error ? "alert" : "status"} title=${props.error ?? nothing}>
+          ${props.error ?? (props.retrying ? t("common.refreshing") : nothing)}
+        </span>
+        ${
+          props.error || props.retrying
+            ? html`<button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRetry}>
+                ${t("common.retry")}
+              </button>`
+            : nothing
+        }
+      </div>
       <div class="activity-feed__main">
-        ${props.filters.personId
-          ? identity
-            ? renderIdentityHeader(props.context, identity, props.rows)
-            : html`<section class="activity-feed__not-found" role="status">
-                <h2>${t("activityFeed.notFoundTitle")}</h2>
-                <p>${t("activityFeed.notFoundDescription")}</p>
-              </section>`
-          : nothing}
-        ${!props.filters.personId || identity
-          ? html`
-              <div class="activity-feed__summary">
-                <h2>${t("activityFeed.sessions")}</h2>
-                <span
-                  >${t("activityFeed.showing", {
-                    shown: String(projection.sessions.length),
-                    total: String(projection.matchedCount),
-                  })}</span
-                >
-              </div>
-              ${projection.days.length > 0
-                ? projection.days.map(
-                    (day) => html`<section class="activity-feed__day">
-                      <h3>${dayLabel(day.timestamp)}</h3>
-                      <div class="activity-feed__sessions">${renderDaySessions(props, day)}</div>
-                    </section>`,
-                  )
-                : html`<section class="activity-feed__empty" role="status">
-                    ${t("activityFeed.noSessions")}
-                  </section>`}
-            `
-          : nothing}
+        ${props.loading && !props.result ? renderActivityLoading() : nothing}
+        ${
+          props.result?.peopleIncomplete
+            ? html`<p role="status">${t("activityFeed.partialHistory")}</p>`
+            : nothing
+        }
+        ${
+          props.result && props.filters.personId
+            ? identity
+              ? renderIdentityHeader(props.context, identity, projection.sessions)
+              : html`<section class="activity-feed__not-found" role="status">
+                  <h2>${t("activityFeed.notFoundTitle")}</h2>
+                  <p>${t("activityFeed.notFoundDescription")}</p>
+                </section>`
+            : nothing
+        }
+        ${
+          props.result && (!props.filters.personId || identity)
+            ? html`
+                <div class="activity-feed__summary">
+                  <h2>${t("activityFeed.sessions")}</h2>
+                  <span
+                    >${t("activityFeed.showing", {
+                      shown: String(projection.sessions.length),
+                      total: String(projection.matchedCount),
+                    })}</span
+                  >
+                </div>
+                ${
+                  projection.days.length > 0
+                    ? projection.days.map(
+                        (day) => html`<section class="activity-feed__day">
+                          <h3>${dayLabel(day.timestamp)}</h3>
+                          <div class="activity-feed__sessions">
+                            ${renderDaySessions(props, day)}
+                          </div>
+                        </section>`,
+                      )
+                    : html`<section class="activity-feed__empty" role="status">
+                        ${t("activityFeed.noSessions")}
+                      </section>`
+                }
+              `
+            : nothing
+        }
       </div>
     </div>
   `;

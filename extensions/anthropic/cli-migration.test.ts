@@ -4,6 +4,7 @@ import type {
   ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 
 const { probeClaudeCliAuthStatus } = vi.hoisted(() => ({
   probeClaudeCliAuthStatus: vi.fn(),
@@ -34,6 +35,9 @@ afterAll(() => {
 });
 
 describe("anthropic Claude model refs", () => {
+  it.each(["constructor", "__proto__", "toString"])("leaves unknown alias %s unchanged", (ref) => {
+    expect(resolveKnownAnthropicModelRef(ref)).toBe(ref);
+  });
   it("upgrades retired refs without rewriting future canonical refs", () => {
     expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-5")).toBe(
       "anthropic/claude-opus-5",
@@ -71,18 +75,17 @@ describe("anthropic Claude model refs", () => {
     );
   });
 
-  it("canonicalizes fable family aliases in bare and provider-qualified forms", () => {
-    // "fable-5" must map to the full model id, not the family name: the
-    // canonicalizer only accepts alias values that already start with
-    // "claude-", so a family-name value would leave the shorthand unresolved.
-    expect(resolveKnownAnthropicModelRef("fable")).toBe("anthropic/claude-fable-5");
-    expect(resolveKnownAnthropicModelRef("fable-5")).toBe("anthropic/claude-fable-5");
-    expect(resolveKnownAnthropicModelRef("claude-fable-5")).toBe("anthropic/claude-fable-5");
-    expect(resolveKnownAnthropicModelRef("claude-cli/fable")).toBe("anthropic/claude-fable-5");
-    expect(resolveKnownAnthropicModelRef("claude-cli/fable-5")).toBe("anthropic/claude-fable-5");
-    expect(resolveKnownAnthropicModelRef("claude-cli/claude-fable-5")).toBe(
-      "anthropic/claude-fable-5",
-    );
+  it.each([
+    ["fable", "claude-fable-5-1"],
+    ["fable-5.1", "claude-fable-5-1"],
+    ["fable-5-1", "claude-fable-5-1"],
+    ["claude-fable-5-1", "claude-fable-5-1"],
+    ["fable-5", "claude-fable-5"],
+    ["claude-fable-5", "claude-fable-5"],
+  ])("canonicalizes %s without changing explicit Fable versions", (alias, modelId) => {
+    for (const provider of ["", "anthropic/", "claude-cli/"]) {
+      expect(resolveKnownAnthropicModelRef(`${provider}${alias}`)).toBe(`anthropic/${modelId}`);
+    }
   });
 
   it("preserves the current claude-haiku-4-5 model and its bare alias", () => {
@@ -124,11 +127,7 @@ function createProviderAuthContext(
     agentDir: "/tmp/openclaw/agents/main",
     workspaceDir: "/tmp/openclaw/workspace",
     prompter: createTestWizardPrompter(),
-    runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    },
+    runtime: createRuntimeSpies(),
     allowSecretRefPrompt: false,
     isRemote: false,
     openUrl: vi.fn(),
@@ -146,11 +145,7 @@ function createProviderAuthMethodNonInteractiveContext(
     config,
     baseConfig: config,
     opts: {},
-    runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    },
+    runtime: createRuntimeSpies(),
     agentDir: "/tmp/openclaw/agents/main",
     workspaceDir: "/tmp/openclaw/workspace",
     resolveApiKey: vi.fn(async () => null),
@@ -199,6 +194,7 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
           },
         },
@@ -290,6 +286,7 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
           },
@@ -337,6 +334,7 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
           },

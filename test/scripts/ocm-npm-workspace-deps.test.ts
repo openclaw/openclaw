@@ -175,6 +175,15 @@ describe("OCM npm workspace dependency adapter", () => {
         join(scriptsDir, "package-changelog.mjs"),
         readFileSync(packageChangelogPath, "utf8"),
       );
+      mkdirSync(join(scriptsDir, "lib"), { recursive: true });
+      writeFileSync(
+        join(scriptsDir, "lib", "release-changelog.mjs"),
+        readFileSync(new URL("../../scripts/lib/release-changelog.mjs", import.meta.url)),
+      );
+      writeFileSync(
+        join(scriptsDir, "lib", "release-notes-compaction.mjs"),
+        readFileSync(new URL("../../scripts/lib/release-notes-compaction.mjs", import.meta.url)),
+      );
       execFileSync(process.execPath, ["scripts/package-changelog.mjs", "prepare"], {
         cwd: root,
         stdio: "pipe",

@@ -211,6 +211,21 @@ describe("question event parsing", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    "javascript:alert(1)",
+    "data:text/html,sign-in",
+    "/sign-in",
+    "//example.test/sign-in",
+    "https://operator:password@example.test/sign-in",
+    "https://",
+    42,
+  ])("rejects unsafe external question URLs: %s", (url) => {
+    const state = createState();
+    const question = requestedPayload().questions[0];
+    expect(requestQuestion(state, { questions: [{ ...question, url }] })).toBe(false);
+    expect(state.prompts.size).toBe(0);
+  });
 });
 
 describe("question prompt state", () => {

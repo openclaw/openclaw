@@ -1,5 +1,9 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import { disposeSelectedSessionMessageSubscription } from "./chat-history.ts";
+import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
+import { t } from "../../i18n/index.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+import { showToast } from "../../lib/toast.ts";
+import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -7,17 +11,18 @@ import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
+import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
 import {
   ChatComposerPersistence,
   type ChatComposerPersistResult,
-  type StoredChatOutboxScope,
+  markChatComposerEdit,
 } from "./composer-persistence.ts";
+import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
 type ChatRenderLifecycleScope = {
-  connectionEpoch: number;
   cancellations: Set<() => void>;
 };
 
@@ -28,6 +33,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private previousChatLoading = false;
   private previousChatMessages: unknown[] = [];
   private previousChatToolMessages: Record<string, unknown>[] = [];
+  private previousChatStreamSegments: ChatPageHost["chatStreamSegments"] = [];
   private previousGuardianNotices: ChatPageHost["guardianNotices"] = [];
   private previousChatStream: string | null = null;
   private previousRealtimeConversation: ChatPageHost["realtimeTalkConversation"] = [];
@@ -36,10 +42,12 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private forceScrollAfterUpdate = false;
   private readonly cleanups: Array<() => void> = [];
   private renderLifecycleConnected = false;
-  private renderLifecycleConnectionEpoch = 0;
   private renderLifecycleScope: ChatRenderLifecycleScope | undefined;
 
-  constructor(private readonly host: ReactiveControllerHost) {
+  constructor(
+    private readonly host: ReactiveControllerHost,
+    private readonly onStateChange?: () => void,
+  ) {
     this.attachmentReads = new ChatAttachmentReadLifecycle(() =>
       this.stateValue?.requestUpdate?.(),
     );
@@ -51,10 +59,32 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     return this.stateValue;
   }
 
+  attachmentInputProps(state: TState) {
+    const reads = this.attachmentReads;
+    const readSignal = reads.readSignal;
+    return {
+      attachments: state.chatAttachments,
+      attachmentLimits: state.hello?.policy?.attachments,
+      getAttachments: () => state.chatAttachments,
+      pendingAttachmentReads: reads.pendingReads,
+      getPendingAttachmentReads: () => reads.pendingReads,
+      readSignal,
+      onPendingReadsChange: (delta: 1 | -1) => {
+        if (delta === 1 && readSignal === reads.readSignal) {
+          markChatComposerEdit(state);
+        }
+        reads.updatePending(readSignal, delta);
+      },
+      onAttachmentsChange: (next: ChatPageHost["chatAttachments"]) => {
+        state.chatAttachments = next;
+        state.requestUpdate?.();
+      },
+    };
+  }
+
   createRenderLifecycle(): RenderLifecycle {
     this.cancelRenderLifecycleScope();
     const scope: ChatRenderLifecycleScope = {
-      connectionEpoch: this.renderLifecycleConnectionEpoch,
       cancellations: new Set(),
     };
     this.renderLifecycleScope = scope;
@@ -77,28 +107,55 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       stopChatRealtimeTalk(this.stateValue);
     }
     this.stateValue = state;
+    state.canRestoreComposer = () => this.stateValue === state && this.composerPersistence.active;
     this.previousChatLoading = state.chatLoading;
     this.previousChatMessages = state.chatMessages;
     this.previousChatToolMessages = state.chatToolMessages;
+    this.previousChatStreamSegments = state.chatStreamSegments;
     this.previousGuardianNotices = state.guardianNotices;
     this.previousChatStream = state.chatStream;
     this.previousRealtimeConversation = state.realtimeTalkConversation;
     const renderLifecycle = state.renderLifecycle;
     state.requestUpdate = () => renderLifecycle.invalidate();
     this.cleanups.push(subscribeChatOutboxProjection(state));
+    // Retained and hidden panes still own corrections; transport availability
+    // must not release their reload protection before Save or Cancel does.
+    this.cleanups.push(
+      registerControlUiReloadGuard(
+        () => this.stateValue !== state || !state.chatQueuedEdit,
+        () => {
+          const edit = state.chatQueuedEdit;
+          const client = state.client;
+          showToast({
+            message: t("chat.queue.reloadBlocked"),
+            actionLabel: state.reviewQueuedMessageEdit ? t("chat.queue.reviewEdit") : undefined,
+            onAction: () => {
+              if (
+                this.stateValue === state &&
+                state.client === client &&
+                edit &&
+                activeQueuedMessageEdit(state) === edit
+              ) {
+                state.reviewQueuedMessageEdit?.();
+              }
+            },
+          });
+        },
+      ),
+    );
     const sendChat = state.handleSendChat;
     state.handleSendChat = async (messageOverride, options, submissionAction) => {
       const pending = sendChat(messageOverride, options, submissionAction);
       renderLifecycle.invalidate();
       try {
-        await pending;
+        return await pending;
       } finally {
         renderLifecycle.invalidate();
       }
     };
     const commitDraftChange = state.handleChatDraftChange;
-    state.handleChatDraftChange = (next) => {
-      commitDraftChange(next);
+    state.handleChatDraftChange = (next, mentions) => {
+      commitDraftChange(next, mentions);
       this.composerPersistence.schedule();
     };
     const navigateInputHistory = state.handleChatInputHistoryKey;
@@ -119,11 +176,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   private isRenderLifecycleScopeActive(scope: ChatRenderLifecycleScope): boolean {
-    return (
-      this.renderLifecycleConnected &&
-      this.renderLifecycleScope === scope &&
-      scope.connectionEpoch === this.renderLifecycleConnectionEpoch
-    );
+    return this.renderLifecycleConnected && this.renderLifecycleScope === scope;
   }
 
   private requestUpdateForScope(scope: ChatRenderLifecycleScope): boolean {
@@ -132,6 +185,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     }
     this.composerPersistence.persistChangedState();
     this.captureRenderLifecycleChanges();
+    this.onStateChange?.();
     this.host.requestUpdate();
     return true;
   }
@@ -225,6 +279,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const messagesChanged =
       this.previousChatMessages !== state.chatMessages ||
       this.previousChatToolMessages !== state.chatToolMessages ||
+      this.previousChatStreamSegments !== state.chatStreamSegments ||
       this.previousGuardianNotices !== state.guardianNotices ||
       this.previousRealtimeConversation !== state.realtimeTalkConversation;
     const streamChanged = this.previousChatStream !== state.chatStream;
@@ -234,6 +289,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.previousChatLoading = state.chatLoading;
     this.previousChatMessages = state.chatMessages;
     this.previousChatToolMessages = state.chatToolMessages;
+    this.previousChatStreamSegments = state.chatStreamSegments;
     this.previousGuardianNotices = state.guardianNotices;
     this.previousChatStream = state.chatStream;
     this.previousRealtimeConversation = state.realtimeTalkConversation;
@@ -252,7 +308,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   hostConnected() {
-    this.renderLifecycleConnectionEpoch += 1;
     this.renderLifecycleConnected = true;
     // A lifecycle created while detached must never become active on reconnect.
     this.cancelRenderLifecycleScope();
@@ -282,12 +337,20 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.composerPersistence.start();
   }
 
+  pauseComposerPersistence() {
+    this.composerPersistence.stop();
+  }
+
   persistComposerForEviction(): ChatComposerPersistResult {
     return this.composerPersistence.persistForRouteSwitchResult();
   }
 
   composerScopeForEviction(): StoredChatOutboxScope | null {
     return this.composerPersistence.scopeForRouteSwitch();
+  }
+
+  get composerDraftRevision(): number {
+    return this.composerPersistence.draftRevision;
   }
 
   private stopChatEffects() {
@@ -301,6 +364,13 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       cancelChatStreamRenderFrame(state);
       cancelChatScroll(state);
       invalidateImageLightbox(state);
+      if (
+        state.sidebarContent?.kind === "loading" ||
+        state.sidebarContent?.kind === "unavailable"
+      ) {
+        state.sidebarContent = null;
+      }
+      clearSessionWorkspacePreviews(state);
       clearSessionWorkspaceTimers(state);
       stopChatRealtimeTalk(state);
       state.resetToolStream?.();

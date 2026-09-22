@@ -10,6 +10,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadExactSessionEntry,
+  loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -138,5 +139,34 @@ describe("outbound mirror route ordering", () => {
       provider: "testchat",
       from: "testchat:12345",
     });
+  });
+
+  it("leaves the stored route untouched when a plugin intentionally suppresses delivery", async () => {
+    const transcriptScope = {
+      agentId: "main",
+      sessionKey: MAIN_SESSION_KEY,
+      sessionId: "main-session",
+      storePath,
+    };
+    const transcriptBefore = loadTranscriptEventsSync(transcriptScope);
+    handleAction.mockResolvedValue(
+      jsonResult({ status: "suppressed", reason: "cancelled_by_message_sending_hook" }),
+    );
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: { channel: "testchat", to: "user:12345", message: "omitted" },
+      agentId: "main",
+      dryRun: false,
+    });
+    expect(result.payload).toEqual({
+      status: "suppressed",
+      reason: "cancelled_by_message_sending_hook",
+    });
+    expect(mainSessionOrigin()).toMatchObject({
+      provider: "discord",
+      from: "discord:operator",
+    });
+    expect(loadTranscriptEventsSync(transcriptScope)).toEqual(transcriptBefore);
   });
 });

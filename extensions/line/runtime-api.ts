@@ -29,6 +29,11 @@ export {
 export { setLineRuntime } from "./src/runtime.js";
 export { firstDefined, normalizeAllowFrom } from "./src/bot-access.js";
 export { downloadLineMedia } from "./src/download.js";
+export {
+  createAudioMessage,
+  createImageMessage,
+  createVideoMessage,
+} from "./src/outbound-media.js";
 export { probeLineBot } from "./src/probe.js";
 export { buildTemplateMessageFromPayload } from "./src/template-messages.js";
 export {
@@ -64,20 +69,15 @@ export {
 export {
   type CodeBlock,
   convertCodeBlockToFlexBubble,
-  convertTableToFlexBubble,
   hasMarkdownToConvert,
-  type MarkdownTable,
   type ProcessedLineMessage,
   processLineMessage,
   stripMarkdown,
 } from "./src/markdown-to-line.js";
 export {
-  createAudioMessage,
   createFlexMessage,
-  createImageMessage,
   createLocationMessage,
   createTextMessageWithQuickReplies,
-  createVideoMessage,
   getUserDisplayName,
   getUserProfile,
   pushImageMessage,

@@ -1,19 +1,12 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { TerminalTaskQueue } from "./terminal-task-queue.ts";
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 describe("TerminalTaskQueue", () => {
   it("drains superseded work before starting the next generation", async () => {
     const queue = new TerminalTaskQueue();
-    const release = deferred();
+    const release = createDeferred();
     const events: string[] = [];
     const stale = queue.enqueue(async (isCurrent) => {
       events.push("stale:start");

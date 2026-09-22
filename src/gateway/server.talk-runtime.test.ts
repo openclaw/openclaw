@@ -7,7 +7,7 @@ import {
   invokeTalkSpeakDirect,
   type TalkSpeakTestPayload,
   withSpeechProviders,
-} from "./talk.test-helpers.js";
+} from "./talk/test-helpers.js";
 
 const synthesizeSpeechMock = vi.hoisted(() =>
   vi.fn<typeof import("../tts/tts.js").synthesizeSpeech>(async () => ({
@@ -102,7 +102,7 @@ function expectSingleSynthesizeSpeechCall() {
 
 describe("gateway talk runtime", () => {
   beforeAll(async () => {
-    await import("./server-methods/talk.js");
+    await import("./talk/handlers/index.js");
     await import("../config/config.js");
   });
 
@@ -183,6 +183,24 @@ describe("gateway talk runtime", () => {
         expect((res?.payload as TalkSpeakTestPayload | undefined)?.audioBase64).toBe(
           Buffer.from([7, 8, 9]).toString("base64"),
         );
+      },
+    );
+  });
+
+  it.each(["```printf```", "> ```\n> x"])("preserves talk.speak prose after %s", async (prefix) => {
+    await setAcmeTalkConfig();
+    const text = `${prefix}\n\nThis explanation is ordinary prose and should be spoken in full.`;
+    await withAcmeSpeechProvider(
+      async () => ({
+        audioBuffer: Buffer.from([7, 8, 9]),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      }),
+      async () => {
+        const res = await invokeTalkSpeakDirect({ text });
+        expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
+        expect(expectSingleSynthesizeSpeechCall().text).toBe(text);
       },
     );
   });

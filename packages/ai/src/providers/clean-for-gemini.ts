@@ -489,13 +489,5 @@ function flattenUnionFallback(
 }
 
 export function cleanSchemaForGemini(schema: unknown): TSchema {
-  if (!schema || typeof schema !== "object") {
-    return schema as TSchema;
-  }
-  if (Array.isArray(schema)) {
-    return schema.map(cleanSchemaForGemini) as TSchema;
-  }
-
-  const defs = extendSchemaDefs(undefined, schema as Record<string, unknown>);
-  return cleanSchemaForGeminiWithDefs(schema, defs, undefined) as TSchema;
+  return cleanSchemaForGeminiWithDefs(schema, undefined, undefined) as TSchema;
 }

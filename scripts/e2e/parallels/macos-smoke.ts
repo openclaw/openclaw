@@ -1,5 +1,6 @@
 #!/usr/bin/env -S pnpm tsx
 // Macos Smoke script supports OpenClaw repository automation.
+import { readFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -24,7 +25,6 @@ import {
   resolveLatestVersion,
   resolveProviderAuth,
   resolveSnapshot,
-  run,
   say,
   shouldSkipSnapshotRestore,
   shellQuote,
@@ -43,12 +43,15 @@ import {
 import { MacosGuest } from "./guest-transports.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import { MacosDiscordSmoke } from "./macos-discord.ts";
+import { runMacosHostCommand as run } from "./macos-exec.ts";
 import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {
+  installSmokeRuntimeCompanions,
   npmRegistryEnv,
   packAndServeSmokeArtifact,
   parseSmokeCliArgs,
+  posixAgentTurnScript,
   posixStopGatewayScript,
   type SmokeCliOptions,
 } from "./smoke-common.ts";
@@ -420,6 +423,15 @@ class MacosSmoke {
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 60, () => this.verifyTargetVersion());
     await this.phase("fresh.verify-bundle-permissions", 180, () => this.verifyBundlePermissions());
+    await this.phase("fresh.install-companions", 600, () =>
+      installSmokeRuntimeCompanions({
+        provider: this.options.provider,
+        readCli: (args) => this.guestExec([guestOpenClaw, ...args]),
+        installCli: (args) => {
+          this.guestExec([guestOpenClaw, ...args]);
+        },
+      }),
+    );
     await this.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("fresh.gateway-start", 180, () => this.startManualGatewayIfNeeded());
     await this.phase("fresh.gateway-status", 180, () => this.verifyGateway());
@@ -842,10 +854,15 @@ fi`);
   }
 
   private ensureGuestPnpm(): void {
+    const { packageManager } = JSON.parse(
+      readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+    ) as { packageManager: string };
+    const spec = packageManager.replace(/\+.*$/u, "");
+    const version = spec.slice("pnpm@".length);
     this.guestSh(String.raw`set -eu
 bootstrap_root=/tmp/openclaw-smoke-pnpm-bootstrap
 bootstrap_bin="$bootstrap_root/node_modules/.bin"
-if [ -x "$bootstrap_bin/pnpm" ]; then
+if [ -x "$bootstrap_bin/pnpm" ] && [ "$("$bootstrap_bin/pnpm" --version)" = ${shellQuote(version)} ]; then
   echo "bootstrap-pnpm: reuse"
   "$bootstrap_bin/pnpm" --version
   exit 0
@@ -853,8 +870,9 @@ fi
 echo "bootstrap-pnpm: install"
 rm -rf "$bootstrap_root"
 mkdir -p "$bootstrap_root"
-npm install --prefix "$bootstrap_root" --no-save pnpm@11
-"$bootstrap_bin/pnpm" --version`);
+node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({private: true, allowScripts: {[process.argv[2]]: true}}))' "$bootstrap_root/package.json" ${shellQuote(spec)}
+npm install --prefix "$bootstrap_root" --no-save ${shellQuote(spec)}
+test "$("$bootstrap_bin/pnpm" --version)" = ${shellQuote(version)}`);
   }
 
   private async runDevChannelUpdate(): Promise<void> {
@@ -1045,43 +1063,14 @@ rm -f "$provider_config_batch"`);
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
 ${posixCodexPlatformPackageRepairFunction()}
-agent_ok=false
-for attempt in 1 2; do
-  session_id="parallels-macos-smoke"
-  if [ "$attempt" -gt 1 ]; then session_id="parallels-macos-smoke-retry-$attempt"; fi
-  rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
-  output_file="$(mktemp)"
-  set +e
-  /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestOpenClawEntryRunner} agent --local --agent main --session-id "$session_id" --message ${shellQuote(
+${posixAgentTurnScript({
+  command: `/usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestOpenClawEntryRunner} agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
-  )} --thinking off --timeout ${this.modelTimeoutSeconds} --json >"$output_file" 2>&1
-  rc=$?
-  set -e
-  cat "$output_file"
-  if [ "$rc" -ne 0 ]; then
-    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
-      rm -f "$output_file"
-      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
-      continue
-    fi
-    rm -f "$output_file"
-    exit "$rc"
-  fi
-  if grep -Eq '"finalAssistant(Raw|Visible)Text"[[:space:]]*:[[:space:]]*"OK"' "$output_file"; then
-    agent_ok=true
-    rm -f "$output_file"
-    break
-  fi
-  rm -f "$output_file"
-  if [ "$attempt" -lt 2 ]; then
-    echo "agent turn attempt $attempt finished without OK response; retrying"
-    sleep 3
-  fi
-done
-if [ "$agent_ok" != true ]; then
-  echo "openclaw agent finished without OK response" >&2
-  exit 1
-fi`,
+  )} --thinking off --timeout ${this.modelTimeoutSeconds} --json`,
+  sessionIdExpression: '"parallels-macos-smoke"',
+  retrySessionIdExpression: '"parallels-macos-smoke-retry-$attempt"',
+  printOutput: "cat",
+})}`,
     );
   }
 

@@ -13,12 +13,16 @@
 // binary's hidden `openclaw update finalize` entrypoint — the designed
 // "external core runtime change" finalizer that runs doctor plus
 // `updatePluginsAfterCoreUpdate` (which calls
-// `updateNpmInstalledPlugins({ syncOfficialPluginInstalls: true, disableOnFailure: true })`
+// `updateNpmInstalledPlugins({ syncOfficialPluginInstalls: true })`
 // and `runPostCorePluginConvergence`). Finalization never restarts, so the RPC
 // handler keeps ownership of the gateway restart.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readConfigFileSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -29,21 +33,27 @@ import {
   type UpdateChannel,
   UPDATE_EFFECTIVE_CHANNEL_ENV,
 } from "./update-channels.js";
+import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";
 import {
   buildPostCoreHandoffEnv,
   type PreUpdateConfigRestoreInput,
 } from "./update-post-core-context.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
-// Whole-process backstop for the finalizer. `update finalize` runs several timed
-// steps (doctor + plugin update/convergence), each bounded by its own per-step
-// `--timeout`. The outer process kill must therefore be larger than a single
-// per-step bound, or a valid multi-step run would be killed and falsely reported
-// as `post-core-plugin-finalize-failed` (blocking the restart). We use a generous
-// floor and, when a larger per-step timeout is requested, scale the outer bound
-// above it rather than reusing the per-step value as the whole-process kill.
-const FINALIZE_PROCESS_TIMEOUT_FLOOR_MS = 30 * 60_000;
-const FINALIZE_PROCESS_STEP_BUDGET_MULTIPLIER = 6;
+export async function readPreUpdateConfigForPostCoreFinalize(): Promise<
+  PreUpdateConfigRestoreInput | undefined
+> {
+  const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+  if (!snapshot.valid) {
+    return undefined;
+  }
+  return {
+    sourceConfig: snapshot.sourceConfig,
+    authoredConfig: isRecord(snapshot.parsed)
+      ? (snapshot.parsed as OpenClawConfig) // SAFETY: the valid snapshot supplies a parsed config object.
+      : snapshot.sourceConfig,
+  };
+}
 
 // Strip the running gateway's service identity from the finalizer child so it is
 // not mistaken for the managed service process (matches the CLI post-core spawn).
@@ -75,6 +85,13 @@ function buildFinalizeEnv(
 
 type PostCoreFinalizeOutcome =
   | { status: "skipped"; reason: "not-git-update" | "entrypoint-missing" }
+  | {
+      status: "skipped";
+      reason: "update-ledger-busy";
+      entrypoint: string;
+      exitCode: number;
+      message: string;
+    }
   | { status: "ok"; entrypoint: string }
   | {
       status: "error";
@@ -84,7 +101,7 @@ type PostCoreFinalizeOutcome =
       message?: string;
     };
 
-type FinalizeSpawnResult = { code: number | null; stderr?: string };
+type FinalizeSpawnResult = { code: number | null; stdout?: string; stderr?: string };
 
 type PostCoreFinalizeSpawner = (params: {
   argv: string[];
@@ -95,7 +112,7 @@ type PostCoreFinalizeSpawner = (params: {
 
 const defaultFinalizeSpawner: PostCoreFinalizeSpawner = async ({ argv, cwd, timeoutMs, env }) => {
   const res = await runCommandWithTimeout(argv, { baseEnv: {}, cwd, timeoutMs, env });
-  return { code: res.code, ...(res.stderr ? { stderr: res.stderr } : {}) };
+  return { code: res.code, stdout: res.stdout, stderr: res.stderr };
 };
 
 // Only git/source updates routed through `runGatewayUpdate` defer-and-drop
@@ -180,10 +197,11 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
   // version so plugins reconcile against the new core, not the running process.
   const compatHostVersion = result.after?.version ?? undefined;
   // Outer whole-process backstop, decoupled from the per-step `--timeout` above.
-  const processTimeoutMs = Math.max(
-    FINALIZE_PROCESS_TIMEOUT_FLOOR_MS,
-    (perStepTimeoutMs ?? 0) * FINALIZE_PROCESS_STEP_BUDGET_MULTIPLIER,
-  );
+  const processTimeoutMs = await resolveUpdateFinalizationTimeoutMs(perStepTimeoutMs, {
+    env: params.env,
+    pluginCount: Object.keys(params.preUpdateConfig?.sourceConfig.plugins?.entries ?? {}).length,
+    nodeRunner: nodePath,
+  });
 
   let sourceConfigDir: string | undefined;
   try {
@@ -209,6 +227,22 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
     if (spawnResult.code === 0) {
       return { status: "ok", entrypoint };
     }
+    const reported = safeParseJsonRecord(spawnResult.stdout ?? "");
+    if (
+      typeof spawnResult.code === "number" &&
+      reported?.status === "skipped" &&
+      reported.mode === "finalize" &&
+      reported.reason === "update-ledger-busy"
+    ) {
+      return {
+        status: "skipped",
+        reason: reported.reason,
+        entrypoint,
+        exitCode: spawnResult.code,
+        message:
+          "Update finalization was deferred while update history was busy. Retry the update after the database writer finishes; plugin convergence is still required before restarting.",
+      };
+    }
     return {
       status: "error",
       reason: "nonzero-exit",
@@ -230,22 +264,22 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
   }
 }
 
-// Fold a finalize failure into the update result so the RPC handler's existing
-// `result.status === "ok"` restart gate skips the restart: restarting on the new
-// core after convergence failed would load the stale plugins we just failed to
-// reconcile. Mirrors the CLI, which exits non-zero before restarting on
-// post-core convergence failure.
+// Required core/config finalization failures keep the RPC's restart gate closed.
+// Individual plugin problems exit successfully and remain separate notices.
 export function foldPostCoreFinalizeIntoResult(
   result: UpdateRunResult,
   outcome: PostCoreFinalizeOutcome,
 ): UpdateRunResult {
-  if (outcome.status !== "error") {
+  if (
+    outcome.status === "ok" ||
+    (outcome.status === "skipped" && outcome.reason !== "update-ledger-busy")
+  ) {
     return result;
   }
   return {
     ...result,
-    status: "error",
-    reason: "post-core-plugin-finalize-failed",
+    status: outcome.status,
+    reason: outcome.status === "skipped" ? outcome.reason : "post-core-plugin-finalize-failed",
     steps: [
       ...result.steps,
       {
@@ -253,7 +287,7 @@ export function foldPostCoreFinalizeIntoResult(
         command: "openclaw update finalize",
         cwd: result.root ?? process.cwd(),
         durationMs: 0,
-        exitCode: outcome.reason === "nonzero-exit" ? (outcome.exitCode ?? 1) : 1,
+        exitCode: outcome.exitCode ?? 1,
         ...(outcome.message ? { stderrTail: trimLogTail(outcome.message) } : {}),
       },
     ],

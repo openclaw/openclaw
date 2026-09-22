@@ -12,8 +12,17 @@ const HEARTBEAT_CONTEXT_PROMPT = `Follow the heartbeat monitor scratch context w
 export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply ${SILENT_REPLY_TOKEN}.`;
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
   "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";
-export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
-export const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
+// A fallback backend may lack the direct-only tool; preserve both quiet and alert outcomes.
+const HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS = `If the heartbeat_respond tool is not available in this run, reply ${SILENT_REPLY_TOKEN} when nothing needs the user's attention; when the user should be interrupted, reply with only the alert text instead of a prose report.`;
+export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} ${HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS}`;
+export const INTERNAL_WAKE_TRANSCRIPT_PROMPTS = {
+  heartbeat: "[OpenClaw heartbeat poll]",
+  exec: "[OpenClaw exec completion]\nDisable automatic completion turns with tools.exec.notifyOnExit=false; check per-agent overrides. Background exec and process poll remain available.",
+  // Saved transcripts still contain the marker without the disablement hint.
+  legacyExec: "[OpenClaw exec completion]",
+  cron: "[OpenClaw cron wake]",
+  event: "[OpenClaw session event]",
+} as const;
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
@@ -95,9 +104,16 @@ export function resolveHeartbeatPromptForResponseTool(raw?: string): string {
   if (!prompt) {
     return HEARTBEAT_RESPONSE_TOOL_PROMPT;
   }
-  return prompt.includes(HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS)
-    ? prompt
-    : `${prompt}\n\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
+  let resolved = prompt;
+  for (const instructions of [
+    HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+    HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS,
+  ]) {
+    if (!resolved.includes(instructions)) {
+      resolved = `${resolved}\n\n${instructions}`;
+    }
+  }
+  return resolved;
 }
 
 type StripHeartbeatMode = "heartbeat" | "message";
@@ -162,6 +178,10 @@ export function stripHeartbeatToken(
   if (!trimmed) {
     return { shouldSkip: true, text: "", didStrip: false };
   }
+  // Markup cleanup inserts spaces or removes edge wrappers; it cannot create this token.
+  if (!trimmed.includes(HEARTBEAT_TOKEN)) {
+    return { shouldSkip: false, text: trimmed, didStrip: false };
+  }
 
   const mode: StripHeartbeatMode = opts.mode ?? "message";
   const maxAckCharsRaw = opts.maxAckChars;
@@ -187,10 +207,6 @@ export function stripHeartbeatToken(
       .replace(/[*`~_]+$/, "");
 
   const trimmedNormalized = stripMarkup(trimmed);
-  const hasToken = trimmed.includes(HEARTBEAT_TOKEN) || trimmedNormalized.includes(HEARTBEAT_TOKEN);
-  if (!hasToken) {
-    return { shouldSkip: false, text: trimmed, didStrip: false };
-  }
 
   const strippedOriginal = stripTokenAtEdges(trimmed);
   const strippedNormalized = stripTokenAtEdges(trimmedNormalized);

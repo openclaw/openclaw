@@ -25,7 +25,9 @@ export function racePromiseWithAbortSignal<T>(
   }
   const abortError = () => createAbortError("Operation aborted", { cause: signal.reason });
   if (signal.aborted) {
-    return Promise.reject(abortError());
+    // The source may already be running. Observe its rejection while preserving
+    // the existing abort's precedence, even over an already-settled source.
+    return Promise.race([Promise.reject(abortError()), promise]);
   }
   let onAbort!: () => void;
   const aborted = new Promise<never>((_, reject) => {
@@ -46,12 +48,6 @@ export async function waitForAbortSignal(signal?: AbortSignal): Promise<void> {
     return;
   }
   await new Promise<void>((resolve) => {
-    const onAbort = () => {
-      // Remove explicitly even with `{ once: true }`; tests use foreign
-      // AbortSignal-like objects, and cleanup must stay deterministic there.
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
+    signal.addEventListener("abort", () => resolve(), { once: true });
   });
 }

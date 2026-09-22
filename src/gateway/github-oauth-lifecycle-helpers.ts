@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { matchesAgentLifecycleBinding } from "../agents/agent-lifecycle-registry.js";
+import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentConfig } from "../agents/agent-scope.js";
 import type {
   GitHubDeviceAuthorizationRecord,
@@ -11,8 +12,6 @@ import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-ident
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 
-export const DEVICE_MAX_LIFETIME_SECONDS = 15 * 60;
-export const DEVICE_MAX_POLL_INTERVAL_SECONDS = 60;
 export const REFRESH_SKEW_MS = 10 * 60_000;
 export const MAINTENANCE_INTERVAL_MS = 60_000;
 export const SHUTDOWN_DRAIN_TIMEOUT_MS = 31_000;
@@ -50,22 +49,24 @@ export function authorizationStillOwned(
 }
 
 export function configuredOAuthIdentities(config: OpenClawConfig): ConfiguredOAuthIdentity[] {
-  const identities: ConfiguredOAuthIdentity[] = [];
-  const system = config.tools?.github;
-  if (system?.kind === "oauth") {
-    identities.push({
-      scope: "system",
-      agentId: "system",
-      identity: { ...system, kind: "oauth" },
-    });
-  }
-  for (const agentId of listAgentIds(config).toSorted()) {
-    const identity = resolveAgentConfig(config, agentId)?.tools?.github;
-    if (identity?.kind === "oauth") {
-      identities.push({ scope: "agent", agentId, identity: { ...identity, kind: "oauth" } });
+  return withAgentRosterFactsBatch(config, () => {
+    const identities: ConfiguredOAuthIdentity[] = [];
+    const system = config.tools?.github;
+    if (system?.kind === "oauth") {
+      identities.push({
+        scope: "system",
+        agentId: "system",
+        identity: { ...system, kind: "oauth" },
+      });
     }
-  }
-  return identities;
+    for (const agentId of listAgentIds(config).toSorted()) {
+      const identity = resolveAgentConfig(config, agentId)?.tools?.github;
+      if (identity?.kind === "oauth") {
+        identities.push({ scope: "agent", agentId, identity: { ...identity, kind: "oauth" } });
+      }
+    }
+    return identities;
+  });
 }
 
 export function currentIdentityForRecord(

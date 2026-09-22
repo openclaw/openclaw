@@ -13,49 +13,26 @@ import {
 } from "./control-ui-contract.js";
 
 const ROUTES = [
-  {
-    route: "agentAvatar",
-    value: "ops/main",
-    path: "/avatar/ops%2Fmain",
-  },
-  {
-    route: "catalogIcon",
-    value: "https://cdn.example.test/icon.svg",
-    path: "/__openclaw__/catalog-icon/https%3A%2F%2Fcdn.example.test%2Ficon.svg",
-  },
-  {
-    route: "channelAvatar",
-    value: "agent:main:discord:direct:user-1",
-    path: "/__openclaw__/channel-avatar/agent%3Amain%3Adiscord%3Adirect%3Auser-1",
-  },
-  {
-    route: "linkFavicon",
-    value: "docs.example.test",
-    path: "/__openclaw__/link-favicon/docs.example.test",
-  },
-  {
-    route: "pluginIcon",
-    value: "@scope/plugin",
-    path: "/__openclaw__/plugin-icon/%40scope%2Fplugin",
-  },
-  {
-    route: "userAvatar",
-    value: "profile/a b",
-    path: "/api/users/profile%2Fa%20b/avatar",
-  },
-  {
-    route: "workspaceIcon",
-    value: "agent:main:one",
-    path: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
-  },
-] as const satisfies readonly {
-  route: ControlUiResourceRoute;
-  value: string;
-  path: string;
-}[];
+  ["agentAvatar", "ops/main", "/avatar/ops%2Fmain"],
+  [
+    "catalogIcon",
+    "https://cdn.example.test/icon.svg",
+    "/__openclaw__/catalog-icon/https%3A%2F%2Fcdn.example.test%2Ficon.svg",
+  ],
+  [
+    "channelAvatar",
+    "agent:main:discord:direct:user-1",
+    "/__openclaw__/channel-avatar/agent%3Amain%3Adiscord%3Adirect%3Auser-1",
+  ],
+  ["linkFavicon", "docs.example.test", "/__openclaw__/link-favicon/docs.example.test"],
+  ["pluginIcon", "@scope/plugin", "/__openclaw__/plugin-icon/%40scope%2Fplugin"],
+  ["pluginActivityIcon", "@scope/plugin", "/__openclaw__/plugin-activity-icon/%40scope%2Fplugin"],
+  ["userAvatar", "profile/a b", "/api/users/profile%2Fa%20b/avatar"],
+  ["workspaceIcon", "agent:main:one", "/__openclaw__/workspace-icon/agent%3Amain%3Aone"],
+] as const satisfies readonly (readonly [ControlUiResourceRoute, string, string])[];
 
 describe("Control UI resource route contract", () => {
-  it.each(ROUTES)("round-trips $route as one encoded segment", ({ route, value, path }) => {
+  it.each(ROUTES)("round-trips %s as one encoded segment", (route, value, path) => {
     expect(buildControlUiResourcePath(route, "", value)).toBe(path);
     expect(buildControlUiResourcePath(route, "control/", value)).toBe(`/control${path}`);
     expect(parseControlUiResourcePath(route, path)).toEqual({ matched: true, value });

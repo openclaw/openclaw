@@ -16,8 +16,8 @@ import { createRuntimeTasks } from "./runtime-tasks.js";
 
 const runtimeTaskMocks = getRuntimeTaskMocks();
 
-afterEach(() => {
-  resetRuntimeTaskTestState();
+afterEach(async () => {
+  await resetRuntimeTaskTestState();
 });
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
@@ -202,6 +202,7 @@ describe("runtime tasks", () => {
 
     expect(runtimeTaskMocks.cancelSessionMock).toHaveBeenCalledWith({
       cfg: {},
+      agentId: "main",
       sessionKey: "agent:main:subagent:child",
       reason: "task-cancel",
       expectedRunId: "runtime-task-cancel",
@@ -339,6 +340,7 @@ describe("runtime tasks", () => {
       runId: "ops-global-run",
       task: "Ops global task",
       status: "running",
+      detail: createAcpTaskBackingDetailForTest("instance:ops-global-run"),
     });
     const researchTask = createTaskRecord({
       runtime: "acp",
@@ -349,6 +351,7 @@ describe("runtime tasks", () => {
       runId: "research-global-run",
       task: "Research global task",
       status: "running",
+      detail: createAcpTaskBackingDetailForTest("instance:research-global-run"),
     });
     if (!opsTask || !researchTask) {
       throw new Error("expected paired global tasks to be created");
@@ -393,9 +396,11 @@ describe("runtime tasks", () => {
     expect(opsCancel.cancelled).toBe(true);
     expect(runtimeTaskMocks.cancelSessionMock).toHaveBeenCalledWith({
       cfg: {},
+      agentId: "ops",
       sessionKey: "agent:ops:acp:child",
       reason: "task-cancel",
       expectedRunId: "ops-global-run",
+      expectedInstanceId: "instance:ops-global-run",
     });
   });
 });

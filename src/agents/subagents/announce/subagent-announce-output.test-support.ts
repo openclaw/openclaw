@@ -1,15 +1,19 @@
 export * from "./subagent-announce-output.js";
+export { buildChildCompletionFindings } from "./subagent-announce-result.js";
 
 type OutputRuntime = typeof import("./subagent-announce.runtime.js");
 type OutputDeps = Pick<
   OutputRuntime,
-  | "callGateway"
   | "getRuntimeConfig"
   | "readSubagentSessionEntry"
   | "readSessionMessagesAsync"
   | "resolveAgentIdFromSessionKey"
   | "resolveSessionStorePathCore"
->;
+> & {
+  callGateway: OutputRuntime["callSubagentLifecycleGateway"];
+  findTranscriptEvent: typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent;
+  findSessionTranscriptArchiveEventReadOnly: typeof import("../../../config/sessions/session-history.js").findSessionTranscriptArchiveEventReadOnly;
+};
 
 type Testing = {
   setDepsForTest(overrides?: Partial<OutputDeps>): void;

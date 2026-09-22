@@ -1,13 +1,11 @@
 // Executes Chrome MCP navigation, snapshot, screenshot, and page actions.
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
 import {
   addTimerTimeoutGraceMs,
   resolveNonNegativeIntegerOption,
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
 import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import {
   rethrowChromeMcpDocumentError,
@@ -33,16 +31,6 @@ import {
   withChromeMcpTarget,
 } from "./chrome-mcp-routing.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
-
-async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-chrome-mcp-"));
-  const filePath = path.join(dir, randomUUID());
-  try {
-    return await fn(filePath);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-}
 
 /** Ensure a Chrome MCP session can be started for the profile. */
 export async function focusChromeMcpTab(
@@ -232,18 +220,21 @@ export async function takeChromeMcpScreenshot(
     format?: "png" | "jpeg";
   },
 ): Promise<Buffer> {
-  return await withTempFile(async (filePath) => {
-    const format = params.format ?? "png";
-    await callTargetTool(params, "take_screenshot", (session) => ({
-      filePath,
-      format,
-      ...(params.uid
-        ? { uid: resolveChromeMcpSnapshotRef(session, params.targetId, params.uid) }
-        : {}),
-      ...(params.fullPage ? { fullPage: true } : {}),
-    }));
-    return await fs.readFile(`${filePath}.${format}`);
-  });
+  return await withTempDownloadPath(
+    { prefix: "openclaw-chrome-mcp", fileName: "screenshot" },
+    async (filePath) => {
+      const format = params.format ?? "png";
+      await callTargetTool(params, "take_screenshot", (session) => ({
+        filePath,
+        format,
+        ...(params.uid
+          ? { uid: resolveChromeMcpSnapshotRef(session, params.targetId, params.uid) }
+          : {}),
+        ...(params.fullPage ? { fullPage: true } : {}),
+      }));
+      return await fs.readFile(`${filePath}.${format}`);
+    },
+  );
 }
 
 /** Click a Chrome MCP snapshot element by uid. */
@@ -359,13 +350,13 @@ export async function dragChromeMcpElement(
   }));
 }
 
-/** Upload a local file into a Chrome MCP file input by uid. */
+/** Upload local files into a Chrome MCP file input by uid. */
 export async function uploadChromeMcpFile(
-  params: ChromeMcpTargetOperation & { uid: string; filePath: string },
+  params: ChromeMcpTargetOperation & { uid: string; filePaths: string[] },
 ): Promise<void> {
   await callTargetTool(params, "upload_file", (session) => ({
     uid: resolveChromeMcpSnapshotRef(session, params.targetId, params.uid),
-    filePath: params.filePath,
+    filePaths: params.filePaths,
   }));
 }
 

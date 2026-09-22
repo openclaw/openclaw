@@ -13,8 +13,9 @@ import {
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
+import { createBlockReplyDeliveryHandler, type DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { hasCommittedReplyOperationOutcome } from "./reply-run-registry.js";
 
 type AgentTurnPresentation = {
   classifyStreamingPartial: (payload: ReplyPayload) => { text?: string; skip: boolean };
@@ -23,7 +24,7 @@ type AgentTurnPresentation = {
     errorContext: boolean,
   ) => { text?: string; skip: boolean };
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
-  startPresentationWhileTyping: (
+  presentWithTyping: (
     typingPromise: Promise<void>,
     startPresentation: () => boolean | void | Promise<boolean | void>,
   ) => Promise<boolean | void>;
@@ -35,12 +36,12 @@ export function createAgentTurnPresentation(params: {
   turn: AgentTurnParams;
   replyMediaContext: ReplyMediaContext;
   directlySentBlockKeys: Set<string>;
-  directlySentBlockPayloads: Array<ReplyPayload | undefined>;
+  directBlockDeliveries: DirectBlockDelivery[];
   heartbeatState: { didLogStrip: boolean };
 }): AgentTurnPresentation {
   const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
     let text = payload.text;
-    const reply = resolveSendableOutboundReplyParts(payload);
+    const reply = resolveSendableOutboundReplyParts(payload, { text: "" });
     if (params.turn.followupRun.run.silentExpected) {
       return { skip: true };
     }
@@ -96,10 +97,27 @@ export function createAgentTurnPresentation(params: {
     return sanitizeStreamingText(classified.text, Boolean(payload.isError));
   };
 
-  const startPresentationWhileTyping = async (
+  const preserveProgressCallbackStartOrder =
+    params.turn.opts?.preserveProgressCallbackStartOrder === true;
+  const presentWithTyping = async (
     typingPromise: Promise<void>,
     startPresentation: () => boolean | void | Promise<boolean | void>,
   ) => {
+    if (!preserveProgressCallbackStartOrder) {
+      await typingPromise;
+      const operation = params.turn.replyOperation;
+      // Successful settlement keeps delivery alive; delayed typing must not
+      // reopen presentation after this operation has committed its final answer.
+      if (
+        operation &&
+        (operation.abortSignal.aborted ||
+          operation.result ||
+          hasCommittedReplyOperationOutcome(operation))
+      ) {
+        return false;
+      }
+      return await startPresentation();
+    }
     let presentationPromise: boolean | void | Promise<boolean | void>;
     try {
       presentationPromise = startPresentation();
@@ -129,7 +147,7 @@ export function createAgentTurnPresentation(params: {
         blockStreamingEnabled: params.turn.blockStreamingEnabled,
         blockReplyPipeline,
         directlySentBlockKeys: params.directlySentBlockKeys,
-        directlySentBlockPayloads: params.directlySentBlockPayloads,
+        directBlockDeliveries: params.directBlockDeliveries,
       })
     : undefined;
 
@@ -137,7 +155,7 @@ export function createAgentTurnPresentation(params: {
     classifyStreamingPartial,
     sanitizeStreamingText,
     normalizeStreamingText,
-    startPresentationWhileTyping,
+    presentWithTyping,
     blockReplyHandler,
   };
 }

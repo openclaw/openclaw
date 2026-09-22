@@ -8,10 +8,8 @@ import {
 } from "./provider-env-vars.js";
 
 describe("provider env vars", () => {
-  it("keeps the auth scrub list broader than the global secret env list", () => {
+  it("keeps provider credentials in auth and secret inventories", () => {
     const sharedSecretNames = [
-      "GITHUB_TOKEN",
-      "GH_TOKEN",
       "ANTHROPIC_OAUTH_TOKEN",
       "BRAVE_API_KEY",
       "DEEPGRAM_API_KEY",
@@ -36,6 +34,12 @@ describe("provider env vars", () => {
     expect(secretNames).toContain("ANTHROPIC_ADMIN_KEY");
     expect(secretNames).toContain("ANTHROPIC_ADMIN_API_KEY");
     expect(listKnownSecretEnvVarNames()).not.toContain("OPENCLAW_API_KEY");
+  });
+
+  it.each(["GH_TOKEN", "GITHUB_TOKEN"])("audits %s without activating a provider", (name) => {
+    expect(listKnownSecretEnvVarNames()).toContain(name);
+    expect(listKnownProviderAuthEnvVarNames()).not.toContain(name);
+    expect(getProviderEnvVars("github-copilot")).not.toContain(name);
   });
 
   it("omits env keys case-insensitively", () => {

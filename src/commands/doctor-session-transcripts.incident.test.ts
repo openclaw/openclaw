@@ -25,9 +25,9 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
-  const { loadBundledPluginPublicSurface } =
-    await import("../plugin-sdk/test-helpers/public-surface-loader.js");
-  const { stateMigrations } = await loadBundledPluginPublicSurface<{
+  const { loadBundledPluginFacade } =
+    await import("../test-utils/bundled-plugin-public-surface.js");
+  const { stateMigrations } = await loadBundledPluginFacade<{
     stateMigrations: PluginDoctorStateMigration[];
   }>({ pluginId: "codex", artifactBasename: "doctor-contract-api.js" });
   return {
@@ -179,16 +179,12 @@ describe("doctor incident-scale Codex binding repair", () => {
       noteSessionTranscriptHealth({
         cfg: config,
         env,
-        sessionDirs: [],
-        sessionSqlite: true,
         shouldRepair: true,
       });
 
     await noteSessionTranscriptHealth({
       cfg: config,
       env,
-      sessionDirs: [],
-      sessionSqlite: true,
       shouldRepair: false,
     });
     expect(note.mock.calls.flat().join("\n")).toContain("orphaned session ownership");

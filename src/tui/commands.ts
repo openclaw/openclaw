@@ -91,6 +91,7 @@ type TuiCommandRow = readonly [
 
 const TUI_COMMAND_ROWS = [
   ["help", "Show slash command help", "/help"],
+  ["question", "Reopen the pending agent question", "/question"],
   [
     "commands",
     undefined,

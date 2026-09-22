@@ -25,21 +25,14 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  DEFAULT_PERPLEXITY_BASE_URL,
-  inferPerplexityBaseUrlFromApiKey,
   isDirectPerplexityBaseUrl,
-  PERPLEXITY_DIRECT_BASE_URL,
-  type PerplexityTransport,
+  resolvePerplexityConfig,
+  resolvePerplexityRuntime,
+  type PerplexityAuth,
+  type PerplexityConfig,
 } from "./perplexity-web-search-provider.shared.js";
 
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
-const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
-
-type PerplexityConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-};
 
 type PerplexitySearchResponse = {
   choices?: Array<{
@@ -66,17 +59,7 @@ type PerplexitySearchApiResponse = {
   }>;
 };
 
-function resolvePerplexityConfig(searchConfig?: SearchConfigRecord): PerplexityConfig {
-  const perplexity = searchConfig?.perplexity;
-  return perplexity && typeof perplexity === "object" && !Array.isArray(perplexity)
-    ? (perplexity as PerplexityConfig)
-    : {};
-}
-
-function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
-  apiKey?: string;
-  source: "config" | "perplexity_env" | "openrouter_env" | "none";
-} {
+function resolvePerplexityApiKey(perplexity?: PerplexityConfig): PerplexityAuth {
   const fromConfig = readConfiguredSecretString(
     perplexity?.apiKey,
     "plugins.entries.perplexity.config.webSearch.apiKey",
@@ -95,34 +78,6 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
   return { apiKey: undefined, source: "none" };
 }
 
-function resolvePerplexityBaseUrl(
-  perplexity?: PerplexityConfig,
-  authSource: "config" | "perplexity_env" | "openrouter_env" | "none" = "none",
-  configuredKey?: string,
-): string {
-  const fromConfig = normalizeOptionalString(perplexity?.baseUrl) ?? "";
-  if (fromConfig) {
-    return fromConfig;
-  }
-  if (authSource === "perplexity_env") {
-    return PERPLEXITY_DIRECT_BASE_URL;
-  }
-  if (authSource === "openrouter_env") {
-    return DEFAULT_PERPLEXITY_BASE_URL;
-  }
-  if (authSource === "config") {
-    return inferPerplexityBaseUrlFromApiKey(configuredKey) === "openrouter"
-      ? DEFAULT_PERPLEXITY_BASE_URL
-      : PERPLEXITY_DIRECT_BASE_URL;
-  }
-  return DEFAULT_PERPLEXITY_BASE_URL;
-}
-
-function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
-  const model = normalizeOptionalString(perplexity?.model) ?? "";
-  return model || DEFAULT_PERPLEXITY_MODEL;
-}
-
 function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
   if (!isDirectPerplexityBaseUrl(baseUrl)) {
     return model;
@@ -137,28 +92,6 @@ function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Reco
     Authorization: `Bearer ${apiKey}`,
     "HTTP-Referer": "https://openclaw.ai",
     "X-Title": "OpenClaw Web Search",
-  };
-}
-
-function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
-  apiKey?: string;
-  source: "config" | "perplexity_env" | "openrouter_env" | "none";
-  baseUrl: string;
-  model: string;
-  transport: PerplexityTransport;
-} {
-  const auth = resolvePerplexityApiKey(perplexity);
-  const baseUrl = resolvePerplexityBaseUrl(perplexity, auth.source, auth.apiKey);
-  const model = resolvePerplexityModel(perplexity);
-  const hasLegacyOverride = Boolean(
-    normalizeOptionalString(perplexity?.baseUrl) || normalizeOptionalString(perplexity?.model),
-  );
-  return {
-    ...auth,
-    baseUrl,
-    model,
-    transport:
-      hasLegacyOverride || !isDirectPerplexityBaseUrl(baseUrl) ? "chat_completions" : "search_api",
   };
 }
 
@@ -234,6 +167,7 @@ async function runPerplexitySearchApi(params: {
     body.max_tokens_per_page = params.maxTokensPerPage;
   }
 
+  const headers = buildPerplexityRequestHeaders(params.apiKey, true);
   return withTrustedWebSearchEndpoint(
     {
       url: PERPLEXITY_SEARCH_ENDPOINT,
@@ -241,13 +175,16 @@ async function runPerplexitySearchApi(params: {
       signal: params.signal,
       init: {
         method: "POST",
-        headers: buildPerplexityRequestHeaders(params.apiKey, true),
+        headers,
         body: JSON.stringify(body),
       },
     },
     async (res) => {
       if (!res.ok) {
-        return await throwWebSearchApiError(res, "Perplexity Search");
+        return await throwWebSearchApiError(res, "Perplexity Search", {
+          headers,
+          signal: params.signal,
+        });
       }
       const data = await readProviderJsonResponse<PerplexitySearchApiResponse>(
         res,
@@ -282,6 +219,7 @@ async function runPerplexitySearch(params: {
     body.search_recency_filter = params.freshness;
   }
 
+  const headers = buildPerplexityRequestHeaders(params.apiKey);
   return withTrustedWebSearchEndpoint(
     {
       url: endpoint,
@@ -289,13 +227,13 @@ async function runPerplexitySearch(params: {
       signal: params.signal,
       init: {
         method: "POST",
-        headers: buildPerplexityRequestHeaders(params.apiKey),
+        headers,
         body: JSON.stringify(body),
       },
     },
     async (res) => {
       if (!res.ok) {
-        return await throwWebSearchApiError(res, "Perplexity");
+        return await throwWebSearchApiError(res, "Perplexity", { headers, signal: params.signal });
       }
       const data = await readProviderJsonResponse<PerplexitySearchResponse>(res, "Perplexity");
       const content = data.choices?.[0]?.message?.content;
@@ -318,7 +256,10 @@ export async function executePerplexitySearch(
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const perplexityConfig = resolvePerplexityConfig(searchConfig);
-  const runtime = resolvePerplexityTransport(perplexityConfig);
+  const runtime = resolvePerplexityRuntime(
+    perplexityConfig,
+    resolvePerplexityApiKey(perplexityConfig),
+  );
   if (!runtime.apiKey) {
     return {
       error: "missing_perplexity_api_key",
@@ -441,87 +382,61 @@ export async function executePerplexitySearch(
     maxTokens,
     maxTokensPerPage,
   ]);
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
 
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
-  const payload =
+  const result =
     runtime.transport === "chat_completions"
-      ? {
+      ? await runPerplexitySearch({
           query,
-          provider: "perplexity",
+          apiKey: runtime.apiKey,
+          baseUrl: runtime.baseUrl,
           model: runtime.model,
-          tookMs: Date.now() - start,
-          externalContent: {
-            untrusted: true,
-            source: "web_search",
-            provider: "perplexity",
-            wrapped: true,
-          },
-          ...(await (async () => {
-            const result = await runPerplexitySearch({
-              query,
-              apiKey: runtime.apiKey!,
-              baseUrl: runtime.baseUrl,
-              model: runtime.model,
-              timeoutSeconds,
-              signal,
-              freshness,
-            });
-            return {
-              content: wrapWebContent(result.content, "web_search"),
-              citations: result.citations,
-            };
-          })()),
-        }
-      : {
+          timeoutSeconds,
+          signal,
+          freshness,
+        })
+      : await runPerplexitySearchApi({
           query,
-          provider: "perplexity",
-          count: 0,
-          tookMs: Date.now() - start,
-          externalContent: {
-            untrusted: true,
-            source: "web_search",
-            provider: "perplexity",
-            wrapped: true,
-          },
-          results: await runPerplexitySearchApi({
-            query,
-            apiKey: runtime.apiKey,
-            count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-            timeoutSeconds,
-            signal,
-            country: country ?? undefined,
-            searchDomainFilter: domainFilter,
-            searchRecencyFilter: freshness,
-            searchLanguageFilter: language ? [language] : undefined,
-            searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
-            searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
-            maxTokens: maxTokens ?? undefined,
-            maxTokensPerPage: maxTokensPerPage ?? undefined,
-          }),
-        };
-
-  if (Array.isArray((payload as { results?: unknown[] }).results)) {
-    (payload as { count: number }).count = (payload as { results: unknown[] }).results.length;
-    (payload as { tookMs: number }).tookMs = Date.now() - start;
-  } else {
-    (payload as { tookMs: number }).tookMs = Date.now() - start;
-  }
+          apiKey: runtime.apiKey,
+          count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+          timeoutSeconds,
+          signal,
+          country: country ?? undefined,
+          searchDomainFilter: domainFilter,
+          searchRecencyFilter: freshness,
+          searchLanguageFilter: language ? [language] : undefined,
+          searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
+          searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
+          maxTokens: maxTokens ?? undefined,
+          maxTokensPerPage: maxTokensPerPage ?? undefined,
+        });
+  const resultFields = Array.isArray(result)
+    ? { results: result }
+    : {
+        content: wrapWebContent(result.content, "web_search"),
+        citations: result.citations,
+      };
+  const payload = {
+    query,
+    provider: "perplexity",
+    ...(Array.isArray(result) ? { count: result.length } : { model: runtime.model }),
+    tookMs: Date.now() - start,
+    externalContent: {
+      untrusted: true,
+      source: "web_search",
+      provider: "perplexity",
+      wrapped: true,
+    },
+    ...resultFields,
+  };
 
   signal?.throwIfAborted();
-  writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  inferPerplexityBaseUrlFromApiKey,
-  resolvePerplexityBaseUrl,
-  resolvePerplexityModel,
-  resolvePerplexityTransport,
-  resolvePerplexityRequestModel,
-  resolvePerplexityApiKey,
-} as const;

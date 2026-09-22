@@ -7,6 +7,7 @@ import type {
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
+  createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -14,7 +15,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { ClickClackClient } from "../http-client.js";
 import type { ClickClackChannel } from "../types.js";
 import type { ClickClackDiscussionBinding } from "./binding-store.js";
+import { getClickClackDiscussionInstallationId } from "./installation.js";
 import { createHarness, testExternalRef } from "./service-test-support.js";
+import { ClickClackDiscussionService } from "./service.js";
 
 function legacyCreateResponse(
   input: Parameters<ClickClackClient["createChannel"]>[1],
@@ -48,23 +51,82 @@ describe("ClickClack discussion state persistence", () => {
 
     try {
       const harness = createHarness({ label: "Persisted legacy title" }, { openSyncKeyedStore });
+      harness.runtime.state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests<T>("clickclack", { ...options, env });
+      const service = new ClickClackDiscussionService(harness.runtime, {
+        clientFactory: () => harness.client,
+        startTimer: false,
+      });
       const sessionKey = "agent:main:persisted-legacy-title";
       vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
         legacyCreateResponse(input),
       );
 
-      await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
+      const [opened, installationId] = await Promise.all([
+        service.open(sessionKey),
+        getClickClackDiscussionInstallationId(harness.runtime),
+      ]);
+      expect(opened).toMatchObject({ state: "open" });
 
       const binding = stores
         .get("discussion-bindings")
         ?.lookup(sessionKey) as ClickClackDiscussionBinding;
       expect(binding).toMatchObject({ channelId: "chn_discussion" });
       expect(binding).not.toHaveProperty("displayTitle");
+      const installation = await harness.runtime.state
+        .openKeyedStore<{ id: string }>({
+          namespace: "discussion-installation",
+          maxEntries: 1,
+          overflowPolicy: "reject-new",
+        })
+        .lookup("current");
+      expect(installation?.id).toBe(installationId);
+      expect(binding.externalRef).toContain(installationId);
     } finally {
       resetPluginStateStoreForTests();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("does not create a remote channel when installation persistence fails", async () => {
+    const harness = createHarness({ label: "Unpersisted installation" });
+    const failure = new Error("installation store unavailable");
+    harness.runtime.state.openKeyedStore = () => {
+      throw failure;
+    };
+    const service = new ClickClackDiscussionService(harness.runtime, {
+      clientFactory: () => harness.client,
+      startTimer: false,
+    });
+
+    await expect(service.open("agent:main:unpersisted-installation")).rejects.toBe(failure);
+    expect(harness.createChannel).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    "requires a durable installation identity after registration returns %s",
+    async (registered) => {
+      const harness = createHarness({ label: "Missing durable installation" });
+      harness.runtime.state.openKeyedStore = () => ({
+        register: async () => {},
+        registerIfAbsent: async () => registered,
+        lookup: async () => undefined,
+        consume: async () => undefined,
+        delete: async () => false,
+        entries: async () => [],
+        clear: async () => {},
+      });
+      const service = new ClickClackDiscussionService(harness.runtime, {
+        clientFactory: () => harness.client,
+        startTimer: false,
+      });
+
+      await expect(service.open("agent:main:missing-installation")).rejects.toThrow(
+        "installation identity is unavailable",
+      );
+      expect(harness.createChannel).not.toHaveBeenCalled();
+    },
+  );
 
   it("clears stale display title confirmation when a patch response omits the field", async () => {
     const harness = createHarness({ label: "Original title" });

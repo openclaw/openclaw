@@ -4,10 +4,7 @@ import { close } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import {
-  openRootFileFollowingParents,
-  readFileDescriptorBounded,
-} from "../infra/boundary-file-read.js";
+import { openRootFile, readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -85,10 +82,11 @@ async function readWorkspaceIconCandidate(
   workspaceRoot: string,
   relativePath: string,
 ): Promise<WorkspaceIcon | undefined> {
-  const opened = await openRootFileFollowingParents({
+  const opened = await openRootFile({
     absolutePath: path.join(workspaceRoot, relativePath),
     rootPath: workspaceRoot,
     boundaryLabel: "workspace root",
+    symlinks: "follow-parents-within-root",
     maxBytes: WORKSPACE_ICON_MAX_BYTES,
   });
   if (!opened.ok) {

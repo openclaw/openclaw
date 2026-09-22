@@ -12,6 +12,7 @@ import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
+  invalidateQuestionList,
   publishQuestionClientResolution,
   registerQuestionClientOwner,
   requestQuestionGateway,
@@ -19,9 +20,9 @@ import {
   type QuestionClient,
   type QuestionClientResolutionOwner,
 } from "./question-prompt-client.ts";
+import { parseQuestion } from "./question-prompt-parse.ts";
 import {
   clearSecretQuestionDrafts,
-  normalizeQuestionSecretStoreFields,
   parseQuestionSubmissionResult,
   prepareQuestionSecretStoreSubmission,
 } from "./question-prompt-secret-store.ts";
@@ -70,74 +71,6 @@ const REFRESH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 
 function readTimestamp(value: unknown): number | null {
   return asSafeIntegerInRange(value, { min: 0 }) ?? null;
-}
-
-const MAX_HEADER_GRAPHEMES = 12;
-
-function clampHeaderGraphemes(header: string): string {
-  const segments = [...new Intl.Segmenter().segment(header)];
-  if (segments.length <= MAX_HEADER_GRAPHEMES) {
-    return header;
-  }
-  return segments
-    .slice(0, MAX_HEADER_GRAPHEMES)
-    .map((part) => part.segment)
-    .join("");
-}
-
-function parseQuestion(value: unknown): Question | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const questionId = readNonEmptyString(value.questionId);
-  const header = typeof value.header === "string" ? value.header : null;
-  const question = readNonEmptyString(value.question);
-  if (!questionId || !/^[a-z][a-z0-9_]*$/.test(questionId) || header === null || !question) {
-    return null;
-  }
-  // Clamp instead of reject: the gateway enforces the 12-cap with grapheme
-  // semantics, and any re-count here (UTF-16, code points, or a second grapheme
-  // impl) can disagree at the boundary and silently drop the whole prompt.
-  const clampedHeader = clampHeaderGraphemes(header);
-  if (!Array.isArray(value.options) || value.options.length > 4) {
-    return null;
-  }
-  const options = value.options.flatMap((option) => {
-    if (!isRecord(option)) {
-      return [];
-    }
-    const label = readNonEmptyString(option.label);
-    if (!label || (option.description !== undefined && typeof option.description !== "string")) {
-      return [];
-    }
-    return [
-      {
-        label,
-        ...(typeof option.description === "string" ? { description: option.description } : {}),
-      },
-    ];
-  });
-  if (options.length !== value.options.length) {
-    return null;
-  }
-  for (const field of ["multiSelect", "isOther"] as const) {
-    if (value[field] !== undefined && typeof value[field] !== "boolean") {
-      return null;
-    }
-  }
-  const secretStoreFields = normalizeQuestionSecretStoreFields(value);
-  if (!secretStoreFields) {
-    return null;
-  }
-  return {
-    questionId,
-    header: clampedHeader,
-    question,
-    options,
-    ...(value.multiSelect === true ? { multiSelect: true } : {}),
-    ...(typeof value.isOther === "boolean" ? { isOther: value.isOther } : {}),
-    ...secretStoreFields,
-  };
 }
 
 function parseQuestionAnswers(value: unknown): QuestionAnswers | null {
@@ -370,6 +303,9 @@ function recordQuestionResolution(
   state: QuestionPromptState,
   resolved: QuestionResolvedEvent,
 ): void {
+  if (state.client) {
+    invalidateQuestionList(state.client);
+  }
   const prompt = state.prompts.get(resolved.id);
   if (prompt) {
     applyQuestionResolution(state, prompt, resolved);
@@ -391,6 +327,9 @@ export function handleQuestionPromptEvent(
     const record = parseQuestionRequestedEvent(event.payload);
     if (!record) {
       return false;
+    }
+    if (state.client) {
+      invalidateQuestionList(state.client);
     }
     const previous = state.prompts.get(record.id);
     if (previous && previous.status !== "pending") {
@@ -460,7 +399,11 @@ async function refreshPendingQuestions(
   const startedAtRevision = state.revision;
   const listResult = await requestQuestionGateway(client, "question.list", {});
   const records = parseQuestionListResult(listResult);
-  if (!records || !isCurrentClient()) {
+  if (!records) {
+    invalidateQuestionList(client);
+    return false;
+  }
+  if (!isCurrentClient()) {
     return false;
   }
   const refreshedIds = new Set(records.map((record) => record.id));

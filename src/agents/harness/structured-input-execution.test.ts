@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  claimPendingAgentQuestionAnswer,
-  type AgentHarnessQuestionGatewayCall,
-} from "./gateway-question.js";
+import type { AgentHarnessQuestionGatewayCall } from "./gateway-question-dispatch.js";
+import { claimPendingAgentQuestionAnswer } from "./gateway-question.js";
 import { runStructuredInput } from "./structured-input-execution.js";
 import {
   compileStructuredInputForm,
@@ -150,7 +148,7 @@ describe("structured input execution", () => {
   });
 
   it.each([
-    ["Continue", "answered"],
+    ["I've completed this step", "answered"],
     ["Decline", "declined"],
   ] as const)("maps the URL choice %s to %s", async (choice, status) => {
     const gateway = createGateway((questions) => ({ [questions[0]!.questionId]: [choice] }));

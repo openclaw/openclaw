@@ -101,15 +101,24 @@ enum GatewayEnvironment {
         return self.profilePortReservation.port
     }
 
+    static func gatewayPort(root: [String: Any]) -> Int {
+        guard AppProfile.current.isActive else { return self.selectedGatewayPort(root: root) }
+        return self.profilePortReservation.port
+    }
+
     static func profileGatewayPortConflict() -> String? {
         guard AppProfile.current.isActive else { return nil }
         return self.profilePortReservation.conflict
     }
 
-    private static func selectedGatewayPort() -> Int {
+    static var gatewayPortRequiresRestart: Bool {
+        AppProfile.current.isActive && self.profilePortReservation.port != self.selectedGatewayPort()
+    }
+
+    private static func selectedGatewayPort(root: [String: Any] = OpenClawConfigFile.loadDict()) -> Int {
         self.resolvedGatewayPort(
             environment: ProcessInfo.processInfo.environment,
-            configPort: OpenClawConfigFile.gatewayPort(),
+            configPort: OpenClawConfigFile.gatewayPort(root: root),
             storedPort: AppDefaults.standard.integer(forKey: "gatewayPort"),
             profile: .current)
     }
@@ -218,7 +227,7 @@ enum GatewayEnvironment {
                     requiredGateway: expectedText,
                     message: """
                     Gateway version \(installedRaw) is incompatible with app \(expectedText);
-                    install or update the global package.
+                    open Connection settings to update or set up the Gateway.
                     """)
             }
 

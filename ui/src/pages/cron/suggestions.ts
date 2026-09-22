@@ -6,7 +6,7 @@
  */
 
 import { t } from "../../i18n/index.ts";
-import type { CronFormState } from "../../lib/cron/index.ts";
+import type { CronFormState } from "../../lib/cron/types.ts";
 
 type CronSuggestion = {
   id: string;
@@ -68,7 +68,6 @@ export function suggestionFormPatch(idea: CronSuggestion): Partial<CronFormState
     payloadText: t(idea.promptKey),
     payloadKind: "agentTurn",
     sessionTarget: "isolated",
-    deliveryMode: "announce",
     wakeMode: "now",
     deleteAfterRun: false,
     enabled: true,

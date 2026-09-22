@@ -4,11 +4,16 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createAuthRateLimiter,
+  createWebhookInFlightLimiter,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   resolveRequestClientIp,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import {
+  runHttpConnectionRequest,
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkWebhookHeaders, NextcloudTalkWebhookServerOptions } from "./types.js";
 import { NextcloudTalkWebhookPayloadError } from "./webhook-spool-state.js";
@@ -18,6 +23,11 @@ const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 const NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
 const NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_VALUE = "durable";
 const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
+// Bound concurrent unauthenticated body reads. Incomplete requests would otherwise
+// occupy readers and sockets for the full pre-auth timeout without ever consuming
+// the authentication-failure budget.
+const PREAUTH_WEBHOOK_MAX_IN_FLIGHT = 64;
+const WEBHOOK_IN_FLIGHT_KEY = "nextcloud-talk-webhook";
 const HEALTH_PATH = "/healthz";
 const WEBHOOK_AUTH_RATE_LIMIT_SCOPE = "nextcloud-talk-webhook-auth";
 const WEBHOOK_ERRORS = {
@@ -98,7 +108,21 @@ function readNextcloudTalkWebhookBody(req: IncomingMessage, maxBodyBytes: number
     // body budget bounded even if the operator-configured post-parse limit is larger.
     maxBytes: Math.min(maxBodyBytes, PREAUTH_WEBHOOK_MAX_BODY_BYTES),
     timeoutMs: PREAUTH_WEBHOOK_BODY_TIMEOUT_MS,
+    // Defer destruction so the rejections below reach the backend before the close.
+    destroyOnLimit: false,
   });
+}
+
+async function rejectWebhookRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  status: number,
+  error: string,
+): Promise<void> {
+  if (res.headersSent) {
+    return;
+  }
+  await sendHttpRequestRejection(req, res, status, JSON.stringify({ error }), "application/json");
 }
 
 export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServerOptions): {
@@ -130,99 +154,145 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     exemptLoopback: false,
     pruneIntervalMs: authRateLimitWindowMs,
   });
+  const webhookInFlightLimiter = createWebhookInFlightLimiter({
+    maxInFlightPerKey: PREAUTH_WEBHOOK_MAX_IN_FLIGHT,
+    maxTrackedKeys: 1,
+  });
+
+  const handleWebhookRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    if (req.url === HEALTH_PATH) {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+
+    if (req.url !== path || req.method !== "POST") {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+
+    const clientIp =
+      resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback) ??
+      req.socket.remoteAddress ??
+      "unknown";
+    if (!webhookAuthRateLimiter.check(clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE).allowed) {
+      res.writeHead(429);
+      res.end("Too Many Requests");
+      return;
+    }
+
+    // Acquire before the unauthenticated read so overflow requests are rejected
+    // immediately instead of pinning a reader for the full pre-auth timeout.
+    if (!webhookInFlightLimiter.tryAcquire(WEBHOOK_IN_FLIGHT_KEY)) {
+      // Close-aware rejection frees the socket instead of leaving it half-open.
+      await sendHttpRequestRejection(req, res, 429, "Too Many Requests");
+      return;
+    }
+
+    let body: string;
+    try {
+      const headers = validateWebhookHeaders({
+        req,
+        res,
+        isBackendAllowed,
+      });
+      if (!headers) {
+        return;
+      }
+
+      body = await readBody(req, maxBodyBytes);
+
+      const hasValidSignature = verifyWebhookSignature({
+        headers,
+        body,
+        secret,
+        res,
+        clientIp,
+        authRateLimiter: webhookAuthRateLimiter,
+      });
+      if (!hasValidSignature) {
+        return;
+      }
+    } catch (err) {
+      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
+        await rejectWebhookRequest(req, res, 413, WEBHOOK_ERRORS.payloadTooLarge);
+        return;
+      }
+      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
+        await rejectWebhookRequest(req, res, 408, requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
+        return;
+      }
+      if (err instanceof NextcloudTalkWebhookPayloadError) {
+        writeWebhookError(res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
+        return;
+      }
+      const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
+      onError?.(error);
+      writeWebhookError(res, 500, WEBHOOK_ERRORS.internalServerError);
+      return;
+    } finally {
+      // Release before authenticated dispatch so a slow handler cannot exhaust
+      // the pre-auth admission budget for other deliveries.
+      webhookInFlightLimiter.release(WEBHOOK_IN_FLIGHT_KEY);
+    }
+
+    try {
+      // Nextcloud retries only a few times. Acknowledge only after the raw
+      // envelope is durably admitted; append failure must remain retryable.
+      const admission = await onWebhook(body);
+      if (admission === "accepted") {
+        // Ignored non-message events still receive 200 but must not claim
+        // durable adoption.
+        res.setHeader(
+          NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_HEADER,
+          NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_VALUE,
+        );
+      }
+      writeJsonResponse(res, 200);
+    } catch (err) {
+      if (err instanceof NextcloudTalkWebhookPayloadError) {
+        // Admission-stage envelope validation maps to the same 400 as read-stage
+        // payload failures; it is a permanent client error, not a server fault.
+        writeWebhookError(res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
+        return;
+      }
+      const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
+      onError?.(error);
+      writeWebhookError(res, 500, WEBHOOK_ERRORS.internalServerError);
+    }
+  };
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    void (async () => {
-      if (req.url === HEALTH_PATH) {
-        res.writeHead(200, { "Content-Type": "text/plain" });
-        res.end("ok");
-        return;
-      }
-
-      if (req.url !== path || req.method !== "POST") {
-        res.writeHead(404);
-        res.end();
-        return;
-      }
-
-      const clientIp =
-        resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback) ??
-        req.socket.remoteAddress ??
-        "unknown";
-      if (!webhookAuthRateLimiter.check(clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE).allowed) {
-        res.writeHead(429);
-        res.end("Too Many Requests");
-        return;
-      }
-
-      try {
-        const headers = validateWebhookHeaders({
-          req,
-          res,
-          isBackendAllowed,
-        });
-        if (!headers) {
-          return;
+    // Per-connection ordering: a pipelined request must not reach the overflow
+    // rejection until every earlier response on this connection finished, or the
+    // rejection's close timer could destroy an unflushed acknowledgement.
+    void runHttpConnectionRequest(req, () => handleWebhookRequest(req, res), res).catch(
+      (error: unknown) => {
+        onError?.(error instanceof Error ? error : new Error(formatErrorMessage(error)));
+        if (!res.destroyed && typeof res.destroy === "function") {
+          res.destroy();
         }
-
-        const body = await readBody(req, maxBodyBytes);
-
-        const hasValidSignature = verifyWebhookSignature({
-          headers,
-          body,
-          secret,
-          res,
-          clientIp,
-          authRateLimiter: webhookAuthRateLimiter,
-        });
-        if (!hasValidSignature) {
-          return;
-        }
-
-        // Nextcloud retries only a few times. Acknowledge only after the raw
-        // envelope is durably admitted; append failure must remain retryable.
-        const admission = await onWebhook(body);
-        if (admission === "accepted") {
-          // Ignored non-message events still receive 200 but must not claim
-          // durable adoption.
-          res.setHeader(
-            NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_HEADER,
-            NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_VALUE,
-          );
-        }
-        writeJsonResponse(res, 200);
-      } catch (err) {
-        if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-          writeWebhookError(res, 413, WEBHOOK_ERRORS.payloadTooLarge);
-          return;
-        }
-        if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-          writeWebhookError(res, 408, requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
-          return;
-        }
-        if (err instanceof NextcloudTalkWebhookPayloadError) {
-          writeWebhookError(res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
-          return;
-        }
-        const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
-        onError?.(error);
-        writeWebhookError(res, 500, WEBHOOK_ERRORS.internalServerError);
-      }
-    })();
+      },
+    );
   });
 
   let stopRequested = false;
+  // The listen callback, rather than server.listening, owns the point where a
+  // startup-racing stop can safely close without cancelling that callback.
+  let listenerActive = false;
   let closePromise: Promise<void> | undefined;
   const closeIfListening = (): Promise<void> => {
     if (closePromise) {
       return closePromise;
     }
-    if (!server.listening) {
+    if (!listenerActive) {
       return Promise.resolve();
     }
     closePromise = new Promise<void>((resolve) => {
       server.close(() => resolve());
     }).finally(() => {
+      listenerActive = false;
       closePromise = undefined;
     });
     return closePromise;
@@ -241,6 +311,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
       const onListenError = (error: Error) => reject(error);
       server.once("error", onListenError);
       server.listen(port, host, () => {
+        listenerActive = true;
         server.off("error", onListenError);
         void (async () => {
           // Abort can land between listen() and its callback. Close after the

@@ -4,12 +4,8 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildFeishuConversationId, parseFeishuConversationId } from "./conversation-id.js";
-import { normalizeFeishuTarget } from "./targets.js";
+import { normalizeFeishuTarget, stripFeishuProviderPrefix } from "./targets.js";
 import { getFeishuThreadBindingManager } from "./thread-bindings.js";
-
-function stripProviderPrefix(raw: string): string {
-  return raw.replace(/^(feishu|lark):/i, "").trim();
-}
 
 function resolveFeishuRequesterConversation(params: {
   accountId?: string;
@@ -26,7 +22,7 @@ function resolveFeishuRequesterConversation(params: {
     return null;
   }
   const rawTo = params.to?.trim();
-  const withoutProviderPrefix = rawTo ? stripProviderPrefix(rawTo) : "";
+  const withoutProviderPrefix = rawTo ? stripFeishuProviderPrefix(rawTo) : "";
   const normalizedTarget = rawTo ? normalizeFeishuTarget(rawTo) : null;
   const threadId =
     params.threadId != null && params.threadId !== "" ? String(params.threadId).trim() : "";
@@ -90,27 +86,6 @@ function resolveFeishuRequesterConversation(params: {
         });
         if (matchingTopicBindings.length === 1) {
           const existing = matchingTopicBindings.at(0);
-          if (existing === undefined) {
-            return null;
-          }
-          return {
-            accountId: existing.accountId,
-            conversationId: existing.conversationId,
-            parentConversationId: existing.parentConversationId,
-          };
-        }
-        const senderScopedTopicBindings = matchingTopicBindings.filter((entry) => {
-          const parsed = parseFeishuConversationId({
-            conversationId: entry.conversationId,
-            parentConversationId: entry.parentConversationId,
-          });
-          return parsed?.scope === "group_topic_sender";
-        });
-        if (
-          senderScopedTopicBindings.length === 1 &&
-          matchingTopicBindings.length === senderScopedTopicBindings.length
-        ) {
-          const existing = senderScopedTopicBindings.at(0);
           if (existing === undefined) {
             return null;
           }

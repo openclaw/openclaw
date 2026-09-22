@@ -67,6 +67,27 @@ export function registerNamedChatRun(
   registerChatRun(state, `run-${name}`, `session-${name}`, `client-${name}`, overrides);
 }
 
+export function createChatVisionModelCatalogSnapshot(): Awaited<
+  ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>
+> {
+  return {
+    agentId: "main",
+    agentDir: "/tmp/chat-attachment-vision-agent",
+    catalogComplete: false,
+    workspaceDir: "/tmp/chat-attachment-vision-workspace",
+    config: {},
+    entries: [
+      {
+        id: "vision-model",
+        name: "Vision Model",
+        provider: "test-provider",
+        input: ["text", "image"],
+      },
+    ],
+    routeVariants: [],
+  };
+}
+
 export function createDirectChatContext(
   overrides: Partial<GatewayRequestContext> = {},
 ): GatewayRequestContext {
@@ -88,6 +109,7 @@ export function createDirectChatContext(
     },
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),

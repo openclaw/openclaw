@@ -11,6 +11,7 @@ export type PreparedGatewaySessionLifecycle = {
   spawnedCwd?: string;
   sessionRoot?: string;
   worktree?: NonNullable<SessionEntry["worktree"]>;
+  repositoryWorkspaceId?: string;
   rollback?: () => Promise<void>;
 };
 
@@ -20,6 +21,9 @@ export type PrepareGatewaySessionLifecycle = (target: {
   key: string;
   storePath: string;
   titleModelSelection?: GatewaySessionTitleModelSelection | null;
+  projectId?: string;
+  /** Inherited or existing policy, resolved while the creation owner holds lifecycle custody. */
+  sandboxRequired?: boolean;
 }) => Promise<Result<PreparedGatewaySessionLifecycle, ErrorShape>>;
 
 export async function rollbackGatewaySessionPreparation(params: {

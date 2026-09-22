@@ -1,12 +1,17 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   PendingApprovalSnapshot,
   SessionApprovalEvent,
   SessionApprovalReplay,
 } from "../../packages/gateway-protocol/src/index.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveApprovalSourceStreamKey } from "./approval-session-audience.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import type { OperatorApprovalLifecycleEvent } from "./exec-approval-manager.js";
+import type {
+  ExecApprovalManager,
+  OperatorApprovalLifecycleEvent,
+} from "./exec-approval-manager.js";
 import { canAccessOperatorApproval } from "./operator-approval-authorization.js";
 import { projectOperatorApprovalSnapshot } from "./operator-approval-snapshot.js";
 import {
@@ -26,6 +31,15 @@ type OperatorApprovalSessionEventRuntime = {
   replay: (sessionKey: string, client: GatewayClient | null) => SessionApprovalReplay;
 };
 
+function resolveApprovalSourceStreamKeyForRecord(record: OperatorApprovalRecord): string | null {
+  return (
+    record.audienceSessionKeys[0] ??
+    (record.source.sessionKey
+      ? resolveApprovalSourceStreamKey(record.source.sessionKey, record.source.agentId)
+      : null)
+  );
+}
+
 /** Project durable approval truth to exact, explicitly opted-in session audiences. */
 export function createOperatorApprovalSessionEventRuntime(params: {
   clients: Iterable<ApprovalSessionClient>;
@@ -35,6 +49,10 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   databaseOptions?: OpenClawStateDatabaseOptions;
   now?: () => number;
   reconcileTerminal?: (record: OperatorApprovalRecord) => boolean;
+  getLiveManager?: (
+    kind: OperatorApprovalRecord["kind"],
+  ) => Pick<ExecApprovalManager<unknown>, "runtimeEpoch" | "getLiveSnapshot"> | undefined;
+  isCurrent?: () => boolean;
 }): OperatorApprovalSessionEventRuntime {
   const controlUiBasePath = normalizeControlUiBasePath(params.controlUiBasePath);
   const now = params.now ?? Date.now;
@@ -69,6 +87,37 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   };
 
   const publish = (event: OperatorApprovalLifecycleEvent): void => {
+    const source = event.record.source;
+    const pending = event.phase === "pending" && event.record.status === "pending";
+    const manager = params.getLiveManager?.(event.record.kind);
+    const live = pending ? manager?.getLiveSnapshot(event.record.id) : undefined;
+    const request = asOptionalObjectRecord(live?.request);
+    const livePending = Boolean(
+      manager?.runtimeEpoch === event.record.runtimeEpoch &&
+      live &&
+      live.resolvedAtMs === undefined &&
+      live.expiresAtMs > now() &&
+      request?.runId === source.runId &&
+      request?.sessionId === source.sessionId &&
+      request?.sessionKey === source.sessionKey,
+    );
+    if (
+      params.getLiveManager &&
+      params.isCurrent?.() !== false &&
+      source.runId &&
+      source.sessionId &&
+      (pending ? livePending : event.record.status !== "pending")
+    ) {
+      // Only the approval owner emits these transitions. Tool-result approval
+      // text can arrive after resolution and cannot re-open an attention request.
+      emitAgentEvent({
+        runId: source.runId,
+        sessionId: source.sessionId,
+        ...(source.sessionKey ? { sessionKey: source.sessionKey } : {}),
+        stream: "execution",
+        data: { approval: { id: event.record.id, state: pending ? "pending" : "resolved" } },
+      });
+    }
     const approval = projectOperatorApprovalSnapshot(event.record, controlUiBasePath);
     if (!approval || event.record.audienceSessionKeys.length === 0) {
       return;
@@ -77,14 +126,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     // first entry; publish that exact form so parents can correlate the event
     // with a stream key they subscribed to. Raw source aliases (bare "global",
     // "main", unscoped child keys) never reach subscribers.
-    const sourceStreamKey =
-      event.record.audienceSessionKeys[0] ??
-      (event.record.source.sessionKey
-        ? resolveApprovalSourceStreamKey(
-            event.record.source.sessionKey,
-            event.record.source.agentId,
-          )
-        : null);
+    const sourceStreamKey = resolveApprovalSourceStreamKeyForRecord(event.record);
     for (const sessionKey of event.record.audienceSessionKeys) {
       const recipients = authorizedRecipients(sessionKey, event.record);
       if (recipients.size === 0) {
@@ -141,7 +183,11 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         }
         const approval = projectOperatorApprovalSnapshot(record, controlUiBasePath);
         if (approval?.status === "pending") {
-          approvals.push(approval);
+          const sourceSessionKey = resolveApprovalSourceStreamKeyForRecord(record);
+          approvals.push({
+            ...approval,
+            ...(sourceSessionKey ? { sourceSessionKey } : {}),
+          });
         }
       }
       return { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated };

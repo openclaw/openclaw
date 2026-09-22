@@ -4,6 +4,7 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
@@ -14,6 +15,8 @@ import {
   resolveExecutablePath,
   resolveExecutablePathCandidate,
 } from "./executable-path.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
   clearExecutablePathCache();
@@ -69,6 +72,40 @@ describe("executable path helpers", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32").each([
+    ["absolute", "actual"],
+    ["relative", "actual"],
+    ["absolute", "decoy"],
+    ["relative", "decoy"],
+  ])(
+    "preserves filesystem traversal in %s PATH entries with an %s executable",
+    async (form, location) => {
+      const root = tempDirs.make("openclaw-path-traversal-");
+      const configured = path.join(root, "configured");
+      const actual = path.join(root, "actual");
+      await fs.mkdir(configured);
+      await fs.mkdir(path.join(actual, "bin"), { recursive: true });
+      await fs.symlink(path.join(actual, "bin"), path.join(configured, "alias"));
+      await fs.writeFile(path.join(location === "actual" ? actual : configured, "runner"), "", {
+        mode: 0o755,
+      });
+      const rawEntry = form === "absolute" ? `${configured}/alias/..` : "configured/alias/..";
+      const resolved = resolveExecutableFromPathEnv("runner", rawEntry, undefined, {
+        cwd: root,
+        useCache: false,
+      });
+
+      if (location === "actual") {
+        expect(resolved).toBe(`${configured}/alias/../runner`);
+        expect(nodeFs.realpathSync.native(`${configured}/alias/../runner`)).toBe(
+          nodeFs.realpathSync.native(path.join(actual, "runner")),
+        );
+      } else {
+        expect(resolved).toBeUndefined();
+      }
+    },
+  );
+
   it("memoizes PATH hits and misses until explicit invalidation", async () => {
     await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const binDir = path.join(base, "bin");
@@ -93,6 +130,70 @@ describe("executable path helpers", () => {
       expect(statSpy.mock.calls.length).toBeGreaterThan(missProbeCount);
     });
   });
+
+  it("rechecks executable availability without replacing ordinary cached probes", async () => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (binDir) => {
+      const executable = path.join(binDir, "runner");
+      await fs.writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const env = { PATH: binDir };
+      expect(resolveExecutablePath("runner", { env })).toBe(executable);
+
+      await fs.unlink(executable);
+
+      expect(resolveExecutablePath("runner", { env, useCache: false })).toBeUndefined();
+      expect(resolveExecutablePath("runner", { env })).toBe(executable);
+    });
+  });
+
+  it.runIf(process.platform !== "win32").each(["bin", ".", ""])(
+    "resolves PATH component %j against the requested cwd",
+    async (pathEntry) => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+        const firstCwd = path.join(base, "first");
+        const secondCwd = path.join(base, "second");
+        const binDir = path.join(firstCwd, pathEntry);
+        await fs.mkdir(binDir, { recursive: true });
+        await fs.mkdir(secondCwd);
+        const executable = path.join(binDir, "runner");
+        await fs.writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        const env = { PATH: pathEntry };
+
+        expect(resolveExecutablePath("runner", { env, cwd: firstCwd })).toBe(executable);
+        expect(resolveExecutablePath("runner", { env, cwd: secondCwd })).toBeUndefined();
+        expect(resolveExecutablePath("runner", { env, cwd: firstCwd, useCache: false })).toBe(
+          executable,
+        );
+      });
+    },
+  );
+
+  it.each([".EXE;.CMD;", ";.EXE;.CMD", ".EXE;;.CMD", ".EXE; ;.CMD", "", ";;"])(
+    "keeps extensionless lookup explicit with PATHEXT %j",
+    async (pathext) => {
+      await withMockedPlatform("win32", async () => {
+        await withTestDir({ prefix: "openclaw-exec-path-" }, async (binDir) => {
+          const barePath = path.join(binDir, "runner");
+          const commandPath = path.join(binDir, "runner.cmd");
+          const env = { PATHEXT: pathext };
+          await fs.writeFile(barePath, "bare file\n");
+
+          expect(
+            resolveExecutableFromPathEnv("runner", binDir, env, { includeExtensionless: false }),
+          ).toBeUndefined();
+          expect(
+            resolveExecutableFromPathEnv("runner", binDir, env, { includeExtensionless: true }),
+          ).toBe(barePath);
+
+          await fs.writeFile(commandPath, "@echo off\n");
+          expect(
+            resolveExecutableFromPathEnv("runner.cmd", binDir, env, {
+              includeExtensionless: false,
+            }),
+          ).toBe(commandPath);
+        });
+      });
+    },
+  );
 
   it("slides PATH hit and miss expiry for steady pollers", async () => {
     await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
