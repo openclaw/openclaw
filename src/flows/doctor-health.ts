@@ -428,6 +428,13 @@ async function runDoctorHealthFlowWithResult(
       }
     }
     const causes = collectNestedErrorCandidates(error);
+    const { classifyDoctorMaintenanceRefusal } =
+      await import("../commands/doctor-maintenance-inspection.js");
+    const maintenanceRefusal =
+      causes.find(
+        (cause): cause is DoctorMaintenanceRefusalError =>
+          cause instanceof DoctorMaintenanceRefusalError && cause.refusal.kind === "data-at-risk",
+      )?.refusal ?? classifyDoctorMaintenanceRefusal(error);
     const unsafeConfigWrite = causes.find(
       (cause): cause is ConfigWritePostCommitError =>
         cause instanceof ConfigWritePostCommitError && cause.rollbackStatus !== "restored",
@@ -442,6 +449,7 @@ async function runDoctorHealthFlowWithResult(
     );
     doctorResult = {
       status: "error",
+      ...(maintenanceRefusal.kind === "data-at-risk" ? { maintenanceRefusal } : {}),
       ...(!healthContext && refusalWarnings.length > 0 ? { warnings: refusalWarnings } : {}),
       failureFacts:
         !unsafeConfigWrite && !schemaRefusal && refusalFacts.length > 0

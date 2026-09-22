@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
 import * as packageRoot from "../../infra/openclaw-root.js";
+import { tryAcquireGatewayLifecycleCleanupCoordinator } from "../../infra/state-database-coordinator.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   DoctorMaintenanceRefusalError,
@@ -18,6 +21,11 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -222,6 +230,94 @@ describe("unproved Doctor authority callers", () => {
     },
   );
 
+  it("defers the published parent-owned continuation before preparing an older schema", async () => {
+    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.5" } });
+    expect(adoptUpdateRun(run.runId).origin.driver?.pid).toBe(process.pid);
+    recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
+    recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
+    recordDeferredPluginMigrations({
+      pending: [
+        {
+          pluginId: "pending-fixture",
+          reason: "state upgrade deferred",
+          command: "openclaw doctor --fix",
+          requiresStateMigration: true,
+        },
+      ],
+    });
+    const resultPath = state.statePath("parent-owned-result.json");
+    await state.writeJson("handoff.json", { completionOwner: "parent" });
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+    const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const prior = new DatabaseSync(databasePath);
+    try {
+      removePreparedWorkerOwnershipColumns(prior);
+      prior.exec(
+        "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'",
+      );
+    } finally {
+      prior.close();
+    }
+    const inspect = () => {
+      const db = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        return {
+          version: db.prepare("PRAGMA user_version").get(),
+          schema: db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all(),
+          pending: db
+            .prepare(
+              "SELECT * FROM migration_runs WHERE id LIKE 'deferred-plugin-migration:%' ORDER BY id",
+            )
+            .all(),
+          steps: JSON.parse(
+            String(
+              db.prepare("SELECT steps_json FROM update_runs WHERE run_id=?").get(run.runId)
+                ?.steps_json,
+            ),
+          ),
+        };
+      } finally {
+        db.close();
+      }
+    };
+    const before = inspect();
+    const holder = tryAcquireGatewayLifecycleCleanupCoordinator({ databasePath });
+    expect(holder).not.toBeNull();
+    const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance");
+    try {
+      const work = resumePostCoreUpdate({
+        root: state.root,
+        channel: "stable",
+        opts: { json: true, yes: true },
+        timeoutMs: 5_000,
+      }).catch((error: unknown) => error);
+      expect(await work).toBeUndefined();
+      expect(maintenance).toHaveBeenCalledWith(expect.objectContaining({ root: null }));
+      expect(maintenance.mock.calls[0]?.[0].assertCurrent).toBeUndefined();
+      expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+        status: "warning",
+        changed: false,
+        warnings: [expect.objectContaining({ reason: "doctor-advisory" })],
+      });
+      const after = inspect();
+      expect(after.version).toEqual(before.version);
+      expect(after.schema).toEqual(before.schema);
+      expect(after.pending).toEqual(before.pending);
+      expect(after.steps).toContainEqual(
+        expect.objectContaining({ step: "warning:finalize:plugins:0", status: "completed" }),
+      );
+      expect(mocks.plugins).not.toHaveBeenCalled();
+      expect(dispatched).toEqual([]);
+      expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
+    } finally {
+      holder?.release();
+    }
+  });
+
   it.each([
     "parent-admission",
     "fresh-doctor",
@@ -407,7 +503,7 @@ describe("unproved Doctor authority callers", () => {
           await expect(fs.stat(canonicalPath)).rejects.toMatchObject({ code: "ENOENT" });
           if (parentOwnsCompletion) {
             expect(phasePath).toBeUndefined();
-            expect(maintenance).not.toHaveBeenCalled();
+            expect(maintenance).toHaveBeenCalledWith(expect.objectContaining({ root: null }));
           } else {
             expect(phasePath).toBeDefined();
             expect(phasePath).not.toBe(canonicalPath);

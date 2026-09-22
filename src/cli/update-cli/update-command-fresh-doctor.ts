@@ -354,6 +354,15 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       : error instanceof Error
         ? error.message
         : String(error);
+    if (
+      doctorResult?.status === "error" &&
+      doctorResult.maintenanceRefusal?.kind === "data-at-risk"
+    ) {
+      throw new DoctorMaintenanceRefusalError(message, doctorResult.maintenanceRefusal, {
+        cause: error,
+        failureFacts,
+      });
+    }
     // Explicit writer/migration refusals and unsettled writers retain their safety decision.
     // An execution failure alone does not establish that installed state is unsafe.
     if (

@@ -264,15 +264,6 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
     process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
   );
   assertCurrent?.();
-  await withPluginLifecycleLease({ assertCurrent }, async (lease) => {
-    await completeSourceUpdateRuntime({
-      root: params.root,
-      timeoutMs: params.timeoutMs,
-      lease,
-      beforePersistentEffect: assertCurrent,
-    });
-  });
-  assertCurrent?.();
   let maintenance: Awaited<
     ReturnType<typeof import("../../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
@@ -309,17 +300,28 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
           );
           recordDoctorWarnings();
         };
-        if (!parentOwnsCompletion) {
-          const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
-          assertCurrent?.();
-          maintenance = await beginDoctorMaintenance({
+        const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
+        assertCurrent?.();
+        maintenance = await beginDoctorMaintenance({
+          // Parent-owned completion retains native service custody, not state admission.
+          root: parentOwnsCompletion ? null : params.root,
+          options: { repair: true, nonInteractive: true, json: params.opts.json },
+          runtime: { ...defaultRuntime, log: defaultRuntime.error },
+          ...(params.opts.run ? { assertCurrent } : {}),
+        });
+        assertCurrent?.();
+        // Each fresh Doctor holds its own database fences after admission.
+        await maintenance?.releaseState();
+        await withPluginLifecycleLease({ assertCurrent }, async (lease) => {
+          await completeSourceUpdateRuntime({
             root: params.root,
-            options: { repair: true, nonInteractive: true, json: params.opts.json },
-            runtime: { ...defaultRuntime, log: defaultRuntime.error },
+            timeoutMs: params.timeoutMs,
+            lease,
+            beforePersistentEffect: assertCurrent,
           });
-          assertCurrent?.();
-          // The parent parks the service; each fresh Doctor holds its own database fences.
-          await maintenance?.releaseState();
+        });
+        assertCurrent?.();
+        if (!parentOwnsCompletion) {
           // Shipped parents expect the child to prepare migration plugins and settle
           // Doctor before plugin config writes; Doctor owns that preparation and its guards.
           const warning = await runUpdateFinalizationDoctorInFreshProcess({

@@ -43,10 +43,7 @@ import {
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
 import { isWorkerEnvironmentCommand } from "../gateway/worker-environments/store-worker-contract.js";
 import { executeWorkerEnvironmentCommand } from "../gateway/worker-environments/store.worker.js";
-import {
-  readDeferredPluginMigrationCompletions,
-  readDeferredPluginMigrations,
-} from "../infra/deferred-plugin-migrations.js";
+import { readDeferredPluginMigrationsInWorker } from "../infra/deferred-plugin-migrations.worker.js";
 import * as deliveryQueue from "../infra/delivery-queue.worker.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import { executeDevicePairingMutationInWorker } from "../infra/device-pairing-dispatch.worker.js";
@@ -340,15 +337,11 @@ export function executeSharedStateCommand(
       (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
     );
   }
-  if (command.type === "plugins.deferredMigrations.read") {
-    return readDeferredPluginMigrations({
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-      artifactPreservingReadOnly: command.input.artifactPreservingReadOnly,
-    });
-  }
-  if (command.type === "plugins.deferredMigrations.completions.read") {
-    return readDeferredPluginMigrationCompletions({
+  if (
+    command.type === "plugins.deferredMigrations.read" ||
+    command.type === "plugins.deferredMigrations.completions.read"
+  ) {
+    return readDeferredPluginMigrationsInWorker(command, {
       path: context.databasePath,
       env: getSqliteWorkerStateContext().environment,
     });

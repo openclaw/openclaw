@@ -8,10 +8,12 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import * as coordinators from "../infra/state-database-coordinator.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
+import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import {
   collectUpdateDoctorFailureFacts,
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
+  DoctorMaintenanceRefusalError,
   UpdateDoctorError,
 } from "../infra/update-doctor-result.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
@@ -250,6 +252,51 @@ describe("Doctor refused-migration maintenance outcome", () => {
 
 describe("Doctor maintenance admission", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it.each(["explicit", "unreadable"] as const)(
+    "serializes unsafe maintenance refusal from the %s owner",
+    async (kind) => {
+      const resultPath = createUpdatePostInstallDoctorResultPath();
+      const env = {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: resultPath,
+      };
+      await withOpenClawTestState({ scenario: "minimal", env }, async (state) => {
+        const refusal = {
+          kind: "data-at-risk" as const,
+          reason:
+            kind === "explicit" ? ("incomplete-migration" as const) : ("unreadable-state" as const),
+        };
+        const error =
+          kind === "explicit"
+            ? new DoctorMaintenanceRefusalError("An admitted migration is incomplete.", refusal)
+            : new DoctorUnreadableStateDatabaseError(
+                state.statePath("state/openclaw.sqlite"),
+                "malformed schema",
+              );
+        mocks.packageRoot.mockReturnValue(undefined);
+        mocks.runContributions.mockClear();
+        vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockRejectedValueOnce(error);
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const failure = await runDoctorHealthFlow(
+          runtime,
+          { repair: true, nonInteractive: true },
+          undefined,
+          { incompatible: [], indeterminate: [] },
+        ).catch((cause: unknown) => cause);
+        const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+        expect(failure).toBe(error);
+        expect(result).toMatchObject({
+          status: "error",
+          configHash: "unchanged",
+          maintenanceRefusal: refusal,
+        });
+        expect(mocks.runContributions).not.toHaveBeenCalled();
+        expect(runtime.exit).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it.each(
     (["gateway", "state", "agent"] as const).flatMap((owner) =>
       [false, true].map((updating) => ({ owner, updating })),

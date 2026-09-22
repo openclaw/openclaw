@@ -152,6 +152,31 @@ describe("post-plugin update readiness", () => {
     },
   );
 
+  it.each(["active-mutation", "unreadable-state", "incomplete-migration"] as const)(
+    "preserves serialized unsafe maintenance refusal %s without diagnostic facts",
+    async (reason) => {
+      const refusal = { kind: "data-at-risk" as const, reason };
+      const childFailure = Object.assign(new Error("Doctor exited with unsafe maintenance."), {
+        exitCode: 1,
+      });
+      mocks.runExec.mockImplementationOnce(async (_command, _args, options) => {
+        await writeUpdatePostInstallDoctorResult({
+          resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+          result: { status: "error", failureFacts: [], maintenanceRefusal: refusal },
+        });
+        throw childFailure;
+      });
+      await expect(completePostCorePluginUpdate(updateOptions)).rejects.toMatchObject({
+        name: "DoctorMaintenanceRefusalError",
+        refusal,
+        cause: childFailure,
+      });
+      expect(mocks.runExec).toHaveBeenCalledOnce();
+      expect(mocks.readConfig).not.toHaveBeenCalled();
+      expect(mocks.runUtf8).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps a fresh Doctor requester refusal terminal when later checks would pass", async () => {
     const isCurrent = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
     const opts: UpdateCommandOptions = {
