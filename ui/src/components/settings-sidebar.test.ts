@@ -43,11 +43,6 @@ const sidebarAgentProps = () => ({
   },
 });
 
-const inactiveRefresh = {
-  refreshRequired: false,
-  onRefresh: async () => false,
-};
-
 beforeEach(async () => {
   await i18n.setLocale("en");
   container = document.createElement("div");
@@ -69,13 +64,9 @@ describe("settings sidebar search", () => {
         presentation: "embed-page",
         basePath: "",
         activeRouteId: "appearance",
-        offline: false,
+        connectionStatus: null,
         lastError: null,
         gatewayVersion: "",
-        updateAvailable: null,
-        updateBusy: false,
-        onUpdate: vi.fn(),
-        ...inactiveRefresh,
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -103,13 +94,9 @@ describe("settings sidebar search", () => {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "model-setup",
-        offline: false,
+        connectionStatus: null,
         lastError: null,
         gatewayVersion: "",
-        updateAvailable: null,
-        updateBusy: false,
-        onUpdate: vi.fn(),
-        ...inactiveRefresh,
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -136,13 +123,9 @@ describe("settings sidebar search", () => {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
-        offline: false,
+        connectionStatus: null,
         lastError: null,
         gatewayVersion: "",
-        updateAvailable: null,
-        updateBusy: false,
-        onUpdate: vi.fn(),
-        ...inactiveRefresh,
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -168,13 +151,9 @@ describe("settings sidebar search", () => {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
-        offline: false,
+        connectionStatus: null,
         lastError: null,
         gatewayVersion: "",
-        updateAvailable: null,
-        updateBusy: false,
-        onUpdate: vi.fn(),
-        ...inactiveRefresh,
         searchQuery: "cp",
         searchBlockMatches: [
           {
@@ -208,13 +187,9 @@ describe("settings sidebar search", () => {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
-        offline: false,
+        connectionStatus: null,
         lastError: null,
         gatewayVersion: "",
-        updateAvailable: null,
-        updateBusy: false,
-        onUpdate: vi.fn(),
-        ...inactiveRefresh,
         searchQuery: "mcp",
         searchBlockMatches: [
           {
@@ -267,13 +242,9 @@ describe("settings sidebar search", () => {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
-        offline: false,
+        connectionStatus: null,
         lastError: null,
         gatewayVersion: "",
-        updateAvailable: null,
-        updateBusy: false,
-        onUpdate: vi.fn(),
-        ...inactiveRefresh,
         searchQuery: "infrastructure",
         searchBlockMatches: [
           {
@@ -317,13 +288,9 @@ describe("settings sidebar search", () => {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "agents",
-        offline: false,
+        connectionStatus: null,
         lastError: null,
         gatewayVersion: "",
-        updateAvailable: null,
-        updateBusy: false,
-        onUpdate: vi.fn(),
-        ...inactiveRefresh,
         searchQuery: "agent defaults",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -347,13 +314,9 @@ describe("settings sidebar search", () => {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
-        offline: false,
+        connectionStatus: null,
         lastError: null,
         gatewayVersion: "",
-        updateAvailable: null,
-        updateBusy: false,
-        onUpdate: vi.fn(),
-        ...inactiveRefresh,
         canAdmin: false,
         searchQuery: "security",
         searchBlockMatches: [
@@ -387,13 +350,9 @@ describe("settings sidebar search", () => {
         activeRouteId: "memory",
         activePathname: "/ui/settings/memory/settings",
         activeHash: "#memory-backend",
-        offline: false,
+        connectionStatus: null,
         lastError: null,
         gatewayVersion: "",
-        updateAvailable: null,
-        updateBusy: false,
-        onUpdate: vi.fn(),
-        ...inactiveRefresh,
         searchQuery: "backend",
         searchBlockMatches: [
           {
@@ -434,13 +393,9 @@ describe("settings sidebar search", () => {
           ...sidebarAgentProps(),
           basePath: "",
           activeRouteId: "appearance",
-          offline: false,
+          connectionStatus: null,
           lastError: null,
           gatewayVersion: "",
-          updateAvailable: null,
-          updateBusy: false,
-          onUpdate: vi.fn(),
-          ...inactiveRefresh,
           searchQuery,
           onExit: vi.fn(),
           onRetryConnect: vi.fn(),
@@ -519,13 +474,9 @@ describe("settings sidebar search", () => {
           ...sidebarAgentProps(),
           basePath: "",
           activeRouteId: "appearance",
-          offline: false,
+          connectionStatus: null,
           lastError: null,
           gatewayVersion: "",
-          updateAvailable: null,
-          updateBusy: false,
-          onUpdate: vi.fn(),
-          ...inactiveRefresh,
           searchQuery,
           onExit,
           onRetryConnect: vi.fn(),
@@ -574,13 +525,9 @@ describe("settings sidebar search", () => {
         ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
-        offline: false,
+        connectionStatus: null,
         lastError: null,
         gatewayVersion: "",
-        updateAvailable: null,
-        updateBusy: false,
-        onUpdate: vi.fn(),
-        ...inactiveRefresh,
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -600,78 +547,73 @@ describe("settings sidebar search", () => {
     expect(labels).toContain("Avancado");
   });
 
-  it("shows the offline retry action without an online status", () => {
-    const onRetryConnect = vi.fn();
-    const renderSidebar = (
-      offline: boolean,
-      lastError: string | null,
-      queuedOutboxCount = 0,
-      restartPending = false,
-      suspensionPhase?: Parameters<typeof renderSettingsSidebar>[0]["suspensionPhase"],
-    ) =>
-      render(
-        renderSettingsSidebar({
-          ...sidebarAgentProps(),
-          basePath: "",
-          activeRouteId: "appearance",
-          offline,
-          restartPending,
-          suspensionPhase,
-          queuedOutboxCount,
-          lastError,
-          gatewayVersion: "1.0.0",
-          updateAvailable: null,
-          updateBusy: false,
-          onUpdate: vi.fn(),
-          ...inactiveRefresh,
-          searchQuery: "",
-          onExit: vi.fn(),
-          onRetryConnect,
-          onNavigate: vi.fn(),
-          onSearchQueryChange: vi.fn(),
-          preloadTimers: new Map(),
-          saveIndicator: { ...saveIndicator(), status: "saving" },
-        }),
-        container,
-      );
+  it.each(["sidebar", "embed-list", "embed-page"] as const)(
+    "keeps connection recovery separate from delivery in %s",
+    async (presentation) => {
+      const onRetryConnect = vi.fn();
+      const renderSidebar = (
+        connectionStatus: Parameters<typeof renderSettingsSidebar>[0]["connectionStatus"],
+        lastError: string | null = null,
+      ) =>
+        render(
+          renderSettingsSidebar({
+            ...sidebarAgentProps(),
+            presentation,
+            basePath: "",
+            activeRouteId: "appearance",
+            connectionStatus,
+            lastError,
+            gatewayVersion: "1.0.0",
+            searchQuery: "",
+            onExit: vi.fn(),
+            onRetryConnect,
+            onNavigate: vi.fn(),
+            onSearchQueryChange: vi.fn(),
+            preloadTimers: new Map(),
+            saveIndicator: { ...saveIndicator(), status: "saving" },
+          }),
+          container,
+        );
 
-    renderSidebar(false, null, 3);
-    expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
-    expect(container.querySelector("openclaw-settings-save-indicator")).not.toBeNull();
+      renderSidebar(null);
+      expect(container.querySelector(".gateway-status__outbox")).toBeNull();
+      await vi.waitFor(() => {
+        expect(container.querySelector(".settings-save-indicator")?.textContent).toContain(
+          t("configView.autoSaveSaving"),
+        );
+      });
 
-    renderSidebar(false, null, 0, false, "prepared");
-    expect(container.querySelector(".sidebar-footer-bar__status")?.textContent).toBe("Suspended");
-    expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
-    renderSidebar(false, null, 0, false, "accepting");
-    expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
-    expect(container.querySelector("openclaw-settings-save-indicator")).not.toBeNull();
+      renderSidebar(null);
+      expect(container.querySelector(".gateway-status")).toBeNull();
+      expect(container.querySelector("openclaw-settings-save-indicator")).not.toBeNull();
 
-    // A Gateway-confirmed suspension outranks the ordinary offline pill while reconnecting.
-    renderSidebar(true, "connection refused?token=settings-secret", 3, false, "prepared");
-    expect(container.querySelector(".sidebar-footer-bar__status--suspended")?.textContent).toBe(
-      "Suspended",
-    );
-    expect(container.querySelector("button.sidebar-footer-bar__status")).toBeNull();
-    expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
+      renderSidebar("suspended", "connection refused?token=settings-secret");
+      const suspended = container.querySelector(".gateway-status--suspended");
+      expect(suspended?.textContent).toContain(t("connection.suspended"));
+      expect(suspended?.textContent).not.toContain("in outbox");
+      expect(container.querySelector("button.gateway-status")).toBeNull();
+      expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
 
-    renderSidebar(true, "connection refused?token=settings-secret", 3);
-    expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
-    const button = container.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
-    expect(button?.hasAttribute("title")).toBe(false);
-    expect(
-      (button?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)?.content,
-    ).toBe("connection refused?[redacted-credential]");
-    expect(button?.textContent).toContain("3 queued");
-    expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now — 3 queued");
-    button?.click();
-    expect(onRetryConnect).toHaveBeenCalledOnce();
+      renderSidebar("offline", "connection refused?token=settings-secret");
+      expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
+      const button = container.querySelector<HTMLButtonElement>("button.gateway-status");
+      expect(button?.hasAttribute("title")).toBe(false);
+      expect(
+        (button?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+          ?.content,
+      ).toBe("connection refused?[redacted-credential]");
+      expect(button?.textContent).not.toContain("in outbox");
+      expect(button?.getAttribute("aria-label")).toBe("Disconnected — Retry now");
+      button?.click();
+      expect(onRetryConnect).toHaveBeenCalledOnce();
 
-    renderSidebar(true, null, 3, true, "prepared");
-    expect(container.querySelector(".sidebar-footer-bar__status--restarting")?.textContent).toBe(
-      "Restarting…",
-    );
-    expect(container.querySelector("button.sidebar-footer-bar__status")).toBeNull();
-  });
+      renderSidebar("restarting");
+      const restarting = container.querySelector(".gateway-status--restarting");
+      expect(restarting?.textContent).toContain(t("connection.restarting"));
+      expect(restarting?.textContent).not.toContain("in outbox");
+      expect(container.querySelector("button.gateway-status")).toBeNull();
+    },
+  );
 });
 
 describe("Settings agent selector", () => {
@@ -680,13 +622,9 @@ describe("Settings agent selector", () => {
       ...sidebarAgentProps(),
       basePath: "",
       activeRouteId: "model-providers" as const,
-      offline: false,
+      connectionStatus: null,
       lastError: null,
       gatewayVersion: "",
-      updateAvailable: null,
-      updateBusy: false,
-      onUpdate: vi.fn(),
-      ...inactiveRefresh,
       searchQuery: "",
       onExit: vi.fn(),
       onRetryConnect: vi.fn(),

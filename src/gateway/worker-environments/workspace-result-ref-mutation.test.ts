@@ -7,7 +7,10 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "../../agents/worktrees/service.js";
 import * as processExec from "../../process/exec.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   cleanupWorkerWorkspaceResultRef,
   deleteStagedWorkerWorkspaceResult,
@@ -21,7 +24,8 @@ import {
 
 const tempDirs = createTempDirTracker();
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   closeOpenClawStateDatabaseForTest();
@@ -58,6 +62,7 @@ it("shares ref serialization and deferred retention between snapshots and result
   const worktree = await service.create({ repoRoot: root, name: "snapshot", baseRef: "HEAD" });
   const removed = await service.remove({ id: worktree.id, reason: "test" });
   const snapshotRef = expectDefined(removed.snapshotRef, "removed worktree snapshot");
+  const snapshotHead = await requireGit(root, ["rev-parse", `${snapshotRef}^{commit}`]);
   const linked = path.join(root, "linked");
   await requireGit(root, ["worktree", "add", "--detach", linked, "HEAD"]);
   const stagedResultRef = workerWorkspaceResultRef("queued-result");
@@ -116,7 +121,7 @@ it("shares ref serialization and deferred retention between snapshots and result
     await expect(hasWorkerWorkspaceResultRef({ root: linked, stagedResultRef })).resolves.toBe(
       true,
     );
-    expect(mutations).toEqual([["update-ref", "-d", snapshotRef]]);
+    expect(mutations).toEqual([["update-ref", "-d", snapshotRef, snapshotHead]]);
     expect(readRetainedRefs).not.toHaveBeenCalled();
     // A queued result writer must not adopt a later repository redirect.
     vi.stubEnv("GIT_COMMON_DIR", path.join(other, ".git"));

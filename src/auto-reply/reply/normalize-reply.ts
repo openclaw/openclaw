@@ -7,6 +7,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  hasReplyPayloadSpeechContent,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import {
@@ -83,7 +84,8 @@ export function normalizeReplyPayloadOutcome(
       },
     );
   const trimmed = normalizeOptionalString(payload.text) ?? "";
-  if (!hasContent(trimmed)) {
+  const hasSpeechContent = hasReplyPayloadSpeechContent(payload);
+  if (!hasContent(trimmed) && !hasSpeechContent) {
     return suppress("empty");
   }
 
@@ -140,7 +142,7 @@ export function normalizeReplyPayloadOutcome(
           })
         : sanitizeUserFacingText(text, { conversationContext: opts.conversationContext });
     }
-    if (!hasContent(text)) {
+    if (!hasContent(text) && !hasSpeechContent) {
       return suppress("empty");
     }
   }

@@ -183,7 +183,9 @@ printf 's "252.39"\\n'
       };
       await runAfterOutput(async () => {
         await expect(assertSystemdAvailable(env, timeout)).rejects.toThrow(
-          "systemctl --user unavailable",
+          termination === "timeout"
+            ? "systemd manager inspection deadline expired"
+            : "systemctl --user unavailable",
         );
       });
       const result = await runAfterOutput(() =>

@@ -19,7 +19,6 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
   resetTaskFlowRegistryForTests,
 } from "./task-runtime.test-helpers.js";
@@ -68,13 +67,11 @@ async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): 
       prefix: "openclaw-task-flow-audit-",
     },
     async (state) => {
-      resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       try {
         await run(state.stateDir);
       } finally {
-        resetTaskRegistryDeliveryRuntimeForTests();
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
       }
@@ -85,7 +82,6 @@ async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): 
 describe("task-flow-registry audit", () => {
   afterEach(() => {
     ORIGINAL_ENV.restore();
-    resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
   });

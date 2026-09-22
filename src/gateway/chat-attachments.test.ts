@@ -1,6 +1,7 @@
 // Chat attachment tests cover inbound image/file parsing, media-store cleanup,
 // warning surfaces, size limits, and outbound message block assembly.
 
+import assert from "node:assert/strict";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -394,7 +395,8 @@ describe("parseMessageWithAttachments", () => {
       pdfAttachment({ content: `data:application/pdf;base64,${bytes.toString("base64")}` }),
     ]);
     expect(parsed.offloadedRefs).toHaveLength(1);
-    expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(bytes);
+    // Node compares Buffer bytes without Vitest's per-byte object traversal.
+    assert.deepStrictEqual(saveMediaBufferMock.mock.calls[0]?.[0], bytes);
   });
 
   it("parses large clipboard data URL images without full base64 decoding", async () => {

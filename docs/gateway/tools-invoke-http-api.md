@@ -72,6 +72,8 @@ Fields:
 
 ## Policy + routing behavior
 
+For identity-authenticated callers with [named operator roles](/gateway/operator-scopes#named-operator-roles), the role's agent allowlist applies even when the selected session has no stored entry. A role with `sandbox: "required"` must target an existing session with recorded required-sandbox provenance; a missing session, including an omitted or `"main"` target that resolves to one, returns **403**. Create a session through the normal session flow first. The WebSocket `tools.invoke` method uses the same rule. Shared-secret and trusted system calls retain their existing authority.
+
 Tool availability is filtered through the same policy chain used by Gateway agents:
 
 - `tools.profile` / `tools.byProvider.profile`

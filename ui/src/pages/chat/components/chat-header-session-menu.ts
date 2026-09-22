@@ -84,6 +84,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) forkDisabled = false;
   @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
+  @property({ attribute: false }) archiveShortcut = false;
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) onOpen: () => void = () => {};
   @property({ attribute: false }) onOpenCommandPalette: () => void = () => {};
@@ -105,6 +106,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       forkDisabled: this.forkDisabled,
       forkFromLastCompleted: this.forkFromLastCompleted,
       archiveAllowed: this.archiveAllowed,
+      archiveShortcut: this.archiveShortcut,
       deleteAllowed: this.deleteAllowed,
       groups: this.groups,
       currentOwner: this.currentOwner,

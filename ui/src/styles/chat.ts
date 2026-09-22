@@ -4,6 +4,7 @@ import "./chat/startup-layout.css";
 // into Chat after New Session has already loaded the passive transcript styles.
 import "./chat/layout.css";
 import "./chat/message-layout.css";
+import "./chat/context-attachment.css";
 import "./chat/text.css";
 import "./sidebar-markdown.css";
 import "./chat/grouped.css";

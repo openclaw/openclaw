@@ -799,9 +799,14 @@ describe("cron service run admission cleanup", () => {
     }
   });
 
-  it.each(["manual", "scheduled", "startup"] as const)(
-    "retries %s cleanup when stop wins the reservation write",
-    async (trigger) => {
+  it.each([
+    { trigger: "manual", restartScheduler: false },
+    { trigger: "scheduled", restartScheduler: false },
+    { trigger: "startup", restartScheduler: false },
+    { trigger: "scheduled", restartScheduler: true },
+  ] as const)(
+    "retries $trigger cleanup when stop wins the reservation write (restart: $restartScheduler)",
+    async ({ trigger, restartScheduler }) => {
       const store = opsRegressionFixtures.makeStorePath();
       const dueAt = Date.parse("2026-02-06T10:05:03.250Z");
       const job = createDueIsolatedJob({
@@ -816,6 +821,9 @@ describe("cron service run admission cleanup", () => {
         nowMs: () => dueAt,
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
+      const releaseSuccessor = createDeferred();
+      let restarted: Promise<void> | undefined;
+      let successorAdmission: Promise<unknown> | undefined;
       let reservationPersisted = false;
       let cleanupFailed = false;
       const stopObserving = observeCronJobWrites(job.id, ({ queuedAtMs }) => {
@@ -826,6 +834,10 @@ describe("cron service run admission cleanup", () => {
         if (!reservationPersisted && queuedAtMs === dueAt) {
           reservationPersisted = true;
           stop(state);
+          if (restartScheduler) {
+            restarted = start(state);
+            successorAdmission = runWithCronAdmission(state, () => releaseSuccessor.promise);
+          }
         }
       });
 
@@ -841,15 +853,24 @@ describe("cron service run admission cleanup", () => {
         } else {
           await expect(runMissedJobs(state)).rejects.toThrow("reservation cleanup persist failed");
         }
+        await restarted;
+        expect(state.stopped).toBe(!restartScheduler);
+        expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
+        expect(reservationPersisted && cleanupFailed).toBe(true);
+        expect(state.runAdmission.active).toBe(restartScheduler ? 1 : 0);
+        expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
+        const persisted = (await loadCronStore(store.storePath)).jobs.find(
+          (entry) => entry.id === job.id,
+        );
+        expect(persisted?.state.queuedAtMs).toBeUndefined();
+        expect(persisted?.state.runningAtMs).toBeUndefined();
       } finally {
         stopObserving();
+        releaseSuccessor.resolve();
+        await Promise.allSettled([restarted, successorAdmission]);
+        stop(state);
       }
-
-      expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
-      expect(
-        (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id)?.state
-          .runningAtMs,
-      ).toBeUndefined();
+      expect(state.runAdmission.active).toBe(0);
     },
   );
 

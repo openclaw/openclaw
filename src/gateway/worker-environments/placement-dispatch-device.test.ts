@@ -89,7 +89,7 @@ function prepareCloudNodeDispatch(
   Object.assign(harness.environments, {
     requiresNodeEnrollment: (profileId: string) => profileId === ready.profileId,
   });
-  vi.mocked(harness.environments.create).mockResolvedValue(ready);
+  vi.mocked(harness.environments.createWithRequest).mockResolvedValue(ready);
   vi.mocked(harness.environments.get).mockImplementation((environmentId) =>
     environmentId === ready.environmentId ? (isAttached ? attached : ready) : undefined,
   );
@@ -133,7 +133,7 @@ describe("device worker placement dispatch", () => {
       available: true,
       node: deviceProof(),
     }));
-    vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue({
+    vi.mocked(harness.environments.createWithRequest).mockResolvedValue({
       ...harness.ready,
       providerId: "device",
       profileId: "device:device-1",
@@ -168,17 +168,13 @@ describe("device worker placement dispatch", () => {
       remoteWorkspaceDir: "/worker/workspace",
     });
 
-    expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
-      { profileId: request.profileId, ...request.inheritedProfile },
-      expect.stringMatching(/^session-dispatch:/u),
-      undefined,
-      REQUEST.executionMode,
-      "/gateway/workspace",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-    );
+    expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
+      profileId: request.profileId,
+      idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
+      executionMode: REQUEST.executionMode,
+      projectPath: "/gateway/workspace",
+      inheritedProfile: request.inheritedProfile,
+    });
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
       ownerEpoch: expect.any(Number),
@@ -209,7 +205,7 @@ describe("device worker placement dispatch", () => {
       sshEndpoint: null,
       sharedHost: true,
     } as const;
-    vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue(nodeEnvironment);
+    vi.mocked(harness.environments.createWithRequest).mockResolvedValue(nodeEnvironment);
     vi.mocked(harness.environments.get).mockImplementation((environmentId) => {
       if (environmentId !== nodeEnvironment.environmentId) {
         return undefined;
@@ -243,17 +239,13 @@ describe("device worker placement dispatch", () => {
       remoteWorkspaceDir: "/worker/workspace",
     });
 
-    expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
-      { profileId: request.profileId, ...request.inheritedProfile },
-      expect.stringMatching(/^session-dispatch:/u),
-      undefined,
-      "remote-exec",
-      "/gateway/workspace",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-    );
+    expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
+      profileId: request.profileId,
+      idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
+      executionMode: "remote-exec",
+      projectPath: "/gateway/workspace",
+      inheritedProfile: request.inheritedProfile,
+    });
     const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
       ?.value;
     expect(workspaceTunnel?.syncWorkspace).toHaveBeenCalledWith(
@@ -282,17 +274,16 @@ describe("device worker placement dispatch", () => {
     });
 
     expect(resolveAvailability).toHaveBeenCalledWith("device-1");
-    expect(harness.environments.create).toHaveBeenCalledWith(
-      "multi-mode-cloud",
-      expect.stringMatching(/^session-dispatch:/u),
-      undefined,
-      "remote-exec",
-      "/gateway/workspace",
-      undefined,
-      undefined,
-      undefined,
-      { providerId: harness.ready.providerId, profileSnapshot: harness.ready.profileSnapshot },
-    );
+    expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
+      profileId: "multi-mode-cloud",
+      idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
+      executionMode: "remote-exec",
+      projectPath: "/gateway/workspace",
+      admittedIntent: {
+        providerId: harness.ready.providerId,
+        profileSnapshot: harness.ready.profileSnapshot,
+      },
+    });
     const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
       ?.value;
     expect(workspaceTunnel?.syncWorkspace).toHaveBeenCalledOnce();
@@ -311,7 +302,7 @@ describe("device worker placement dispatch", () => {
       }),
     ).resolves.toMatchObject({ state: "active", executionMode: "remote-exec" });
 
-    expect(harness.environments.create).toHaveBeenCalledOnce();
+    expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
   });
 
   it("rejects a remote-exec-only enrolled node before provider allocation when its command is denied", async () => {
@@ -325,7 +316,7 @@ describe("device worker placement dispatch", () => {
 
     await expect(harness.service.dispatch(request)).rejects.toThrow(CODEX_COMMAND);
 
-    expect(harness.environments.create).not.toHaveBeenCalled();
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(harness.environments.attachSession).not.toHaveBeenCalled();
   });
 
@@ -355,7 +346,9 @@ describe("device worker placement dispatch", () => {
 
     await expect(harness.service.dispatch(request)).rejects.toThrow("codex.exec-server.stdio.v1");
 
-    expect(harness.environments.create).toHaveBeenCalledTimes(scenario.expectedProvisionCalls);
+    expect(harness.environments.createWithRequest).toHaveBeenCalledTimes(
+      scenario.expectedProvisionCalls,
+    );
     expect(harness.environments.attachSession).not.toHaveBeenCalled();
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.placements.current()).toMatchObject({ state: "failed" });
@@ -371,7 +364,7 @@ describe("device worker placement dispatch", () => {
 
     await expect(harness.service.dispatch(request)).rejects.toThrow();
 
-    expect(harness.environments.create).toHaveBeenCalledOnce();
+    expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
     expect(harness.environments.attachSession).not.toHaveBeenCalled();
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.placements.current()).toMatchObject({ state: "failed" });
@@ -584,7 +577,7 @@ describe("device worker placement dispatch", () => {
     );
 
     expect(states).toEqual(["requested", "failed"]);
-    expect(harness.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(createWorkerSessionPlacementStore({ database }).get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       environmentId: null,
@@ -615,7 +608,7 @@ describe("device worker placement dispatch", () => {
     await expect(harness.service.dispatch(request)).rejects.toThrow("reconnect");
 
     expect(resolveAvailability).toHaveBeenCalledTimes(2);
-    expect(harness.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.placements.current()).toMatchObject({
       state: "failed",
@@ -775,7 +768,7 @@ describe("device worker placement dispatch", () => {
       available: true,
       node: deviceProof(),
     }));
-    vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue({
+    vi.mocked(harness.environments.createWithRequest).mockResolvedValue({
       ...harness.ready,
       providerId: "device",
       profileId: "device:device-1",

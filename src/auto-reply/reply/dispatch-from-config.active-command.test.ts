@@ -1,6 +1,6 @@
 // Exercises control-command reachability without relaxing ordinary reply admission.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, raceWithTimeoutResult } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import {
@@ -26,84 +26,93 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-async function raceWithTimeoutResult<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  timeoutResult: T,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((resolve) => {
-        timer = setTimeout(() => resolve(timeoutResult), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 describe("dispatch active command admission", () => {
-  it("delivers an authorized text command acknowledgement while its session operation is active", async () => {
-    const sessionKey = "agent:main:command-reply-active";
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "active-session",
-      resetTriggered: false,
-    });
-    activeOperation.setPhase("running");
-    onTestFinished(() => activeOperation.complete());
+  it.each([
+    { source: "text", body: "/think high", commandName: "think" },
+    { source: "text", body: "/help", commandName: "help" },
+    { source: "native", body: "/help", commandName: "help" },
+    { source: "text", body: "/tasks", commandName: "tasks" },
+    { source: "native", body: "/tasks", commandName: "tasks" },
+  ] as const)(
+    "delivers authorized $source $body while its session operation is active",
+    async ({ source, body, commandName }) => {
+      const sessionKey = "agent:main:command-reply-active";
+      const activeOperation = createReplyOperation({
+        sessionKey,
+        sessionId: "active-session",
+        resetTriggered: false,
+      });
+      activeOperation.setPhase("running");
+      onTestFinished(() => activeOperation.complete());
+      const waitingForActive = createDeferred<{ status: "waiting_for_active" }>();
+      const waitForIdle = replyRunRegistry.waitForIdle.bind(replyRunRegistry);
+      vi.spyOn(replyRunRegistry, "waitForIdle").mockImplementation((key, ...args) => {
+        if (key === sessionKey) {
+          waitingForActive.resolve({ status: "waiting_for_active" });
+        }
+        return waitForIdle(key, ...args);
+      });
 
-    const acknowledgement = { text: "Thinking level set to high." };
-    const replyResolver = vi.fn(async () => markCommandReplyForDelivery(acknowledgement));
-    const dispatcher = createDispatcher();
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        CommandAuthorized: true,
-        CommandSource: "text",
-        CommandTurn: {
-          kind: "text-slash",
-          source: "text",
-          authorized: true,
-          commandName: "think",
-          body: "/think high",
-        },
-        SessionKey: sessionKey,
-        Body: "/think high",
-        RawBody: "/think high",
-        CommandBody: "/think high",
-        BodyForAgent: "/think high",
-      }),
-      cfg: {
-        diagnostics: { enabled: true },
-        session: { sendPolicy: { default: "allow" } },
-      } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-    });
+      const acknowledgement = { text: "Command completed." };
+      const replyResolver = vi.fn(async () => markCommandReplyForDelivery(acknowledgement));
+      const dispatcher = createDispatcher();
+      const dispatchPromise = dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          CommandAuthorized: true,
+          CommandSource: source,
+          CommandTurn: {
+            ...(source === "native"
+              ? ({ kind: "native", source: "native" } as const)
+              : ({ kind: "text-slash", source: "text" } as const)),
+            authorized: true,
+            commandName,
+            body,
+          },
+          SessionKey: sessionKey,
+          Body: body,
+          RawBody: body,
+          CommandBody: body,
+          BodyForAgent: body,
+        }),
+        cfg: {
+          diagnostics: { enabled: true },
+          session: { sendPolicy: { default: "allow" } },
+        } as OpenClawConfig,
+        dispatcher,
+        replyResolver,
+      });
 
-    try {
-      await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
-      expect(replyResolver).toHaveBeenCalledOnce();
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(acknowledgement);
-      expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
-    } finally {
-      activeOperation.complete();
-      await dispatchPromise;
-    }
-    expect(getActiveReplyRunCount()).toBe(0);
-  });
+      try {
+        const outcome = await Promise.race([
+          dispatchPromise.then((result) => ({ status: "settled" as const, result })),
+          waitingForActive.promise,
+        ]);
+
+        expect(outcome).toMatchObject({
+          status: "settled",
+          result: { queuedFinal: true },
+        });
+        expect(replyResolver).toHaveBeenCalledOnce();
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(acknowledgement);
+        expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
+      } finally {
+        activeOperation.complete();
+        await dispatchPromise;
+      }
+      expect(getActiveReplyRunCount()).toBe(0);
+    },
+  );
 
   it.each([
-    { body: "/bash echo unsafe", commandName: "bash", authorized: true },
-    { body: "/reset", commandName: "reset", authorized: false },
-    { body: "/new", commandName: "new", authorized: false },
-  ])(
-    "keeps $body (authorized=$authorized) behind active-session admission",
-    async ({ body, commandName, authorized }) => {
+    { source: "text", body: "/bash echo unsafe", commandName: "bash", authorized: true },
+    { source: "native", body: "/compact", commandName: "compact", authorized: true },
+    { source: "text", body: "/reset", commandName: "reset", authorized: false },
+    { source: "text", body: "/new", commandName: "new", authorized: false },
+    { source: "text", body: "/help", commandName: "help", authorized: false },
+    { source: "native", body: "/help", commandName: "help", authorized: false },
+  ] as const)(
+    "keeps $source $body (authorized=$authorized) behind active-session admission",
+    async ({ source, body, commandName, authorized }) => {
       const sessionKey = "agent:main:executable-command-active";
       const activeOperation = createReplyOperation({
         sessionKey,
@@ -119,10 +128,11 @@ describe("dispatch active command admission", () => {
       const dispatchPromise = dispatchReplyFromConfig({
         ctx: buildTestCtx({
           CommandAuthorized: authorized,
-          CommandSource: "text",
+          CommandSource: source,
           CommandTurn: {
-            kind: "text-slash",
-            source: "text",
+            ...(source === "native"
+              ? ({ kind: "native", source: "native" } as const)
+              : ({ kind: "text-slash", source: "text" } as const)),
             authorized,
             commandName,
             body,

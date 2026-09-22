@@ -14,12 +14,12 @@ import {
   assignSessionOwner,
   listSessionParticipantsReadOnly,
   loadSessionEntry,
-  recordSessionParticipant,
 } from "./session-accessor.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import * as candidates from "./session-accessor.sqlite-maintenance-candidates.js";
 import { applySessionEntryMaintenance } from "./session-accessor.sqlite-maintenance.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import * as maintenanceRuntime from "./store-maintenance-runtime.js";
 import {
   resolveMaintenanceConfigFromInput,

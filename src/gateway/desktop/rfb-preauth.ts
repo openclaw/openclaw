@@ -33,6 +33,17 @@ export class RfbPreauthTimeoutError extends Error {
   }
 }
 
+export class RfbAuthenticationRejectedError extends Error {
+  constructor(status: number, reason: string) {
+    super(
+      reason
+        ? `RFB authentication failed: ${reason}`
+        : `RFB authentication failed with status ${status}`,
+    );
+    this.name = "RfbAuthenticationRejectedError";
+  }
+}
+
 function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
@@ -327,11 +338,7 @@ async function readSecurityResult(peer: RfbPreauthPeer, signal: AbortSignal): Pr
   } catch {
     // Older servers may close immediately after the status word.
   }
-  throw new Error(
-    reason
-      ? `RFB authentication failed: ${reason}`
-      : `RFB authentication failed with status ${status}`,
-  );
+  throw new RfbAuthenticationRejectedError(status, reason);
 }
 
 async function negotiateServer(params: {

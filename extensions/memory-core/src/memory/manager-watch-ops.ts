@@ -21,6 +21,45 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     if (!this.sources.has("memory") || !this.settings.sync.watch || this.closed) {
       return;
     }
+    if (this.memoryFiles) {
+      if (this.memoryWatchSubscription || this.memoryWatchUnavailable) {
+        return;
+      }
+      const subscription = new AbortController();
+      this.memoryWatchSubscription = subscription;
+      const markDirty = (event: "change" | "unavailable") => {
+        if (subscription.signal.aborted || this.closed) {
+          return;
+        }
+        this.dirty = true;
+        this.memoryWatchUnavailable ||= event === "unavailable";
+        // Remote notifications have already passed native file settling on the host.
+        runDetachedMemorySync(() => this.sync({ reason: "watch" }), "watch");
+      };
+      void this.memoryFiles
+        .watch(
+          {
+            agentId: this.agentId,
+            settings: {
+              extraPaths: this.settings.extraPaths,
+              multimodal: this.settings.multimodal,
+              sync: { watchDebounceMs: this.settings.sync.watchDebounceMs },
+            },
+          },
+          markDirty,
+          subscription.signal,
+        )
+        .then(
+          () => markDirty("unavailable"),
+          (error: unknown) => {
+            markDirty("unavailable");
+            if (!subscription.signal.aborted) {
+              log.warn(`memory workspace watcher unavailable: ${String(error)}`);
+            }
+          },
+        );
+      return;
+    }
     if (this.fileWatcher) {
       return;
     }
@@ -40,6 +79,8 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   }
 
   protected async closeMemoryWatcher(): Promise<void> {
+    this.memoryWatchSubscription?.abort();
+    this.memoryWatchSubscription = undefined;
     await this.fileWatcher?.close();
     this.fileWatcher = undefined;
   }

@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Darwin
 import Testing
 
 @MainActor
@@ -14,8 +15,32 @@ enum AppKitTestSupport {
         return (application, didSetActivationPolicy)
     }()
 
-    static var application: NSApplication { self.initializedApplication.application }
-    static var didSetActivationPolicy: Bool { self.initializedApplication.didSetActivationPolicy }
+    static var application: NSApplication {
+        self.initializedApplication.application
+    }
+
+    static var didSetActivationPolicy: Bool {
+        self.initializedApplication.didSetActivationPolicy
+    }
+
+    static func startApplication() async throws {
+        let application = self.application
+        guard !application.isRunning else { return }
+        await withCheckedContinuation { continuation in
+            // Start outside a Swift task so AppKit owns nested menu run loops.
+            // Otherwise macOS 27 can stop Swift's outer loop and exit before test completion.
+            RunLoop.main.perform(inModes: [.common]) {
+                MainActor.assumeIsolated {
+                    let started = Timer(timeInterval: 0, repeats: false) { _ in
+                        continuation.resume()
+                    }
+                    RunLoop.main.add(started, forMode: .common)
+                    application.run()
+                }
+            }
+        }
+        try #require(application.isRunning)
+    }
 
     static func accessibilityElements(in root: AnyObject) async throws -> [AnyObject] {
         // SwiftUI materializes its virtual accessibility children after a real client request.
@@ -36,6 +61,20 @@ enum AppKitTestSupport {
         }
         visit(root)
         return elements
+    }
+
+    static func accessibilityTitle(of element: AnyObject) -> String? {
+        // SwiftUI menu titles may be attributed strings; the typed String getter raises an ObjC exception.
+        let selector = NSSelectorFromString("accessibilityTitle")
+        guard let object = element as? NSObject, object.responds(to: selector),
+              let value = object.perform(selector)?.takeUnretainedValue() else { return nil }
+        if let attributed = value as? NSAttributedString { return attributed.string }
+        return value as? String
+    }
+
+    static func accessibilityName(of element: AnyObject) -> String? {
+        if let label = element.accessibilityLabel?(), !label.isEmpty { return label }
+        return self.accessibilityTitle(of: element)
     }
 
     static func waitForAccessibilityElement(
@@ -59,7 +98,7 @@ enum AppKitTestSupport {
         }.joined(separator: "\n")
         let accessibility: String = observedElements.map {
             let role = String(describing: $0.accessibilityRole?())
-            let title = String(describing: $0.accessibilityTitle?())
+            let title = String(describing: self.accessibilityTitle(of: $0))
             let label = String(describing: $0.accessibilityLabel?())
             let value: Any? = $0.accessibilityValue?()
             let identifier = String(describing: $0.accessibilityIdentifier?())
@@ -88,7 +127,9 @@ enum AppKitTestSupport {
         tracking.start()
         defer { tracking.stop() }
         try Task.checkCancellation()
-        func text(_ value: String?) -> String { value.map { String($0.prefix(160)) } ?? "nil" }
+        func text(_ value: String?) -> String {
+            value.map { String($0.prefix(160)) } ?? "nil"
+        }
         let value: Any? = button.accessibilityValue?()
         let valueText = (value as? String) ?? (value as? NSNumber)?.stringValue ??
             value.map { String(reflecting: type(of: $0)) }
@@ -101,7 +142,7 @@ enum AppKitTestSupport {
         print("""
         Before menu dispatch at \(file):\(line)
         node=\(ObjectIdentifier(button)) type=\(text(controlType)) role=\(String(describing: role))
-        identifier=\(text(button.accessibilityIdentifier?())) title=\(text(button.accessibilityTitle?())) label=\(text(button.accessibilityLabel?())) value=\(text(valueText))
+        identifier=\(text(button.accessibilityIdentifier?())) title=\(text(self.accessibilityTitle(of: button))) label=\(text(button.accessibilityLabel?())) value=\(text(valueText))
         enabled=\(String(describing: enabled)) frame=\(String(describing: frame)) window=\(window.windowNumber) windowMatches=\(windowMatches)
         pressAllowed=\(String(describing: pressAllowed)) showMenuAllowed=\(String(describing: showMenuAllowed)) remaining=\(ContinuousClock.now.duration(to: tracking.expiresAt)) appRunning=\(NSApp.isRunning)
         """)
@@ -142,7 +183,8 @@ enum AppKitTestSupport {
                     "The fixture menu element has no allowed accessibility action: Press=\(String(describing: pressAllowed)), ShowMenu=\(String(describing: showMenuAllowed))")
             }
             guard actionResult != nil else {
-                throw InteractionFailure(message: "The fixture menu element does not implement its allowed \(action) action")
+                throw InteractionFailure(
+                    message: "The fixture menu element does not implement its allowed \(action) action")
             }
         }
         await tracking.waitForCompletion()
@@ -159,6 +201,31 @@ enum AppKitTestSupport {
         guard completed else {
             throw InteractionFailure(message: "The native menu inspection must complete before its tracking deadline")
         }
+    }
+
+    static func recordCompositedWindow(
+        _ window: NSWindow, name: String, directory: URL) async throws
+    {
+        try await Task.sleep(for: .milliseconds(300))
+        let screen = try #require(window.screen)
+        let acknowledgement = "\(name)-\(UUID().uuidString).captured"
+        let frame = window.frame
+        let bounds = screen.frame
+        // Native materials and custom menu labels need the compositor, not NSView.cacheDisplay.
+        let request: [String: Any] = [
+            "windowID": window.windowNumber,
+            "window": ["x": frame.minX, "y": frame.minY, "width": frame.width, "height": frame.height],
+            "screen": ["x": bounds.minX, "y": bounds.minY, "width": bounds.width, "height": bounds.height],
+            "acknowledgement": acknowledgement,
+        ]
+        try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
+            .write(to: directory.appendingPathComponent("\(name)-capture-request.json"), options: .atomic)
+        let deadline = ContinuousClock.now + .seconds(30)
+        let acknowledged = directory.appendingPathComponent(acknowledgement).path
+        while !FileManager.default.fileExists(atPath: acknowledged), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try #require(FileManager.default.fileExists(atPath: acknowledged), "The external screenshot must complete")
     }
 
     static func record(menu: NSMenu, content: NSView?, name: String) throws {

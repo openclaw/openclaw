@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import * as cryptoDigest from "../infra/crypto-digest.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -150,6 +151,7 @@ describe("prepared model catalog worker input", () => {
     expect(builtInput.generationFingerprint).not.toBe(cloned.generationFingerprint);
     const request = {
       kind: "catalog" as const,
+      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts(),
       syntheticAuth: [
         {
           providerRef: "native",

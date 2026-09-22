@@ -8,6 +8,7 @@ import {
   collectHostedGateEvidence as collectHostedGateEvidenceRaw,
   HOSTED_GATE_MAX_AGE_HOURS,
   loadPullRequestCommitShas,
+  main,
   notApplicableScheduledHostedWorkflows,
   parseArgs,
   parseWorkflowRunPage,
@@ -1753,6 +1754,23 @@ describe("verify-pr-hosted-gates", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Expected --pr <positive-integer>.");
     expect(result.stderr).not.toContain("spawnSync gh");
+  });
+
+  it.each([
+    { number: pr + 1, repo: "openclaw/openclaw", head: sha, error: "does not identify" },
+    { number: pr, repo: "replacement/openclaw", head: sha, error: "does not identify" },
+    { number: pr, repo: "openclaw/openclaw", head: previousSha, error: "head changed" },
+    { number: pr, repo: "openclaw/openclaw", head: "", error: "missing head metadata" },
+  ])("rejects carried observation drift before hosted discovery: $number/$repo/$head", (value) => {
+    expect(() =>
+      main(requiredCliArgs, {
+        number: value.number,
+        baseRepository: { nameWithOwner: value.repo },
+        headRefName: "topic",
+        headRefOid: value.head,
+        headRepository: { nameWithOwner: "openclaw/openclaw" },
+      }),
+    ).toThrow(value.error);
   });
 
   it("rejects duplicate hosted gate verifier CLI arguments", () => {

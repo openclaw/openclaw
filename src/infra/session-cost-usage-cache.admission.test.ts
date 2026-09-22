@@ -13,6 +13,7 @@ import {
   withOpenClawAgentDatabaseAsync,
 } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
+import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -52,6 +53,7 @@ it.each(["acquire", "release", "rollup", "prune"] as const)(
             rollupId: "session.jsonl",
             previousValueJson: null,
             valueJson: Buffer.from('{"totalTokens":1}'),
+            blob: null,
             updatedAt: 1,
           }),
         { agentId, path: databasePath },
@@ -94,6 +96,7 @@ it.each(["acquire", "release", "rollup", "prune"] as const)(
                 rollupId: "session.jsonl",
                 previousValueJson: Buffer.from(before.rows[0]!.valueJson),
                 valueJson: Buffer.from('{"totalTokens":2}'),
+                blob: null,
                 updatedAt: 2,
               }),
             ).toBe(true);
@@ -153,6 +156,7 @@ it.each([
       const agentId = "usage-test";
       const databasePath = openOpenClawAgentDatabase({ agentId }).path;
       closeOpenClawAgentDatabasesForTest();
+      clearOpenClawAgentIntegrityVerification(databasePath, { OPENCLAW_STATE_DIR: root });
       const cwd = retarget
         ? vi.spyOn(process, "cwd").mockReturnValue(path.dirname(databasePath))
         : undefined;
@@ -208,6 +212,7 @@ it.each([
               rollupId: "session.jsonl",
               previousValueJson: null,
               valueJson: Buffer.from('{"totalTokens":7}'),
+              blob: null,
               updatedAt: 1,
             });
           } finally {

@@ -11,6 +11,7 @@ import type {
   SqliteIntegrityWorkerResult,
 } from "./sqlite-integrity-worker.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 
 function nativeErrorDetails(error: Error) {
   // SAFETY: Node's filesystem and SQLite errors attach these optional diagnostic fields.
@@ -46,9 +47,7 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
     database = openNodeSqliteDatabase(input.pathname, { readOnly: true });
     setSqliteBusyTimeout(database, input.busyTimeoutMs);
-    // Full index checks revisit pages. Keep their cache in this disposable child,
-    // without raising the memory budget of the Gateway's retained connections.
-    database.exec("PRAGMA cache_size = -65536;"); // sqlite-allow-raw -- Connection-local page-cache policy for this disposable integrity child.
+    configureSqliteMaintenanceCache(database);
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
     await sendPhase("checking");
     const startedAt = performance.now();

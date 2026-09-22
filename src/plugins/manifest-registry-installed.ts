@@ -45,10 +45,8 @@ import {
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
-import {
-  normalizePluginDependencySpecs,
-  type PluginDependencySpecMap,
-} from "./status-dependencies-core.js";
+import { normalizePluginDependencySpecs } from "./status-dependencies-core.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
 type InstalledPackageMetadata = {
   packageDescription?: string;

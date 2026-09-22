@@ -13,7 +13,8 @@ import { resolveGatewayLockDir } from "../config/paths.js";
 import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
-import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry-listing.js";
+import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
+import { resolveQuarantineStorePath } from "../state/openclaw-quarantine-store.js";
 import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
 import {
   resolveOpenClawRegisteredAgentDatabasePath,
@@ -24,6 +25,7 @@ import {
   sanitizeOpenClawStateLeaseRows,
 } from "../state/openclaw-state-snapshot-sanitizer.js";
 import {
+  assertBackupSqliteSourceGroup,
   captureBackupSqliteSourceGroup,
   planBackupSqliteSourceGroups,
   type BackupSqliteSourceGroup,
@@ -67,7 +69,7 @@ type CanonicalSqliteSource = {
   archiveSourcePath: string;
   identity: Stats;
   sourcePath: string;
-} & ({ role: "global" } | { role: "agent"; agentId: string });
+} & ({ role: "global" | "quarantine" } | { role: "agent"; agentId: string });
 
 function resolveSqliteBackupDatabasePath(sourcePath: string): string | undefined {
   for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
@@ -172,10 +174,10 @@ async function discoverBackupSqliteSources(params: {
     await visit(sourcePath);
   }
 
-  for (const database of params.inventory.coreDatabases) {
-    if (database.identity && params.inventory.isIncluded(database.sourcePath)) {
-      snapshotPaths.add(database.sourcePath);
-      discoveredSourcePaths.add(database.sourcePath);
+  for (const sourcePath of params.inventory.coreDatabaseSourcePaths) {
+    if (params.inventory.isIncluded(sourcePath)) {
+      snapshotPaths.add(sourcePath);
+      discoveredSourcePaths.add(sourcePath);
     }
   }
 
@@ -183,6 +185,45 @@ async function discoverBackupSqliteSources(params: {
     snapshotPaths: [...snapshotPaths].toSorted((left, right) => left.localeCompare(right)),
     discoveredSourcePaths,
   };
+}
+
+async function planBackupSqliteSources(
+  inventory: BackupResourceInventory,
+  snapshotPaths: readonly string[],
+) {
+  const sources: Array<{
+    archiveSourcePath: string;
+    path: string;
+    identity: Stats;
+    canonicalSource: CanonicalSqliteSource | undefined;
+  }> = [];
+  for (const archiveSourcePath of snapshotPaths) {
+    const identity = await fs.stat(archiveSourcePath);
+    const owner = inventory.resolveSqliteSource(archiveSourcePath, identity);
+    if (!owner || owner.role === "unresolvable-link") {
+      throw new Error(`SQLite ownership changed after discovery: ${archiveSourcePath}`);
+    }
+    let canonicalSource: CanonicalSqliteSource | undefined;
+    if (owner.role !== "plugin") {
+      if (!owner.identity || !sameFileIdentity(owner.identity, identity)) {
+        throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
+      }
+      canonicalSource = {
+        ...owner,
+        archiveSourcePath: owner.sourcePath,
+        sourcePath: await fs.realpath(owner.sourcePath),
+        identity: owner.identity,
+      };
+      assertNotUpdateCapturePath(canonicalSource.sourcePath, inventory.stateDir);
+    }
+    sources.push({
+      archiveSourcePath,
+      path: canonicalSource ? await fs.realpath(archiveSourcePath) : archiveSourcePath,
+      identity,
+      canonicalSource,
+    });
+  }
+  return { sources, groups: await planBackupSqliteSourceGroups(sources) };
 }
 
 export async function createBackupSqliteSnapshotPlan(params: {
@@ -195,22 +236,24 @@ export async function createBackupSqliteSnapshotPlan(params: {
   snapshots: SqliteBackupAsset[];
   discoveredSourcePaths: Set<string>;
 }> {
-  const capturedSnapshots = new Map<string, string>();
+  const capturedSnapshots = new Map<BackupSqliteSourceGroup, string>();
   const snapshots: SqliteBackupAsset[] = [];
   let capturedAgents: Array<{ role: "agent"; agentId: string; sourcePath: string }> = [];
   async function captureSource(
     archiveSourcePath: string,
+    sourceGroup: BackupSqliteSourceGroup | undefined,
     canonicalSource?: CanonicalSqliteSource,
-    genericGroup?: BackupSqliteSourceGroup,
   ): Promise<void> {
+    if (!sourceGroup) {
+      throw new Error(`SQLite ownership changed after discovery: ${archiveSourcePath}`);
+    }
     if (
       canonicalSource &&
       !sameFileIdentity(canonicalSource.identity, await fs.stat(archiveSourcePath))
     ) {
       throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
     }
-    const sourceDatabasePath =
-      canonicalSource?.sourcePath ?? genericGroup?.sourcePath ?? archiveSourcePath;
+    const sourceDatabasePath = sourceGroup.sourcePath;
     assertNotUpdateCapturePath(archiveSourcePath, params.resources.stateDir);
     assertNotUpdateCapturePath(sourceDatabasePath, params.resources.stateDir);
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
@@ -258,23 +301,18 @@ export async function createBackupSqliteSnapshotPlan(params: {
             }
             await embedSessionColdArchivesInSnapshot({
               database,
-              sourceStorePath:
-                canonicalSource?.archiveSourcePath ?? genericGroup?.sourcePath ?? archiveSourcePath,
+              sourceStorePath: canonicalSource?.archiveSourcePath ?? sourceDatabasePath,
             });
           },
         });
-      const captureOwner = canonicalSource?.archiveSourcePath ?? sourceDatabasePath;
-      const capturedPath = capturedSnapshots.get(captureOwner);
-      if (capturedPath) {
-        // Each archive name needs its own staged path; the remap owner keys by
-        // staged path. Copy only the already verified, compacted private image.
-        await fs.copyFile(capturedPath, sourcePath, fs.constants.COPYFILE_EXCL);
-      } else if (genericGroup) {
-        await captureBackupSqliteSourceGroup(genericGroup, capture);
-      } else {
-        await capture();
-      }
-      capturedSnapshots.set(captureOwner, sourcePath);
+      const capturedPath = capturedSnapshots.get(sourceGroup);
+      // Alias staging reuses the private image but still validates its journal binding.
+      await captureBackupSqliteSourceGroup(sourceGroup, () =>
+        capturedPath
+          ? fs.copyFile(capturedPath, sourcePath, fs.constants.COPYFILE_EXCL)
+          : capture(),
+      );
+      capturedSnapshots.set(sourceGroup, sourcePath);
     } catch (error) {
       const stateChange = findLegacyAuditBackupStateChange(error);
       if (stateChange) {
@@ -307,6 +345,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
     throw error;
   });
   let globalIdentity: Stats | undefined;
+  let globalGroup: BackupSqliteSourceGroup | undefined;
   if (globalEntry) {
     globalIdentity = globalEntry.isSymbolicLink() ? await fs.stat(globalPath) : globalEntry;
     if (!globalIdentity.isFile()) {
@@ -314,12 +353,24 @@ export async function createBackupSqliteSnapshotPlan(params: {
         `Canonical global SQLite path must be a regular file or symlink to one: ${globalPath}`,
       );
     }
-    await captureSource(globalPath, {
+    const globalSource: CanonicalSqliteSource = {
       role: "global",
       archiveSourcePath: globalPath,
       sourcePath: await fs.realpath(globalPath),
       identity: globalIdentity,
-    });
+    };
+    const globalInventory = sealBackupResourceInventory(params.resources, [
+      { role: "global", sourcePath: globalPath, identity: globalIdentity },
+    ]);
+    const { snapshotPaths } = await discoverBackupSqliteSources({ inventory: globalInventory });
+    const { groups } = await planBackupSqliteSources(
+      globalInventory,
+      snapshotPaths.filter(
+        (sourcePath) => globalInventory.resolveSqliteSource(sourcePath)?.role === "global",
+      ),
+    );
+    globalGroup = groups.get(globalSource.sourcePath);
+    await captureSource(globalPath, globalGroup, globalSource);
   } else {
     for (const sidecar of resolveSqliteDatabaseFilePaths(globalPath).slice(1)) {
       const exists = await fs.lstat(sidecar).catch((error: unknown) => {
@@ -338,57 +389,44 @@ export async function createBackupSqliteSnapshotPlan(params: {
   const coreDatabases: BackupCoreDatabase[] = [
     { role: "global", sourcePath: globalPath, identity: globalIdentity },
   ];
-  for (const agent of capturedAgents) {
-    const identity = await fs.stat(agent.sourcePath).catch((error: unknown) => {
+  for (const database of [
+    {
+      role: "quarantine" as const,
+      sourcePath: resolveQuarantineStorePath({
+        ...process.env,
+        OPENCLAW_STATE_DIR: params.resources.stateDir,
+      }),
+    },
+    ...capturedAgents,
+  ]) {
+    const identity = await fs.stat(database.sourcePath).catch((error: unknown) => {
       if (hasErrnoCode(error, "ENOENT")) {
         return undefined;
       }
       throw error;
     });
     if (identity && !identity.isFile()) {
-      throw new Error(`Core SQLite path must resolve to a regular file: ${agent.sourcePath}`);
+      throw new Error(`Core SQLite path must resolve to a regular file: ${database.sourcePath}`);
     }
-    coreDatabases.push(Object.freeze({ ...agent, identity }));
+    coreDatabases.push(Object.freeze({ ...database, identity }));
   }
   const inventory = sealBackupResourceInventory(params.resources, coreDatabases);
   const discovery = await discoverBackupSqliteSources({ inventory });
-  const sources: Array<{
-    archiveSourcePath: string;
-    identity: Stats;
-    canonicalSource: CanonicalSqliteSource | undefined;
-  }> = [];
-  for (const archiveSourcePath of discovery.snapshotPaths) {
-    const identity = await fs.stat(archiveSourcePath);
-    const owner = inventory.resolveSqliteSource(archiveSourcePath, identity);
-    if (!owner || owner.role === "unresolvable-link") {
-      throw new Error(`SQLite ownership changed after discovery: ${archiveSourcePath}`);
-    }
-    let canonicalSource: CanonicalSqliteSource | undefined;
-    if (owner.role !== "plugin") {
-      if (!owner.identity || !sameFileIdentity(owner.identity, identity)) {
-        throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
-      }
-      canonicalSource = {
-        ...owner,
-        archiveSourcePath: owner.sourcePath,
-        sourcePath: await fs.realpath(owner.sourcePath),
-        identity: owner.identity,
-      };
-    }
-    if (archiveSourcePath !== globalPath) {
-      sources.push({ archiveSourcePath, identity, canonicalSource });
+  const { sources, groups } = await planBackupSqliteSources(inventory, discovery.snapshotPaths);
+  for (const source of sources) {
+    if (source.archiveSourcePath !== globalPath) {
+      // The archived registry must remain the image that supplied capturedAgents.
+      await captureSource(
+        source.archiveSourcePath,
+        source.canonicalSource?.role === "global" ? globalGroup : groups.get(source.path),
+        source.canonicalSource,
+      );
     }
   }
-  const genericGroups = await planBackupSqliteSourceGroups(
-    sources
-      .filter((source) => !source.canonicalSource)
-      .map((source) => ({ path: source.archiveSourcePath, identity: source.identity })),
-  );
-
-  for (const { archiveSourcePath, canonicalSource } of sources) {
-    await captureSource(archiveSourcePath, canonicalSource, genericGroups.get(archiveSourcePath));
+  if (globalGroup) {
+    await assertBackupSqliteSourceGroup(globalGroup);
   }
-  for (const source of inventory.coreDatabases) {
+  for (const source of coreDatabases) {
     if (source.identity && !sameFileIdentity(source.identity, await fs.stat(source.sourcePath))) {
       throw new Error(`Canonical SQLite path changed after discovery: ${source.sourcePath}`);
     }

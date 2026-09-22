@@ -15,6 +15,7 @@ import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, peekSystemEventEntries } from "../infra/system-events.js";
+import { removeSessionTestDirectories } from "./session-test-directories.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
@@ -43,9 +44,7 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
-  await Promise.all(
-    cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
+  await removeSessionTestDirectories(cleanupDirs.splice(0));
 });
 
 // Give each connection scenario an isolated authoritative session store.

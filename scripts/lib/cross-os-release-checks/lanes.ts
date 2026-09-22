@@ -1,4 +1,12 @@
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type {
@@ -144,6 +152,20 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
       });
     });
 
+    const authoredConfigPath = join(lane.stateDir, "openclaw.json");
+    const nestedPluginPath = "~/.openclaw/wiki";
+    await runTimedLanePhase(lane, "seed-nested-plugin-path", async () => {
+      const config = JSON.parse(readFileSync(authoredConfigPath, "utf8"));
+      config.plugins ??= {};
+      config.plugins.entries ??= {};
+      // A disabled entry exercises generic path expansion without changing provider setup.
+      config.plugins.entries.wiki = {
+        enabled: false,
+        config: { store: { path: nestedPluginPath } },
+      };
+      writeFileSync(authoredConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    });
+
     const gateway = await runTimedLanePhase(lane, "start-gateway", async () => {
       await gatewayPortReservation.release();
       return startGateway({
@@ -163,6 +185,13 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
         gatewayLogPath: join(params.logsDir, "fresh-gateway.log"),
         logPath: join(params.logsDir, "fresh-gateway-status.log"),
       });
+    });
+
+    await runTimedLanePhase(lane, "verify-nested-plugin-path", async () => {
+      const config = JSON.parse(readFileSync(authoredConfigPath, "utf8"));
+      if (config.plugins?.entries?.wiki?.config?.store?.path !== nestedPluginPath) {
+        throw new Error("Fresh Gateway startup changed the authored nested plugin path.");
+      }
     });
 
     await runTimedLanePhase(lane, "dashboard", async () => {

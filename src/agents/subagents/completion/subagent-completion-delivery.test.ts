@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -12,6 +22,7 @@ import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-help
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import * as admission from "./subagent-completion-admission.store.js";
 import { settleSubagentCompletionDelivery } from "./subagent-completion-admission.store.js";
 import {
   dismissSubagentCompletionDelivery,
@@ -41,6 +52,7 @@ describe("subagent completion recovery identity", () => {
     resetTaskRegistryForTests({ persist: false });
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   function persistCompletion(
@@ -176,6 +188,61 @@ describe("subagent completion recovery identity", () => {
       });
       expect.soft(storedPair(old)).toEqual(oldRows);
       expect.soft(subagentRuns.get(old.subagent.runId)).toEqual(oldLive);
+    },
+  );
+
+  it.each([false, true])(
+    "retries under a fresh operator without reviving retired custody (write fails: %s)",
+    async (fails) => {
+      const { subagent, task } = persistCompletion("current");
+      const context = createContext();
+      const originalClient = createOperatorClient({
+        profileId: "original",
+        scopes: ["operator.write"],
+      });
+      const original = withPluginRuntimeGatewayRequestScope(
+        { client: originalClient, context, isWebchatConnect: () => false },
+        captureOperatorToolGatewayContinuationContext,
+      )!;
+      subagentRuns.bindCompletionAuthority(subagent, original);
+      subagentRuns.releaseCompletionAuthority(subagent);
+      expect(() => subagentRuns.runWithCompletionAuthority(subagent, () => "retired")).toThrow(
+        /authority/,
+      );
+      const client = createOperatorClient({ profileId: "retry-owner", scopes: ["operator.write"] });
+      const fresh = captureGatewayOperatorRunAuthority({ client, context })!;
+      client.internal = { operatorRunAuthority: fresh.authority };
+      if (fails) {
+        vi.spyOn(admission, "settleSubagentCompletionDelivery").mockImplementationOnce(() => {
+          throw new Error("write refused");
+        });
+      }
+      try {
+        const retry = withPluginRuntimeGatewayRequestScope(
+          { client, context, isWebchatConnect: () => false },
+          () => retrySubagentCompletionDelivery(task.taskId, { database }),
+        );
+        if (fails) {
+          await expect(retry).rejects.toThrow("write refused");
+        } else {
+          await expect(retry).resolves.toMatchObject({ ok: true });
+        }
+        fresh.release();
+        if (fails) {
+          expect(fresh.authority.assertCurrent).toThrow();
+        } else {
+          subagentRuns.runWithCompletionAuthority(subagent, () =>
+            expect(
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority?.source,
+            ).toBe(fresh.authority.source),
+          );
+          subagentRuns.releaseCompletionAuthority(subagent);
+          expect(fresh.authority.assertCurrent).toThrow();
+        }
+        expect(original.operatorAuthority?.assertCurrent).toThrow();
+      } finally {
+        fresh.release();
+      }
     },
   );
 

@@ -2,6 +2,7 @@ import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 
 export function resolveUsageCostCacheDatabasePath(agentId: string): string {
@@ -25,6 +26,7 @@ export async function refreshCostUsageCacheForAgent(params: {
   storePath?: string;
   sessionFiles?: string[];
   startMs?: number;
+  rebuildRows?: SessionCostUsageRollupRow[];
 }): Promise<"refreshed" | "busy"> {
   const prepared = prepareUsageCostWorker(params);
   const result = await runUsageCostWorker(prepared, {
@@ -33,6 +35,7 @@ export async function refreshCostUsageCacheForAgent(params: {
     sessionsDir: params.sessionsDir,
     sessionFiles: params.sessionFiles,
     startMs: params.startMs,
+    rebuildRows: params.rebuildRows,
   });
   if (result.kind === "busy") {
     return "busy";

@@ -75,10 +75,10 @@ describe("renderSidebarMentionItem", () => {
   function renderMention(overrides: Partial<Parameters<typeof renderSidebarMentionItem>[0]> = {}) {
     const params = {
       mention,
-      context: { basePath: "/team", navigate: vi.fn() },
+      context: { basePath: "/team" },
       dismissing: false,
       onDismiss: vi.fn(),
-      onClosePanel: vi.fn(),
+      onNavigate: vi.fn(),
       ...overrides,
     };
     render(renderSidebarMentionItem(params), container);
@@ -86,7 +86,7 @@ describe("renderSidebarMentionItem", () => {
   }
 
   it("opens the linked session without dismissing the mention", () => {
-    const { context, onClosePanel, onDismiss } = renderMention();
+    const { onNavigate, onDismiss } = renderMention();
     const open = container.querySelector<HTMLAnchorElement>("a[data-issue-row-focus]")!;
     expect(open.getAttribute("href")).toBe(pathname);
 
@@ -102,19 +102,16 @@ describe("renderSidebarMentionItem", () => {
     );
     open.dispatchEvent(new MouseEvent("click", { metaKey: true, cancelable: true }));
     expect(nativeNavigationPreserved).toBe(true);
-    expect(context.navigate).not.toHaveBeenCalled();
-    expect(onClosePanel).not.toHaveBeenCalled();
+    expect(onNavigate).not.toHaveBeenCalled();
     expect(onDismiss).not.toHaveBeenCalled();
 
     open.click();
-    expect(context.navigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
-    expect(onClosePanel).toHaveBeenCalledOnce();
+    expect(onNavigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
     expect(onDismiss).not.toHaveBeenCalled();
 
     container.querySelector<HTMLButtonElement>("[data-mention-id] button")!.click();
     expect(onDismiss).toHaveBeenCalledOnce();
-    expect(context.navigate).toHaveBeenCalledOnce();
-    expect(onClosePanel).toHaveBeenCalledOnce();
+    expect(onNavigate).toHaveBeenCalledOnce();
   });
 
   it("renders the message excerpt as text rather than HTML or Markdown", () => {
@@ -127,15 +124,14 @@ describe("renderSidebarMentionItem", () => {
   });
 
   it("disables repeated dismissal while leaving the session link usable", () => {
-    const { context, onClosePanel, onDismiss } = renderMention({ dismissing: true });
+    const { onNavigate, onDismiss } = renderMention({ dismissing: true });
     const dismiss = container.querySelector<HTMLButtonElement>("[data-mention-id] button")!;
     expect(dismiss.disabled).toBe(true);
     dismiss.click();
     expect(onDismiss).not.toHaveBeenCalled();
 
     container.querySelector<HTMLAnchorElement>("a[data-issue-row-focus]")!.click();
-    expect(context.navigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
-    expect(onClosePanel).toHaveBeenCalledOnce();
+    expect(onNavigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
   });
 });
 

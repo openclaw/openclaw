@@ -8,6 +8,43 @@ const CORE_PACKAGE_NAMES = new Set(["openclaw"]);
 
 type PackageRootOptions = { cwd?: string; argv1?: string; moduleUrl?: string };
 
+const PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN =
+  /^(.*?)([\\/])node_modules\2\.pnpm\2openclaw@[^\\/]+\2node_modules\2openclaw\2.+$/;
+
+/** Keeps replacement and respawn on pnpm's stable package link. */
+export function rewritePnpmVersionedOpenClawEntryPath(entryPath: string): string {
+  return entryPath.replace(
+    PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN,
+    "$1$2node_modules$2openclaw$2openclaw.mjs",
+  );
+}
+
+/** Capture an installation path while its link still belongs to the running package. */
+export function resolveOpenClawInstallationRootSync(
+  runningRoot: string,
+  argv1: string | undefined,
+): string {
+  const launcherRoot = argv1 ? findPackageRootSync(path.dirname(path.resolve(argv1))) : null;
+  const pnpmRoot = path.dirname(
+    rewritePnpmVersionedOpenClawEntryPath(path.join(runningRoot, "openclaw.mjs")),
+  );
+  for (const candidate of [launcherRoot, pnpmRoot]) {
+    if (!candidate || candidate === runningRoot) {
+      continue;
+    }
+    try {
+      if (
+        openClawRootFsSync.realpathSync(candidate) === openClawRootFsSync.realpathSync(runningRoot)
+      ) {
+        return candidate;
+      }
+    } catch {
+      // A missing or unrelated stable link cannot identify this installation.
+    }
+  }
+  return runningRoot;
+}
+
 function parsePackageName(raw: string): string | null {
   const parsed = JSON.parse(raw) as { name?: unknown };
   return typeof parsed.name === "string" ? parsed.name : null;

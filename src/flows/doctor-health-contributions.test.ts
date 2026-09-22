@@ -3,7 +3,6 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDoctorConfigSnapshot } from "../commands/doctor-config-snapshot.test-helpers.js";
-import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
@@ -18,6 +17,8 @@ import {
   createDoctorConfigFixture,
   createDoctorHealthFlowContext,
   createDoctorLintContext,
+  createDoctorPrompterFixture,
+  createGatewayWriterFixture,
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
@@ -528,7 +529,11 @@ vi.mock("../config/config.js", async (importOriginal) => ({
       {},
     );
     await mocks.replaceConfigFile({ ...options, nextConfig });
-    return { nextConfig };
+    const path = options.writeOptions?.expectedConfigPath;
+    if (!path) {
+      throw new Error("Doctor write fixture requires an expected config path");
+    }
+    return { nextConfig, path, persistedHash: "committed-revision" };
   },
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
@@ -657,32 +662,13 @@ type DoctorContributionRunContext = Parameters<
   ReturnType<typeof requireDoctorContribution>["run"]
 >[0];
 
-function buildDoctorPrompter(shouldRepair: boolean): DoctorPrompter {
-  return {
-    confirm: vi.fn(async () => shouldRepair),
-    confirmAutoFix: vi.fn(async () => shouldRepair),
-    confirmAggressiveAutoFix: vi.fn(async () => shouldRepair),
-    confirmRuntimeRepair: vi.fn(async () => shouldRepair),
-    select: vi.fn(async (_params, fallback) => fallback),
-    shouldRepair,
-    shouldForce: false,
-    repairMode: {
-      shouldRepair,
-      shouldForce: false,
-      nonInteractive: true,
-      canPrompt: false,
-      updateInProgress: false,
-    },
-  };
-}
-
 function createDoctorContext({
   shouldRepair = false,
   ...overrides
 }: Parameters<typeof createDoctorHealthFlowContext>[0] & { shouldRepair?: boolean } = {}) {
   return createDoctorHealthFlowContext({
     configPath: "/tmp/fake-openclaw.json",
-    prompter: buildDoctorPrompter(shouldRepair),
+    prompter: createDoctorPrompterFixture(shouldRepair),
     ...overrides,
   });
 }
@@ -1074,7 +1060,7 @@ describe("doctor health contributions", () => {
     const ctx = createDoctorHealthFlowContext({
       cfg: {},
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      prompter: buildDoctorPrompter(true),
+      prompter: createDoctorPrompterFixture(true),
       invalidatePluginMetadataSnapshot,
     });
 
@@ -1610,7 +1596,7 @@ describe("doctor health contributions", () => {
       cfg: {},
       configResult: { cfg: {}, sourceLastTouchedVersion: "2026.4.29" },
       sourceConfigValid: true,
-      prompter: buildDoctorPrompter(false),
+      prompter: createDoctorPrompterFixture(false),
       env: {},
     });
 
@@ -1633,7 +1619,7 @@ describe("doctor health contributions", () => {
       cfg: {},
       configResult: { cfg: {}, sourceLastTouchedVersion: "2026.4.29" },
       sourceConfigValid: true,
-      prompter: buildDoctorPrompter(true),
+      prompter: createDoctorPrompterFixture(true),
       env: {},
       invalidatePluginMetadataSnapshot,
     });
@@ -2128,7 +2114,7 @@ describe("doctor health contributions", () => {
     await contribution.run(
       createDoctorHealthFlowContext({
         cfg,
-        prompter: buildDoctorPrompter(true),
+        prompter: createDoctorPrompterFixture(true),
         env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
       }),
     );
@@ -2354,7 +2340,7 @@ describe("doctor health contributions", () => {
       cfg: { gateway: { mode: "local" } },
       configResult: {},
       sourceConfigValid: true,
-      prompter: buildDoctorPrompter(true),
+      prompter: createDoctorPrompterFixture(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       options: {},
     });
@@ -2560,7 +2546,7 @@ describe("doctor health contributions", () => {
     const ctx = createDoctorContext({
       shouldRepair: true,
       options: { repair: true },
-      prompter: buildDoctorPrompter(false),
+      prompter: createDoctorPrompterFixture(false),
     });
 
     await contribution.run(ctx);
@@ -2719,7 +2705,7 @@ describe("doctor health contributions", () => {
       cfg,
       cfgForPersistence: structuredClone(cfg),
       sourceConfigValid: true,
-      prompter: buildDoctorPrompter(true),
+      prompter: createDoctorPrompterFixture(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       options: { nonInteractive: true },
     });
@@ -2761,7 +2747,7 @@ describe("doctor health contributions", () => {
       cfg,
       cfgForPersistence: cfg,
       env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-      prompter: buildDoctorPrompter(true),
+      prompter: createDoctorPrompterFixture(true),
     });
 
     await requireDoctorContribution("doctor:auth-profile-migration").run(ctx);
@@ -2793,7 +2779,7 @@ describe("doctor health contributions", () => {
     const ctx = createDoctorHealthFlowContext({
       cfg,
       sourceConfigValid: true,
-      prompter: buildDoctorPrompter(true),
+      prompter: createDoctorPrompterFixture(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       options: { nonInteractive: true },
     });
@@ -4487,15 +4473,8 @@ describe("doctor health contributions", () => {
     const gatewayServicesContribution = requireDoctorContribution("doctor:gateway-services");
     const writeConfigContribution = requireDoctorContribution("doctor:write-config");
     const originalCfg = { gateway: {} };
-    const repairedCfg = {
-      gateway: {
-        auth: {
-          mode: "token",
-          token: "recovered-token",
-        },
-      },
-    };
-    mocks.maybeRepairGatewayServiceConfig.mockResolvedValueOnce(repairedCfg);
+    const { config: repairedCfg, repair } = createGatewayWriterFixture("recovered-token");
+    mocks.maybeRepairGatewayServiceConfig.mockImplementationOnce(repair);
 
     const ctx = createDoctorContext({
       cfg: originalCfg,
@@ -4512,6 +4491,8 @@ describe("doctor health contributions", () => {
 
     await migrationWriteContribution.run(ctx);
     await gatewayServicesContribution.run(ctx);
+    expect(ctx.cfgForPersistence).toEqual(repairedCfg);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
     await writeConfigContribution.run(ctx);
 
     expect(ctx.cfg).toBe(repairedCfg);
@@ -4521,9 +4502,7 @@ describe("doctor health contributions", () => {
       ctx.runtime,
       ctx.prompter,
       expect.objectContaining({
-        allowConfigSizeDrop: true,
-        preservedLegacyRootKeys: ["defaultModel"],
-        skipPluginValidation: true,
+        writeConfig: expect.any(Function),
       }),
     );
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
@@ -4531,11 +4510,20 @@ describe("doctor health contributions", () => {
       1,
       expect.objectContaining({
         nextConfig: originalCfg,
+        baseHash: "planning-revision",
+        writeOptions: expect.objectContaining({ expectedConfigPath: ctx.configPath }),
       }),
     );
     expect(mocks.replaceConfigFile).toHaveBeenLastCalledWith(
       expect.objectContaining({
         nextConfig: repairedCfg,
+        baseHash: "committed-revision",
+        writeOptions: expect.objectContaining({
+          expectedConfigPath: ctx.configPath,
+          allowConfigSizeDrop: true,
+          preservedLegacyRootKeys: ["defaultModel"],
+          skipPluginValidation: true,
+        }),
       }),
     );
   });
@@ -4625,11 +4613,12 @@ describe("doctor health contributions", () => {
         cfg,
         shouldWriteConfig: true,
         shouldRepairCronCodexModelRefsAfterConfigWrite: true,
+        confirmedConfigSource: { path: "/tmp/fake-openclaw.json", hash: "planning-revision" },
         blockedCodexModelIdentities: ["codex\u0000gpt-5.6-sol"],
       },
       configPath: "/tmp/fake-openclaw.json",
       sourceConfigValid: true,
-      prompter: buildDoctorPrompter(true),
+      prompter: createDoctorPrompterFixture(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       options: {},
       env: {},
@@ -4656,12 +4645,13 @@ describe("doctor health contributions", () => {
           cfg,
           shouldWriteConfig: true,
           shouldRepairCronCodexModelRefsAfterConfigWrite: legacy,
+          confirmedConfigSource: { path: "/tmp/fake-openclaw.json", hash: "planning-revision" },
           retiredModelRefConfig,
           blockedCodexModelIdentities: ["codex\u0000gpt-5.6-sol"],
         },
         configPath: "/tmp/fake-openclaw.json",
         sourceConfigValid: true,
-        prompter: buildDoctorPrompter(repair),
+        prompter: createDoctorPrompterFixture(repair),
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         options: {},
         env: {},

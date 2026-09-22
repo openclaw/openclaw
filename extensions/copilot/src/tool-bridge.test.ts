@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Tool as SdkTool, ToolInvocation, ToolResultObject } from "@github/copilot-sdk";
+import type { Tool as SdkTool, ToolResultObject } from "@github/copilot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createOpenClawCodingTools as createRealOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
@@ -29,6 +29,8 @@ import { createCopilotToolBridge as createCopilotToolBridgeImpl } from "./tool-b
 import {
   convertOpenClawToolToSdkToolForTest,
   createCopilotToolBridge,
+  makeInvocation,
+  runSdkTool,
   type CopilotCodingToolsOptions,
   type CopilotToolBridgeInput,
 } from "./tool-bridge.test-support.js";
@@ -40,16 +42,6 @@ type FakeTool = AnyAgentTool & {
 
 function flushAsync() {
   return Promise.resolve().then(() => {});
-}
-
-function makeInvocation(overrides: Partial<ToolInvocation> = {}): ToolInvocation {
-  return {
-    arguments: { value: "input" },
-    sessionId: "session-1",
-    toolCallId: "call-1",
-    toolName: "tool-a",
-    ...overrides,
-  };
 }
 
 function makeTool(
@@ -74,13 +66,6 @@ function makeTool(
 
 function getError(result: ToolResultObject): string | undefined {
   return result.error;
-}
-
-function runSdkTool(tool: SdkTool, args: unknown, invocation = makeInvocation()) {
-  if (!tool.handler) {
-    throw new Error(`SDK tool '${tool.name}' has no handler`);
-  }
-  return tool.handler(args, invocation);
 }
 
 afterEach(() => {
@@ -324,6 +309,7 @@ describe("createCopilotToolBridge", () => {
                 ...config,
                 tools: {
                   profile,
+                  ...(surface === "direct" ? { toolSearch: false } : {}),
                   ...(surface === "tool-search" ? { toolSearch: true } : {}),
                   ...(surface === "code-mode" ? { codeMode: true } : {}),
                 },
@@ -359,7 +345,9 @@ describe("createCopilotToolBridge", () => {
         );
 
         const fullWithoutPrepared = await createCopilotToolBridge({
-          attemptParams: { config: { ...config, tools: { profile: "full" } } } as never,
+          attemptParams: {
+            config: { ...config, tools: { profile: "full", toolSearch: false } },
+          } as never,
           createOpenClawCodingTools: createRealOpenClawCodingTools,
           sessionId: "full-without-prepared",
         });
@@ -1124,6 +1112,7 @@ describe("createCopilotToolBridge", () => {
 
       await createCopilotToolBridge({
         attemptParams: {
+          config: { tools: { toolSearch: false } },
           trigger: "cron",
           thinkLevel: "off",
           jobId: "job-1",
@@ -1323,7 +1312,7 @@ describe("createCopilotToolBridge", () => {
       const createTools = vi.fn(() => [makeTool({ name: "read" }), output]);
       const bridge = await createCopilotToolBridge({
         attemptParams: {
-          config: { tools: { codeMode } },
+          config: { tools: { codeMode, toolSearch: false } },
           runId: "copilot-collector-contract",
           toolsAllow,
           swarmCollector: true,
@@ -1764,7 +1753,10 @@ describe("createCopilotToolBridge", () => {
     it("does not keep apply_patch for a write-only allowlist", async () => {
       const createOpenClawCodingTools = vi.fn(createRealOpenClawCodingTools);
       const result = await createCopilotToolBridge({
-        attemptParams: { toolsAllow: ["write"] } as never,
+        attemptParams: {
+          config: { tools: { toolSearch: false } },
+          toolsAllow: ["write"],
+        } as never,
         createOpenClawCodingTools,
       });
       expect(result.sourceTools.map((tool) => tool.name)).toEqual(["write"]);

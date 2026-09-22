@@ -1,8 +1,40 @@
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MigrationCheckpointIdentity } from "../infra/startup-migration-checkpoint.js";
+import type {
+  MigrationCheckpointIdentity,
+  StartupMigrationLease,
+} from "../infra/startup-migration-checkpoint.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
+
+/** Renew through awaited admission and surface a lost lease before the next write. */
+export function keepStartupMigrationLeaseAlive(lease: StartupMigrationLease, intervalMs: number) {
+  let failure: Error | undefined;
+  const timer = setInterval(() => {
+    try {
+      lease.heartbeat();
+    } catch (error) {
+      failure =
+        error instanceof Error
+          ? error
+          : new Error("OpenClaw startup migration lease heartbeat failed.");
+    }
+  }, intervalMs);
+  timer.unref?.();
+  return {
+    get error() {
+      return failure;
+    },
+    throwIfFailed() {
+      if (failure) {
+        throw failure;
+      }
+    },
+    stop() {
+      clearInterval(timer);
+    },
+  };
+}
 
 export function resolveMigrationCheckpointIdentity(params: {
   snapshot: ConfigFileSnapshot;
@@ -36,4 +68,16 @@ export function migrationCheckpointIdentitiesMatch(
     left.pluginDoctorConfigFingerprint === right.pluginDoctorConfigFingerprint &&
     left.pluginMigrationFingerprint === right.pluginMigrationFingerprint
   );
+}
+
+export function checkpointIdentityForSnapshot(
+  snapshotRead: { snapshot: ConfigFileSnapshot; pluginMigrationFingerprint: string | null },
+  baseConfig = snapshotRead.snapshot.sourceConfig ?? snapshotRead.snapshot.config ?? {},
+) {
+  const { snapshot, pluginMigrationFingerprint } = snapshotRead;
+  return resolveMigrationCheckpointIdentity({
+    snapshot,
+    baseConfig,
+    pluginMigrationFingerprint,
+  });
 }

@@ -282,8 +282,6 @@ export function assertConversationRouteEligibleForAgent(params: {
   );
 }
 
-type ResolveConversation = typeof resolveConversation;
-
 export function assertConversationDeliveryAttemptAuthorized(params: {
   config: OpenClawConfig;
   agentId: string;
@@ -292,12 +290,8 @@ export function assertConversationDeliveryAttemptAuthorized(params: {
   expectedSessionId?: string;
   expectedSessionKey?: string;
   scope: ConversationRegistryScope;
-  resolveConversation?: ResolveConversation;
 }): void {
-  const conversation = (params.resolveConversation ?? resolveConversation)(
-    params.scope,
-    params.conversationRef,
-  );
+  const conversation = resolveConversation(params.scope, params.conversationRef);
   if (
     !conversation ||
     resolveConversationRouteFingerprint(conversation) !== params.expectedRouteFingerprint ||

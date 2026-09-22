@@ -748,6 +748,43 @@ describe("handleEmbeddedAssistantFailure", () => {
     expect(fixture.traceAttempts).toEqual([]);
   });
 
+  it("retries a blank runtime failure and advances to fallback when its budget is spent", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    const assistant = buildEmbeddedRunnerAssistant({
+      api: "github-copilot",
+      provider: "anthropic",
+      model: "mock-1",
+      stopReason: "error",
+      errorMessage: "No API provider registered for api: github-copilot",
+      content: [{ type: "text", text: "" }],
+      usage: createMockUsage(0, 0),
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    fixture.input.attempt = attempt;
+    fixture.input.attemptAssistant = assistant;
+    fixture.input.currentAttemptAssistant = assistant;
+    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    fixture.input.emptyErrorRetries = 0;
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).resolves.toMatchObject({
+      action: "retry",
+      emptyErrorRetries: 1,
+    });
+
+    fixture.input.emptyErrorRetries = 3;
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      reason: "unknown",
+      provider: "anthropic",
+      model: "mock-1",
+      rawError: assistant.errorMessage,
+    });
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+  });
+
   it("retries a pre-dispatch tool-call rejection whose content was discarded", async () => {
     // Buffered Anthropic rejection leaves empty content with positive output usage.
     const fixture = makeExhaustedCredentialFailureInput();

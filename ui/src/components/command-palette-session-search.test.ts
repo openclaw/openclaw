@@ -65,7 +65,7 @@ describe("CommandPalette session search", () => {
       const { palette } = await mountPalette(createContext(gateway, list));
 
       await enterQuery(palette, "needle");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await vi.waitFor(() =>
         expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(
           1,
@@ -141,7 +141,7 @@ describe("CommandPalette session search", () => {
     const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
     const { palette } = await mountPalette(createContext(gateway, list));
     await enterQuery(palette, "uncommonneedle");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
 
     expect(palette.textContent).toContain("Older planning discussion");
@@ -166,7 +166,7 @@ describe("CommandPalette session search", () => {
     const { palette } = await mountPalette(createContext(gateway, list));
 
     await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await vi.waitFor(() =>
       expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1),
     );
@@ -239,7 +239,7 @@ describe("CommandPalette session search", () => {
       const { palette } = await mountPalette(createContext(gateway, list));
 
       await enterQuery(palette, "needle");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await vi.waitFor(() =>
         expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(
           1,

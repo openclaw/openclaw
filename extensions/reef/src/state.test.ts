@@ -30,6 +30,7 @@ import {
   type ReviewRequest,
 } from "../protocol/index.js";
 import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { handleReefCommand } from "./commands.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
@@ -680,6 +681,24 @@ describe("Reef SQLite state", () => {
     await expect(stores.reviews.request(review)).resolves.toBeUndefined();
     await expect(stores.reviews.lookupDecision(review.approvalDigest)).resolves.toBe("pending");
     await expect(stores.reviews.lookupDecision("c".repeat(64))).resolves.toBe("none");
+    const commandAuthority = createReefRuntimeAuthority();
+    activateReviewStore(commandAuthority, createRuntime(stateDir), stores.reviews);
+    try {
+      for (const action of ["approve", "deny"]) {
+        await expect(
+          handleReefCommand({
+            args: `review ${action} ${review.approvalDigest}`,
+            senderIsOwner: true,
+            assertOwnerCurrent: () => {
+              throw new Error("owner revoked");
+            },
+          }),
+        ).rejects.toThrow("owner revoked");
+        await expect(stores.reviews.lookupDecision(review.approvalDigest)).resolves.toBe("pending");
+      }
+    } finally {
+      commandAuthority.release();
+    }
     await expect(stores.reviews.decide(review.approvalDigest, true)).resolves.toMatchObject({
       id: review.id,
       direction: "outbound",

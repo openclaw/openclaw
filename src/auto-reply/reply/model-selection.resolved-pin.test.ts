@@ -1,5 +1,4 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { resolveCliRuntimeCanonicalProvider } from "../../agents/cli-backends.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,6 +20,7 @@ afterEach(() => resetPluginRuntimeStateForTest());
 test("keeps thinking defaults separate for distinct literal model IDs", async () => {
   await withStateDirEnv("reply-thinking-identities-", async () => {
     const selection = await createModelSelectionState({
+      agentId: "main",
       cfg: { plugins: { enabled: false } },
       agentCfg: undefined,
       defaultProvider: "custom",
@@ -78,6 +78,7 @@ test.each(["origin", "notice"])(
             }),
       };
       const selection = await createModelSelectionState({
+        agentId: "main",
         cfg: { plugins: { enabled: false } },
         agentCfg: undefined,
         sessionEntry: entry,
@@ -258,15 +259,6 @@ test.each<SelectionCase>([
       },
     });
     setActivePluginRegistry(registry);
-    if (fixture.cli) {
-      expect(
-        resolveCliRuntimeCanonicalProvider({
-          runtime: "demo-cli",
-          config: cfg,
-          includeSetupRegistry: true,
-        }),
-      ).toBe("custom");
-    }
     const provider = fixture.provider ?? (fixture.cli ? "demo-cli" : "custom");
     const pinnedEntry: SessionEntry = { sessionId: "resolved-pin", updatedAt: 1 };
     applyModelOverrideToSessionEntry({
@@ -343,7 +335,7 @@ test.each<SelectionCase>([
           preparedModelCatalog,
         });
         expect(selection).toMatchObject({
-          provider: "custom",
+          provider: fixture.cli ? "demo-cli" : "custom",
           model: fixture.expected,
           resetModelOverride: fixture.disallowed === true && !fixture.inherited,
         });

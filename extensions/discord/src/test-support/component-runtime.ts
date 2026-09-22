@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { vi, type Mock } from "vitest";
+import { setDiscordRuntime } from "../runtime.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -181,6 +182,7 @@ vi.mock("../interactive-dispatch.js", async () => {
 });
 
 export function resetDiscordComponentRuntimeMocks() {
+  setDiscordRuntime(createPluginRuntimeMock());
   dispatchPluginInteractiveHandlerMock.mockReset().mockResolvedValue({
     matched: false,
     handled: false,

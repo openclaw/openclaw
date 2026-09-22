@@ -120,6 +120,12 @@ Follow-up tools still require the current turn's host permissions. Commands star
 in the background do not hold the turn open. If the turn fails or is cancelled while one of these
 commands still needs a follow-up, OpenClaw closes that subprocess and starts a fresh one for the next turn.
 
+While native background agents or workflows continue, a completed Claude answer can reach the
+channel through the normal reply pipeline without waiting for the continuation to finish.
+This also works with raw previews and block streaming disabled. Already delivered answer segments
+are not sent again at final settlement; failed deliveries remain eligible for retry. Delivering
+an answer does not end the admitted turn or grant its background work another turn's permissions.
+
 The `openclaw agent` command also has its own request deadline. Its 600-second fallback default applies to that command invocation, not to ordinary Gateway turns. See [`openclaw agent`](/cli/agent).
 
 ### Claude CLI specifics
@@ -435,6 +441,15 @@ When bundle MCP is enabled, OpenClaw:
 - binds tool access to the Gateway-selected session, account, and channel context instead of trusting child-process headers
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config or settings shape
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
+
+The loopback bridge sends keepalive bytes while a tool response or notification
+stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
+bytes are not tool results or agent progress; client request deadlines and the
+overall agent turn timeout still apply.
+
+After plugin replacement, new CLI turns resolve bridge tools against the current
+plugin generation without restarting the listener. Retired plugin instances remain
+unavailable, and each turn still needs its own active context grant.
 
 With the Gateway's MCP bridge, channel-origin CLI turns can use the `message`
 tool for permitted reads and same-conversation actions, including reactions. The

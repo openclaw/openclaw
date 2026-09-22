@@ -8,7 +8,7 @@ import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
-import type { CronRunReceiptHandle } from "./run-receipt-store.js";
+import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 type CronRunTriggerStateDatabase = Pick<
   OpenClawStateDatabase,

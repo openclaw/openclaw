@@ -76,6 +76,43 @@ describe("web_search normalized output security", () => {
     expect(normalized.truncated).toBe(true);
   });
 
+  it.each([
+    ["2026-02-30", undefined],
+    ["2026-13-01", undefined],
+    ["1900-02-29", undefined],
+    ["2000-02-29", "2000-02-29"],
+    ["0099-12-31", "0099-12-31"],
+    ["0000-02-29", "0000-02-29"],
+    ["2024-02-29T00:30:00+14:00", "2024-02-29T00:30:00+14:00"],
+    ["2026-09-21T", "2026-09-21T"],
+  ])("omits only impossible calendar metadata for %s", (published, expected) => {
+    const normalized = normalizeWebSearchOutput({
+      provider: "external-demo",
+      query: "publication date",
+      result: {
+        results: [
+          {
+            title: "result title",
+            url: "https://example.com/result",
+            snippet: "result snippet",
+            published,
+          },
+        ],
+      },
+    });
+
+    assertOutputKind(normalized, "results");
+    expect(normalized.results).toHaveLength(1);
+    const row = normalized.results[0];
+    expect(row?.url).toBe("https://example.com/result");
+    expect(stripWrapMarkers(row?.title ?? "")).toBe("result title");
+    expect(stripWrapMarkers(row?.snippet ?? "")).toBe("result snippet");
+    expect(row?.published).toBe(expected);
+    if (expected === undefined) {
+      expect(row).not.toHaveProperty("published");
+    }
+  });
+
   it("bounds the aggregate untrusted result URLs, titles, snippets, and site names", () => {
     const normalized = normalizeWebSearchOutput({
       provider: "external-demo",

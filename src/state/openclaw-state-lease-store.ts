@@ -13,6 +13,9 @@ import {
 import type { DB } from "./openclaw-state-db.generated.js";
 
 export type OpenClawStateLeaseIdentity = { scope: string; key: string; owner: string };
+export type OpenClawStateLeaseAcquisition =
+  | { kind: "acquired"; expiresAt: number }
+  | { kind: "held"; holder: { owner: string; epoch: number } };
 type LeaseDatabase = Pick<DB, "state_leases">;
 
 /** The caller owns the write transaction; only absent or expired leases can be acquired. */
@@ -21,7 +24,7 @@ export function acquireOpenClawStateLeaseInTransaction(
   identity: OpenClawStateLeaseIdentity,
   leaseMs: number,
   payloadJson: string | null = null,
-): number | undefined {
+): OpenClawStateLeaseAcquisition {
   // BEGIN IMMEDIATE may wait on SQLite. Sample only after admission so a
   // successful insert never commits an already-expired lease.
   const now = Date.now();
@@ -51,7 +54,15 @@ export function acquireOpenClawStateLeaseInTransaction(
       })
       .onConflict((conflict) => conflict.columns(["scope", "lease_key"]).doNothing()),
   );
-  return inserted.numAffectedRows === 1n ? expiresAt : undefined;
+  if (inserted.numAffectedRows === 1n) {
+    return { kind: "acquired", expiresAt };
+  }
+  const held = readOpenClawStateLease(db, identity);
+  if (!held) {
+    throw new Error("Conflicting state lease disappeared inside its acquisition transaction");
+  }
+  // The owner token and recorded creation time identify this lease's grant, not liveness.
+  return { kind: "held", holder: { owner: held.owner, epoch: held.createdAt } };
 }
 
 export function readOpenClawStateLease(
@@ -62,7 +73,12 @@ export function readOpenClawStateLease(
     db,
     getNodeSqliteKysely<LeaseDatabase>(db)
       .selectFrom("state_leases")
-      .select(["owner", "expires_at as expiresAt", "payload_json as payloadJson"])
+      .select([
+        "owner",
+        "created_at as createdAt",
+        "expires_at as expiresAt",
+        "payload_json as payloadJson",
+      ])
       .where("scope", "=", identity.scope)
       .where("lease_key", "=", identity.key),
   );

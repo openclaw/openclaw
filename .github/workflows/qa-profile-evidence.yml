@@ -166,6 +166,12 @@ jobs:
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
       workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
     steps:
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       # github.workflow_sha identifies the caller during workflow_call. Resolve the called
       # workflow SHA from job context so trusted harness checkouts cannot drift to candidate code.
       - name: Resolve job workflow identity

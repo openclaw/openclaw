@@ -47,6 +47,31 @@ const inspectionOperations = resolveGlobalSingleton(
   () => new WeakMap<object, SqliteInspectionOperation>(),
 );
 
+const nativeOpenFailures = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteNativeOpenFailures"),
+  () => new WeakSet<object>(),
+);
+
+export function markSqliteNativeOpenFailure(error: unknown): void {
+  if (error !== null && typeof error === "object") {
+    nativeOpenFailures.add(error);
+  }
+}
+
+/** Record the native effect without changing its error or tagging surrounding authority checks. */
+export function withSqliteNativeOpen<T>(open: () => T): T {
+  try {
+    return open();
+  } catch (error) {
+    markSqliteNativeOpenFailure(error);
+    throw error;
+  }
+}
+
+export function isSqliteNativeOpenFailure(error: unknown): boolean {
+  return error !== null && typeof error === "object" && nativeOpenFailures.has(error);
+}
+
 export function markSqliteInspectionOperation(
   error: unknown,
   operation: SqliteInspectionOperation,

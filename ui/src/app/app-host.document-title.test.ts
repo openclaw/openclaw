@@ -169,7 +169,7 @@ describe("OpenClaw shell document title", () => {
     expect(document.title).toBe("(Disconnected) Usage — OpenClaw");
   });
 
-  it("includes stored chat outbox messages in the disconnected marker", () => {
+  it("keeps stored chat outbox counts out of the disconnected marker", () => {
     const shell = createShell(createContext({ connected: false }));
     shell.routeState = { routeId: "usage" };
     shell.outboxStoreRuntime = {
@@ -178,7 +178,7 @@ describe("OpenClaw shell document title", () => {
 
     shell.syncDocumentTitle();
 
-    expect(document.title).toBe("(Disconnected · 3 queued) Usage — OpenClaw");
+    expect(document.title).toBe("(Disconnected) Usage — OpenClaw");
   });
 
   it("uses the meaningful custodian label without a brand suffix", () => {

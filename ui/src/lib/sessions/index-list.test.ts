@@ -17,7 +17,7 @@ import {
 } from "./session-capability.test-support.ts";
 import type { SessionGateway } from "./session-capability.ts";
 
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 type ListParams = {
   agentId?: string;
@@ -674,7 +674,7 @@ describe("session list requests", () => {
         await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
         second.resolve(sessionsResult([row(2)], 2));
         await Promise.all([initial, forced]);
-        await vi.advanceTimersByTimeAsync(999);
+        await vi.advanceTimersByTimeAsync(4_999);
         expect(managedCalls).toBe(2);
         expect(sessions.listSnapshot(query).result?.sessions[0]?.label).toBe("Read 2");
         await vi.advanceTimersByTimeAsync(1);
@@ -972,7 +972,7 @@ describe("session list requests", () => {
           expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(2);
           pending.reject(error);
           await refresh;
-          await vi.advanceTimersByTimeAsync(999);
+          await vi.advanceTimersByTimeAsync(4_999);
           expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(2);
           expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:original");
           await vi.advanceTimersByTimeAsync(1);

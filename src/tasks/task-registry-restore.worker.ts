@@ -1,4 +1,5 @@
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { serializeAgentSchemaInspectionError } from "../state/openclaw-agent-schema-inspection-response.js";
@@ -86,6 +87,10 @@ export function syncTaskMirroredFlowInDatabase(
         try {
           runOpenClawStateWriteTransaction(
             ({ db }) => {
+              requestSqliteWorkerOperationAdmission({
+                stage: "transaction",
+                facts: { kind: "task-restored-flow", taskId: task.taskId, flowId },
+              });
               upsertTaskFlowRowInDatabase(db, bindTaskFlowRecord(prepared.next));
               deferSqlitePostCommitPublication(db, () => {
                 committedFlow = prepared.next;

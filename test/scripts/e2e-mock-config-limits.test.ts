@@ -939,8 +939,9 @@ describe("mock OpenAI response markers", () => {
     }
   });
 
-  it("resumes the MCP Code Mode fixture until the latest result completes", async () => {
-    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+  it.each(["current", "legacy"])("resumes the MCP Code Mode fixture (%s catalog)", async (mode) => {
+    const env = { OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE: mode };
+    await withMockServer(mockOpenAiPath, env, async (baseUrl) => {
       const input: Record<string, unknown>[] = [
         { content: "mcp code mode api file qa check", role: "user" },
       ];
@@ -963,10 +964,13 @@ describe("mock OpenAI response markers", () => {
       };
       const first = await request();
       expect(first.output?.[0]).toMatchObject({ name: "exec", type: "function_call" });
-      expect(JSON.parse(first.output[0].arguments)).toMatchObject({
-        language: "javascript",
+      const execArguments = JSON.parse(first.output[0].arguments);
+      expect(execArguments).toEqual({
         code: expect.stringContaining('MCP.fixture.lookupNote({ id: "alpha" })'),
       });
+      expect(execArguments.code).toContain(
+        mode === "legacy" ? "ALL_TOOLS.some(" : "catalog.all().some(",
+      );
 
       for (const reason of ["pending_tools", "yield"]) {
         input.push({
@@ -1347,6 +1351,8 @@ describe("SQLite flip mock endpoint ownership", () => {
       const stopFailure = new Error("mock process closure could not be verified");
       let instance: OpenClawTestInstance | undefined;
       let publishedPort: number | undefined;
+      let mockChild: ChildProcess | undefined;
+      const mockClosed = vi.fn();
       let competingBind: unknown;
       let requestLog = "";
       let initialConfig: Record<string, unknown> | undefined;
@@ -1369,11 +1375,16 @@ describe("SQLite flip mock endpoint ownership", () => {
           publicationCount++;
           publishedConfig = record;
           publishedPort = Number(new URL(provider.baseUrl).port);
-          const mockSpawn = vi
+          const mockSpawnIndex = vi
             .mocked(spawn)
-            .mock.calls.find(
-              ([, args]) => Array.isArray(args) && args[0] === "scripts/e2e/mock-openai-server.mjs",
-            );
+            .mock.calls.findIndex(([, args]) => Array.isArray(args) && args[0] === mockOpenAiPath);
+          const mockSpawn = vi.mocked(spawn).mock.calls[mockSpawnIndex];
+          const spawned = vi.mocked(spawn).mock.results[mockSpawnIndex];
+          if (spawned?.type !== "return") {
+            throw new Error("mock OpenAI listener child was not started");
+          }
+          mockChild = spawned.value;
+          mockChild.on("close", mockClosed);
           childEnv = mockSpawn?.[2]?.env;
           competingBind = await tryBind(publishedPort);
           if (asRecord(competingBind)?.code === "EADDRINUSE") {
@@ -1408,6 +1419,11 @@ describe("SQLite flip mock endpoint ownership", () => {
         const result = await runSqliteSessionsTranscriptsFlipProof().catch(
           (error: unknown) => error,
         );
+        const mockAtSettlement = {
+          closeCount: mockClosed.mock.calls.length,
+          exitCode: mockChild?.exitCode,
+          signalCode: mockChild?.signalCode,
+        };
         expect(publicationCount).toBe(1);
         expect(competingBind).toMatchObject({ code: "EADDRINUSE" });
         expect(initialConfig).toBeDefined();
@@ -1422,6 +1438,7 @@ describe("SQLite flip mock endpoint ownership", () => {
           Object.keys(previousEnv).filter((key) => process.env[key] !== previousEnv[key]),
         ).toEqual([]);
         expect(instance).toBeDefined();
+        expect(mockChild).toBeDefined();
         expect({ HOME: childEnv?.HOME, OPENCLAW_STATE_DIR: childEnv?.OPENCLAW_STATE_DIR }).toEqual({
           HOME: instance!.homeDir,
           OPENCLAW_STATE_DIR: instance!.stateDir,
@@ -1433,13 +1450,20 @@ describe("SQLite flip mock endpoint ownership", () => {
           expect((result as AggregateError).errors[0]).toBe(configFailure);
           await expect(stat(instance!.stateDir)).resolves.toBeDefined();
           expect(await tryBind(publishedPort!)).toMatchObject({ code: "EADDRINUSE" });
+          expect(mockAtSettlement.closeCount).toBe(0);
+          expect(mockAtSettlement.exitCode).toBeNull();
+          expect(mockAtSettlement.signalCode).toBeNull();
         } else {
           expect(result).toMatchObject({
             ok: false,
             failures: [expect.stringContaining(configFailure.message)],
           });
           await expect(stat(instance!.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(await tryBind(publishedPort!)).toBeUndefined();
+          // This direct Node child owns the socket; a released port may already be reused.
+          expect(mockAtSettlement.closeCount).toBe(1);
+          expect(mockAtSettlement.exitCode !== null || mockAtSettlement.signalCode !== null).toBe(
+            true,
+          );
         }
       } finally {
         for (const [child, timeout] of vi.mocked(stopChildProcess).mock.calls) {

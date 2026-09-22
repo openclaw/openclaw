@@ -221,7 +221,7 @@ suite.define(() => {
       await gateway.setOnline(false);
       await gateway.closeLatest();
       await page
-        .locator('.agent-chat__composer-status[data-tone="warn"] .agent-chat__composer-status-band')
+        .locator('.agent-chat__composer-status[data-tone="info"] .agent-chat__composer-status-band')
         .waitFor({ timeout: 10_000 });
 
       // `hasText` stops matching once the row text becomes a textarea value.
@@ -416,7 +416,7 @@ suite.define(() => {
       await gateway.deferNext("chat.send");
       await gateway.setOnline(true);
       await page
-        .locator('.agent-chat__composer-status[data-tone="warn"] .agent-chat__composer-status-band')
+        .locator('.agent-chat__composer-status[data-tone="info"] .agent-chat__composer-status-band')
         .waitFor({ state: "detached", timeout: 10_000 });
       await gateway.emitChatFinal({ runId: activeRunId, text: "Initial run completed." });
       await gateway.emitGatewayEvent("sessions.changed", terminalSession);

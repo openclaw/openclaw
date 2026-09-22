@@ -1,4 +1,4 @@
-import type { WorkboardExecution, WorkboardStatus } from "@openclaw/workboard-contract";
+import type { WorkboardExecution } from "@openclaw/workboard-contract";
 import { describe, expect, it, vi } from "vitest";
 import { createWorkboardAutomationNudgeService } from "./automation-nudge.js";
 import {
@@ -7,6 +7,7 @@ import {
   syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./lifecycle-sync.js";
+import { createLinkedCard } from "./lifecycle-sync.test-support.js";
 import { workboardSessionKeyForCard } from "./session-link.js";
 import type { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
@@ -26,28 +27,6 @@ function execution(
     startedAt: 1000,
     updatedAt: 1000,
   };
-}
-
-async function createLinkedCard(
-  store: WorkboardStore,
-  options: {
-    status?: WorkboardStatus;
-    sessionKey?: string;
-    runId?: string;
-    execution?: WorkboardExecution;
-    agentId?: string;
-    boardId?: string;
-  } = {},
-) {
-  return await store.create({
-    title: "Gateway-owned lifecycle",
-    status: options.status ?? "running",
-    sessionKey: options.sessionKey,
-    runId: options.runId,
-    execution: options.execution,
-    agentId: options.agentId,
-    boardId: options.boardId,
-  });
 }
 
 async function runSessionSweep(params: {
@@ -857,128 +836,6 @@ describe("Workboard gateway lifecycle sync", () => {
     });
 
     expect((await store.get(card.id))?.status).toBe("review");
-  });
-
-  it("waits for gateway startup before beginning the lifecycle sweep", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const sessionKey = "agent:main:dashboard:startup-ready";
-    const card = await createLinkedCard(store, { status: "todo", sessionKey });
-    let gatewayReady = false;
-    const readSessions = vi.fn(async () => {
-      if (!gatewayReady) {
-        throw new Error("sessions.list unavailable during gateway startup");
-      }
-      return {
-        sessions: [{ key: sessionKey, status: "done" as const, updatedAt: card.updatedAt + 1 }],
-        complete: true,
-      };
-    });
-    const warn = vi.fn();
-    const service = createWorkboardLifecycleService({ store, readSessions });
-    const context = { logger: { warn } } as never;
-
-    await service.start(context);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-
-    expect(readSessions).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-
-    gatewayReady = true;
-    service.onGatewayStart();
-    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
-    service.onGatewayStop();
-    await service.stop?.(context);
-
-    expect(readSessions).toHaveBeenCalledOnce();
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("begins immediately when the lifecycle service reloads after gateway startup", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const sessionKey = "agent:main:dashboard:plugin-reload";
-    const card = await createLinkedCard(store, { status: "todo", sessionKey });
-    const readSessions = vi
-      .fn()
-      .mockResolvedValueOnce({
-        sessions: [
-          { key: sessionKey, status: "running", hasActiveRun: true, updatedAt: card.updatedAt + 1 },
-        ],
-        complete: true,
-      })
-      .mockResolvedValueOnce({
-        sessions: [{ key: sessionKey, status: "done", updatedAt: card.updatedAt + 2 }],
-        complete: true,
-      });
-    const warn = vi.fn();
-    const context = { logger: { warn } } as never;
-    const original = createWorkboardLifecycleService({ store, readSessions });
-
-    await original.start(context);
-    original.onGatewayStart();
-    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("running"));
-    await original.stop?.(context);
-
-    const replacement = createWorkboardLifecycleService({ store, readSessions });
-    await replacement.start(context);
-    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
-    replacement.onGatewayStop();
-    await replacement.stop?.(context);
-
-    expect(readSessions).toHaveBeenCalledTimes(2);
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("runs the bounded session reconciliation from the lifecycle-owned service interval", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const runOperation = vi.spyOn(store, "runOperation");
-    vi.useFakeTimers();
-    let service: ReturnType<typeof createWorkboardLifecycleService> | undefined;
-    try {
-      const sessionKey = "agent:main:dashboard:service";
-      const card = await createLinkedCard(store, { status: "todo", sessionKey });
-      const readSessions = vi
-        .fn()
-        .mockResolvedValueOnce({
-          sessions: [
-            {
-              key: sessionKey,
-              status: "running",
-              hasActiveRun: true,
-              updatedAt: card.updatedAt + 1,
-            },
-          ],
-          complete: true,
-        })
-        .mockResolvedValueOnce({
-          sessions: [
-            { key: sessionKey, status: "done", hasActiveRun: false, updatedAt: card.updatedAt + 2 },
-          ],
-          complete: true,
-        });
-      service = createWorkboardLifecycleService({ store, readSessions });
-      runOperation.mockClear();
-      await service.start({ logger: { warn: vi.fn() } } as never);
-      service.onGatewayStart();
-      expect(runOperation).toHaveBeenCalled();
-      // The next interval is armed only after the whole admitted sweep settles.
-      await runOperation.mock.results[0]?.value;
-      expect((await store.get(card.id))?.status).toBe("running");
-
-      runOperation.mockClear();
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(runOperation).toHaveBeenCalled();
-      await runOperation.mock.results[0]?.value;
-      expect((await store.get(card.id))?.status).toBe("review");
-
-      expect(readSessions).toHaveBeenCalledTimes(2);
-    } finally {
-      service?.onGatewayStop();
-      await service?.stop?.({ logger: { warn: vi.fn() } } as never);
-      runOperation.mockRestore();
-      vi.useRealTimers();
-    }
   });
 
   it("federates configured agents without ownerless sentinels", async () => {

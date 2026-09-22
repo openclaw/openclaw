@@ -1,5 +1,6 @@
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { registerSubagentRun } from "./subagents/registry/subagent-registry.js";
+import type { SubagentRegistrationScope } from "./subagents/registry/subagent-registry.types.js";
 
 type SpawnPipelinePhase = "initialize" | "dispatch" | "register";
 
@@ -10,6 +11,7 @@ export type SpawnBackendAdapter<TState> = {
     phase: SpawnPipelinePhase;
     state?: TState;
     error: unknown;
+    registrationScope?: SubagentRegistrationScope;
   }): Promise<void>;
 };
 
@@ -25,7 +27,7 @@ type SpawnProgressOrigin = {
 };
 
 type SpawnPipelineResult<TState> =
-  | { ok: true; state: TState; runId: string }
+  | { ok: true; state: TState; runId: string; registrationScope?: SubagentRegistrationScope }
   | {
       ok: false;
       phase: SpawnPipelinePhase;
@@ -57,6 +59,7 @@ export async function runSpawnPipeline<TState>(
   let phase: SpawnPipelinePhase = "initialize";
   let state: TState | undefined;
   let runId: string | undefined;
+  let registrationScope: SubagentRegistrationScope | undefined;
   try {
     let registration: RegisterSubagentRunInput;
     try {
@@ -69,13 +72,28 @@ export async function runSpawnPipeline<TState>(
       ({ runId } = await params.adapter.dispatchTurn(state));
       phase = "register";
       params.assertActive?.();
-      // Construction and registration transfer ownership without an interleaving await.
+      // Running and optional registration keep their synchronous handoff.
       registration = params.buildRegistration(state, runId);
-      registerSubagentRun(registration);
-      // Registry insertion takes ownership synchronously; keeping the slot would double-count it.
+      const completion = registration.queued
+        ? registerSubagentRun(registration, {
+            assertCurrent: params.assertActive,
+            retainOwnership: (scope) => {
+              registrationScope = scope;
+            },
+          })
+        : registerSubagentRun(registration);
+      if (completion) {
+        await completion;
+      }
+      // Required queued registrations await here; ordinary child admission stays synchronous.
       params.admissionReservation?.release();
     } catch (error) {
-      await params.adapter.cleanupOnFailure({ phase, state, error });
+      await params.adapter.cleanupOnFailure({
+        phase,
+        state,
+        error,
+        ...(registrationScope ? { registrationScope } : {}),
+      });
       return { ok: false, phase, state, runId, error };
     }
 
@@ -98,7 +116,7 @@ export async function runSpawnPipeline<TState>(
         // Presentation hooks are best-effort after the run is durably registered.
       }
     }
-    return { ok: true, state, runId };
+    return { ok: true, state, runId, ...(registrationScope ? { registrationScope } : {}) };
   } finally {
     params.admissionReservation?.release();
   }

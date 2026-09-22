@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { GrammyError } from "grammy";
-import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -12,6 +15,7 @@ import {
   runWithTelegramUpdateProcessingFrame,
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { resolveTelegramForumFlag } from "./bot/helpers.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
 import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
@@ -234,6 +238,118 @@ describe("createTelegramIngressMonitor", () => {
       expect(dispatch).toHaveBeenCalledOnce();
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
       await monitor.stop();
+    });
+  });
+
+  it.each([
+    {
+      name: "private chat",
+      updateKind: "message",
+      chat: { id: 1234, type: "private" },
+      topic: {},
+      laneKey: "telegram:1234",
+    },
+    {
+      name: "private topic",
+      updateKind: "edited_message",
+      chat: { id: 1234, type: "private" },
+      topic: { message_thread_id: 42 },
+      laneKey: "telegram:1234:topic:42",
+    },
+    {
+      name: "forum topic",
+      updateKind: "message",
+      chat: { id: -1234, type: "supergroup", is_forum: true },
+      topic: { message_thread_id: 42, is_topic_message: true },
+      laneKey: "telegram:-1234:topic:42",
+    },
+    {
+      name: "channel Direct Messages topic",
+      updateKind: "message",
+      chat: { id: -1234, type: "supergroup", is_direct_messages: true },
+      topic: { direct_messages_topic: { topic_id: 42 }, message_thread_id: 99 },
+      laneKey: "telegram:-1234:topic:42",
+    },
+    ...["channel_post", "edited_channel_post"].map((updateKind) => ({
+      name: updateKind,
+      updateKind,
+      chat: { id: -1234, type: "channel" },
+      topic: {},
+      laneKey: "telegram:-1234",
+    })),
+    ...["telegram:-9999:topic:42", "telegram:-1234:topic:99", "telegram:-1234:approval"].map(
+      (laneKey) => ({
+        name: `mismatched Direct Messages lane ${laneKey}`,
+        updateKind: "message",
+        chat: { id: -1234, type: "supergroup", is_direct_messages: true },
+        topic: { direct_messages_topic: { topic_id: 42 }, message_thread_id: 99 },
+        laneKey,
+        reject: true,
+      }),
+    ),
+  ])("replays promoted controls after restart: $name", async (testCase) => {
+    await withTempState(async (stateDir) => {
+      const queueOptions = { channelId: "telegram", accountId: "default", stateDir };
+      const update = {
+        update_id: 136,
+        [testCase.updateKind]: {
+          message_id: 1,
+          date: 1_736_380_800,
+          from: { id: 111, is_bot: false, first_name: "Ada" },
+          chat: testCase.chat,
+          ...testCase.topic,
+          text: "/models@openclaw_bot",
+        },
+      };
+      const eventId = String(update.update_id).padStart(16, "0");
+      const payload: TelegramSpooledUpdatePayload = {
+        version: 1,
+        updateId: update.update_id,
+        receivedAt: Date.now(),
+        update,
+      };
+      await createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions).enqueue(
+        eventId,
+        payload,
+        { laneKey: testCase.laneKey },
+      );
+      closeOpenClawStateDatabaseForTest();
+
+      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions);
+      const controlLaneKey = `telegram:${testCase.chat.id}:control`;
+      const dispatch = vi.fn(async () => {
+        expect(await queue.listClaims()).toMatchObject([{ laneKey: controlLaneKey }]);
+        return { kind: "completed" as const };
+      });
+      const monitor = createTelegramIngressMonitor({
+        queue,
+        getConfig: () => cfg,
+        accountId: "default",
+        botInfo: {
+          ...telegramBotInfoForTest,
+          has_topics_enabled: true,
+        },
+        dispatch,
+      });
+      try {
+        monitor.start();
+        await monitor.waitForIdle();
+        if ("reject" in testCase && testCase.reject) {
+          expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
+            { reason: "invalid-event", laneKey: testCase.laneKey },
+          ]);
+          expect(dispatch).not.toHaveBeenCalled();
+        } else {
+          expect(dispatch).toHaveBeenCalledExactlyOnceWith(update, expect.any(Object));
+          expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+          expect(await queue.enqueue(eventId, payload, { laneKey: controlLaneKey })).toMatchObject({
+            kind: "completed",
+          });
+        }
+        expect(await queue.listPending()).toEqual([]);
+      } finally {
+        await monitor.stop();
+      }
     });
   });
 

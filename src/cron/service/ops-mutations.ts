@@ -582,7 +582,7 @@ export async function remove(
   const cleanup = async () => {
     try {
       const shouldRemove = await locked(state, async () => {
-        await ensureLoaded(state, { skipRecompute: true });
+        await ensureLoaded(state);
         return !state.store?.jobs.some((job) => job.id === id);
       });
       if (shouldRemove) {

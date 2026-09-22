@@ -63,7 +63,7 @@ function createArchiveResponse(bytes: Uint8Array, headers?: HeadersInit): Respon
     `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
   );
   responseHeaders.set("X-ClawHub-Npm-Shasum", createHash("sha1").update(bytes).digest("hex"));
-  responseHeaders.set("X-ClawHub-Npm-Tarball-Name", "registry-selected.tgz");
+  responseHeaders.set("X-ClawHub-Npm-Tarball-Name", "NUL.tgz");
   responseHeaders.set("X-ClawHub-ClawPack-Spec-Version", "3");
   return new Response(new Uint8Array(bytes), { status: 200, headers: responseHeaders });
 }
@@ -167,7 +167,7 @@ const archiveDownloadCases: Array<{
         fetchImpl: async () => response,
       }),
     expectedResource: "ClawPack download for demo@1.2.3",
-    expectedFileName: "registry-selected.tgz",
+    expectedFileName: "NUL_.tgz",
     expectedArtifact: "clawpack",
   },
   {
@@ -374,7 +374,7 @@ describe("clawhub artifacts", () => {
           `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
         );
         expect(archive.npmShasum).toBe(createHash("sha1").update(bytes).digest("hex"));
-        expect(archive.npmTarballName).toBe("registry-selected.tgz");
+        expect(archive.npmTarballName).toBe("NUL.tgz");
       }
 
       await archive.cleanup();

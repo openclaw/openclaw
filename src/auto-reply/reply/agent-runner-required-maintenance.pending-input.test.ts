@@ -23,13 +23,14 @@ import {
   createRestartSafeChatRequest,
   resolveRestartSafeChatAdmission,
 } from "../../gateway/server-methods/chat-restart-recovery.js";
-import { clearMemoryPluginState, registerMemoryCapability } from "../../plugins/memory-state.js";
+import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runReplyAgent } from "./agent-runner.js";
 import {
   createTestFollowupRun,
+  installAgentRunnerMemoryFixture,
   isModelRuntimeContextCarrier,
 } from "./agent-runner.test-fixtures.js";
 import { createTypingController } from "./typing.js";
@@ -322,16 +323,14 @@ describe("required maintenance with restart-safe admitted input", () => {
           followupRun.userTurnTranscriptRecorder = recorder;
           entry = loadSessionEntry(scope)!;
           const sessionStore = { [sessionKey]: entry };
-          registerMemoryCapability("memory-core", {
-            flushPlanResolver: () => ({
-              softThresholdTokens: 4_000,
-              reserveTokensFloor: 8_192,
-              forceFlushTranscriptBytes: 2 * 1024 * 1024,
-              prompt: "Checkpoint durable notes. Reply NO_REPLY.",
-              systemPrompt: "Write durable notes only.",
-              relativePath: "memory/checkpoint.md",
-            }),
-          });
+          installAgentRunnerMemoryFixture(() => ({
+            softThresholdTokens: 4_000,
+            reserveTokensFloor: 8_192,
+            forceFlushTranscriptBytes: 2 * 1024 * 1024,
+            prompt: "Checkpoint durable notes. Reply NO_REPLY.",
+            systemPrompt: "Write durable notes only.",
+            relativePath: "memory/checkpoint.md",
+          }));
           const foregroundContexts: unknown[][] = [];
           observeForeground = () => {
             foregroundContexts.push(

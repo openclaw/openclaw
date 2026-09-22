@@ -5,6 +5,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
+import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
 import {
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
@@ -40,33 +41,13 @@ import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts"
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
-  summarizeSidebarSessionAttention,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
-import type { SessionAttentionController } from "./session-attention-controller.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
-
-export function resolveSidebarHomeAttention(
-  attention: SessionAttentionController,
-  sessionKey: string,
-  row: GatewaySessionRow | null,
-) {
-  const known = summarizeSidebarSessionAttention(
-    attention
-      .knownSessionAttention()
-      .filter((entry) => areUiSessionKeysEquivalent(entry.sessionKey, sessionKey))
-      .map((entry) => entry.attention),
-  );
-  return known.kind !== "none"
-    ? known
-    : row
-      ? attention.resolveSessionAttention(row)
-      : SIDEBAR_SESSION_NO_ATTENTION;
-}
 
 type SidebarSessionSortOptions = {
   sortMode: SidebarSessionSortMode;
@@ -245,6 +226,7 @@ export function buildSidebarSessionNavigationState(input: {
       boardFace: row.boardFace,
       channel: channelInfo.channel,
       channelSession: channelInfo.channelSession,
+      channelPresentation: resolveSessionChannelPresentation(row),
       workSession:
         Boolean(row.worktree || row.repository || row.execNode) ||
         context?.sessions.isPreparedWorkSession(row.key) === true,

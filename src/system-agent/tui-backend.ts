@@ -5,7 +5,10 @@ import type {
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { ChannelsAddOptions } from "../commands/channels/add.js";
-import { buildAgentMainSessionKey } from "../routing/session-key.js";
+import {
+  agentSessionKeysMatchByRequestKey,
+  buildAgentMainSessionKey,
+} from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { notifyListeners } from "../shared/listeners.js";
 import type {
@@ -220,6 +223,15 @@ class SystemAgentTuiBackend implements TuiBackend {
           modelProvider: this.route.modelProvider,
         },
       ],
+    };
+  }
+
+  async describeSession(opts: Parameters<TuiBackend["describeSession"]>[0]) {
+    const { sessions, defaults } = await this.listSessions();
+    return {
+      session:
+        sessions.find((row) => agentSessionKeysMatchByRequestKey(row.key, opts.sessionKey)) ?? null,
+      defaults,
     };
   }
 

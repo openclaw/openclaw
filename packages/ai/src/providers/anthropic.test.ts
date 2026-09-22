@@ -311,7 +311,7 @@ describe("Anthropic provider", () => {
     expect((capturedPayload as { system?: unknown }).system).toEqual([
       {
         type: "text",
-        text: "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;",
+        text: "x-anthropic-billing-header: cc_version=2.1.278; cc_entrypoint=sdk-cli;",
       },
       {
         type: "text",

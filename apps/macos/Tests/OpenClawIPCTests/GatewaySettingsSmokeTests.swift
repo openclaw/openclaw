@@ -17,7 +17,7 @@ struct GatewaySettingsSmokeTests {
                     let buttons = try await AppKitTestSupport.accessibilityElements(in: hosting)
                     let button = try #require(buttons.first {
                         $0.accessibilityRole?() == .button &&
-                            [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains(action)
+                            [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains(action)
                     })
                     #expect(button.accessibilityPerformPress?() == true)
                     let deadline = ContinuousClock.now + .seconds(3)
@@ -36,7 +36,8 @@ struct GatewaySettingsSmokeTests {
                         }
                         connectEnabled = elements.first {
                             $0.accessibilityRole?() == .button &&
-                                [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Connect")
+                                [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)]
+                                .contains("Connect")
                         }?.isAccessibilityEnabled?()
                         let populated = values.contains(profile.name) && values.contains(profile.url.absoluteString)
                         if values.count >= 2, connectEnabled == reconnecting,
@@ -54,7 +55,7 @@ struct GatewaySettingsSmokeTests {
                     }
                     let cancel = try #require(try await AppKitTestSupport.accessibilityElements(in: sheet).first {
                         $0.accessibilityRole?() == .button &&
-                            [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Cancel")
+                            [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains("Cancel")
                     })
                     #expect(cancel.accessibilityPerformPress?() == true)
                     let dismissedDeadline = ContinuousClock.now + .seconds(3)

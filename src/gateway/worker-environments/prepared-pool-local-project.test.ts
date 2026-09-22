@@ -77,7 +77,7 @@ describe("local project prepared worker reserves", () => {
           },
           assertCurrent: () => {},
         }),
-        resumeProvision: async (record) => fixture.ready(record),
+        resumeProvision: async (record) => await fixture.ready(record),
         isStopping: () => false,
         inState: (record, ...states) => states.includes(record.state),
         withLock: async (_environmentId, task) => task(),
@@ -91,12 +91,12 @@ describe("local project prepared worker reserves", () => {
         reconcile: async (record, _signal, beforeReconcile) => {
           beforeReconcile();
           if (record.state === "requested" && record.destroyRequestedAtMs === null) {
-            fixture.ready(record);
+            await fixture.ready(record);
           }
         },
       });
     const intentOwner = createIntentOwner();
-    const source = fixture.attach(
+    const source = await fixture.attach(
       await intentOwner.createWithProfile("development", "seed-allocation", {
         projectPath: seed.path,
         executionMode: "worker-turn",
@@ -112,9 +112,9 @@ describe("local project prepared worker reserves", () => {
     expect(spare.preparation?.key).toBe(admittedPreparation.key);
 
     fixture.nowMs += 100;
-    const consumed = fixture.attach(spare);
+    const consumed = await fixture.attach(spare);
     expect(consumed.preparation?.consumedAtMs).toBe(fixture.nowMs);
-    fixture.teardown(source);
+    await fixture.teardown(source);
     const archived = await worktrees.remove({ id: seed.id, reason: "session-archive" });
     expect(archived).toMatchObject({ removed: true });
     await expect(fs.access(seed.path)).rejects.toMatchObject({ code: "ENOENT" });
@@ -130,7 +130,7 @@ describe("local project prepared worker reserves", () => {
       archived.snapshotRef,
     ]);
 
-    fixture.reopenStore();
+    await fixture.reopenStore();
     await fixture.schedule(createPool(createIntentOwner()));
     const available = fixture
       .reserves()

@@ -96,10 +96,13 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
       }
       let payload: Buffer;
       let assertCurrent: (() => void) | undefined;
+      const admission = scope?.assertCurrent;
+      const createAdmission = scope?.createAdmission;
+      // Queued callbacks run from Worker replies, outside this command's async context.
+      const inCaller = admission || createAdmission ? AsyncLocalStorage.snapshot() : undefined;
       try {
         const commandType = command.type;
-        const admission = scope?.assertCurrent;
-        assertCurrent = admission ? () => admission(commandType) : undefined;
+        assertCurrent = admission && inCaller ? () => inCaller(admission, commandType) : undefined;
         assertCurrent?.();
         // The queued guard and wire command must observe the same captured type.
         payload = serialize({ type: commandType, input: command.input });
@@ -108,8 +111,6 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
           toErrorObject(error, "SQLite worker command could not be serialized"),
         );
       }
-      const createAdmission = scope?.createAdmission;
-      const inCaller = createAdmission ? AsyncLocalStorage.snapshot() : undefined;
       const operation = owner.dispatch(
         payload,
         options.signal,
