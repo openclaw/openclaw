@@ -776,8 +776,67 @@ export class NodeRegistry {
     return node?.pairingGeneration === pairingGeneration ? node : undefined;
   }
 
+  /**
+   * Reports the pairing generation of the live session for one connection, synchronously.
+   * Callers capture it before an async authority lookup so a promotion that lands during
+   * that lookup is detectable at retirement time (#148693).
+   */
+  pairingGenerationForConnection(connId: string): string | undefined {
+    const nodeId = this.nodesByConn.get(connId);
+    const node = nodeId ? this.nodesById.get(nodeId) : undefined;
+    return node && node.connId === connId ? node.pairingGeneration : undefined;
+  }
+
+  /**
+   * Atomically decides retirement for a rejected connection and retires the session when
+   * the captured authority is still the live one. Synchronous on purpose: no promotion can
+   * interleave between the comparison and the invalidation, so a session promoted during
+   * the caller's lookup is preserved instead of being retired with the obsolete lease.
+   */
+  retireRejectedConnection(params: {
+    connId: string;
+    observedGeneration: string | undefined;
+    reason: string;
+  }): "retire" | "obsolete" | "preserve" {
+    const nodeId = this.nodesByConn.get(params.connId);
+    const node = nodeId ? this.nodesById.get(nodeId) : undefined;
+    if (!node || node.connId !== params.connId) {
+      // The connection is gone from the registry (replaced or disconnected): nothing on
+      // this connection can be promoted, so its obsolete transport may be closed.
+      return "obsolete";
+    }
+    if (node.client.invalidated === true) {
+      return "retire";
+    }
+    // Strict equality: a lease captured without a generation still loses to a session
+    // that gained one while the caller's lookup awaited persistence.
+    if (node.pairingGeneration !== params.observedGeneration) {
+      return "preserve";
+    }
+    const invalidatedPresence = this.invalidateSessionForPairingChange(node, params.reason);
+    if (invalidatedPresence) {
+      this.publishActiveNodeContext();
+    }
+    // Read the client again after the call above: it is the owner that marks the client
+    // invalidated, so the pre-call check must not be reused here.
+    const clientAfterRetirement = node.client;
+    return clientAfterRetirement.invalidated === true ? "retire" : "preserve";
+  }
+
   /** Revalidates that one inbound node connection still owns its persisted pairing state. */
   async isConnectionCurrentPairingState(connId: string): Promise<boolean> {
+    return (await this.resolveConnectionPairingState(connId)) === "current";
+  }
+
+  /**
+   * Resolves the settled pairing outcome for one inbound node connection without
+   * retiring it. "unavailable" means the persisted pairing state could not be read,
+   * so callers must keep the connection and retry instead of treating it as stale
+   * (#148693).
+   */
+  async resolveConnectionPairingState(
+    connId: string,
+  ): Promise<"current" | "stale" | "unavailable"> {
     const nodeId = this.nodesByConn.get(connId);
     const initial = nodeId ? this.nodesById.get(nodeId) : undefined;
     if (
@@ -787,7 +846,7 @@ export class NodeRegistry {
       initial.client.invalidated === true ||
       !this.options.resolveCurrentPairingState
     ) {
-      return false;
+      return "stale";
     }
     const resolution = await this.resolvePairingLease(this.capturePairingLease(initial), {
       invalidateStale: true,
@@ -795,7 +854,7 @@ export class NodeRegistry {
     if (resolution.status === "stale" && resolution.presenceInvalidated) {
       this.publishActiveNodeContext();
     }
-    return resolution.status === "current";
+    return resolution.status;
   }
 
   private clearDesktopAvailability(node: NodeSession): void {

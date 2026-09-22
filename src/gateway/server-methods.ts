@@ -374,17 +374,52 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     if (sessionMutation.error) {
       return { error: sessionMutation.error };
     }
-    if (
-      params.client?.connect.role === "node" &&
-      (!params.client.connId ||
-        !(await params.context.nodeRegistry.isConnectionCurrentPairingState(params.client.connId)))
-    ) {
-      return {
-        error: errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
-          retryable: true,
-          details: { code: "PAIRING_CHANGED" },
-        }),
-      };
+    if (params.client?.connect.role === "node") {
+      const connId = params.client.connId;
+      // Captured synchronously before the authority lookup: a promotion landing during that
+      // lookup advances the generation, and the retirement decision below compares against
+      // this capture instead of re-reading after the await (#148693).
+      const observedGeneration = connId
+        ? params.context.nodeRegistry.pairingGenerationForConnection(connId)
+        : undefined;
+      const pairingState = connId
+        ? await params.context.nodeRegistry.resolveConnectionPairingState(connId)
+        : "stale";
+      if (pairingState !== "current") {
+        // A definitively stale pairing must not linger as a connected node, but only that
+        // exact physical connection may be retired. A same-device replacement and a session
+        // promoted while this lookup awaited persistence keep their authority, so the
+        // captured lease is settled by resolveConnectionPairingState (never a conn-wide
+        // invalidation) and only this connection's transport is closed after the rejection
+        // frame is written (#148693). An unreadable pairing store stays retryable.
+        if (connId && pairingState === "stale") {
+          const disconnect = params.context.disconnectClientForConnection?.bind(params.context);
+          if (disconnect) {
+            // Retirement is decided atomically by the registry against the captured
+            // generation, so a promotion that landed during the lookup is preserved and its
+            // transport stays open (#148693).
+            const retire = params.context.nodeRegistry.retireRejectedConnection.bind(
+              params.context.nodeRegistry,
+            );
+            setTimeout(() => {
+              const outcome = retire({
+                connId,
+                observedGeneration,
+                reason: "node pairing changed before request dispatch",
+              });
+              if (outcome !== "preserve") {
+                disconnect(connId, "node pairing changed before request dispatch");
+              }
+            }, 0);
+          }
+        }
+        return {
+          error: errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
+            retryable: true,
+            details: { code: "PAIRING_CHANGED" },
+          }),
+        };
+      }
     }
     return {
       error: null,

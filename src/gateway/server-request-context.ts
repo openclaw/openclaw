@@ -481,6 +481,23 @@ export function createGatewayRequestContext(
       }
       disconnectDeviceTransports?.(deviceId, opts);
     },
+    disconnectClientForConnection: (connId: string, reason?: string) => {
+      const retirementReason = reason ?? "connection-retired";
+      for (const gatewayClient of clients) {
+        if (gatewayClient.connId !== connId) {
+          continue;
+        }
+        // Mark before closing so RPCs already pipelined in the WS buffer fail the
+        // per-request dispatch check even when socket.close() lands asynchronously.
+        gatewayClient.invalidated = true;
+        gatewayClient.invalidatedReason ??= retirementReason;
+        try {
+          gatewayClient.socket.close(4001, retirementReason);
+        } catch {
+          /* ignore */
+        }
+      }
+    },
     disconnectClientsForUserProfile: (profileId: string) => {
       for (const gatewayClient of clients.authorityClients) {
         if (gatewayClient.authenticatedUserProfile?.profileId !== profileId) {

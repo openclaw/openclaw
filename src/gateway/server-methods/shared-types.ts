@@ -338,6 +338,8 @@ type GatewayTransportContext = {
     record?: ExecApprovalRecord<TPayload>;
   }) => ReadonlySet<string>;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
+  /** Retires one exact physical connection without touching same-device successors. */
+  disconnectClientForConnection?: (connId: string, reason?: string) => void;
   disconnectClientsForUserProfile?: (profileId: string) => void;
   invalidateClientsForDevice?: (
     deviceId: string,

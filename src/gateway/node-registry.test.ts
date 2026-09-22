@@ -1108,14 +1108,87 @@ describe("gateway/node-registry", () => {
       pairingGeneration: "generation-a",
     });
 
-    await expect(registry.isConnectionCurrentPairingState("conn-generation")).resolves.toBe(true);
+    await expect(registry.resolveConnectionPairingState("conn-generation")).resolves.toBe(
+      "current",
+    );
     resolveCurrentPairingState.mockResolvedValue({
       identity: "identity-a",
       generation: "generation-b",
     });
-    await expect(registry.isConnectionCurrentPairingState("conn-generation")).resolves.toBe(false);
+    await expect(registry.resolveConnectionPairingState("conn-generation")).resolves.toBe("stale");
     expect(client.invalidated).toBe(true);
     expect(resolveCurrentPairingState).toHaveBeenCalledWith("node-generation");
+  });
+
+  it("retires only the captured lease and preserves a promoted session", async () => {
+    const resolveCurrentPairingState = vi.fn().mockResolvedValue({
+      identity: "identity-a",
+      generation: "generation-a",
+    });
+    const registry = createNodeRegistry({ resolveCurrentPairingState });
+    const client = makeClient("conn-retire", "node-retire");
+    registerNodeSession(registry, client, {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+
+    expect(registry.pairingGenerationForConnection("conn-retire")).toBe("generation-a");
+    expect(registry.pairingGenerationForConnection("conn-unknown")).toBeUndefined();
+
+    // A newer generation on the same connection is a promotion, never a retirement.
+    expect(
+      registry.retireRejectedConnection({
+        connId: "conn-retire",
+        observedGeneration: "generation-earlier",
+        reason: "test",
+      }),
+    ).toBe("preserve");
+    expect(client.invalidated).not.toBe(true);
+
+    // A lease captured without a generation still defers to a session that gained one.
+    expect(
+      registry.retireRejectedConnection({
+        connId: "conn-retire",
+        observedGeneration: undefined,
+        reason: "test",
+      }),
+    ).toBe("preserve");
+    expect(client.invalidated).not.toBe(true);
+
+    // The captured generation still being live retires that session.
+    expect(
+      registry.retireRejectedConnection({
+        connId: "conn-retire",
+        observedGeneration: "generation-a",
+        reason: "test",
+      }),
+    ).toBe("retire");
+    expect(client.invalidated).toBe(true);
+
+    // A connection missing from the registry is obsolete, not preserved.
+    expect(
+      registry.retireRejectedConnection({
+        connId: "conn-gone",
+        observedGeneration: undefined,
+        reason: "test",
+      }),
+    ).toBe("obsolete");
+  });
+
+  it("reports an unreadable pairing store as unavailable without retiring the connection", async () => {
+    const resolveCurrentPairingState = vi.fn().mockRejectedValue(new Error("pairing store down"));
+    const registry = createNodeRegistry({ resolveCurrentPairingState });
+    const client = makeClient("conn-unavailable", "node-unavailable");
+    registerNodeSession(registry, client, {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+
+    await expect(registry.resolveConnectionPairingState("conn-unavailable")).resolves.toBe(
+      "unavailable",
+    );
+    expect(client.invalidated).not.toBe(true);
+    expect(registry.get("node-unavailable")).toBeDefined();
   });
 
   it("removes an externally replaced session from connected and active projections", async () => {
