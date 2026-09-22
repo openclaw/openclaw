@@ -3245,6 +3245,28 @@ describe("chat slash menu accessibility", () => {
     );
   });
 
+  it("inserts a new line on Enter with a touch-only on-screen keyboard", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(pointer: coarse) and (any-hover: none)",
+    }));
+    onTestFinished(() => vi.unstubAllGlobals());
+    const onSend = vi.fn();
+    const container = renderChatView({ onSend, sendShortcut: "enter" });
+
+    inputDraft(container, "first line");
+    const plainEnter = keydownComposer(container, "Enter");
+
+    expect(plainEnter.defaultPrevented).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(container.querySelector("textarea")?.getAttribute("aria-keyshortcuts")).toBe(
+      "Control+Enter Meta+Enter",
+    );
+
+    keydownComposer(container, "Enter", { ctrlKey: true });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves local draft input across unrelated rerenders", () => {
     const onDraftChange = vi.fn();
     const container = document.createElement("div");
