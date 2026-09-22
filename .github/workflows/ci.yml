@@ -1827,7 +1827,7 @@ jobs:
               "--reporter=verbose",
               "--reporter=github-actions",
               "--reporter=./scripts/lib/vitest-resource-reporter.mts",
-              ...(frozenTarget ? [] : ["--shard=1/3"]),
+              ...(compatibilityTarget ? [] : ["--shard=1/3"]),
             ],
           }, testRuntimeMode) ? testRuntimeMode : "node";
           const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
@@ -2879,7 +2879,7 @@ jobs:
   checks-ui:
     permissions:
       contents: read
-    name: ${{ needs.preflight.outputs.frozen_target == 'true' && 'checks-ui' || format('checks-ui ({0}/3)', matrix.shard) }}
+    name: ${{ needs.preflight.outputs.compatibility_target == 'true' && 'checks-ui' || format('checks-ui ({0}/3)', matrix.shard) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_ui_tests == 'true'
     # Keep three workers per row; admit hosted hybrid rows only within budget.
@@ -2889,8 +2889,8 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        # Frozen checkouts retain their original unsharded test envelope.
-        shard: ${{ fromJSON(needs.preflight.outputs.frozen_target == 'true' && '[1]' || '[1,2,3]') }}
+        # Only the legacy package command is unsharded; exact current targets use the shard runner.
+        shard: ${{ fromJSON(needs.preflight.outputs.compatibility_target == 'true' && '[1]' || '[1,2,3]') }}
     env:
       COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
@@ -2946,7 +2946,7 @@ jobs:
           OPENCLAW_NODE_TEST_CONFIGS_JSON: '["ui/vitest.config.ts"]'
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ needs.preflight.outputs.ui_test_groups_gzip_base64 }}
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ format('["--maxWorkers", "3", "--reporter=verbose", "--reporter=github-actions", "--reporter=./scripts/lib/vitest-resource-reporter.mts"{0}]', needs.preflight.outputs.frozen_target != 'true' && format(', "--shard={0}/3"', matrix.shard) || '') }}
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ format('["--maxWorkers", "3", "--reporter=verbose", "--reporter=github-actions", "--reporter=./scripts/lib/vitest-resource-reporter.mts"{0}]', needs.preflight.outputs.compatibility_target != 'true' && format(', "--shard={0}/3"', matrix.shard) || '') }}
         run: |
           if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
             # Frozen targets can contain timing-sensitive tests fixed on current main.

@@ -177,6 +177,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/ci-dispatch.mjs!",
   // merge.sh invokes this native review-authority parser by path.
   "scripts/pr-lib/clawsweeper-review-gate.mjs!",
+  // review.sh invokes the corrected-candidate review validator by path.
+  "scripts/pr-lib/correction-review.mjs!",
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/materialize-dependencies.mjs!",
   "scripts/pr-lib/merge-body.mjs!",

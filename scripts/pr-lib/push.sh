@@ -186,6 +186,9 @@ GRAPHQL
     return 1
   fi
   local result
+  if [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ]; then
+    verify_correction_publication_authority || { rm -f "$payload_file"; return 1; }
+  fi
   result=$(pr_gh_plain api graphql --input "$payload_file" 2>&1) || {
     rm -f "$payload_file"
     echo "GraphQL push failed: $result" >&2
@@ -297,6 +300,9 @@ push_prep_head_once() {
 
   revalidate_pr_publication "$pr" "$observation" "$pr_head" "$lease_sha" "$prep_head_sha" || return 1
   local push_output push_status
+  if [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ]; then
+    verify_correction_publication_authority || return 1
+  fi
   if push_output=$(pr_git push "--force-with-lease=refs/heads/$pr_head:$lease_sha" "$PRHEAD_REMOTE_URL" "$prep_head_sha:refs/heads/$pr_head" 2>&1); then
     printf '%s\n' "$push_output" >&2
   else

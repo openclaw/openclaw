@@ -167,6 +167,23 @@ function cachedProbe(root: string, directory: string): string {
 }
 
 describe("compiled worker content cache", () => {
+  it("propagates namespace rejection evidence without publishing a cache signature", async () => {
+    const f = fixture();
+    const owner = await f.cache();
+    expect(await owner.restore()).toBeUndefined();
+    const manifest = f.prepare();
+    f.write(".workflow-shell-fixture.mjs", "export {};\n");
+
+    await expect(owner.seal(manifest)).rejects.toThrow(
+      'Boundary configuration or resolution topology changed during compilation: {"category":"namespace","changes":[{"change":"added","path":".workflow-shell-fixture.mjs"}],"omitted":0}',
+    );
+    expect(manifest.cacheSignature).toBeUndefined();
+    expect(await retainVitestWorkerArtifacts(f.root, f.directory, manifest)).toBe(false);
+    expect(
+      fs.existsSync(path.join(f.root, ".artifacts/vitest-worker-cache/run-cache-0/stamp.json")),
+    ).toBe(false);
+  });
+
   it.each([
     "NODE_PATH",
     "NAPI_RS_NATIVE_LIBRARY_PATH",

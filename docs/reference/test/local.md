@@ -12,6 +12,18 @@ read_when:
 2. `pnpm test <path-or-filter>` for one file, directory, or explicit target.
 3. `pnpm test` only when you intentionally need the full local Vitest suite.
 
+The repository wrappers partition ordinary unfiltered Gateway-server run-mode
+selections and expanded full-suite plans into at most 50 test files per process.
+This bounds the non-isolated module graph as the inventory grows without changing
+worker concurrency, heap limits, or individual file boundaries. Raw Vitest and
+existing single-invocation selections, such as explicit targets, coverage, report
+output, bail, and watch mode, retain their existing behavior.
+
+Tests that create real managed worktrees must satisfy the
+[capacity and disk-space requirements](/concepts/managed-worktrees#capacity-and-disk-space),
+including the additional allowance for executable setup scripts. Keep that space
+available throughout the run.
+
 The project runner prints wrapper usage for a sole `--help` or `-h` request.
 Compound requests, including `--help --no-help`, follow native Vitest option semantics.
 

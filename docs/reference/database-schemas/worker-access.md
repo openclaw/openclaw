@@ -93,10 +93,14 @@ cleanup whenever the event loop drains.
 For an example, ordinary durable pages in
 `src/gateway/server-methods/chat-history-pages.ts` already await
 `readSessionHistoryPageInWorker`. Raw cursor delta reads now use that same worker
-for SQLite and JSON parsing. The main thread retains display/profile projection,
-byte budgets, and fresh sharing checks. Selected/current entries, pending inputs
-and receipts, retained transcript-session keys, and lazy subagent source/visibility
-reads remain migration debt. Process-held incognito databases and the existing
+for SQLite, JSON parsing, and the subagent source/run visibility facts needed by
+the bounded delta. The main thread retains display/profile projection, byte
+budgets, and fresh sharing checks against the originally admitted sources. A
+failed visibility lookup joins worker retirement before its partial facts return;
+the host observes that failure only if projection reaches the lookup before a
+history reset. Selected/current entries, pending inputs and receipts, retained
+transcript-session keys, and SSE inline subagent visibility reads remain migration
+debt. Process-held incognito databases and the existing
 CLI-import history path still need their owner/lifetime migration; they are not
 new synchronous exceptions or fallbacks for a failed durable worker read.
 

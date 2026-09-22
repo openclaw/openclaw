@@ -13,12 +13,8 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnCommand } from "./exec-spawn.js";
 import { runWithSpawnBroker } from "./spawn-broker/context.js";
 import { createSpawnBrokerHost } from "./spawn-broker/host.js";
-import {
-  emitChildProcessSpawnSample,
-  recordChildProcessSpawn,
-  spawnProcess,
-  spawnWithFallback,
-} from "./spawn-utils.js";
+import { emitChildProcessSpawnSample, recordChildProcessSpawn } from "./spawn-diagnostics.js";
+import { spawnProcess, spawnWithFallback } from "./spawn-utils.js";
 
 type SpawnImplementation = NonNullable<Parameters<typeof spawnWithFallback>[0]["spawnImpl"]>;
 
