@@ -236,6 +236,7 @@ export function createSessionRowPlacementProjection(
         owner.register(row.entry.sessionId);
       } else if (
         row.entry &&
+        registered.has(row.entry.sessionId) &&
         !related(row.entry.sessionId).some(
           (other) => other.entry && (other.entry.archivedAt === undefined || other.materialized),
         )
@@ -255,6 +256,7 @@ export function createSessionRowPlacementProjection(
       isActive: () => boolean,
       lookup: (query: Lookup) => Row | undefined,
       queries: (config: OpenClawConfig) => readonly Lookup[],
+      prepareRows: (queries: readonly Lookup[]) => Promise<void> | undefined,
       consume: (read: SessionRowReadView) => T,
     ): ReturnType<typeof withPreparedSessionRows<T>> {
       let deferred: { kind: "pending"; database: { agentId: string; path: string } } | undefined;
@@ -273,6 +275,15 @@ export function createSessionRowPlacementProjection(
         },
         () =>
           deferred ?? withPreparedSessionRows(projection, isActive, () => preparedQueries, consume),
+        () => {
+          let pending: Promise<void> | undefined;
+          const selected = withCanonicalSessionValidationDeferral(() => {
+            preparedQueries = queries(projection.state.cfg);
+            pending = inOwnerContext(() => prepareRows(preparedQueries));
+          });
+          deferred = selected.kind === "pending" ? selected : undefined;
+          return pending;
+        },
       );
     },
     async prepare() {
@@ -299,7 +310,9 @@ export function createSessionRowPlacementProjection(
     async withPrepared<T>(
       selectIds: () => readonly string[],
       consume: () => T,
+      prepareSelectedRows: () => Promise<void> | undefined,
     ): Promise<Awaited<T>> {
+      const prepare = () => prepareReadFacts() ?? prepareSelectedRows();
       while (true) {
         for (let pending = prepareReadFacts(); pending; pending = prepareReadFacts()) {
           await pending;
@@ -310,13 +323,18 @@ export function createSessionRowPlacementProjection(
         const ids = selectIds();
         const requested = missing(ids);
         if (!reader || requested.length === 0) {
+          const pending = prepareSelectedRows();
+          if (pending) {
+            await pending;
+            continue;
+          }
           return await consume();
         }
         const read = acquireRead(requested, "exact");
         try {
           const snapshot = await read.result;
           // Caller facts can retire while the placement read yields.
-          for (let pending = prepareReadFacts(); pending; pending = prepareReadFacts()) {
+          for (let pending = prepare(); pending; pending = prepare()) {
             await pending;
           }
           if (disposed) {
@@ -330,6 +348,12 @@ export function createSessionRowPlacementProjection(
             selectedIds.some((id) => !resident.has(id) && !prepared.has(id))
           ) {
             continue;
+          }
+          for (const [id, facts] of prepared) {
+            if (registered.has(id)) {
+              resident.set(id, facts);
+              dirty.delete(id);
+            }
           }
           const previous = exact;
           let result: T;

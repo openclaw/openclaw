@@ -1,26 +1,30 @@
-import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 
-export type CodexAttemptTimeout = {
+export type AgentHarnessAttemptTimeout = {
   kind: "execution" | "settlement";
   elapsedMs: number;
   timeoutMs: number;
 };
 
 type Deadline = {
-  kind: CodexAttemptTimeout["kind"];
+  kind: AgentHarnessAttemptTimeout["kind"];
   startedAtMs: number;
   timeoutMs: number;
 };
 
-export function createCodexAttemptDeadlineController(params: {
+/** Tracks execution and local settlement against their original absolute deadlines. */
+export function createAgentHarnessAttemptDeadlineController(params: {
   startedAtMs: number;
   timeoutMs: number;
+  settlementTimeoutMs: number;
   signal: AbortSignal;
   onDeadlineChanged?: (
     deadline: { kind: "bounded"; deadlineAtMs: number } | { kind: "unlimited" },
   ) => void;
-  onTimeout: (timeout: CodexAttemptTimeout) => void;
+  onTimeout: (timeout: AgentHarnessAttemptTimeout) => void;
 }) {
   let deadline: Deadline | { kind: "unlimited" } | { kind: "closed" } = { kind: "closed" };
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -78,7 +82,7 @@ export function createCodexAttemptDeadlineController(params: {
       armDeadline({
         kind: "settlement",
         startedAtMs,
-        timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+        timeoutMs: params.settlementTimeoutMs,
       });
     },
     dispose,

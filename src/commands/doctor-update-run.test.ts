@@ -1,11 +1,21 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listUpdateRunsAsync } from "../infra/update-run-reader.js";
+import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  recordUpdateRunStep,
+} from "../infra/update-run-ledger.js";
+import { getUpdateRun, listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { noteStaleUpdateRuns } from "./doctor-update-run.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
-vi.mock("../infra/update-run-reader.js", () => ({ listUpdateRunsAsync: vi.fn() }));
+vi.mock("../infra/update-run-reader.js", async (original) => ({
+  ...(await original<typeof import("../infra/update-run-reader.js")>()),
+  listUpdateRunsAsync: vi.fn(),
+}));
 vi.mock("../infra/update-run-interruption.js", async (original) => ({
   ...(await original<typeof import("../infra/update-run-interruption.js")>()),
   reconcileInterruptedUpdateRuns: async () => [],
@@ -92,3 +102,71 @@ it.each([
 
   expect(note).not.toHaveBeenCalled();
 });
+
+it.each(["state migration is pending", "data/settings upgrade is unfinished"])(
+  "stops replaying resolved %s warnings without erasing history",
+  async (wording) => {
+    await withOpenClawTestState({ label: "update-warning-resolution" }, async () => {
+      const pending = (pluginId: string) => ({
+        pluginId,
+        reason: "The plugin has not reported completion.",
+        command: "openclaw doctor --fix",
+      });
+      recordDeferredPluginMigrations({ pending: [pending("resolved"), pending("unfinished")] });
+      const warnings = [
+        `Plugin "unrecorded" ${wording}: Completion has never been recorded.`,
+        `Plugin "unfinished" ${wording}: The plugin has not reported completion.`,
+        "Unrelated update warning",
+        `Plugin "resolved" ${wording}: The plugin has not reported completion.`,
+      ];
+      const run = createUpdateRun({ trigger: "cli" });
+      for (const [index, detail] of warnings.entries()) {
+        recordUpdateRunStep(run.runId, {
+          step: `warning:openclaw doctor:${index}`,
+          status: "completed",
+          detail,
+          endedAtMs: 1,
+        });
+      }
+      const history = finishUpdateRun(run.runId, { status: "succeeded" });
+      let latestRunId = run.runId;
+      vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) =>
+        input?.active ? [] : [getUpdateRun(latestRunId)!],
+      );
+      const output = async () => {
+        vi.mocked(note).mockClear();
+        await noteStaleUpdateRuns({ migrateState: false });
+        return vi
+          .mocked(note)
+          .mock.calls.map(([message]) => message)
+          .join("\n");
+      };
+      expect(await output()).toContain(warnings[3]);
+
+      recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
+      const repaired = await output();
+      expect(repaired).not.toContain(warnings[3]);
+      for (const warning of warnings.slice(0, 3)) {
+        expect(repaired).toContain(warning);
+      }
+      expect(getUpdateRun(run.runId)).toEqual(history);
+
+      recordDeferredPluginMigrations({ pending: [pending("resolved")] });
+      expect(await output()).toContain(warnings[3]);
+      expect(getUpdateRun(run.runId)).toEqual(history);
+
+      recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
+      const later = createUpdateRun({ trigger: "cli" });
+      recordUpdateRunStep(later.runId, {
+        step: "warning:openclaw doctor",
+        status: "completed",
+        detail: warnings[3],
+        endedAtMs: Date.now() + 60_000,
+      });
+      const laterHistory = finishUpdateRun(later.runId, { status: "succeeded" });
+      latestRunId = later.runId;
+      expect(await output()).toContain(warnings[3]);
+      expect(getUpdateRun(later.runId)).toEqual(laterHistory);
+    });
+  },
+);

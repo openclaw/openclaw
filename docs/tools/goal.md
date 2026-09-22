@@ -204,8 +204,9 @@ The web Control UI shows the goal as a compact pill above the chat composer:
 a status icon, the status label (for example `Pursuing goal`), the truncated
 objective, and a live elapsed timer.
 
-Active goals use a green target icon. Paused goals use a yellow pause icon and
-a frozen elapsed timer. Blocked or limited goals use a yellow warning icon;
+Active goals use a green target icon. Paused goals use a neutral pause icon,
+the normal card surface, and a frozen elapsed timer. Blocked or limited goals
+use an amber warning icon and tinted card;
 completed goals use a green check. Status labels identify each state without
 relying on color. Hover or focus a paused or blocked goal's status label to read
 its status note, including the reason for an error pause. The expanded details
@@ -221,6 +222,10 @@ The pill carries inline controls:
 - **Trash** clears the current Goal.
 - **Chevron** expands the pill to show the full objective, the latest status
   note, token usage, and elapsed time.
+
+On narrow mobile screens, expand the pill to reveal compact labeled controls
+above the full objective. Collapsing it hides these controls again; token usage
+and elapsed time remain below the objective and status note.
 
 Edit, Pause, and Clear do not send slash commands or add chat turns. Controls
 target the displayed Goal ID, so a stale button cannot change a replacement
